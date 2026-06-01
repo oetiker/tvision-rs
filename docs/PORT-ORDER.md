@@ -26,7 +26,12 @@ class implementations and are excluded.
 - `TText` methods live in `drivers.cpp`/`drivers2.cpp` (not a `ttext.cpp`);
   `tvtext1.cpp`/`tvtext2.cpp` are **static glyph/string tables** that become the
   Theme `Glyphs` set (D7), not a class.
-- Color quantization ladder is `mapcolor.cpp` + `palette.cpp`.
+- Color quantization ladder is **`source/platform/colors.cpp`** (the
+  `RGBtoHCL`/`RGBtoXTerm16` algorithm + LUTs) plus the inline conversion
+  functions in **`include/tvision/colors.h`** (`RGBtoXTerm256`, `BIOStoXTerm16`,
+  `XTerm256toRGB`, …). **Not** `mapcolor.cpp`/`palette.cpp` — those are the D7
+  palette-chain walk (`TView::mapColor`) and the `TPalette` container, which
+  belong to row 16 (`Theme`), not the row-5 quantization ladder.
 
 **Tags:** `FOUNDATION` (pattern-setting; many deviations collide; careful
 first-time work), `MECHANICAL` (leaf/transcription once foundation exists),
@@ -53,7 +58,7 @@ the Backend row is "net-new trait wrapping ported code," not write-from-scratch.
 | 2 | `TRect` | — | `objects.h` (inline) | `view` (geometry) | MECHANICAL | a/b corners; intersect/union/move/grow; owns 2×`TPoint` |
 | 3 | `TColorRGB`/`TColorDesired` → `Color` | — | `colors.h` (inline) | `color` | FOUNDATION | D6 four-variant enum (Default/Bios/Indexed/Rgb) |
 | 4 | `TColorAttr` → `Style` | — | `colors.h` (inline) | `color` | FOUNDATION | D6 fg/bg + `Modifiers` (reverse, no-shadow); owns `Color` |
-| 5 | quantization ladder | — | `mapcolor.cpp`, `palette.cpp` | `backend` | INFRA* | D6 RGB→256→16→BIOS faithful port; lives in Backend |
+| 5 | quantization ladder | — | `platform/colors.cpp`, `colors.h` (inline) | `backend` (`quantize`) | INFRA* | D6 RGB→256→16→BIOS faithful port; lives in Backend. (Not `mapcolor.cpp`/`palette.cpp` — those are D7/row 16.) |
 | 6 | `TScreenCell` → `Cell` | — | `scrncell.h` (inline) | `screen` | FOUNDATION | char(s)+`Style`; vendored ratatui cell shape |
 | 7 | `TDrawBuffer` | — | `drivers.cpp` | `screen` (`DrawBuffer`) | FOUNDATION | moveStr/moveChar/moveBuf/putAttribute; owns `Cell`s |
 | 8 | `TText` | — | `drivers.cpp`, `drivers2.cpp` | `text` | FOUNDATION | D13 width/scroll/cell-writer; `unicode-width`+`-segmentation` |

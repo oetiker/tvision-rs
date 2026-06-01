@@ -6,5 +6,7 @@
 //! geometry primitives every later row depends on.
 
 mod geometry;
+mod id;
 
 pub use geometry::{Point, Rect};
+pub use id::{ViewArena, ViewId};

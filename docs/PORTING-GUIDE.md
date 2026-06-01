@@ -380,6 +380,24 @@ schedule against an **injected `Clock`** with cancelable handles and set the
 loop's poll timeout — never `sleep` (this is also what makes timing
 deterministic under test, D11).
 
+> **`Clock` + `TimerQueue` shape (ratified during the row 20 port).** The
+> injected clock is a `trait Clock { fn now_ms(&self) -> u64 }` (faithful to TV's
+> `TTimePoint` = `uint64_t` ms tick), with a production `SystemClock` (the **only**
+> place `Instant::now()` is allowed) and a test `ManualClock` (interior-mutable
+> `Cell<u64>`, `set`/`advance`) — the latter is what makes the synchronous
+> `pump_until_idle` loop deterministic. `TTimerQueue` ports faithfully *except*
+> two structural deviations: **(1)** the `collectId` re-entrancy marking is
+> **dropped** — `collect_expired(now_ms) -> Vec<TimerId>` gathers the due ids and
+> the caller dispatches afterward, so there is no re-entrant list mutation to
+> guard against (invariants preserved: one `now_ms` per pass; a periodic timer
+> fires at most once per call, rescheduling forward via the **verbatim** port of
+> `calcNextExpiresAt` — a catch-up-aware grid alignment, *not* `expires_at +=
+> period`). **(2)** the clock is **not stored** in the queue — `now_ms` is passed
+> into `set_timer`/`collect_expired`/`time_until_next` from the loop. `TTimerId`
+> (a raw `TTimer*`) becomes an opaque monotonic `TimerId(u64)` — no generational
+> reuse needed (unlike `ViewId`, D3), since a `u64` id space never realistically
+> exhausts.
+
 ---
 
 ## D10 — Flat-record data transfer → typed value protocol · *forced*
@@ -426,6 +444,39 @@ runs in parallel.
 **Integration.** The platform-selection *idea* ports faithfully (a swappable
 adapter); the trait is just its Rust shape, with everything above the seam
 identical in both modes. Testing is a pure addition.
+
+> **`Backend` is object-safe; the `EventSource` collapses into `poll_event`
+> (amendment, ratified during the row 18/19 design).** The trait above describes
+> an *associated `EventSource`*; we instead make `Backend` **object-safe** so the
+> app holds a `Box<dyn Backend>` and the view tree / `Context` never carry a
+> `<B>` type parameter (the whole tree is already `Box<dyn View>` — a viral
+> `<B: Backend>` would fight that). Concretely: `draw(&mut self, content:
+> &[(u16, u16, &Cell)])` takes the **diff as a slice** (collected once per frame —
+> trivial cost) rather than ratatui's generic `draw<I: Iterator>`; events come
+> from `poll_event(&mut self, timeout: Option<Duration>) -> Option<Event>` rather
+> than an associated type. The **`Renderer`** owns the back/front `Buffer` pair
+> and runs paint → `Buffer::diff` → `backend.draw` → swap → `backend.flush` (the
+> role of ratatui's `Terminal::draw`). `CrosstermBackend` translates crossterm
+> events → our `Event` (the D4 key decomposition) and applies the row-5
+> quantization ladder per the terminal's color depth; `HeadlessBackend` holds an
+> in-memory front `Buffer` + a programmed event queue and **never blocks on the
+> `poll_event` timeout** (it returns the next queued event or `None` immediately;
+> time advances only via `ManualClock`, D9) — that is what makes
+> `pump_until_idle` deterministic.
+
+> **Golden snapshot format (FOUNDATION — frozen in `screen::snapshot`).** Every
+> widget test from Phase 1 on diffs its `HeadlessBackend` screen against the
+> string produced by `screen::snapshot::snapshot(&Buffer, cursor)`. The shape is
+> fixed *once*, here, not improvised per test (re-baselining many goldens later
+> is miserable). It has four parts, all timestamp-free: a **`size:`** line; a
+> **`cursor:`** line (`x,y` or `hidden`); a **`text:`** layer (the glyphs, one
+> `|`-framed line per row so trailing spaces survive); an **`attr:`** layer (one
+> legend key per *display column*, aligned under the text — `.` is always the
+> default style, others keyed `a..z A..Z 0..9` in row-major first-appearance
+> order); and a **`legend:`** mapping each key to `fg=… bg=… [+mod…]` (the
+> default style shown as the shorthand `default`). A wide glyph contributes its
+> 2-column glyph to `text` and its key **twice** to `attr`; the `trail` cell is
+> absorbed, so both layers are exactly `width` columns and stay aligned.
 
 ---
 

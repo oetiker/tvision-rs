@@ -69,24 +69,61 @@ vendored ratatui cell-buffer+diff (MIT) → retained view tree + event loop.
   - row 12 `Command` → `src/command.rs` (D1; **`Command(&'static str)`** namespaced
     open newtype + `Command::custom`; `CommandSet` over `HashSet`, no range guard;
     only shared-vocabulary consts here, view-specific ones live with their view).
-  - 64 unit tests green; `cargo clippy --all-targets` and `cargo fmt --check` clean.
+  - **INFRA substrate (rows 5, 17, 18, 19, 20):**
+    - row 5 quantization ladder → `src/backend/quantize.rs` (D6; faithful port of
+      `platform/colors.cpp` + `colors.h` conversions — NOT `mapcolor.cpp`/
+      `palette.cpp`, which are the D7 palette-chain walk; PORT-ORDER row 5's file
+      cite was corrected). `rgb_to_xterm16/256`, `rgb_to_bios`, `bios_to_xterm16`,
+      `xterm256_to_xterm16/rgb`; compile-time LUTs.
+    - row 17 `ViewId` arena → `src/view/id.rs` (D3; generational *identity*
+      allocator only — NOT a view store; `Option<ViewId>` niche via `NonZeroU32`;
+      resolution to `&dyn View` is a later tree-walk via `Context`).
+    - row 18 `Buffer` + diff → `src/screen/buffer.rs` (D8; ratatui-adapted diff,
+      MIT attribution in-file; wide-char skip driven off our `wide`/`trail` flags;
+      no `skip` field).
+    - row 19 `Backend` + `Renderer` + `HeadlessBackend`/`HeadlessHandle` +
+      `CrosstermBackend` → `src/backend/{traits,renderer,headless,crossterm_backend}.rs`
+      (D11). **Object-safe `Box<dyn Backend>`** (slice-based `draw`, `poll_event`
+      collapses the associated `EventSource`); `Renderer` owns back/front buffer
+      pair + draw cycle; `HeadlessBackend` shares state via `HeadlessHandle` for
+      test inspection/injection (no downcast); Crossterm does key/mouse/color
+      translation. Deps added: `crossterm`, dev-dep `insta`.
+    - row 20 `Clock` + `TimerQueue` → `src/timer.rs` (D9/D11; injected
+      `Clock`/`SystemClock`/`ManualClock`; `calc_next_expires_at` verbatim; dropped
+      the `collectId` dance — collect-then-dispatch; clock passed in, not stored).
+  - **Snapshot format (FOUNDATION) frozen** in `src/screen/snapshot.rs`
+    (`snapshot(&Buffer, cursor) -> String`): `size`/`cursor`/`text`/`attr`/`legend`,
+    `|`-framed rows, `.`=default style, per-display-column attr keys, wide glyph
+    keyed twice + trail absorbed. First end-to-end snapshot test in
+    `tests/render_pipeline.rs`. Every future widget test diffs against this.
+  - 130 unit/integration tests green; `cargo clippy --all-targets` and
+    `cargo fmt --check` clean.
   - Coordinates are `i32` (faithful to magiblot's `int`).
-  - Deps: `unicode-segmentation`, `unicode-width`.
+  - Deps: `unicode-segmentation`, `unicode-width`, `crossterm`; dev: `insta`.
 - **Key design decisions** (recorded in `docs/PORTING-GUIDE.md` D1/D4): newtype vs
   enum by *extensibility* — open/app-extensible families (`Command`, `HelpCtx`) →
   open newtype with namespaced `&'static str` identity; closed sets (`Key`) → enum.
   Constants live with their owner (no central registry).
-- Git on `main`; the scaffold + Phase 0 rows 1–12 are **uncommitted** (commit
-  only when asked).
+- Git on `main`; Phase 0 rows 1–12 are **committed** (last commit `010584f`);
+  rows 5, 17, 18, 19, 20 + the snapshot format are **uncommitted** (commit only
+  when asked).
 
 ## Next step
-Continue Phase 0 with the `INFRA` rows: quantization ladder (row 5, in `backend`),
-`ViewId` arena (row
-17), vendored ratatui back-buffer + diff (row 18 — copy ratatui's `Buffer`/`Cell`
-+diff, keep its MIT header), `Backend` + `CrosstermBackend` + `HeadlessBackend`
-(row 19), `Clock` + timer queue (row 20), capture stack (row 21), `Context`/
-`DrawCtx` (row 22). That substrate unlocks every later `MECHANICAL` widget and all
-snapshot tests.
+Finish Phase 0 with the last two INFRA rows, the most interlocking in the phase:
+- **minimal `Theme`** (partial row 16, a DrawCtx dependency): `Role` is a
+  *first-party* enum that grows per-widget (D7 — not a newtype, not third-party
+  extensible), `Glyphs` a near-empty stub (row 9 not needed yet), default = classic
+  blue. Pulled in early only because `DrawCtx` needs `&Theme`.
+- **row 21 capture stack** (D9): LIFO `CaptureHandler`s holding `ViewId`; modal/
+  drag/press become handlers, not nested loops. The handler signature references
+  `Context`, so 21 and 22 co-design.
+- **row 22 `Context`/`DrawCtx`** (D3/D4): `DrawCtx` (buffer + clip + origin + theme;
+  re-expresses `DrawBuffer` ops) is safe to build fully; the event-side `Context`
+  is anchored to Appendix B's decided `ctx.*` calls (`broadcast`/`query`/timer
+  scheduling/`push`/`pop_capture`). The one tricky bit: the loop owns the capture
+  stack and `Context` exposes push/pop so a running handler isn't borrowed from the
+  thing it mutates. Full loop wiring is deferred to `TProgram` (row 31).
+Then Phase 0 is complete and Phase 1 (`TView` row 23) can begin.
 
 ## Conventions
 - English for all code/comments/identifiers (user-facing strings may be localized).

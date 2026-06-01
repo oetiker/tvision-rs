@@ -1,0 +1,17 @@
+---
+source: tests/render_pipeline.rs
+expression: screen.snapshot()
+---
+size: 12x3
+cursor: 5,0
+text:
+|Hello       |
+|            |
+|            |
+attr:
+|aaaaa.......|
+|............|
+|............|
+legend:
+  . default
+  a fg=BIOS(15) bg=BIOS(1)

@@ -13,8 +13,9 @@ categories = ["command-line-interface"]
 # prefix was faking (PORTING-GUIDE D1).
 
 [dependencies]
+crossterm = "0.29.0"            # backend module: production terminal I/O behind the Backend trait (D11, row 19)
 unicode-segmentation = "1.13.2" # text module: grapheme clustering (D13, row 8)
 unicode-width = "0.2.2"         # text module: display column widths (D13, row 8)
-# Added lazily as the port reaches the rows that need them:
-#   crossterm              -> backend module (D11, row 19)
-# dev-dependency `insta`   -> snapshot tests (D11)
+
+[dev-dependencies]
+insta = "1.47.2" # snapshot tests: golden-file verification (D11, row 19)
