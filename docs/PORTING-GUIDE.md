@@ -11,6 +11,11 @@
 > **how the deviated part stitches back into the otherwise-direct port.**
 >
 > If something isn't listed here, port it straight from the C++.
+>
+> The dependency-ordered port sequence lives in
+> [PORT-ORDER.md](file:///home/oetiker/checkouts/rstv/docs/PORT-ORDER.md); the
+> mechanical per-class recipe is **Appendix B**. Together they let `MECHANICAL`
+> classes be ported with near-zero judgment.
 
 ---
 
@@ -433,3 +438,77 @@ blank continuation cell.
 | `TStreamable`, `TResourceFile` | — (dropped; serde if revived) | D12 |
 | `TCommandSet` (256-bit) | `HashSet<Command>` | D1 |
 | `forEach` / `firstThat` / `TSortedCollection` | iterators / `Vec<T: Ord>` | (idiom) |
+
+---
+
+## Appendix B — Per-class porting procedure
+
+> The mechanical recipe for any class tagged **`MECHANICAL`** in
+> [PORT-ORDER.md](file:///home/oetiker/checkouts/rstv/docs/PORT-ORDER.md).
+> Follow it verbatim. **Do not run this recipe on `FOUNDATION` or `INFRA` rows**
+> — those establish or build the patterns and need careful (human/Opus) work.
+> See the **Escalate** list at the end for when to stop and ask.
+
+**0 · Preconditions.** Confirm every row this class depends on (its base class
+and everything it owns/constructs) is already ported. Open the C++ file(s) named
+in the row's `C++ files` column under
+`/home/oetiker/scratch/tvision-spec/magiblot-tvision/source/tvision/` (plus the
+matching header in `include/tvision/`).
+
+**1 · Module & type (D1, D2, D3, D5, D6).** Create the Rust module from the
+row's `Rust module` column. Define the struct, dropping the `T` prefix and
+embedding `ViewState`:
+
+```rust
+pub struct Foo {                 // TFoo -> Foo
+    base: ViewState,             // the TView data members
+    // ...the class's own C++ data members, translated:
+}
+```
+Translate members: `TView*`/`owner`/peer pointers → `ViewId`; the `ushort`
+`state`/`options`/`growMode`/`dragMode` are already in `base`; color fields →
+`Style`; C strings → `String`; `TCollection*` → `Vec<_>`.
+
+**2 · Trait impl (D2).** `impl tv::View for Foo { … }`, providing `state` /
+`state_mut` / `draw`, and overriding `handle_event` and any other virtuals the
+C++ class overrides. If the C++ class derives a *concrete* widget (e.g.
+`TParamText : TStaticText`), **embed-and-delegate**: hold the base widget and
+forward the unchanged methods.
+
+**3 · Port each method body verbatim, applying these line-level substitutions:**
+
+| C++ pattern | Rust | dev |
+| ----------- | ---- | --- |
+| `TFoo`, `new TFoo(...)`, `meth()` | `Foo`, `Foo::new(...)`, `meth()` snake_case | D1 |
+| `cmX` / `kbX` / `hcX` | `tv::Command::X` / `tv::Key::X` / `tv::HelpCtx::X` | D1 |
+| `event.what == evX`, `& evX` | `match ev { Event::X(..) => … }` | D4 |
+| `clearEvent(event)` | `*ev = Event::Nothing` | D4 |
+| `state & sfX` / `setState(sfX,v)` | `self.state().x` / `self.set_state(StateFlag::X, v)` | D5 |
+| `options & ofX` | `self.state().options.x` | D5 |
+| `getColor(n)` / `getPalette()` | `ctx.theme.style(Role::…)` | D7 |
+| literal box/mark chars | `ctx.theme.glyphs.…` | D7 |
+| `TDrawBuffer` + `writeLine`/`writeBuf` | write cells into `ctx` at local coords | D8 |
+| string width / truncation | `text::width` / `text::scroll` | D13 |
+| `owner` / `current` / `TopView()` | resolve via `ctx` / `ViewId` (never store up-ptr) | D3 |
+| `message(rcvr, evBroadcast, cmX, p)` | `ctx.broadcast(Command::X)` | D4 |
+| `message(rcvr, …)` expecting a result | `ctx.query(id, …) -> Option<T>` | D4 |
+| `dataSize` / `getData` / `setData` | typed `value()` / `set_value()` | D10 |
+| `streamableName`/`read`/`write`/`build`, `TStreamableClass` reg | **delete** | D12 |
+
+**4 · Snapshot test (mandatory, D11).** Build the widget on a `HeadlessBackend`,
+`pump_until_idle()`, and `assert_snapshot!(app.backend().buffer())`. For
+interactive widgets, push key/mouse events and snapshot each step; advance the
+injected `Clock` for any animation.
+
+**5 · Verify.** The widget must respond to the same keys/commands and lay out the
+same as the C++ original. The snapshot is the evidence.
+
+**Escalate — stop and hand back to a human/Opus — when:**
+- the row is tagged `FOUNDATION` or `INFRA`;
+- a method does pointer arithmetic, `union` field access, or relies on dropped
+  machinery (`lock`/`unlock`/`buffer`, `drawUnder*`, streaming);
+- the `s*`/`nm*` file holds **real member code**, not just streamable boilerplate
+  (PORT-ORDER.md flags these explicitly);
+- a `getData`/`setData` does a raw struct `memcpy` whose record layout isn't
+  obvious (the typed `value` mapping is a judgment call — D10);
+- behavior depends on a class not yet ported.
