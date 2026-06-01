@@ -54,26 +54,60 @@ namespacing — 1991 C++ had no real namespaces.
   *is* the namespace the `T` prefix was faking.
 - Drop the `T` prefix (`TView` → `tv::View`). Methods are `snake_case`
   (`handleEvent` → `handle_event`).
-- The `cm*`/`kb*`/`hc*` families become **type-scoped associated constants** in
+- The `cm*`/`hc*` families become **type-scoped associated constants** in
   `SCREAMING_SNAKE_CASE` on open newtypes — recognizable, no `#![allow]`, and
   user-extensible (the value space stays open, unlike an `enum`):
 
   ```rust
-  pub struct Command(pub u16);
+  pub struct Command(&'static str);
   impl Command {
-      pub const OK:     Command = Command(10);
-      pub const CANCEL: Command = Command(11);
+      pub const OK:     Command = Command("tv.ok");
+      pub const CANCEL: Command = Command("tv.cancel");
   }
-  // tv::Command::OK ; your app: pub const CMD_REFRESH: tv::Command = tv::Command(1000);
+  // tv::Command::OK ; your app: pub const CMD_REFRESH: tv::Command = Command::custom("myapp.refresh");
   ```
 
-  Likewise `tv::Key::F1`, `tv::HelpCtx::NO_CONTEXT`. (`sf*`/`of*` are handled by
-  D5.) Because `Command` is an open `u16` rather than a 0–255 space, the
+  Likewise `tv::HelpCtx::NO_CONTEXT`. The `kb*` family is the *opposite* case
+  (see the refinement below): the set of physical keys is fixed, so it is a
+  closed `enum Key` (D4), not a newtype. (`sf*`/`of*` are handled by D5.)
+  Because a `Command`'s value is open identity rather than a 0–255 space, the
   enabled-command set is a `HashSet<Command>`, not a fixed bit array.
 
-> **Key values are modern, not BIOS scan codes.** `kbEnter = 0x1c0d` is a DOS
-> scan-code/ASCII pair. We keep the *name* (`tv::Key::ENTER`) but build the value
-> from crossterm's key model. The name transfers; the magic number does not.
+> **Newtype vs. enum, by extensibility.** D1's rationale for open newtypes is
+> *extensibility*; apply it precisely. **Open, app/view-extensible spaces → open
+> newtype** (`Command`, `HelpCtx` — apps and third-party views mint their own
+> values). **Closed, fixed sets → enum** (`Key` — the set of physical keys is
+> fixed; no external code invents a new key). This refines D1's reason, it does
+> not contradict it.
+
+> **`Command`/`HelpCtx` identity is a namespaced `&'static str`, not an
+> integer.** *(chosen.)* TV's `cm*`/`hc*` are hand-assigned small integers in one
+> flat space. We make the value a namespaced static string —
+> `Command("tv.ok")`, exposed via SCREAMING_SNAKE assoc consts plus
+> `Command::custom("ns.name")` for external code (same for `hc*`). Safe and
+> better because the integers existed only for serialization (`TStreamable`,
+> dropped — D12) and for a 256-bit `TCommandSet` (already a `HashSet`); a
+> command's value is now pure internal identity. Namespacing makes the
+> decentralized constants (below) collision-safe *by construction*, where integer
+> ranges only papered over collisions. The command **bus** itself — decoupled
+> token dispatch, enable/disable sets, menu/status binding — is good architecture
+> and is kept; only the token's representation modernizes. Zero porting cost at
+> call sites (`match cmd { Command::OK => … }`, menu tables, events all read the
+> same). *Consequence:* TV's "commands ≥ 256 are always enabled / the 256-entry
+> trackable range" rule is **dropped** (a bit-array artifact). `TCommandSet`
+> becomes a plain set over `HashSet<Command>`
+> (`enable`/`disable`/`has`/union/intersection/difference) with no range guard
+> and no `all()`; the *enabled-by-default* policy lives later in the
+> `TView`/`TProgram` row (likely a tracked disabled set), not in the set
+> primitive.
+
+> **Constants live with their owner.** The `command` module hosts only the
+> framework's **shared vocabulary** — the core/dialog/edit/window/app/broadcast
+> commands the core generates or interprets generically — and **documents the
+> namespace convention**. **View-specific** commands (editor movement/edit,
+> file-dialog results, …) are defined *with their view's module* when that row
+> lands, exactly as an external third-party view defines its own under its own
+> namespace. No privileged central registry.
 
 **Integration.** A regular, mechanical transform — `TFoo → tv::Foo`,
 `cmFoo → tv::Command::FOO`. Appendix A is the lookup table. Every site that
@@ -175,6 +209,27 @@ top-most child under the cursor; focused events through the three ordered passes
 (pre-process → focused → post-process). The phase opt-ins `ofPreProcess` /
 `ofPostProcess` are just `options` fields (D5); the rest of `TGroup::handleEvent`
 translates directly.
+
+> **The `Key` shape (decomposed, crossterm-shaped).** `TKey`/`kb*`/`KeyDownEvent`
+> become a **decomposed** model — a closed `enum Key` (D1):
+>
+> ```rust
+> pub enum Key { Char(char), F(u8), Enter, Esc, Backspace, Tab,
+>                Up, Down, Left, Right, Home, End,
+>                PageUp, PageDown, Insert, Delete }
+> pub struct KeyModifiers { shift: bool, ctrl: bool, alt: bool }   // D5
+> pub struct KeyEvent { key: Key, modifiers: KeyModifiers }
+> ```
+>
+> **No modifier-combined variants:** `Ctrl+C` = `Key::Char('c')` + `ctrl`;
+> `Shift+Tab` = `Key::Tab` + `shift`; `Alt+F3` = `Key::F(3)` + `alt`. This
+> mirrors magiblot's own canonical `TKey`, which already normalizes combined
+> codes to `{base key, modifier flags}` (`kbCtrlA == TKey('A', kbCtrlShift)`) and
+> checks modifiers via a separate `controlKeyState` channel. `kbNoKey` = the
+> *absence* of a key event (no `Null` variant). DOS scan-code/ASCII pairs
+> (`kbEnter = 0x1c0d`) do not survive — an enum variant carries no number at all;
+> the name transfers, the magic value does not. The `CrosstermBackend` translates
+> crossterm's key model into this at a later row.
 
 ---
 
@@ -440,8 +495,9 @@ blank continuation cell.
 | `TView` | `tv::View` (trait) + `tv::ViewState` (data) | D2 |
 | `TGroup` | `tv::Group` (owns `Vec<Box<dyn View>>`) | D2, D3 |
 | `TWindow`, `TDialog`, `TButton`, … | `tv::Window`, `tv::Dialog`, `tv::Button`, … | D1 |
-| `cmOK` / `cmCancel` | `tv::Command::OK` / `::CANCEL` | D1 |
-| `kbEnter` | `tv::Key::ENTER` (modern value) | D1 |
+| `cmOK` / `cmCancel` | `tv::Command::OK` / `::CANCEL` — `Command(&'static str)`, open newtype, namespaced | D1 |
+| `kbEnter` | `tv::Key::Enter` (enum) + `KeyModifiers` (decomposed) | D4, D1 |
+| `TKey` / `KeyDownEvent` | `event::{Key, KeyModifiers, KeyEvent}` | D1, D4, D5 |
 | `sfFocused` | `state.focused` / `StateFlag::Focused` | D5 |
 | `ofSelectable` / `ofPreProcess` | `options.selectable` / `options.pre_process` | D5 |
 | `evKeyDown` / `evCommand` | `Event::KeyDown(..)` / `Event::Command(..)` | D4 |
@@ -458,7 +514,7 @@ blank continuation cell.
 | `owner` / `current` / `selected` | `ViewId` handles | D3 |
 | `drawHide`/`drawShow`/`drawUnder*`, buffered group | — (dropped; redraw + diff) | D8 |
 | `TStreamable`, `TResourceFile` | — (dropped; serde if revived) | D12 |
-| `TCommandSet` (256-bit) | `HashSet<Command>` | D1 |
+| `TCommandSet` (256-bit) | `CommandSet` over `HashSet<Command>` (no range guard) | D1 |
 | `forEach` / `firstThat` / `TSortedCollection` | iterators / `Vec<T: Ord>` | (idiom) |
 
 ---
@@ -502,7 +558,8 @@ forward the unchanged methods.
 | C++ pattern | Rust | dev |
 | ----------- | ---- | --- |
 | `TFoo`, `new TFoo(...)`, `meth()` | `Foo`, `Foo::new(...)`, `meth()` snake_case | D1 |
-| `cmX` / `kbX` / `hcX` | `tv::Command::X` / `tv::Key::X` / `tv::HelpCtx::X` | D1 |
+| `cmX` / `hcX` | `tv::Command::X` / `tv::HelpCtx::X` (open-newtype assoc consts) | D1 |
+| `kbX` | PascalCase `enum Key` variant (`kbEnter`→`Key::Enter`); combined codes decompose into base `Key` + `KeyModifiers` (`kbCtrlC`→`Key::Char('c')`+ctrl, `kbShiftTab`→`Key::Tab`+shift) | D4/D5 |
 | `event.what == evX`, `& evX` | `match ev { Event::X(..) => … }` | D4 |
 | `clearEvent(event)` | `*ev = Event::Nothing` | D4 |
 | `state & sfX` / `setState(sfX,v)` | `self.state().x` / `self.set_state(StateFlag::X, v)` | D5 |

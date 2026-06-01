@@ -37,8 +37,9 @@
 //! | 7 | `DrawBuffer` | [`screen`] | ✅ |
 //! | 5 | quantization ladder | `backend` | ⏳ |
 //! | 9 | glyph tables | `theme` | ⏳ |
-//! | 10, 11 | `Key`, `Event` | `event` | ⏳ |
-//! | 12 | `Command` / command set | `command` | ⏳ |
+//! | 10 | `Key` | [`event`] | ✅ |
+//! | 11 | `Event` | [`event`] | ✅ |
+//! | 12 | `Command` / command set | [`command`] | ✅ |
 //! | 16 | `Theme` | `theme` | ⏳ |
 //! | 17 | `ViewId` arena | [`view`] | ⏳ |
 //! | 18 | back-buffer + diff | `screen` | ⏳ |
@@ -48,6 +49,8 @@
 //! | 22 | `Context` / `DrawCtx` | [`view`] | ⏳ |
 
 pub mod color;
+pub mod command;
+pub mod event;
 pub mod screen;
 pub mod text;
 pub mod view;
@@ -55,5 +58,10 @@ pub mod view;
 // --- House-style root re-exports (so `tv::Point` etc. resolve without `use`) ---
 
 pub use color::{Color, Modifiers, Style};
+pub use command::{Command, CommandSet};
+pub use event::{
+    Event, EventMask, Key, KeyEvent, KeyModifiers, MouseButtons, MouseEvent, MouseEventFlags,
+    MouseWheel,
+};
 pub use screen::{Cell, DrawBuffer};
 pub use view::{Point, Rect};

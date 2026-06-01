@@ -60,18 +60,28 @@ vendored ratatui cell-buffer+diff (MIT) → retained view tree + event loop.
     base char, ZWJ sequences clustered);
   - row 7 `DrawBuffer` → `src/screen/draw_buffer.rs` (`move_char`/`move_str[_part]`/
     `move_cstr[_part]`/`move_buf`/`put_char`/`put_attribute`; delegates text to row
-    8; dropped the `0 = retain` sentinel — `move_char` always writes both).
-  - 39 unit tests green; `cargo clippy --all-targets` and `cargo fmt --check` clean.
+    8; dropped the `0 = retain` sentinel — `move_char` always writes both);
+  - row 10 `Key` → `src/event/key.rs` (D4/D5; **`enum Key`** + `KeyModifiers` +
+    `KeyEvent`, decomposed — no modifier-combined variants, `Ctrl+C`=`Char('c')`+ctrl);
+  - row 11 `Event` → `src/event/mod.rs` (D4 `enum Event` + `MouseEvent` (`position`,
+    not `where`) + `EventMask`; `infoPtr`/`MessageEvent` dropped — query/broadcast
+    split);
+  - row 12 `Command` → `src/command.rs` (D1; **`Command(&'static str)`** namespaced
+    open newtype + `Command::custom`; `CommandSet` over `HashSet`, no range guard;
+    only shared-vocabulary consts here, view-specific ones live with their view).
+  - 64 unit tests green; `cargo clippy --all-targets` and `cargo fmt --check` clean.
   - Coordinates are `i32` (faithful to magiblot's `int`).
   - Deps: `unicode-segmentation`, `unicode-width`.
-- Git on `main`; the crate scaffold + Phase 0 rows are **uncommitted** (commit
+- **Key design decisions** (recorded in `docs/PORTING-GUIDE.md` D1/D4): newtype vs
+  enum by *extensibility* — open/app-extensible families (`Command`, `HelpCtx`) →
+  open newtype with namespaced `&'static str` identity; closed sets (`Key`) → enum.
+  Constants live with their owner (no central registry).
+- Git on `main`; the scaffold + Phase 0 rows 1–12 are **uncommitted** (commit
   only when asked).
 
 ## Next step
-Continue Phase 0 in dependency order: `Key`/`Event` (rows 10–11, `src/event` —
-D1 modern key values from crossterm, D4 `enum Event` + `EventMask`); `Command`/
-command set (row 12, `src/command` — `Command(u16)` open newtype + `HashSet`).
-Then the `INFRA`: quantization ladder (row 5, in `backend`), `ViewId` arena (row
+Continue Phase 0 with the `INFRA` rows: quantization ladder (row 5, in `backend`),
+`ViewId` arena (row
 17), vendored ratatui back-buffer + diff (row 18 — copy ratatui's `Buffer`/`Cell`
 +diff, keep its MIT header), `Backend` + `CrosstermBackend` + `HeadlessBackend`
 (row 19), `Clock` + timer queue (row 20), capture stack (row 21), `Context`/

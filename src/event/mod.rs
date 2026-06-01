@@ -1,0 +1,239 @@
+//! Events — deviation **D4** (TV's event records as a Rust sum type).
+//!
+//! Turbo Vision's single `TEvent` (a tagged union over `evKeyDown`,
+//! `evMouse*`, `evCommand`/`evBroadcast`, `evNothing`; `system.h`) becomes an
+//! idiomatic [`Event`] enum matched arm-by-arm. The keyboard side lives in the
+//! [`key`] submodule ([`Key`], [`KeyEvent`], [`KeyModifiers`]); the sum type,
+//! the mouse record, and the trimmed [`EventMask`] opt-in live here.
+//!
+//! **`infoPtr` / `MessageEvent` dropped (D4).** `TEvent`'s `MessageEvent`
+//! carried a `command` plus a `void* infoPtr` union used to round-trip a result
+//! back to the sender. We drop that round-trip entirely: [`Event::Command`] and
+//! [`Event::Broadcast`] carry **only** the [`Command`]. Payloaded messages
+//! become typed `Context` queries returning `Option<T>` at a later row, so
+//! there is no `MessageEvent` analogue.
+
+mod key;
+
+pub use key::{Key, KeyEvent, KeyModifiers};
+
+use crate::command::Command;
+use crate::view::Point;
+
+/// A Turbo Vision event — deviation **D4**. Replaces the `TEvent` tagged union
+/// (`what` bitmask + `union { mouse; keyDown; message; }`; `system.h`) with a
+/// real Rust sum type, matched arm-by-arm instead of masked.
+///
+/// The `ev*` event classes map onto the variants directly. `evNothing` and any
+/// *consumed* event are both [`Event::Nothing`] (see [`Event::clear`], the
+/// `clearEvent` equivalent). The `evMouseWheel` class has no variant here:
+/// wheel direction rides on the [`MouseEvent::wheel`] field of the mouse
+/// variants, faithful to the C++ `MouseEventType::wheel`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Event {
+    /// `evMouseDown` — a mouse button was pressed.
+    MouseDown(MouseEvent),
+    /// `evMouseUp` — a mouse button was released.
+    MouseUp(MouseEvent),
+    /// `evMouseMove` — the mouse moved (opt-in; see [`EventMask::mouse_move`]).
+    MouseMove(MouseEvent),
+    /// `evMouseAuto` — auto-repeat while a button is held (opt-in; see
+    /// [`EventMask::mouse_auto`]).
+    MouseAuto(MouseEvent),
+    /// `evKeyDown` — a key was pressed. Reuses [`key::KeyEvent`].
+    KeyDown(KeyEvent),
+    /// `evCommand` — a command targeted at a specific receiver.
+    Command(Command),
+    /// `evBroadcast` — a command broadcast to interested views.
+    Broadcast(Command),
+    /// `evNothing`, or an event that a handler has consumed via
+    /// [`Event::clear`].
+    Nothing,
+}
+
+impl Event {
+    /// Consume this event by setting it to [`Event::Nothing`]. This is the
+    /// `clearEvent` equivalent; the porting recipe maps `clearEvent(event)`
+    /// onto `event.clear()`.
+    pub fn clear(&mut self) {
+        *self = Event::Nothing;
+    }
+
+    /// Whether this is [`Event::Nothing`] (`evNothing` / a consumed event).
+    pub fn is_nothing(&self) -> bool {
+        matches!(self, Event::Nothing)
+    }
+}
+
+/// A mouse event record — ports `MouseEventType` (`system.h`):
+/// `{ TPoint where; ushort eventFlags; ushort controlKeyState; uchar buttons;
+/// uchar wheel; }`. The `where` field (a Rust keyword) becomes `position`; the
+/// bit-words become struct-of-bools / enums per deviation **D5**; and
+/// `controlKeyState` reuses [`key::KeyModifiers`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MouseEvent {
+    /// Cursor position, in the relevant coordinate space (`where`).
+    pub position: Point,
+    /// Buttons currently down (`buttons`, the `mb*` bit-word; D5).
+    pub buttons: MouseButtons,
+    /// Wheel direction, if any (`wheel`, the `mw*` set).
+    pub wheel: MouseWheel,
+    /// Click/move flags (`eventFlags`, the `me*` bit-word; D5).
+    pub flags: MouseEventFlags,
+    /// Modifiers held during the event (`controlKeyState`; reuses
+    /// [`key::KeyModifiers`]).
+    pub modifiers: KeyModifiers,
+}
+
+/// The mouse buttons currently down — deviation **D5**, replacing the `buttons`
+/// `mb*` bit-word (`system.h`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MouseButtons {
+    /// Left button (`mbLeftButton`).
+    pub left: bool,
+    /// Right button (`mbRightButton`).
+    pub right: bool,
+    /// Middle button (`mbMiddleButton`).
+    pub middle: bool,
+}
+
+/// Mouse event flags — deviation **D5**, replacing the `eventFlags` `me*`
+/// bit-word (`system.h`).
+///
+/// `system.h` defines exactly three `me*` flags; there is **no** `meMouseWheel`
+/// (`evMouseWheel` is an event-*class* bit in `what`, not an `me*` flag). Wheel
+/// state therefore lives on [`MouseEvent::wheel`], not here.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MouseEventFlags {
+    /// The press completed a double click (`meDoubleClick`).
+    pub double_click: bool,
+    /// The press completed a triple click (`meTripleClick`).
+    pub triple_click: bool,
+    /// The mouse moved (`meMouseMoved`).
+    pub mouse_moved: bool,
+}
+
+/// Mouse wheel direction — deviation **D1**, replacing the `wheel` `mw*` closed
+/// set (`system.h`). [`MouseWheel::None`] means no wheel motion.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MouseWheel {
+    /// No wheel motion.
+    #[default]
+    None,
+    /// Wheel scrolled up (`mwUp`).
+    Up,
+    /// Wheel scrolled down (`mwDown`).
+    Down,
+    /// Wheel scrolled left (`mwLeft`).
+    Left,
+    /// Wheel scrolled right (`mwRight`).
+    Right,
+}
+
+/// The per-view opt-in for *expensive* event classes — deviation **D4**, the
+/// surviving slice of the `ushort eventMask` bit-word (`TView::eventMask`).
+///
+/// The always-on classes — mouse-down/up, key-down, command, broadcast — are
+/// **not** gated by this struct; they are delivered unconditionally. Per D4
+/// only the costly opt-ins (continuous mouse tracking, auto-repeat) are worth
+/// keeping, so the bit-word collapses to these two bools.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct EventMask {
+    /// Deliver [`Event::MouseMove`] (continuous tracking; `evMouseMove`).
+    pub mouse_move: bool,
+    /// Deliver [`Event::MouseAuto`] (auto-repeat while held; `evMouseAuto`).
+    pub mouse_auto: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn each_variant_constructs() {
+        let m = MouseEvent::default();
+        let _ = Event::MouseDown(m);
+        let _ = Event::MouseUp(m);
+        let _ = Event::MouseMove(m);
+        let _ = Event::MouseAuto(m);
+        let _ = Event::KeyDown(KeyEvent::from(Key::Enter));
+        let _ = Event::Command(Command::OK);
+        let _ = Event::Broadcast(Command::OK);
+        let _ = Event::Nothing;
+    }
+
+    #[test]
+    fn clear_sets_nothing_and_is_nothing() {
+        let mut ev = Event::KeyDown(KeyEvent::from(Key::Enter));
+        assert!(!ev.is_nothing());
+        ev.clear();
+        assert_eq!(ev, Event::Nothing);
+        assert!(ev.is_nothing());
+    }
+
+    #[test]
+    fn key_down_round_trip() {
+        let ev = Event::KeyDown(KeyEvent::from(Key::Enter));
+        match ev {
+            Event::KeyDown(k) => {
+                assert_eq!(k.key, Key::Enter);
+                assert_eq!(k.modifiers, KeyModifiers::default());
+            }
+            _ => panic!("expected KeyDown"),
+        }
+    }
+
+    #[test]
+    fn mouse_event_default_is_empty() {
+        let m = MouseEvent::default();
+        assert_eq!(m.position, Point::default());
+        assert!(!m.buttons.left);
+        assert!(!m.buttons.right);
+        assert!(!m.buttons.middle);
+        assert_eq!(m.wheel, MouseWheel::None);
+        assert!(!m.flags.double_click);
+        assert!(!m.flags.triple_click);
+        assert!(!m.flags.mouse_moved);
+        assert_eq!(m.modifiers, KeyModifiers::default());
+    }
+
+    #[test]
+    fn struct_of_bools_defaults_all_false() {
+        assert_eq!(
+            MouseButtons::default(),
+            MouseButtons {
+                left: false,
+                right: false,
+                middle: false,
+            }
+        );
+        assert_eq!(
+            MouseEventFlags::default(),
+            MouseEventFlags {
+                double_click: false,
+                triple_click: false,
+                mouse_moved: false,
+            }
+        );
+        assert_eq!(
+            EventMask::default(),
+            EventMask {
+                mouse_move: false,
+                mouse_auto: false,
+            }
+        );
+    }
+
+    #[test]
+    fn wheel_up_mouse_event() {
+        let m = MouseEvent {
+            wheel: MouseWheel::Up,
+            ..Default::default()
+        };
+        let ev = Event::MouseDown(m);
+        match ev {
+            Event::MouseDown(me) => assert_eq!(me.wheel, MouseWheel::Up),
+            _ => panic!("expected MouseDown"),
+        }
+    }
+}

@@ -58,9 +58,9 @@ the Backend row is "net-new trait wrapping ported code," not write-from-scratch.
 | 7 | `TDrawBuffer` | — | `drivers.cpp` | `screen` (`DrawBuffer`) | FOUNDATION | moveStr/moveChar/moveBuf/putAttribute; owns `Cell`s |
 | 8 | `TText` | — | `drivers.cpp`, `drivers2.cpp` | `text` | FOUNDATION | D13 width/scroll/cell-writer; `unicode-width`+`-segmentation` |
 | 9 | glyph/string tables | — | `tvtext1.cpp`, `tvtext2.cpp` | `theme` (`Glyphs`) | MECHANICAL | D7 frame/scrollbar/marks/icons → `Glyphs` |
-| 10 | `TKey` + key events | — | `tkey.cpp`, `tkeys.h` | `event` (`Key`) | FOUNDATION | D1 modern values from crossterm; not BIOS scancodes |
+| 10 | `TKey` + key events | — | `tkey.cpp`, `tkeys.h` | `event` (`Key`) | FOUNDATION | D5 decomposed `enum Key` + `KeyModifiers` bool struct + `KeyEvent`; no modifier-combined variants (Ctrl+C = `Key::Char('c')` + ctrl, Shift+Tab = `Key::Tab` + shift). Mirrors magiblot canonical `TKey` (base key + modifier flags + `controlKeyState`). Not BIOS scancodes |
 | 11 | `TEvent`/`MouseEventType`/`KeyDownEvent`/`MessageEvent` | — | `tevent.cpp`, `system.h` | `event` | FOUNDATION | D4 `enum Event` sum type; `EventMask` bool struct |
-| 12 | `TCommandSet` | — | `tcmdset.cpp` | `command` | FOUNDATION | D1 → `HashSet<Command>`; `Command(u16)` newtype |
+| 12 | `TCommandSet` | — | `tcmdset.cpp` | `command` | FOUNDATION | D1 → `CommandSet` over `HashSet<Command>`; `Command(&'static str)` open newtype (namespaced); no range guard, no `all()`; external views mint via `Command::custom("ns.name")`. Enabled-by-default policy moves to `TView`/`TProgram` (rows 23/31). View-specific commands live with their view module, not centralized. |
 | 13 | `TObject` | — | `tobject.cpp` | (absorbed) | FOUNDATION | D2 no root class; lifetime via Rust ownership/`Drop` |
 | 14 | `TNSCollection`/`TCollection` | `TObject` | `tcollect.cpp`, `tvobjs.h` | (idiom) | MECHANICAL | → `Vec<T>` + iterators; `firstThat`/`forEach` → iterators |
 | 15 | `TNSSortedCollection`/`TSortedCollection` | `TCollection` | `tsortcol.cpp` | (idiom) | MECHANICAL | → `Vec<T: Ord>` |
