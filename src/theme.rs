@@ -115,6 +115,29 @@ impl Role {
 /// ```
 /// Indices: `[0]`=back-arrow, `[1]`=fwd-arrow, `[2]`=page/trough, `[3]`=thumb,
 /// `[4]`=page-when-no-range.
+///
+/// # Frame glyphs (row 24)
+///
+/// `TFrame` (`tframe.cpp` / `framelin.cpp`) draws its border from CP437 box
+/// chars. magiblot encodes them as a 5-bit `frameChars[33]` mask table fed by
+/// `initFrame[19]`, plus the sibling tee-join walk. Under D3 the sibling walk is
+/// **deferred** (a frame can't reach its siblings), so we instead store the box
+/// pieces as **named glyphs** (single- and double-line) and draw plain
+/// corners/edges — byte-identical to C++ for the common case (no `ofFramed`
+/// sibling touching the border). The four icon strings carry the `~`-toggle
+/// markers consumed by [`DrawCtx::put_cstr`](crate::view::DrawCtx::put_cstr).
+///
+/// The tee/cross glyphs (`frame_tee_*`, `frame_cross`) are seeded for
+/// completeness but are **unused this row** (they feed the deferred sibling
+/// walk).
+///
+/// CP437 → Unicode mapping (from `tvtext1.cpp`):
+/// ```text
+/// ┌ \xDA  ┐ \xBF  └ \xC0  ┘ \xD9  ─ \xC4  │ \xB3   (single)
+/// ╔ \xC9  ╗ \xBB  ╚ \xC8  ╝ \xBC  ═ \xCD  ║ \xBA   (double)
+/// closeIcon "[~■~]"  zoomIcon "[~↑~]"  unZoomIcon "[~↕~]"
+/// dragIcon "~─┘~"    dragLeftIcon "~└─~"
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Glyphs {
     // --- Scrollbar glyphs (row 25) ---
@@ -132,6 +155,58 @@ pub struct Glyphs {
     pub sb_thumb: char,
     /// Page fill when range is zero (both orientations). `vChars[4]` = `'\xB2'` (▓).
     pub sb_page_no_range: char,
+
+    // --- Frame glyphs (row 24) — single-line box ---
+    /// Single-line top-left corner `┌` (`\xDA`).
+    pub frame_tl: char,
+    /// Single-line top-right corner `┐` (`\xBF`).
+    pub frame_tr: char,
+    /// Single-line bottom-left corner `└` (`\xC0`).
+    pub frame_bl: char,
+    /// Single-line bottom-right corner `┘` (`\xD9`).
+    pub frame_br: char,
+    /// Single-line horizontal edge `─` (`\xC4`).
+    pub frame_h: char,
+    /// Single-line vertical edge `│` (`\xB3`).
+    pub frame_v: char,
+
+    // --- Frame glyphs (row 24) — double-line box (active frame) ---
+    /// Double-line top-left corner `╔` (`\xC9`).
+    pub frame_tl_d: char,
+    /// Double-line top-right corner `╗` (`\xBB`).
+    pub frame_tr_d: char,
+    /// Double-line bottom-left corner `╚` (`\xC8`).
+    pub frame_bl_d: char,
+    /// Double-line bottom-right corner `╝` (`\xBC`).
+    pub frame_br_d: char,
+    /// Double-line horizontal edge `═` (`\xCD`).
+    pub frame_h_d: char,
+    /// Double-line vertical edge `║` (`\xBA`).
+    pub frame_v_d: char,
+
+    // --- Frame glyphs (row 24) — tee/cross joins (DEFERRED sibling walk) ---
+    /// Single-line left tee `├` (`\xC3`) — unused this row.
+    pub frame_tee_l: char,
+    /// Single-line right tee `┤` (`\xB4`) — unused this row.
+    pub frame_tee_r: char,
+    /// Single-line top tee `┬` (`\xC2`) — unused this row.
+    pub frame_tee_t: char,
+    /// Single-line bottom tee `┴` (`\xC1`) — unused this row.
+    pub frame_tee_b: char,
+    /// Single-line cross `┼` (`\xC5`) — unused this row.
+    pub frame_cross: char,
+
+    // --- Frame icon strings (row 24) — `~`-toggled for `put_cstr` ---
+    /// Close icon `"[~■~]"` — `[` `]` in the frame role, `■` in `FrameIcon`.
+    pub close_icon: &'static str,
+    /// Zoom icon `"[~↑~]"` (window not maximized).
+    pub zoom_icon: &'static str,
+    /// Un-zoom icon `"[~↕~]"` (window maximized).
+    pub unzoom_icon: &'static str,
+    /// Resize/drag icon (bottom-right) `"~─┘~"`.
+    pub drag_icon: &'static str,
+    /// Resize/drag icon (bottom-left) `"~└─~"`.
+    pub drag_left_icon: &'static str,
 }
 
 impl Default for Glyphs {
@@ -150,6 +225,38 @@ impl Default for Glyphs {
             sb_thumb: '\u{25A0}',
             // Trough when range is zero: ▓ (0xB2)
             sb_page_no_range: '\u{2593}',
+
+            // Frame box — single-line: ┌ ┐ └ ┘ ─ │
+            frame_tl: '\u{250C}',
+            frame_tr: '\u{2510}',
+            frame_bl: '\u{2514}',
+            frame_br: '\u{2518}',
+            frame_h: '\u{2500}',
+            frame_v: '\u{2502}',
+
+            // Frame box — double-line: ╔ ╗ ╚ ╝ ═ ║
+            frame_tl_d: '\u{2554}',
+            frame_tr_d: '\u{2557}',
+            frame_bl_d: '\u{255A}',
+            frame_br_d: '\u{255D}',
+            frame_h_d: '\u{2550}',
+            frame_v_d: '\u{2551}',
+
+            // Frame tee/cross joins (deferred sibling walk): ├ ┤ ┬ ┴ ┼
+            frame_tee_l: '\u{251C}',
+            frame_tee_r: '\u{2524}',
+            frame_tee_t: '\u{252C}',
+            frame_tee_b: '\u{2534}',
+            frame_cross: '\u{253C}',
+
+            // Frame icon strings (~ toggles the FrameIcon style for the bright glyph):
+            //   close "[~■~]"  zoom "[~↑~]"  unZoom "[~↕~]"
+            //   drag "~─┘~"    dragLeft "~└─~"
+            close_icon: "[~\u{25A0}~]",
+            zoom_icon: "[~\u{2191}~]",
+            unzoom_icon: "[~\u{2195}~]",
+            drag_icon: "~\u{2500}\u{2518}~",
+            drag_left_icon: "~\u{2514}\u{2500}~",
         }
     }
 }
@@ -315,5 +422,15 @@ mod tests {
         // Spot-check the scrollbar glyphs (row 25).
         assert_eq!(t.glyphs().sb_page, '\u{2592}');
         assert_eq!(t.glyphs().sb_thumb, '\u{25A0}');
+        // Spot-check the frame glyphs (row 24).
+        assert_eq!(t.glyphs().frame_tl, '\u{250C}'); // ┌
+        assert_eq!(t.glyphs().frame_br, '\u{2518}'); // ┘
+        assert_eq!(t.glyphs().frame_tl_d, '\u{2554}'); // ╔
+        assert_eq!(t.glyphs().frame_h_d, '\u{2550}'); // ═
+        assert_eq!(t.glyphs().close_icon, "[~\u{25A0}~]"); // [~■~]
+        assert_eq!(t.glyphs().zoom_icon, "[~\u{2191}~]"); // [~↑~]
+        assert_eq!(t.glyphs().unzoom_icon, "[~\u{2195}~]"); // [~↕~]
+        assert_eq!(t.glyphs().drag_icon, "~\u{2500}\u{2518}~"); // ~─┘~
+        assert_eq!(t.glyphs().drag_left_icon, "~\u{2514}\u{2500}~"); // ~└─~
     }
 }

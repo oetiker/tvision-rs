@@ -159,6 +159,31 @@ impl<'a> DrawCtx<'a> {
         crate::text::draw_str(row, indent, s, text_indent, style) as i32
     }
 
+    /// Write `s` at view-local `(x, y)`, toggling between `lo` and `hi` styles at
+    /// each `~` (the `~` itself is not drawn) — ports `TDrawBuffer::moveCStr`'s
+    /// attribute-pair toggle (used by frame icons; reused by buttons/labels/menus
+    /// for hotkey highlighting). Starts in `lo`. Clipped exactly like
+    /// [`put_char`](Self::put_char). Returns the number of columns advanced.
+    ///
+    /// Faithful to [`DrawBuffer::move_cstr_part`](crate::screen::DrawBuffer): the
+    /// first `~` flips `lo` → `hi`, the next flips back, and so on; the `~`
+    /// characters draw nothing and do not advance the column.
+    pub fn put_cstr(&mut self, x: i32, y: i32, s: &str, lo: Style, hi: Style) -> i32 {
+        let mut col = 0i32;
+        let mut current = lo;
+        let mut hi_active = false;
+        for ch in s.chars() {
+            if ch == '~' {
+                hi_active = !hi_active;
+                current = if hi_active { hi } else { lo };
+                continue;
+            }
+            self.put_char(x + col, y, ch, current);
+            col += UnicodeWidthChar::width(ch).unwrap_or(1) as i32;
+        }
+        col
+    }
+
     /// Fill view-local rect `area_local` (clipped) with `ch` styled `style`.
     pub fn fill(&mut self, area_local: Rect, ch: char, style: Style) {
         if self.clip.is_empty() {
@@ -420,6 +445,46 @@ mod tests {
         assert_eq!(buf.get(1, 0).symbol(), " ");
         assert_eq!(buf.get(2, 0).symbol(), "c");
         assert_eq!(buf.get(3, 0).symbol(), "d");
+    }
+
+    #[test]
+    fn put_cstr_toggles_style_on_tilde() {
+        let mut buf = Buffer::new(10, 1);
+        let theme = Theme::classic_blue();
+        let lo = style(0xF, 0x1);
+        let hi = style(0xA, 0x1);
+        let n = {
+            let mut ctx = DrawCtx::new(&mut buf, &theme, Rect::new(0, 0, 10, 1), Point::new(0, 0));
+            // "[~X~]" -> '[' and ']' in lo, 'X' in hi; tildes draw nothing.
+            ctx.put_cstr(0, 0, "[~X~]", lo, hi)
+        };
+        assert_eq!(n, 3, "three visible columns advanced (the ~ draw nothing)");
+        assert_eq!(buf.get(0, 0).symbol(), "[");
+        assert_eq!(buf.get(0, 0).style(), lo);
+        assert_eq!(buf.get(1, 0).symbol(), "X");
+        assert_eq!(buf.get(1, 0).style(), hi, "between the ~ the style is hi");
+        assert_eq!(buf.get(2, 0).symbol(), "]");
+        assert_eq!(
+            buf.get(2, 0).style(),
+            lo,
+            "after the closing ~ the style is lo"
+        );
+    }
+
+    #[test]
+    fn put_cstr_clips_like_put_char() {
+        let mut buf = Buffer::new(10, 1);
+        let theme = Theme::classic_blue();
+        let lo = style(0xF, 0x1);
+        let hi = style(0xA, 0x1);
+        {
+            // clip columns 0..2; "[~X~]" draws '[' at 0, 'X' at 1, ']' at 2 (clipped).
+            let mut ctx = DrawCtx::new(&mut buf, &theme, Rect::new(0, 0, 2, 1), Point::new(0, 0));
+            ctx.put_cstr(0, 0, "[~X~]", lo, hi);
+        }
+        assert_eq!(buf.get(0, 0).symbol(), "[");
+        assert_eq!(buf.get(1, 0).symbol(), "X");
+        assert_eq!(buf.get(2, 0).symbol(), " ", "beyond the clip stays blank");
     }
 
     #[test]

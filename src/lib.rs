@@ -56,6 +56,7 @@
 //! | 29 | `TBackground` | [`desktop`] | ✅ |
 //! | 25 | `TScrollBar` | [`widgets`] | ✅ |
 //! | 26 | `TGroup` (`Group`) | [`view`] | ✅ |
+//! | 24 | `TFrame` (`Frame`) | [`frame`] | ✅ |
 
 pub mod backend;
 pub mod capture;
@@ -63,6 +64,7 @@ pub mod color;
 pub mod command;
 pub mod desktop;
 pub mod event;
+pub mod frame;
 pub mod help;
 pub mod screen;
 pub mod text;
@@ -82,6 +84,7 @@ pub use event::{
     Event, EventMask, Key, KeyEvent, KeyModifiers, MouseButtons, MouseEvent, MouseEventFlags,
     MouseWheel,
 };
+pub use frame::{Frame, WindowFlags};
 pub use help::HelpCtx;
 pub use screen::{Buffer, Cell, DrawBuffer};
 pub use theme::{Role, Theme};

@@ -1,0 +1,24 @@
+---
+source: src/frame.rs
+expression: screen.snapshot()
+---
+size: 20x6
+cursor: hidden
+text:
+|╔═[■]══ Edit ══[↑]═╗|
+|║                  ║|
+|║                  ║|
+|║                  ║|
+|║                  ║|
+|└─════════════════─┘|
+attr:
+|aaabaaaaaaaaaaaabaaa|
+|aaaaaaaaaaaaaaaaaaaa|
+|aaaaaaaaaaaaaaaaaaaa|
+|aaaaaaaaaaaaaaaaaaaa|
+|aaaaaaaaaaaaaaaaaaaa|
+|bbaaaaaaaaaaaaaaaabb|
+legend:
+  . default
+  a fg=BIOS(15) bg=BIOS(1)
+  b fg=BIOS(10) bg=BIOS(1)
