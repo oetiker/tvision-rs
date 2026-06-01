@@ -551,6 +551,8 @@ blank continuation cell.
 | `TKey` / `KeyDownEvent` | `event::{Key, KeyModifiers, KeyEvent}` | D1, D4, D5 |
 | `sfFocused` | `state.focused` / `StateFlag::Focused` | D5 |
 | `ofSelectable` / `ofPreProcess` | `options.selectable` / `options.pre_process` | D5 |
+| `growMode` / `dragMode` | `GrowMode` / `DragMode` (struct-of-bools; `gf*`/`dm*`) | D5 |
+| `helpCtx` / `hcNoContext` | `ViewState.help_ctx` / `HelpCtx::NO_CONTEXT` (open newtype) | D1 |
 | `evKeyDown` / `evCommand` | `Event::KeyDown(..)` / `Event::Command(..)` | D4 |
 | `message(v, …)` | targeted query (`Option<T>`) / `Event::Broadcast` | D4 |
 | `getPalette` / `getColor` | `ctx.theme.style(Role::…)` | D7 |

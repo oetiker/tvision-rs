@@ -8,7 +8,12 @@
 mod context;
 mod geometry;
 mod id;
+// `view::view` houses the `View` trait + `ViewState` (TView, row 23). The
+// inner name mirrors the C++ class file; the re-exports below flatten it away.
+#[allow(clippy::module_inception)]
+mod view;
 
 pub use context::{Context, DrawCtx};
 pub use geometry::{Point, Rect};
 pub use id::{ViewArena, ViewId};
+pub use view::{DragMode, GrowMode, Options, State, View, ViewState};

@@ -152,6 +152,20 @@ vendored ratatui cell-buffer+diff (MIT) → retained view tree + event loop.
     deferred Phase-0 item is row 9 (glyph tables → `Glyphs`), a stub that fills in
     per-widget. 155 unit/integration tests green; `cargo clippy --all-targets` and
     `cargo fmt --check` clean.
+  - **Phase 1 started — row 23 `TView` DONE** (`src/view/view.rs` + `src/help.rs`):
+    the `View` trait (`state`/`state_mut`/`draw` required; `handle_event`[no-op
+    base]/`valid`/`awaken`/`size_limits`/`calc_bounds`/`change_bounds` defaulted) +
+    `ViewState` composition + the four D5 struct-of-bools (`State`/`Options`/
+    `GrowMode`/`DragMode`) + `HelpCtx` open newtype (D1). Key decisions: base
+    `handle_event` is a no-op — TView's only body (mouse-down→`focus()`) **relocates
+    to TGroup row 26** (D3; breadcrumb incl. the `sfSelected`/`sfDisabled` guard is
+    in the `view.rs` module doc); no `getColor`/`getPalette`/`mapColor` on the trait
+    (views call `ctx.style(Role)`, D7); occlusion/buffered/`sfExposed` dropped (D8);
+    `dragView`→row 33, data/`value`→D10/row 39, enabled-command set→TProgram row 31
+    (the `>255`-always-enabled rule **dropped**, D1). `calcBounds`/`sizeLimits`
+    growMode math ported verbatim (incl. `resize_balance` recovery) and unit-tested.
+    Two-stage reviewed (spec PASS, quality PASS). 173 unit + 3 integration tests
+    green; clippy/fmt clean.
   - Coordinates are `i32` (faithful to magiblot's `int`).
   - Deps: `unicode-segmentation`, `unicode-width`, `crossterm`; dev: `insta`.
 - **Key design decisions** (recorded in `docs/PORTING-GUIDE.md` D1/D4): newtype vs
@@ -159,23 +173,24 @@ vendored ratatui cell-buffer+diff (MIT) → retained view tree + event loop.
   open newtype with namespaced `&'static str` identity; closed sets (`Key`) → enum.
   Constants live with their owner (no central registry).
 - Git on `main`; Phase 0 rows 1–12 committed (`010584f`); the INFRA substrate
-  (rows 5,17,18,19,20 + snapshot format) committed (`7f6edd9`); rows 16(min),
-  21, 22 are **uncommitted** (commit only when asked).
+  (rows 5,17,18,19,20 + snapshot format) committed (`7f6edd9`); Phase-0 rows
+  16(min), 21, 22 committed (`8045847`); **Phase-1 row 23 (`TView`) committed** as a
+  checkpoint so the Batch-A worktrees can see it. Working tree clean.
 
 ## Next step
-**Phase 0 is done — begin Phase 1, run it subagent-driven** (see "How to run the
-port" above). Sequence:
+**Phase 1 in progress — row 23 `TView` is DONE.** Continue subagent-driven (see
+"How to run the port" above). Sequence:
 
-1. **Row 23 `TView`** (`tview.cpp`, `sview.cpp`, `tvexposd.cpp`, `tvcursor.cpp`) —
-   FOUNDATION, **design on the main thread / Opus**: the `View` trait + `ViewState`
-   (D2/D5 state/options/growMode/dragMode struct-of-bools), drawn through `DrawCtx`,
-   events through `Context`. This sets the pattern every widget embeds, so own the
-   trait shape yourself (likely an advisor consult). It also forces the first
-   decisions deferred to it: the *enabled-by-default command policy* (D1 note on
-   row 12) and how `setState`/`getColor`→`Role` map. NOT a parallel-fan-out row.
-2. **Then `TFrame` 24 ∥ `TScrollBar` 25 ∥ `TBackground` 29** — once `TView`'s
-   pattern is set, these are largely independent; dispatch as parallel worktree
-   implementers, each with spec + code-quality review.
+1. ~~**Row 23 `TView`**~~ ✅ DONE (see Current state). The pattern every widget
+   embeds is set: embed `ViewState`, `impl View`, draw through `DrawCtx`, events
+   through `Context`. **Row-26 carryover:** TGroup must implement the relocated
+   mouse-down→select logic (verbatim breadcrumb, incl. `sfSelected`/`sfDisabled`
+   guard, in `src/view/view.rs` module doc) + the `sfFocused` focus broadcast.
+2. **NEXT — `TFrame` 24 ∥ `TScrollBar` 25 ∥ `TBackground` 29** — Batch A, largely
+   independent now that `TView`'s pattern is set; dispatch as parallel worktree
+   implementers, each with spec + code-quality review. **First resolve the commit
+   question** (row 23 must be visible to the worktrees — see the Worktree gotcha in
+   Current state).
 3. **`TGroup` 26** — FOUNDATION again: owns `Vec<Box<dyn View>>` (D3), three-phase
    event routing (D4), and brings the **live event loop** + the `query`/focus
    `Context` methods deferred from row 22. Design-heavy; main thread.

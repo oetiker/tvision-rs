@@ -47,12 +47,19 @@
 //! | 20 | `Clock` + timer queue | [`timer`] | ✅ |
 //! | 21 | capture stack | [`capture`] | ✅ |
 //! | 22 | `Context` / `DrawCtx` | [`view`] | ✅ |
+//!
+//! ## Phase 1 (widgets)
+//!
+//! | row | item | module | status |
+//! |-----|------|--------|--------|
+//! | 23 | `TView` (`View` trait + `ViewState`) | [`view`] | ✅ |
 
 pub mod backend;
 pub mod capture;
 pub mod color;
 pub mod command;
 pub mod event;
+pub mod help;
 pub mod screen;
 pub mod text;
 pub mod theme;
@@ -69,7 +76,10 @@ pub use event::{
     Event, EventMask, Key, KeyEvent, KeyModifiers, MouseButtons, MouseEvent, MouseEventFlags,
     MouseWheel,
 };
+pub use help::HelpCtx;
 pub use screen::{Buffer, Cell, DrawBuffer};
 pub use theme::{Role, Theme};
 pub use timer::{Clock, ManualClock, SystemClock, TimerId, TimerQueue};
-pub use view::{Context, DrawCtx, Point, Rect, ViewId};
+pub use view::{
+    Context, DragMode, DrawCtx, GrowMode, Options, Point, Rect, State, View, ViewId, ViewState,
+};

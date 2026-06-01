@@ -1,0 +1,17 @@
+---
+source: src/view/view.rs
+expression: screen.snapshot()
+---
+size: 6x3
+cursor: hidden
+text:
+|      |
+| **** |
+| **** |
+attr:
+|......|
+|.aaaa.|
+|.aaaa.|
+legend:
+  . default
+  a fg=BIOS(7) bg=BIOS(1)
