@@ -1,0 +1,19 @@
+---
+source: src/app/program.rs
+expression: screen.snapshot()
+---
+size: 12x4
+cursor: hidden
+text:
+|▒▒▒▒▒▒▒▒▒▒▒▒|
+|▒▒▒▒▒▒▒▒▒▒▒▒|
+|▒▒▒▒▒▒▒▒▒▒▒▒|
+|▒▒▒▒▒▒▒▒▒▒▒▒|
+attr:
+|aaaaaaaaaaaa|
+|aaaaaaaaaaaa|
+|aaaaaaaaaaaa|
+|aaaaaaaaaaaa|
+legend:
+  . default
+  a fg=BIOS(7) bg=BIOS(1)

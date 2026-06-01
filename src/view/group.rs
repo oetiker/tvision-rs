@@ -131,6 +131,19 @@ impl Group {
         self.children.iter().position(|c| c.id == id)
     }
 
+    /// Test hook: resolve a [`ViewId`] to its child index (the private
+    /// [`index_of`](Self::index_of) for other modules' tests).
+    #[cfg(test)]
+    pub fn index_of_pub(&self, id: ViewId) -> Option<usize> {
+        self.index_of(id)
+    }
+
+    /// Test hook: mutably borrow the [`ViewState`] of child `idx`.
+    #[cfg(test)]
+    pub fn child_state_mut(&mut self, idx: usize) -> &mut ViewState {
+        self.children[idx].view.state_mut()
+    }
+
     // -- insert / remove ----------------------------------------------------
 
     /// Insert `view` on **top** of the group (becomes the frontmost child) and
@@ -473,6 +486,19 @@ impl View for Group {
                 self.children[i].view.change_bounds(r);
             }
         }
+    }
+
+    /// `TView::resetCursor` (group case) — descend into the `current` child for
+    /// the absolute cursor position, accumulating the child's `origin` at this
+    /// level. `None` if there is no current child or it wants no cursor shown.
+    /// The top-down realization of the C++ focused-chain cursor walk.
+    fn cursor_request(&self) -> Option<Point> {
+        let i = self.current.and_then(|id| self.index_of(id))?;
+        let child = &self.children[i];
+        child
+            .view
+            .cursor_request()
+            .map(|p| p + child.view.state().origin)
     }
 
     /// `TGroup::valid` — for `cmReleasedFocus`, defer to the current child iff it
@@ -1278,5 +1304,49 @@ mod tests {
         );
         assert!(group.index_of(idb).is_none(), "B is gone");
         assert!(group.index_of(ida).is_some(), "A is still present");
+    }
+
+    // -- 11. cursor_request descends into the current child ------------------
+
+    #[test]
+    fn cursor_request_descends_into_current_child_with_origin() {
+        let mut out = VecDeque::new();
+        let mut timers = TimerQueue::new();
+        let log = Rc::new(RefCell::new(Vec::new()));
+
+        // A focused child at origin (6, 4) that wants a visible cursor at its
+        // view-local (2, 1). The group must return the origin-shifted (8, 5).
+        let mut group = Group::new(Rect::new(0, 0, 20, 10));
+        let id = with_ctx(&mut out, &mut timers, |_ctx| {
+            let mut p = Probe::new(Rect::new(6, 4, 11, 9), 'A', log.clone());
+            p.st.options.selectable = true;
+            p.st.state.focused = true;
+            p.st.state.cursor_vis = true;
+            p.st.cursor = Point::new(2, 1);
+            group.insert(Box::new(p))
+        });
+        with_ctx(&mut out, &mut timers, |ctx| {
+            group.set_current(Some(id), SelectMode::Normal, ctx)
+        });
+
+        assert_eq!(
+            group.cursor_request(),
+            Some(Point::new(8, 5)),
+            "current child's view-local cursor is shifted by its origin"
+        );
+
+        // With the cursor hidden the group returns None.
+        with_ctx(&mut out, &mut timers, |_ctx| {
+            group.children[0].view.state_mut().state.cursor_vis = false;
+        });
+        assert_eq!(
+            group.cursor_request(),
+            None,
+            "no current cursor when the child hides it"
+        );
+
+        // No current child -> None.
+        let empty = Group::new(Rect::new(0, 0, 20, 10));
+        assert_eq!(empty.cursor_request(), None);
     }
 }

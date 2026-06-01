@@ -629,6 +629,25 @@ pub trait View {
     fn change_bounds(&mut self, bounds: Rect) {
         self.state_mut().set_bounds(bounds);
     }
+
+    /// `TView::resetCursor` support — the view-local hardware-cursor position
+    /// this view wants shown, or `None` to hide it. Base: `Some(cursor)` iff the
+    /// view is focused with a visible cursor (`sfFocused && sfCursorVis`), else
+    /// `None`.
+    ///
+    /// This is the top-down realization of the C++ focused-chain cursor walk
+    /// (`TView::resetCursor` / `TView::drawCursor`): the live loop (row 31) asks
+    /// the root for the absolute cursor each pass. [`Group`](crate::view::Group)
+    /// overrides this to descend into its `current` child, accumulating the
+    /// child's origin at each level.
+    fn cursor_request(&self) -> Option<Point> {
+        let s = self.state();
+        if s.state.focused && s.state.cursor_vis {
+            Some(s.cursor)
+        } else {
+            None
+        }
+    }
 }
 
 #[cfg(test)]

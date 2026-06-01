@@ -118,6 +118,19 @@ impl Clock for ManualClock {
     }
 }
 
+/// Lets a shared [`ManualClock`] be injected (as `Box<Rc<ManualClock>>`) while a
+/// test retains a clone to advance time — the boxed `dyn Clock` an event loop
+/// owns is otherwise un-advanceable. `Clock` reads through `&self`, and
+/// `ManualClock`'s interior [`Cell`] makes advancing through a shared `Rc`
+/// sound on the single thread the event loop runs on. **Test-only** to keep the
+/// public clock API minimal.
+#[cfg(test)]
+impl Clock for std::rc::Rc<ManualClock> {
+    fn now_ms(&self) -> u64 {
+        (**self).now_ms()
+    }
+}
+
 // ---------------------------------------------------------------------------
 // TimerId — a cancelable handle
 // ---------------------------------------------------------------------------

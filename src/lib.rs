@@ -57,7 +57,9 @@
 //! | 25 | `TScrollBar` | [`widgets`] | ✅ |
 //! | 26 | `TGroup` (`Group`) | [`view`] | ✅ |
 //! | 24 | `TFrame` (`Frame`) | [`frame`] | ✅ |
+//! | 31 | `TProgram` (`Program`, live loop) | [`app`] | ✅ |
 
+pub mod app;
 pub mod backend;
 pub mod capture;
 pub mod color;
@@ -75,6 +77,7 @@ pub mod widgets;
 
 // --- House-style root re-exports (so `tv::Point` etc. resolve without `use`) ---
 
+pub use app::{ModalFrame, Program};
 pub use backend::{Backend, CrosstermBackend, HeadlessBackend, HeadlessHandle, Renderer};
 pub use capture::{CaptureFlow, CaptureHandler, CaptureStack};
 pub use color::{Color, Modifiers, Style};
