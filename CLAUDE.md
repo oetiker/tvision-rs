@@ -283,6 +283,48 @@ vendored ratatui cell-buffer+diff (MIT) → retained view tree + event loop.
   (`bff4885`); **Phase-2 row 30 (`TDeskTop`) committed** (`c80a20d`); **row 33a
   (Group/Context primitives) committed** (`4da4f52`); **row 33b (`TWindow` core)
   committed** (`d44e39b`); **row 33c (`TWindow` zoom) committed** (`432c01a`).
+  - **Phase-2 row 34 (`TDialog`) DONE** (module `dialog` = `src/dialog/{mod,dialog}.rs`;
+    + `Program::exec_view` + `Deferred::EndModal`/`Context::end_modal` +
+    `CaptureStack::pop` + `Window::set_flags`/`set_palette`/`set_grow_mode`): **the
+    modality payoff.** `Dialog { window: Window }` is the D2 embed-and-delegate
+    exemplar one level deeper (delegates all of `View` to the window except
+    `handle_event` + `valid`); ctor overrides `flags = wfMove|wfClose`,
+    `growMode = 0`, `palette = Gray`. **`handle_event`** ports `TDialog::handleEvent`
+    (delegate to `Window::handle_event` FIRST, then Esc→post `cmCancel`,
+    Enter→broadcast `cmDefault`, `cmOK/cmCancel/cmYes/cmNo`→`endModal` **iff
+    sfModal**); **`valid`** = `cmCancel`→true else `Group::valid`. **`exec_view`**
+    is the FOUNDATION crux (D9 "exec_view — corrected"): it ports `TGroup::execView`
+    + `execute` as a **nested `while end_state.is_none() { pump_once() }`** loop
+    that is sound because a `View` holds only `&mut Context`, never `&mut Program`,
+    so **the compiler bars a view from calling it mid-dispatch** (the sync loop only
+    runs top-level — startup / app `main` / a test driving pre-queued events).
+    Faithful steps: save/restore `current` + `command_set` (getCommands/setCommands),
+    insert at root (faithful to `application->execView`; `deskTop->execView` =
+    `executeDialog`'s variant — breadcrumbed for Phase-4 desktop-inset), clear
+    `ofSelectable`, set `sfModal` **directly** (C++ `setState` never propagates
+    sfModal), `set_current(Enter)`, push `ModalFrame` directly, run the inner+outer
+    (`while !valid`) loops, then **`captures.pop()` + `remove` conditional on the
+    modal's OWN `valid`** (NOT the root group's — a spec-review BLOCKER caught from a
+    wrong brief: `TGroup::execute`'s `while(!valid)` is virtual on `p`=the dialog,
+    `tgroup.cpp:184/205`; the root-scoped check ANDs the desktop sibling → latent
+    hang). **`endModal` is downward** (D3): the dialog can't reach `Program` so it
+    requests `ctx.end_modal(cmd)`→`Deferred::EndModal`→pump sets `end_state` (the
+    `69897fe` "new capability adds a Deferred variant" rule; 4th disjoint state
+    target, order-equivalent). **`CaptureStack::pop`** added (the one place a frame
+    is popped other than `ConsumedPop`; the loop owns the stack so `exec_view`, not
+    the handler, does the `valid(end_state)`-conditional pop). **DEFERRED (no
+    consumer at row 34, breadcrumbed, no dead stubs):** gray multi-scheme theming
+    (`palette = Gray` recorded; frame still renders blue — `TODO(row 34 gray
+    theming)`); `getData`/`setData`/`dataSize` (D10 — no data controls until Batch
+    B); the return-consuming `message()`/`query` + `cmCanCloseForm` veto (`valid`
+    uses only `Group::valid`); view-/menu-triggered async modal
+    (`Deferred::OpenModal` + posted completion) → Phase 4; `msgbox`. **TheTopView
+    dropped** (D8, no occlusion). `TheTopView`/post-remove sfModal-restore moot
+    (view dropped on remove). Brief: `docs/briefs/row34-tdialog-modal.md`; guide
+    amended (D9 "exec_view — corrected"). Two-stage reviewed (SPEC-FAIL→fixed the
+    validation-scope BLOCKER + a discriminating bite-verified sibling-veto test +
+    root-insert breadcrumb; QUALITY-PASS, one find_mut-consolidation nit applied).
+    299 lib + 3 integration + 1 doctest green; clippy/fmt clean. Working tree clean.
   - **SUBSTRATE realigned (`7b15782`)** — mid-33d we stopped to fix a foundation
     instead of bandaiding around it. `ViewId` was **group-local** (each `Group`
     embedded its own generational `ViewArena`) — an unexamined default that
@@ -423,13 +465,13 @@ above). Sequence:
      ~~33d-1 drag/close/setState~~ ✅ (`2887e95`),
      ~~33d-2 selection (cmNext/cmPrev + Alt-N + numbered windows)~~ ✅ (`15c601d`,
      see Current state).
-   - **`TDialog` 34 — NEXT** designs `exec_view`/`executeDialog` + the `ModalFrame`
-     push→pop lifecycle on `Program` (pop conditional on `valid(end_state)` — the
-     crux: a view can't reach the loop, so `exec_view` owns the modal run) +
-     `cmOK`/`cmCancel` + the return-consuming `message()`/`query` primitive (first
-     consumer: the `cmCanCloseForm` veto) + `getData`/`setData` (D10). Gray window
-     scheme drives the deferred multi-scheme theming. See
-     [`docs/HANDOVER.md`](docs/HANDOVER.md) (the row-34 design of record).
+   - ~~**`TDialog` 34**~~ ✅ **DONE** (module `dialog`; see Current state). The
+     modal payoff: `Dialog` embeds `Window` (D2 one level deeper) + `Program::
+     exec_view` (the nested-pump modal lifecycle — sound because a `View` holds
+     only `&mut Context`, never `&mut Program`, so the compiler bars a view from
+     re-entering the loop). **Scoped to the modal mechanism**; gray theming /
+     `getData`-`setData` (D10) / `message()`-`query` veto deferred (no consumers
+     yet — see the row-34 deferrals).
 7. **Then the widget batches fan out hard** (PORT-ORDER Batches B–E): Phase-3
    leaves, validators, menus, dialogs, editor — the bulk `MECHANICAL` rows; run as
    parallel worktree implementer+reviewer trios, committing at batch boundaries.

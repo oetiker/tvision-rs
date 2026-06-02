@@ -1,141 +1,146 @@
-# Session handover — row 33 (`TWindow`) COMPLETE; resume at row 34 (`TDialog`)
+# Session handover — row 34 (`TDialog`) COMPLETE; resume at Batch B (Phase 3 leaf widgets)
 
 > Living handover for the **next** rstv session. Read this, then
 > [CLAUDE.md](file:///home/oetiker/checkouts/rstv/CLAUDE.md) (orientation /
-> Current state / Next step), then start. When row 34 lands, update or replace
-> this file for the session after.
+> Current state / Next step), then start. When the next stage lands, update or
+> replace this file for the session after.
 
 ## Where things stand (git `main`)
 
 | commit | what |
 |--------|------|
-| `7efecb3` | Phase A — `Event::Broadcast { command, source }` (D4 amendment) |
-| `2887e95` | Row 33d-1 — TWindow drag + close + setState command set |
-| `69897fe` | Refactor — unify the 3 deferred channels into one `Deferred` queue |
-| **`15c601d`** | **Row 33d-2 — window selection (cmNext/cmPrev + Alt-N + numbered windows)** |
+| `15c601d` | Row 33d-2 — window selection (`TWindow` COMPLETE) |
+| `7011a1c` | docs: row 33d-2 done; row 34 handover |
+| **(this session)** | **Row 34 — `TDialog` + the modal `exec_view` lifecycle** |
 
-**Build state:** 287 lib + 3 integration + 1 doctest green; `cargo clippy
+**Build state:** 299 lib + 3 integration + 1 doctest green; `cargo clippy
 --all-targets -- -D warnings` and `cargo fmt --check` clean. Working tree clean.
 
-**Row 33 (`TWindow`) is now COMPLETE** (33a core/primitives → 33b core → 33c zoom
-→ substrate realign → Phase A → 33d-1 drag/close → 33d-2 selection). The next
-FOUNDATION stage is **row 34 (`TDialog`)** — the modality payoff.
+**Phase 2 is COMPLETE** (`TDeskTop` 30 → `TWindow` 33 → `TDialog` 34). The path
+to "a window/dialog you can see and drive modally" is done. The next work is the
+**Phase 3 leaf-widget fan-out** (PORT-ORDER Batch B) — the bulk `MECHANICAL`
+rows, run as **parallel worktree implementer+reviewer trios**.
 
-## What 33d-2 did (just landed — `15c601d`)
+## What row 34 did (just landed — the modality payoff)
 
-The *selection* half of `TWindow`. Brief:
-[`docs/briefs/row33d-2-selection.md`](briefs/row33d-2-selection.md). Built:
+Brief: [`docs/briefs/row34-tdialog-modal.md`](briefs/row34-tdialog-modal.md).
+Guide amended: **D9 "exec_view — corrected"** (the two modal-invocation paths).
+New module `dialog` = `src/dialog/{mod.rs,dialog.rs}`.
 
-- **`View::number() -> Option<i16>`** (trait, default `None`; `Window` overrides
-  `Some(n)` iff `n>0`). Dropped Window's inherent `number()` getter — no
-  same-name inherent+trait clash. Field still named `number`.
-- **`View::select_window_num(num, ctx) -> bool`** (trait tree-op, default no-op;
-  `Desktop` overrides → `group.focus_by_number`). Reached via the **trait method,
-  NOT an `as_any_mut` downcast** — keeps `Program` decoupled from concrete
-  `Desktop`. Lives in the `find_mut`/`remove_descendant` tree-op family.
-- **`Group::focus_by_number`** — selects the **`ofSelectable`** child whose
-  `number()` matches, via `focus_child`. **The select-vs-focus crux:** C++ uses
-  `select()` (cmNext via `selectNext`, Alt-N via the window's `select()`); we have
-  no standalone `select_child`, only `focus_child` (== `select()` + an outgoing
-  `valid(cmReleasedFocus)` guard). That guard is **redundant-but-harmless** because
-  both call sites are gated upstream (cmNext via the desktop's `valid`; Alt-N via
-  `canMoveFocus`), and windows carry **`ofTopSelect`** so `focus_child`→`make_first`
-  raises them exactly as `select()`→`makeFirst` does. Reasoning is in code
-  comments at each call site (a spec reviewer will ask "why not `select`?").
-- **TDeskTop `cmNext`/`cmPrev`** (`desktop.rs` `handle_event`, the old
-  `TODO(row 33, D9)` breadcrumb): faithful `tdesktop.cpp` port. `ev.clear()` sits
-  **outside** the `valid()` guard (C++ `break` falls through to `clearEvent`);
-  other commands → **no** clear (C++ `default: return`). cmNext = `focus_next(false)`
-  (== `selectNext(False)`); cmPrev = `put_in_front_of(current, Some(background))`
-  (sends current to the back). NB `put_in_front_of`'s `target: None` means *to-top*
-  — cmPrev passes the resolved `Some(background)`.
-- **Alt-N (`cmSelectWindowNum`)** in `program_handle_event` — **BEFORE**
-  `group.handle_event` (faithful `TProgram::handleEvent` order). A **direct walk**
-  (the window number is an integer, not a `ViewId`, so the `Broadcast{source}`
-  substrate does not serve it). The three-way clear matrix: `can&&matched`→clear,
-  `can&&!matched`→**event stays live** (falls through to the group), `!can`→clear.
-  `canMoveFocus` checks the **desktop's** `valid(RELEASED_FOCUS)` (via
-  `find_mut(desktop_id)`), not the root group's. Added `desktop: Option<ViewId>`
-  param to `program_handle_event`.
-- **`setState`** — `{cmNext, cmPrev}` enabled **UNCONDITIONALLY** (C++ has no flag
-  guard — unlike cmClose/cmZoom). `cmResize` stays **dropped** (no handler yet —
-  the keyboard-resize sub-mode deviation).
+- **`Dialog { window: Window }`** — the D2 embed-and-delegate exemplar one level
+  deeper (`Dialog` is-a `Window` is-a `Group`). Delegates *all* of `View` to the
+  window **except** `handle_event` + `valid`. Ctor (`tdialog.cpp`): `flags =
+  wfMove|wfClose` (re-pushed to the frame via new `Window::set_flags` so no zoom
+  icon), `growMode = 0`, `palette = Gray`, `wnNoNumber`.
+- **`handle_event`** ports `TDialog::handleEvent`: `Window::handle_event` **first**,
+  then Esc→post `cmCancel`, Enter→broadcast `cmDefault`, `cmOK/cmCancel/cmYes/cmNo`
+  →`endModal` **iff `sfModal`** (else left live). **`valid`** = `cmCancel`→true else
+  `Group::valid`.
+- **`Program::exec_view(view) -> Command`** — the FOUNDATION crux. Ports
+  `TGroup::execView` + `execute` as a **nested `while end_state.is_none() {
+  pump_once() }`** loop (+ the outer `while !valid`). **Sound because a `View` holds
+  only `&mut Context`, never `&mut Program`** — the compiler bars a view from
+  re-entering the loop, so the sync loop only ever runs top-level (startup / app
+  `main` / a test driving pre-queued events). Faithful: save/restore `current` +
+  `command_set`, insert at root (faithful to `application->execView`), clear
+  `ofSelectable`, set `sfModal` **directly** (C++ `setState` never propagates it),
+  `set_current(Enter)`, push `ModalFrame` directly, run the loops, then
+  `captures.pop()` + `remove` — **validation scoped to the modal's OWN `valid`,
+  NOT the root group's** (the spec-review blocker: `tgroup.cpp:184/205` — the
+  `while(!valid)` is virtual on `p`=the dialog; root-scoping ANDs the desktop
+  sibling → latent hang).
+- **`endModal` is downward (D3):** the dialog requests `ctx.end_modal(cmd)` →
+  **`Deferred::EndModal`** → the pump sets `Program::end_state` (the `69897fe`
+  "new capability adds a `Deferred` variant" rule). **`CaptureStack::pop`** added
+  (the loop owns the stack, so `exec_view` — not the handler — does the
+  `valid(end_state)`-conditional pop).
 
-Two-stage reviewed (SPEC-PASS; QUALITY-PASS after closing two test-discrimination
-gaps: the no-match Alt-N test now asserts the event stayed **live** via a recording
-probe — verified it bites by temporarily flipping the arm to clear; and the
-cmNext-cycle test drives the enable through a **real `pump_once` drain** of a live
-Alt+1 selection rather than force-enabling, which let us **delete the
-`clear_deferred` test scaffold**).
+Two-stage reviewed: SPEC-FAIL → fixed the validation-scope **blocker** (+ a
+bite-verified discriminating sibling-veto test + a root-insert deviation
+breadcrumb), then QUALITY-PASS (one `find_mut`-consolidation nit applied).
 
-## NEXT — row 34 (`TDialog`): the modality payoff
+## NEXT — Batch B: the Phase 3 leaf-widget fan-out begins
 
-Consumes the row-31 `ModalFrame` seam. Design on the main thread; **advisor
-consult before writing**; Opus implementer against a written
-`docs/briefs/row34-*.md`; fresh-agent two-stage review (spec → quality);
-integrate; commit at the boundary. FOUNDATION → main thread, **no worktree**.
+This is where the port **stops being serial FOUNDATION and fans out**. PORT-ORDER
+**Batch B** (lines ~197–202). Run as **parallel worktree implementer+reviewer
+trios** (`isolation: "worktree"`), Sonnet for `MECHANICAL`, committing at batch
+boundaries. **Commit completed rows before dispatching worktree agents that build
+on them** (the worktree-gotcha: a worktree branches from the last *commit*).
 
-The crux (row-31 breadcrumb in `src/app/program.rs`): a view can't reach the loop,
-so **`exec_view`/`executeDialog` owns the modal run** — push the `ModalFrame`
-capture handler, run the loop until `valid(end_state)`, then **pop the frame
-conditional on `valid(end_state)`** (Program state a `CaptureHandler` can't reach;
-this is why the pop lives in `exec_view`, not the handler). Also:
+The dependency-ordered waves:
 
-- **`cmOK`/`cmCancel`** + the modal `end_modal` path (33d-1 already wired the
-  window's `cmClose`→`sfModal`→post `cmCancel` branch; row 34 owns the teardown
-  that consumes it).
-- **The return-consuming `message()`/`query` tree-owner primitive** — first
-  consumer is the dialog `cmCanCloseForm` veto. Design of record: guide
-  **D4 "message() — corrected"** (a `message(id, ev) -> Option<ViewId>` over
-  `find_mut`; the audit shows every return-consuming `message()` is
-  owner-initiated, so the aliasing rule bars only a pattern that never occurs).
-- **`getData`/`setData`** typed gather/scatter (D10).
-- **Gray window scheme** drives the deferred multi-scheme theming.
-- **Any new deferred capability row 34 needs** (e.g. the modal-pop, if it routes
-  through the queue) **ADDS A `Deferred` VARIANT**, not a `Context::new` param
-  (the `69897fe` unification — `Deferred {PushCapture, EnableCommand,
-  DisableCommand, ChangeBounds, SetState, Close}` + one `deferred: Vec<Deferred>`;
-  `Context::new` is 4 params `(out_events, timers, now_ms, deferred)`).
+1. **`TCluster` (38, FOUNDATION-ish) + `TStaticText` (36, MECHANICAL)** first —
+   they gate the rest of the wave. `TCluster` is the base for checkboxes/radio;
+   `TStaticText` is the base for `TParamText`/`TLabel`. Build these (and review)
+   **before** fanning out their dependents.
+2. **No-validator wave (parallel once 36/38 land):** `TButton` (37, press
+   animation via the row-20 `Clock`; broadcast/command flags), `TIndicator` (45),
+   `TParamText`/`TLabel` (40/41, need 36), `TCheckBoxes`/`TRadioButtons`/
+   `TMultiCheckBoxes` (42/43/44, need `TCluster` 38).
+3. **Validator wave:** `TValidator` trait (35, the abstract base — D2 `transfer`
+   hook feeds D10) → `TInputLine` (39, FOUNDATION: typed `value`/`set_value`).
 
-C++ source (read it): `tdialog.cpp` `TDialog::handleEvent` (cmOK/cmCancel + the
-`cmCanCloseForm`/`valid` veto); `tprogram.cpp` `TProgram::execView`/`execModal`;
-`tgroup.cpp` `TGroup::execView`/`execute`/`endModal`/`valid`.
+**`TButton` is the natural first exec_view *consumer*:** a dialog with an OK/Cancel
+button posting `cmOK`/`cmCancel` is the first realistic `exec_view` round-trip with
+real controls. **`msgbox` (63)** (`messageBox`/`inputBox`) becomes buildable once
+`TButton` + `TStaticText` exist — it is also the first consumer of the **D9
+view-triggered async-modal path** (result via a posted completion `Command`); the
+guide's D9 "exec_view — corrected" carries that design (built at Phase 4 / when a
+menu or msgbox needs it, NOT now).
 
-## Still deferred after row 33 (unchanged by 33d-2)
-- **`cmResize` keyboard resize sub-mode** (`dragView`'s arrows-until-Enter/Esc
-  branch) — no menu can trigger `cmResize` yet; enable it in `setState` only when
-  menus land. `TODO(33d-2/later, D9)` breadcrumb in `window.rs`.
+## Row-34 deferrals that become buildable as controls land (don't forget these)
+- **`getData`/`setData`/`dataSize` (D10) — build at `TInputLine` (39)**, the first
+  data-bearing control. The typed `value`/`set_value` protocol + the dialog
+  gather/scatter group-walk. No stub exists today (correctly).
+- **Gray multi-scheme theming** — `Dialog` records `palette = Gray` but the frame
+  still renders the blue `Frame*` roles. Mapping `Gray`/`Cyan` → distinct `Theme`
+  roles (push palette to the frame + branch role selection + new `Theme` entries)
+  is a standalone cosmetic chunk. `TODO(row 34 gray theming)` in `window.rs`
+  (`set_palette`) + the `dialog` module doc. Good first-thing when a dialog's look
+  matters (e.g. the color dialog, Batch E).
+- **The return-consuming `message()`/`query` tree-owner primitive + `cmCanCloseForm`
+  veto** — `Dialog::valid` uses only `Group::valid` today. The veto needs a
+  *validating control* (`TInputLine` + a `TValidator`); build the primitive at its
+  first real consumer (guide D4 "message() — corrected" is the design of record,
+  "designed but not built").
+
+## Still deferred (older, unchanged by row 34)
+- **`cmResize` keyboard resize sub-mode** (`window.rs` `TODO(33d-2/later, D9)`) —
+  enable in `setState` only when a menu can trigger `cmResize`.
 - **Scrollbar auto-repeat + thumb-drag** (`scrollbar.rs` `TODO(row 31, D9)`) →
-  Batch B widget pass.
-- **Close press-and-hold release-confirm loop** (`frame.rs` `TODO(row 33, D9)`) —
-  we post `cmClose` on mouse-down.
-- Sibling tee-walk, multi-scheme theming, shadow casting, row-9 glyphs — as before.
+  Batch B widget pass (good to fold in while touching widgets).
+- **Close press-and-hold release-confirm** (`frame.rs` `TODO(row 33, D9)`).
+- **Sibling tee-walk** (`framelin.cpp` `FrameMask`), **shadow casting**
+  (`group.rs` `TODO(row 33)`), **row-9 glyphs** continue per-widget.
+- **View-/menu-triggered async modal** (`Deferred::OpenModal` + posted completion)
+  → Phase 4 (no menu/button exists yet); guide D9 carries the design.
 
 ## Process reminders
-- Main-thread design + **advisor consult before writing** + Opus implementer
-  against a written `docs/briefs/` brief + fresh-agent two-stage review (keep
-  reviewers adversarial against the **C++ + corrected guide**, not just the brief).
-- Single main-thread FOUNDATION stages → **no worktree**. Commit at clean reviewed
-  stage boundaries.
-- **The verification that matters is the `pump_once` round-trip**, not a
-  handler/capture unit test in isolation. For row 34 specifically: a modal
-  `exec_view` test must drive the full push→run→pop through real pumps and assert
-  the frame popped only on `valid(end_state)`.
-- **Make round-trip tests discriminating** (33d-2 lesson): a test that passes
-  under both the correct and the buggy branch proves nothing — assert the
-  *distinguishing* observation (event stayed live / enable came from a real drain),
-  and confirm the test bites by temporarily breaking the code.
-- **Split a too-large stage at its natural seam** (33d → 33d-1/33d-2 worked). If
-  row 34 is large, split modal-loop-mechanism from typed-data gather/scatter.
+- **The fan-out changes the cadence:** Phase 0–2 were serial main-thread
+  FOUNDATION. Batch B is **parallel `MECHANICAL` leaves** → dispatch
+  implementer+reviewer trios in **worktrees** (`isolation: "worktree"`), Sonnet for
+  `MECHANICAL`, Opus for the FOUNDATION rows (`TCluster` 38, `TValidator` 35,
+  `TInputLine` 39). The orchestrator owns shared-file edits (`lib.rs`,
+  `widgets/mod.rs` re-exports) to avoid races. Commit at batch boundaries.
+- **Per-row brief is still inline + self-contained** (the PORT-ORDER row + the C++
+  + the D-rules from Appendix B + the existing types it builds on + "run
+  test/clippy/fmt + add a snapshot test"). Never "go read the plan."
+- **Two-stage review stays mandatory** (spec → quality, fresh adversarial agents
+  against the **C++ + guide**, not just the brief — row 34 proved the brief itself
+  can be wrong: a brief error put the modal validation at the wrong scope, and only
+  a C++-adversarial spec reviewer caught it). **Make round-trip tests
+  discriminating + bite-checked.**
+- **Snapshot-test workflow** (Appendix B step 4) is fully unlocked: build a widget
+  on a `HeadlessBackend`, `render`, `assert_snapshot!` against the frozen format.
+  NB cargo-insta is **not installed** in this env — `insta::assert_snapshot!`
+  compares against the committed `.snap`; for a new snapshot, run with
+  `INSTA_UPDATE=always cargo test <name>` to generate, then review the `.snap` by
+  hand (row 34 hand-wrote one and verified it regenerates identically).
 
 ## Outstanding TODOs seeded in code (grep)
+- `TODO(row 34 gray theming)` in `src/window/window.rs` — gray/cyan scheme roles.
 - `TODO(33d-2/later, D9)` in `src/window/window.rs` — cmResize keyboard sub-mode.
-- `row 34` in `src/app/program.rs` — `exec_view`/`executeDialog` + the `ModalFrame`
-  pop lifecycle + the `message()` primitive (**row 34 — NEXT**).
-- `TODO(row 33, D9)` in `src/frame.rs` — close press-and-hold confirm (the frame's
-  own drag cases are now handled window-side via `DragCapture`; that part of the
-  breadcrumb can be trimmed).
 - `TODO(row 31, D9)` in `src/widgets/scrollbar.rs` — auto-repeat + thumb-drag.
+- `TODO(row 33, D9)` in `src/frame.rs` — close press-and-hold confirm.
 - `TODO(row 33)` in `src/view/group.rs` — shadow casting in `Group::draw`.
-- Sibling tee-walk + full `framelin.cpp` machinery — deferred (`src/frame.rs`).
 - Row 9 `Glyphs` continues to fill in per-widget.
