@@ -319,6 +319,33 @@ vendored ratatui cell-buffer+diff (MIT) → retained view tree + event loop.
     the polymorphism. Brief: `docs/briefs/row33-phaseA-broadcast-source.md`.
     Two-stage reviewed (SPEC-PASS + QUALITY-PASS). 268 unit + 3 integration + 1
     doctest green; clippy/fmt clean. Working tree clean.
+  - **Row 33d-1 — TWindow drag + close + setState DONE (`2887e95`)** — the
+    *interactive* half of `TWindow`. **33d was split** at its natural seam (advisor
+    call): 33d-1 = drag/close/setState; 33d-2 = selection (cmNext/cmPrev + Alt-N).
+    The split kept 33c's "enable only handled commands" principle clean. Built:
+    (a) a **deferred tree-op channel** on `Context` — `TreeOp {ChangeBounds,
+    SetState, Close}` + `request_bounds`/`request_set_state`/`request_close`, the
+    **3rd member** of the deferred-channel family (`pending_captures`/
+    `command_changes`/`pending_tree_ops`); the pump drains+applies it after dispatch
+    against the root via `find_mut`/`change_bounds`, `find_mut`/`set_state`,
+    `remove_descendant` (drain-to-local-then-rebuild-ctx, the row-31 destructure
+    discipline). (b) **Drag = a `DragCapture` capture handler** (D9, replaces
+    `dragView`'s nested `mouseEvent` loop): the **window** — not the frame (D3: a
+    frame can't name the window it moves) — starts the drag from a still-live
+    `MouseDown` *after* group delegation, replicating `TFrame::handleEvent`'s
+    geometry (title→Move, bottom corners→Grow/GrowLeft, middle-btn→Move);
+    `move_grow` ports `TView::moveGrow` verbatim (`min(max())` **not** `clamp` — it
+    panics on lo>hi); `sfDragging` on directly (propagates to the frame's
+    single-line border) / off via the deferred channel on `MouseUp`. **(0,0)-desktop
+    absolute-coords assumption documented** on `DragCapture` (matches `ModalFrame`'s
+    caveat — revisit when a menu/status bar shifts the desktop, Phase 4). (c)
+    **`cmClose`** → if `sfModal` post `cmCancel` (row 34 owns teardown) else
+    `request_close` if `valid(cmClose)`; **no target guard** (Phase A vacuous). (d)
+    **`setState`** enable set = `{cmClose if wfClose, cmZoom if wfZoom}` (cmNext/
+    cmPrev → 33d-2; cmResize stays un-enabled). Brief: `docs/briefs/row33d-1-drag-
+    close.md`. Two-stage reviewed (SPEC-PASS after strengthening a vacuous
+    `dmLimitLoY` clamp test; QUALITY-PASS). 278 unit + 3 integration + 1 doctest
+    green; clippy/fmt clean. Working tree clean.
 
 ## Next step
 **Phase 2 in progress.** Continue subagent-driven (see "How to run the port"
@@ -345,14 +372,16 @@ above). Sequence:
    - **`TWindow` 33** (module `window`) — the D2 embed-and-delegate exemplar,
      **staged**: ~~33a Group/Context primitives~~ ✅, ~~33b core~~ ✅, ~~33c zoom~~ ✅,
      ~~SUBSTRATE realign (global `ViewId`)~~ ✅ (`7b15782`),
-     ~~Phase A `Broadcast{source}`~~ ✅ (`7efecb3`, see Current state).
-     **NEXT → 33d** — now *simplified* by the substrate: drag = capture handler
-     (window names itself via `self.id()`, loop applies bounds via `find_mut(id)`),
-     close = `root.remove_descendant(id)`, full setState enable-set + TDeskTop
-     cmNext/cmPrev (+ Alt-N number-walk, now unblocked), scrollbar
-     auto-repeat/thumb-drag. The old close-removal channel + drag path-building are
-     **gone**. See [`docs/HANDOVER.md`](docs/HANDOVER.md) (the 33d plan + the
-     `docs/briefs/row33*-*.md` templates).
+     ~~Phase A `Broadcast{source}`~~ ✅ (`7efecb3`),
+     ~~33d-1 drag/close/setState~~ ✅ (`2887e95`, see Current state).
+     **NEXT → 33d-2** — the *selection* half: `View::number()` (drop Window's
+     inherent getter), `Group::focus_by_number` + `View::select_window_num` (trait
+     method, Desktop overrides — **not** an `as_any_mut` downcast), TDeskTop
+     `cmNext`/`cmPrev` (now buildable: `focus_next` + `put_in_front_of` exist),
+     Alt-N (`cmSelectWindowNum`) as a **direct walk** in `program_handle_event`
+     (before `group.handle_event`; gated on desktop `valid(RELEASED_FOCUS)`), and
+     adding `{cmNext, cmPrev}` to the window's setState enable set. See
+     [`docs/HANDOVER.md`](docs/HANDOVER.md) (the 33d-2 design of record).
    - **`TDialog` 34** designs `exec_view`/`executeDialog` + the `ModalFrame`
      push→pop lifecycle on `Program` (pop conditional on `valid(end_state)` — the
      crux). Gray window scheme drives the deferred multi-scheme theming.
