@@ -11,7 +11,9 @@
 |--------|------|
 | `15c601d` | Row 33d-2 — window selection (`TWindow` COMPLETE) |
 | `7011a1c` | docs: row 33d-2 done; row 34 handover |
-| **(this session)** | **Row 34 — `TDialog` + the modal `exec_view` lifecycle** |
+| `b265a28` | **Row 34 — `TDialog` + the modal `exec_view` lifecycle** |
+| `233179e` | docs: row 34 done (Phase 2 complete); Batch B handover |
+| `c7d3cf6` | docs: record the row-34 modal program-handling deviation (D9) |
 
 **Build state:** 299 lib + 3 integration + 1 doctest green; `cargo clippy
 --all-targets -- -D warnings` and `cargo fmt --check` clean. Working tree clean.
