@@ -1,195 +1,166 @@
-# Session handover — resume at row 33d (drag + close) → TDialog 34
+# Session handover — resume at the message()/payload cleanup → then row 33d
 
 > Living handover for the **next** rstv session. Read this, then
 > [CLAUDE.md](file:///home/oetiker/checkouts/rstv/CLAUDE.md) (orientation /
-> Current state / Next step), then start the next stage. When it lands, update or
-> replace this file for the session after.
+> Current state / Next step), then start. When it lands, update or replace this
+> file for the session after.
 
 ## Where things stand (git `main`)
 
 | commit | what |
 |--------|------|
-| `bff4885` | **Row 31 `TProgram`** — the live event loop (D9): capture stack + timer queue made live |
-| `c80a20d` | **Row 30 `TDeskTop`** — `Desktop` = Group + Background (D2); embed-and-delegate-a-Group exemplar; faithful `defaultBkgrnd` ░ |
-| `4da4f52` | **Row 33a** — Group/Context primitives for TWindow |
-| `d44e39b` | **Row 33b** — TWindow core (static selectable window) |
-| `432c01a` | **Row 33c** — TWindow zoom (owner-extent channel + downcast seam + zoom/locate + cmZoom enable) |
+| `bff4885` | Row 31 `TProgram` — the live event loop (D9) |
+| `c80a20d` | Row 30 `TDeskTop` |
+| `432c01a` | Row 33c — TWindow zoom |
+| `8f2d11d` | (handover doc for the 33c→33d session) |
+| **`7b15782`** | **Substrate realignment — global `ViewId` + self-id + `find_mut`/`remove_descendant`** |
 
-**Build state:** 269 unit + 3 integration tests green; `cargo clippy --all-targets
--- -D warnings` and `cargo fmt --check` clean. Working tree clean.
+**Build state:** 271 tests green (267 unit + 3 integration + 1 doctest); `cargo
+clippy --all-targets -- -D warnings` and `cargo fmt --check` clean. Working tree clean.
 
-**Phase 2 progress:** row 30 done; **row 33 is staged** — 33a + 33b + 33c done,
-**33d remains**; then **row 34 `TDialog`**. The goal is still "a window you can see
-and drive": you can now **see**, **select/raise**, and **zoom** a window; 33d makes
-it **draggable + closable** (move/resize/close + cmNext/cmPrev).
+## What the last session did (read this — it changes 33d)
 
-## The row-33 staging (decided + partly executed)
+We stopped to fix a foundation rather than bandaid around it (see the new memory
+`fix-foundations-not-bandaids`). Root cause: `ViewId`s were **group-local** (each
+`Group` embedded its own generational `ViewArena`) — an unexamined default that
+contradicted the guide's own D3 promise ("resolve a `ViewId` by a tree-walk via
+`Context`") and whose `is_valid` validator was **dead code**. That group-locality
+was the real obstacle behind 33d's drag/close.
 
-Row 33 (`TWindow`) is too big for one pass; it was decomposed (advisor-sharpened).
-The gating realization: **`pump_once` drops disabled commands at the program
-boundary**, and `cmZoom`/`cmClose`/`cmResize`/`cmNext`/`cmPrev` start **disabled**;
-only `TWindow::setState(sfSelected)`→`enableCommands` turns them on. So a view must
-reach the program's command set — a D3 view→owner problem. There are **three**
-such view→owner effects in TWindow, each needs a downward channel:
+**Landed (`7b15782`):** one process-global monotonic `ViewId` (`NonZeroU64`),
+stamped into each view's own `ViewState.id` at `Group::insert`, resolved by
+`View::find_mut(id)` / `remove_descendant(id, ctx)` (Group recurses; Window/Desktop
+delegate; Frame leaf). The dead arena is gone. Guide corrected: **D3 "Resolution
+substrate — corrected"** and **D4 "`message()` — corrected"**.
 
-1. **`select()`→`makeFirst`** (Z-reorder) — internal to `Group`. ✅ **done in 33a.**
-2. **`setState`→enable/disable commands** — deferred command-enable channel on
-   `Context`. ✅ **channel done in 33a; used by 33c/33d's setState.**
-3. **`close()`→`destroy(this)`** (self-removal) — a close-removal channel. **33d.**
+**The downstream realization (D4 amendment, designed, NOT yet built):** the C++
+`message()` payload + targeted query were droppable *only because* the id substrate
+was broken. The whole-tree audit (42 `message()` sites) shows it ports **directly**
+onto the new substrate:
+- **39/42 fire-and-forget** `message(owner, evBroadcast, cmX, this)` → a
+  **`Broadcast { command, source: Option<ViewId> }`** (the `void* infoPtr`
+  reinstated as a **resolvable `ViewId`**). Receiver: `source == self.h_scroll_bar`.
+- **3/42 consume the return** (Alt-N, an app `cmCanCloseForm` veto in `valid()`, a
+  test) — a synchronous "broadcast a question, was it claimed?" — and **all are
+  owner-initiated and downward**. They port as one tree-owner primitive:
+  `Group::message(target: ViewId, ev) -> Option<ViewId>` = `find_mut(target)` →
+  deliver → return the source iff consumed. NOT a `Context` method (Context holds
+  no tree). The aliasing rule bars only "a view querying across the tree mid-`handle_event`",
+  which the audit shows **never happens**.
 
-### ✅ 33a (commit `4da4f52`) — `docs/briefs/row33a-group-context-primitives.md`
-- **Deferred command-enable channel** on `Context`: `command_changes:
-  Vec<(Command,bool)>` + `Context::enable_command`/`disable_command`; `Program`
-  has `pending_command_changes`, applied after dispatch (mirrors
-  `pending_captures`), flips `command_set_changed`. Threaded the new 5th
-  `Context::new` arg through all ~17 call sites.
-- **Z-reorder on `Group`**: `put_in_front_of(id, target, ctx)` + `make_first(id,
-  ctx)` (faithful `putInFrontOf`/`makeFirst`, D8 drawHide/drawShow dropped,
-  `ofSelectable`→`resetCurrent` tail kept). **`None` is a deliberate to-top
-  sentinel for `make_first`, NOT C++ `Target==0` (which is send-to-bottom — has no
-  consumer, unimplemented).** Documented.
-- **`ofTopSelect` rewire**: selecting a `top_select` child raises it via
-  `make_first` (faithful `select()`); validate gate (`focus()`) preserved;
-  `focusNext`→`focus()` raises `ofTopSelect` views (faithful). Raise-on-click test
-  uses the realistic desktop layout (non-selectable Background at `children[0]`/
-  bottom, so `firstMatch` skips it and returns the raised window as current).
+## NEXT — Phase A: build `message`/payload, then remove the kludges it was missing
 
-### ✅ 33b (commit `d44e39b`) — `docs/briefs/row33b-twindow-core.md`
-New module `src/window/{mod,window.rs}`. `Window` embeds a `Group` (D2), delegates
-the `View` trait, overriding `draw`/`handle_event`/`set_state`/`size_limits`.
-- ctor ports `TWindow::TWindow` verbatim (flags wfMove|wfGrow|wfClose|wfZoom,
-  zoom_rect=bounds, palette=Blue, sfShadow + ofSelectable|ofTopSelect, growMode
-  gfGrowAll|gfGrowRel). Builds the `Frame` directly + pushes title/flags/number
-  down (D3) + inserts as a group child. **No frame factory** (under D3 a custom
-  frame needs the downcast seam → reintroduce at 33c if needed; `TODO(33c)` in
-  `window.rs`).
-- **`WindowFlags` relocated** from `frame.rs` to the `window` module (crate-root
-  re-export preserved). **`WindowPalette`** enum (Blue/Cyan/Gray; getPalette under
-  D7 — blue scheme only, multi-scheme → row 34 gray dialogs).
-- `getTitle`; `sizeLimits` override (min `minWinSize {16,6}`); **`calc_bounds`
-  deliberately NOT overridden** so the trait default routes through
-  `Window::size_limits` (the 16×6 floor — delegating to `group.calc_bounds` would
-  use its 0×0 min; load-bearing, commented — do NOT add a delegating override).
-- `set_state`: **activation only** (sfSelected → sfActive self-recursion → frame
-  goes active via `Group::set_state(Active)` propagation, no manual frame push).
-  **Command-enable DEFERRED** (`TODO(33c)` names the exact set).
-- `standard_scroll_bar` (vertical/horizontal edge rects + sbHandleKeyboard →
-  ofPostProcess); `handle_event`: delegate group + kbTab/kbShiftTab → `focus_next`
-  (Shift+Tab is `Key::Tab` + `shift`; no `BackTab`).
-- **Deferred to 33c/33d** (breadcrumbs in `window.rs`, no dead stubs): zoom,
-  cmResize/move/grow drag, close/destroy, the setState command-enable set,
-  cmSelectWindowNum match (D4 dropped the payload).
+Do this **before** 33d (33d's `cmClose` self-target guard is its first consumer).
+Run it the established way: own the design on the main thread, **advisor consult
+before writing**, Opus implementer against a written `docs/briefs/` brief,
+fresh-agent two-stage review (spec → quality), integrate, commit at the boundary.
 
-### ✅ 33c (commit `432c01a`) — `docs/briefs/row33c-twindow-zoom.md`
-- **Owner-extent-down channel on `Context`**: a transient `owner_size: Point` field
-  + `owner_size()`/`set_owner_size()`. **Decided (advisor): a defaulted field +
-  setter, NOT a `Context::new` param** — `Group::handle_event` mutates it during
-  dispatch so a setter exists regardless; a param would be pure churn over ~17 call
-  sites and conceptually muddies the disjoint-borrow model (the other four fields
-  are loop-owned `&mut` channels; this is transient routing state). Each
-  `Group::handle_event` sets it to its own size before routing and **restores
-  unconditionally** — the three-phase body was extracted into `Group::route_event`
-  so the positional arm's early `return` can't skip the restore. So when
-  `Window`'s cmZoom arm runs after `self.group.handle_event`, `owner_size` is back
-  to the *desktop's* size. **Caveat (33d):** `owner_size` is valid only during
-  group-routed dispatch; a capture handler sees `(0,0)`, so 33d's drag handler must
-  capture its limits at *push time* (inside `Window::handle_event`), not read them
-  at drag time.
-- **Downcast seam**: defaulted `View::as_any_mut() -> Option<&mut dyn Any>` (base
-  `None` → no ripple; `Frame` overrides `Some(self)`) + `Group::child_mut(id) ->
-  Option<&mut dyn View>`. `Window::zoom` pushes `set_zoomed` through it.
-- **`zoom()` + `locate()`** (faithful `TWindow::zoom`/`TView::locate`): size!=max
-  toggle, zoom_rect save/restore, `range`-clamp to sizeLimits; locate's
-  owner!=0/drawUnderRect tail dropped (D8); local `range` (tview.cpp). cmZoom in
-  `handle_event` (after the group delegate; infoPtr guard dropped, D4).
-- **`setState` enables cmZoom only** (33a channel). **DIVERGENCE (documented):**
-  C++ enables {cmNext,cmPrev,cmResize,cmClose,cmZoom} atomically; 33c enables only
-  cmZoom — the one command whose handler exists. Rest → 33d/row 34.
-- Milestone snapshots: window restored vs zoomed-to-fill (frame fills, scrollbar
-  resizes, `[↑]`→`[↕]` icon). Two-stage reviewed (SPEC-PASS + QUALITY-PASS).
+### A1 — the infrastructure (D4 amendment)
+1. **`Broadcast` carries a source.** Change `Event::Broadcast(Command)` →
+   `Event::Broadcast { command: Command, source: Option<ViewId> }` (or add an
+   `Event::Message{..}` variant if you want to keep a one-word sourceless broadcast
+   — decide in the brief). Thread the `source` through `ctx.broadcast(cmd, source)`
+   and the pump's broadcast fan-out. Receivers match on `source`.
+2. **`message`/`query` tree-owner primitive.** Add `Group::message(id, ev) ->
+   Option<ViewId>` and a read-only `Group::query(id, …) -> Option<T>` over
+   `find_mut`; `Program` exposes the same via its root group. Faithful to C++
+   `message()` (deliver synchronously, return the payload iff the receiver
+   consumed). Document: only a tree owner may call it (the only place C++ ever
+   calls a return-consuming `message()` from).
+3. Keep the `cmTimerExpired` timer-id payload **separate** — it carries *which
+   timer*, not a `ViewId`; its own design, when a widget needs it.
 
-## NEXT: 33d (drag + close + cmNext/cmPrev) then TDialog 34
+### A2 — remove the kludges introduced because the payload/query was missing
+Each is a `grep`-able breadcrumb today:
+- **`src/widgets/scrollbar.rs`** (`:20,:24,:267`) — `cmScrollBarChanged` /
+  `cmScrollBarClicked` broadcast with the `this` payload dropped. Now include the
+  scrollbar's `source: ViewId` so a scroller/editor with two bars can tell which
+  changed (`infoPtr == hScrollBar` → `source == self.h_scroll_bar`).
+- **`src/window/window.rs`** (`:350`) — the `cmZoom` `infoPtr == 0 || == this`
+  self-target guard was dropped. Restore it now (and `cmClose` gets the same guard
+  in 33d) so a zoom/close command targets the right window when several exist.
+- **Alt-N window selection** — `src/app/program.rs` (`:38-39,:587-588`),
+  `src/window/window.rs` (`:363-364`), `src/window/mod.rs` (`:22`),
+  `src/command.rs` (`:147` `cmSelectWindowNum`). Realize it: program (a tree owner)
+  resolves the numbered window — either `message`/broadcast carrying the number, or
+  a direct walk of the desktop's children by `number` + `select()`. Pick the
+  simpler in the brief.
+- **`src/view/context.rs`** (`:240`) — the "`query` deferred" note: update it.
+  `query` is now a **tree-owner** primitive (Group/Program over `find_mut`), NOT a
+  `Context` method — Context holds no tree. Correct the comment.
+- **`src/view/view.rs`** (`:600`) — the relocated-`handleEvent` broadcast note that
+  mentions the dropped `owner`/`this` payload: revisit once `source` exists.
 
-Run these the established way: own the design on the main thread, **advisor
-consult before writing**, dispatch an Opus implementer against a self-contained
-brief (`docs/briefs/` has the 33a/33b/33c templates), **two-stage review**
-(spec-compliance → code-quality, fresh agents), fix via a fresh agent with a
-precise change-list, integrate, commit at the stage boundary.
+(Scope note: don't over-reach. `owner_size`, the deferred `command_changes`
+channel, `pending_captures`, owner-data-down to the frame, and the `Frame`
+`as_any_mut` downcast seam are **legitimate D3 downward needs**, not message
+kludges — leave them.)
 
-### 33d — make the window **draggable + closable**
-1. **Drag capture handlers** (port `dragView`/`moveGrow` mouse branch as transient
-   `CaptureHandler`s — the live loop + capture stack make this buildable). On a
-   `wfMove` frame row-0 click (the frame currently leaves it unconsumed — see
-   `frame.rs` `TODO(row 33, D9)`) the window pushes a **move** capture that tracks
-   MouseMove and `moveGrow`s `origin` until MouseUp; on a `wfGrow` bottom-corner
-   click, a **grow** capture. Use `ctx.owner_size()` (33c channel) for limits.
-   Defer the **keyboard-resize** sub-mode (arrows-until-Enter/Esc, `cmResize` from a
-   menu) unless cheap — separate capture mode.
-2. **Close-removal channel** (the "genuinely hard" one). A window can't remove
-   itself (no owner pointer; doesn't know its own `ViewId`). Recipe: `Context`
-   gains a close-request signal (`request_close()` setting a flag/Option); the
-   **owning `Group`**, right after the `deliver` that ran a child's `handle_event`,
-   checks-and-clears the flag and records that child's idx; removes it **after the
-   group's full dispatch completes** (not mid-phase — index shifts). Check-and-clear
-   at the *innermost* deliver makes nesting (root→desktop→window) unambiguous.
-   Window `cmClose`: `valid(cmClose)`; if `sfModal` → post `cmCancel` (do NOT
-   remove — row 34 owns modal teardown); else request close.
-3. **setState**: extend the enabled set to cmResize/cmClose; land TDeskTop's
-   deferred cmNext/cmPrev (`src/desktop/desktop.rs` `TODO(row 33, D9)` — now
-   buildable: `focus_next` + `put_in_front_of` exist).
-4. Also land the row-25 scrollbar **auto-repeat + thumb-drag** (capture handlers)
-   if not split into a Batch-B widget pass — it's independent of the window.
+## THEN — Phase B: row 33d (drag + close + cmNext/cmPrev), now simplified
 
-### Row 34 — `TDialog` (the modality payoff)
-Consumes the `ModalFrame` seam shipped in row 31. Design `exec_view`/
-`executeDialog` + the push→run-until-`valid(end_state)`→pop lifecycle on
-`Program` — **the pop is conditional on `valid(end_state)`** (the crux; a view
-can't reach the loop, so `exec_view` owns it). `cmOK`/`cmCancel`; gather/scatter
-typed values (D10). Gray window scheme (`WindowPalette::Gray`) drives the
-multi-scheme theming deferred in 33b (introduce cyan/gray `Role`s or a scheme
-mechanism in the `Theme`). See the row-31 "modality seam" notes (below) + the
-`row 34` breadcrumbs in `src/app/program.rs`.
+The substrate dissolves the hard parts the old handover agonized over (the
+close-removal channel + drag path-building are **gone**). Design on the main
+thread; advisor consult; Opus implementer; two-stage review.
 
-## The row-31 modality seam — still the plan for row 34
-Row 31 shipped the modality **mechanism only**: a `ModalFrame` capture handler
-gating positional events to the modal view. **Row 34 adds:** the frame-pop is
-row 34's job (`CaptureStack` has no external pop; a `ModalFrame` only gets `&mut
-Context` and can't observe `end_state`), and it must be **conditional on
-`valid(end_state)`** — so the push→run→pop lifecycle belongs to `exec_view` (a
-`Program` method that owns `end_state`/`valid_end`). Zero test coverage of the pop
-path until row 34; breadcrumb `row 34` in `program.rs`.
+1. **Drag = a capture handler** (the D9 replacement for `dragView`'s nested
+   `mouseEvent` loop — the capture stack is the centerpiece, do not route around
+   it). Flow:
+   - The **frame** leaves a row-0 / bottom-corner mouse-down unconsumed (it already
+     consumes close/zoom; see `frame.rs` `TODO(row 33, D9)`). The **window**, after
+     delegating to its group, detects the unconsumed `MouseDown` and starts the
+     drag — it knows its own id via **`self.state().id`** and its limits via
+     **`ctx.owner_size()`** (valid at that point; capture the limits at push time).
+   - Push a transient `DragCapture { window_id, kind, anchor, min, max, limits }`.
+     Each `MouseMove`: compute new bounds via faithful **`moveGrow`/`locate`**
+     (ported in `window.rs` already for zoom) and request the apply via a small
+     deferred channel on `Context` (`ctx.request_bounds(id, rect)` — mirrors
+     `command_changes`). The **loop** applies it after dispatch via
+     `root.find_mut(id).change_bounds(rect)`. `MouseUp` → `ConsumedPop`; the loop
+     flips `sfDragging` off via `find_mut(id).set_state(Dragging, false, ctx)`
+     (the capture can't call `set_state`; `find_mut` is the uniform apply primitive).
+   - `cmResize` keyboard sub-mode (arrows-until-Enter/Esc) — defer unless cheap.
+2. **Close** = `cmClose` → `if valid(cmClose)`: if `sfModal` post `cmCancel` (row 34
+   owns modal teardown), else `ctx.request_close(self.state().id)`; the loop drains
+   it after dispatch via `root.remove_descendant(id, ctx)`. Add the restored
+   `infoPtr == this` guard (A2) so the command targets the right window.
+3. **`setState`** — extend the enable set to the full C++ `{cmNext, cmPrev,
+   cmResize if (grow|move), cmClose if close, cmZoom if zoom}` (33c shipped cmZoom
+   only). Land **TDeskTop cmNext/cmPrev** (`src/desktop/desktop.rs` `TODO(row 33,
+   D9)` — now buildable: `focus_next` + `put_in_front_of` exist).
+4. **Scrollbar auto-repeat + thumb-drag** (`src/widgets/scrollbar.rs` `TODO(row 31,
+   D9)`) — capture handlers; independent of the window. Land here or split into a
+   Batch-B widget pass.
+
+## Row 34 — `TDialog` (the modality payoff) — unchanged plan
+Consumes the row-31 `ModalFrame` seam. Design `exec_view`/`executeDialog` + the
+push→run-until-`valid(end_state)`→**pop (conditional on `valid(end_state)`)**
+lifecycle on `Program` (the crux: a view can't reach the loop, so `exec_view` owns
+it). `cmOK`/`cmCancel`; gather/scatter typed values (D10). Gray window scheme
+(`WindowPalette::Gray`) drives the deferred multi-scheme theming. Breadcrumbs:
+`row 34` in `src/app/program.rs`.
 
 ## Process reminders
-- Subagent-driven worked well again (30/33a/33b): main-thread design + **advisor
+- Subagent-driven worked well (substrate stage: main-thread design + **advisor
   consult before writing** + Opus implementer against a written `docs/briefs/`
-  brief + fresh-agent two-stage review (spec then quality) + fresh-agent fixes.
-- Keep reviewers **adversarial against the C++**, not just the brief — the 33a
-  spec reviewer re-derived the `firstMatch`/raise-on-click ring math; the 33b
-  quality reviewer caught the hollow `create_frame` factory.
-- These are single main-thread FOUNDATION stages (no parallel fan-out) → **no
-  worktree**. The later widget batches (B–E) are the parallel ones.
-- **Commit at clean reviewed stage boundaries** (the project workflow).
+  brief + fresh-agent two-stage review + fresh-agent fixes).
+- Keep reviewers **adversarial against the C++ + the corrected guide**, not just
+  the brief.
+- Single main-thread FOUNDATION stages → **no worktree**. Commit at clean reviewed
+  stage boundaries.
+- **When a design forces non-obvious machinery, investigate WHY before bandaiding**
+  (memory `fix-foundations-not-bandaids`). The substrate + `message()` fixes both
+  came from that.
 
-## Outstanding TODOs seeded in code (grep for them)
-- `TODO(33d)` in `src/window/window.rs` — cmResize (drag), cmClose (close-removal),
-  cmNext/cmPrev in the setState command-enable set, and re-pushing `set_zoomed` on
-  owner resize (the pushed-bool staleness vs C++'s per-draw recompute). The
-  cmSelectWindowNum match stays deferred (D4 dropped the payload). The downcast
-  seam + owner-extent channel that 33d's drag reuses are **already in** (33c).
-- `row 34` in `src/app/program.rs` — `exec_view`/`executeDialog`/getData/setData +
-  the `ModalFrame` pop lifecycle (conditional on `valid(end_state)`).
+## Outstanding TODOs seeded in code (grep)
+- `TODO(33d)` in `src/window/window.rs` — cmResize (drag), cmClose, cmNext/cmPrev
+  in the setState set, re-pushing `set_zoomed` on owner resize.
+- `row 34` in `src/app/program.rs` — `exec_view`/`executeDialog` + the `ModalFrame`
+  pop lifecycle (conditional on `valid(end_state)`).
 - `TODO(row 33, D9)` in `src/frame.rs` — close press-and-hold confirm, `wfMove`
-  drag, grow drags, middle-button move (now buildable: capture is live).
-- `TODO(row 31, D9)` in `src/widgets/scrollbar.rs` — scrollbar auto-repeat +
-  thumb-drag (capture handlers).
-- `TODO(row 33, D9)` in `src/desktop/desktop.rs` — TDeskTop cmNext/cmPrev (now
-  unblocked by 33a's Z-reorder + select).
-- `TODO(row 33)` in `src/view/group.rs` — shadow casting in `Group::draw` (still
-  deferred; needs a shadow-dim mechanism in DrawCtx/Theme).
-- Sibling tee-walk + full `framelin.cpp` machinery — deferred (see `src/frame.rs`).
+  drag, grow drags, middle-button move (now buildable).
+- `TODO(row 31, D9)` in `src/widgets/scrollbar.rs` — auto-repeat + thumb-drag.
+- `TODO(row 33)` in `src/view/group.rs` — shadow casting in `Group::draw`.
+- Sibling tee-walk + full `framelin.cpp` machinery — deferred (`src/frame.rs`).
 - Row 9 `Glyphs` continues to fill in per-widget.
-
-## `cargo doc` cleanup (opportunistic)
-`cargo doc -D warnings` is pre-existing-broken project-wide on
-`private_intra_doc_links`. Not in the normal gate (test/clippy/fmt). A small
-separate cleanup pass would make `cargo doc` clean.
+- `cargo doc -D warnings` pre-existing-broken on `private_intra_doc_links`
+  (not in the gate; opportunistic cleanup).

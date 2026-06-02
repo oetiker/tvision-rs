@@ -282,10 +282,24 @@ vendored ratatui cell-buffer+diff (MIT) → retained view tree + event loop.
   24 (`TFrame`) committed** (`25d10b6`); **Phase-1 row 31 (`TProgram`) committed**
   (`bff4885`); **Phase-2 row 30 (`TDeskTop`) committed** (`c80a20d`); **row 33a
   (Group/Context primitives) committed** (`4da4f52`); **row 33b (`TWindow` core)
-  committed** (`d44e39b`); **row 33c (`TWindow` zoom) committed** (`432c01a`) at
-  the stage boundary. Working tree clean. Phase-2 stage detail (per-stage
-  decisions, deferrals, the 33d/34 plan) lives in
-  [`docs/HANDOVER.md`](docs/HANDOVER.md), not duplicated here.
+  committed** (`d44e39b`); **row 33c (`TWindow` zoom) committed** (`432c01a`).
+  - **SUBSTRATE realigned (`7b15782`)** — mid-33d we stopped to fix a foundation
+    instead of bandaiding around it. `ViewId` was **group-local** (each `Group`
+    embedded its own generational `ViewArena`) — an unexamined default that
+    contradicted D3's own "resolve a `ViewId` by tree-walk" promise and whose
+    `is_valid` was dead code; it was the real obstacle behind 33d's drag/close.
+    Now: one **process-global monotonic `ViewId`** (`NonZeroU64`), each view knows
+    its own id (`ViewState.id`, stamped at `Group::insert`), resolved by
+    `View::find_mut(id)` / `remove_descendant(id, ctx)` (Group recurses;
+    Window/Desktop delegate; Frame leaf). Guide corrected: **D3 "Resolution
+    substrate — corrected"** + **D4 "`message()` — corrected"**. The D4 amendment
+    (designed, NOT built): `message()` ports directly onto the substrate — a
+    tree-owner `message(id, ev) -> Option<ViewId>` over `find_mut`, plus a
+    `ViewId` source on `Broadcast` (the resolvable `infoPtr` successor); the
+    audit (42 sites) shows every return-consuming `message()` is owner-initiated,
+    so the aliasing rule bars only a pattern that never occurs. Two-stage
+    reviewed; 271 tests green. Working tree clean. Phase-2 stage detail lives in
+    [`docs/HANDOVER.md`](docs/HANDOVER.md), not duplicated here.
 
 ## Next step
 **Phase 2 in progress.** Continue subagent-driven (see "How to run the port"
@@ -310,14 +324,19 @@ above). Sequence:
    - ~~**`TDeskTop` 30**~~ ✅ DONE (`c80a20d`). `Group`+owned-`TBackground`; gives
      `Program` a real named desktop.
    - **`TWindow` 33** (module `window`) — the D2 embed-and-delegate exemplar,
-     **staged**: ~~33a Group/Context primitives~~ ✅, ~~33b core (static selectable
-     window)~~ ✅, ~~33c zoom (owner-extent channel + downcast seam)~~ ✅.
-     **NEXT → 33d**: drag/move/grow (transient capture handlers; owner-extent
-     channel + downcast seam from 33c are reusable), `close`/destroy (close-removal
-     channel), the rest of the setState command-enable set (cmResize/cmClose) +
-     TDeskTop's cmNext/cmPrev, scrollbar auto-repeat/thumb-drag. See
-     [`docs/HANDOVER.md`](docs/HANDOVER.md) (the per-stage plan + the
-     `docs/briefs/row33{a,b,c}-*.md` templates).
+     **staged**: ~~33a Group/Context primitives~~ ✅, ~~33b core~~ ✅, ~~33c zoom~~ ✅,
+     ~~SUBSTRATE realign (global `ViewId`)~~ ✅ (`7b15782`).
+     **NEXT → Phase A (cleanup): build `message`/`query` + `Broadcast{source:ViewId}`
+     (D4 amendment) and remove the kludges that exist because it was missing**
+     (scrollbar source disambiguation, the dropped `cmZoom`/`cmClose` self-target
+     guard, Alt-N window select, the `context.rs` query note). **Then 33d** —
+     now *simplified* by the substrate: drag = capture handler (window names
+     itself via `self.id()`, loop applies bounds via `find_mut(id)`), close =
+     `root.remove_descendant(id)`, full setState enable-set + TDeskTop
+     cmNext/cmPrev, scrollbar auto-repeat/thumb-drag. The old close-removal channel
+     + drag path-building are **gone**. See
+     [`docs/HANDOVER.md`](docs/HANDOVER.md) (the Phase-A/B plan + the
+     `docs/briefs/row33*-*.md` templates).
    - **`TDialog` 34** designs `exec_view`/`executeDialog` + the `ModalFrame`
      push→pop lifecycle on `Program` (pop conditional on `valid(end_state)` — the
      crux). Gray window scheme drives the deferred multi-scheme theming.
