@@ -19,8 +19,11 @@
 //! * **D3** owner-data-down: no owner back-pointer; the frame's title/flags/
 //!   number are pushed **down** at construction. (zoom/drag's owner-extent need
 //!   is 33c.)
-//! * **D4** events carry no payload → the `cmSelectWindowNum` window-number
-//!   match defers (the broadcast cannot carry the target number).
+//! * **D4** `Event::Broadcast` carries a `source: ViewId` (the broadcast-subject
+//!   successor to `infoPtr`); the `cmSelectWindowNum` window-number match still
+//!   **defers to 33d** — its blocker is the missing `select()`/`canMoveFocus`
+//!   machinery, not a payload story (the window number is an *integer* argument,
+//!   not a `ViewId`, so `source` does not serve it; Alt-N is a direct walk).
 //! * **D5** the `wf*` flag word → [`WindowFlags`] (relocated here from
 //!   `frame.rs`, where it lived because `Frame` was the first thing to need it);
 //!   `WindowPalette` for the `palette` member.

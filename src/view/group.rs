@@ -575,11 +575,15 @@ impl View for Group {
         // Base behaviour: flip the group's own flag + (for Focused) broadcast.
         self.st.set_flag(flag, enable);
         if flag == StateFlag::Focused {
-            ctx.broadcast(if enable {
-                Command::RECEIVED_FOCUS
-            } else {
-                Command::RELEASED_FOCUS
-            });
+            let source = self.st.id(); // the group itself == C++ `this`
+            ctx.broadcast(
+                if enable {
+                    Command::RECEIVED_FOCUS
+                } else {
+                    Command::RELEASED_FOCUS
+                },
+                source,
+            );
         }
         match flag {
             StateFlag::Active | StateFlag::Dragging => {
@@ -741,7 +745,7 @@ impl Group {
                 }
             }
             // -- broadcast: phFocused, every child (incl. disabled) -----------
-            Event::Broadcast(_) => {
+            Event::Broadcast { .. } => {
                 for i in (0..n).rev() {
                     self.deliver(i, ev, ctx);
                 }
@@ -862,7 +866,7 @@ mod tests {
             // Consume key/command/mouse so we can observe "reached me". Broadcasts
             // are passed through (TV convention: multiple views react to one), so
             // they reach every child.
-            if !matches!(ev, Event::Broadcast(_)) {
+            if !matches!(ev, Event::Broadcast { .. }) {
                 ev.clear();
             }
         }
@@ -1070,8 +1074,10 @@ mod tests {
             group.set_current(Some(id_a), SelectMode::Normal, ctx)
         });
         assert!(
-            out.iter()
-                .any(|e| *e == Event::Broadcast(Command::RECEIVED_FOCUS)),
+            out.iter().any(|e| matches!(
+                e,
+                Event::Broadcast { command, .. } if *command == Command::RECEIVED_FOCUS
+            )),
             "selecting A while focused broadcasts RECEIVED_FOCUS"
         );
 
@@ -1082,11 +1088,17 @@ mod tests {
         });
         let events: Vec<Event> = out.iter().copied().collect();
         assert!(
-            events.contains(&Event::Broadcast(Command::RELEASED_FOCUS)),
+            events.iter().any(|e| matches!(
+                e,
+                Event::Broadcast { command, .. } if *command == Command::RELEASED_FOCUS
+            )),
             "A releases focus"
         );
         assert!(
-            events.contains(&Event::Broadcast(Command::RECEIVED_FOCUS)),
+            events.iter().any(|e| matches!(
+                e,
+                Event::Broadcast { command, .. } if *command == Command::RECEIVED_FOCUS
+            )),
             "B receives focus"
         );
         assert_eq!(group.current(), Some(id_b));
@@ -1109,8 +1121,10 @@ mod tests {
             group.set_current(Some(id), SelectMode::Normal, ctx)
         });
         assert!(
-            !out.iter()
-                .any(|e| *e == Event::Broadcast(Command::RECEIVED_FOCUS)),
+            !out.iter().any(|e| matches!(
+                e,
+                Event::Broadcast { command, .. } if *command == Command::RECEIVED_FOCUS
+            )),
             "unfocused group must not broadcast focus on select"
         );
         // But the child is still selected.
@@ -1242,7 +1256,10 @@ mod tests {
             b.st.state.disabled = true;
             group.insert(Box::new(b));
         });
-        let mut ev = Event::Broadcast(Command::SCROLL_BAR_CHANGED);
+        let mut ev = Event::Broadcast {
+            command: Command::SCROLL_BAR_CHANGED,
+            source: None,
+        };
         with_ctx(&mut out, &mut timers, |ctx| {
             group.handle_event(&mut ev, ctx)
         });
@@ -1795,7 +1812,10 @@ mod tests {
 
         // Broadcast reaches every child (probe sees owner_size). Set a sentinel
         // owner_size on the ctx first to prove the OUTER group restores it.
-        let mut ev = Event::Broadcast(Command::SCROLL_BAR_CHANGED);
+        let mut ev = Event::Broadcast {
+            command: Command::SCROLL_BAR_CHANGED,
+            source: None,
+        };
         with_ctx(&mut out, &mut timers, |ctx| {
             ctx.set_owner_size(Point::new(111, 222)); // sentinel (a "parent" value)
             outer.handle_event(&mut ev, ctx);

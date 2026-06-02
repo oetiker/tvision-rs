@@ -263,14 +263,32 @@ translates directly.
 > **`message()` — corrected (the payload + query were droppable only because the
 > id substrate was broken).** D4 originally "dropped `infoPtr`" and deferred the
 > targeted query. The whole-tree audit of C++ `message()` (42 call sites) shows
-> the objective splits cleanly and ports **directly** onto the corrected D3
-> substrate (global resolvable `ViewId` + `find_mut`):
+> the objective splits cleanly onto the corrected D3 substrate (global resolvable
+> `ViewId` + `find_mut`). **`infoPtr` is polymorphic** — it is used three unrelated
+> ways, and only one of them maps onto `source: Option<ViewId>`:
 >
-> * **39/42 are fire-and-forget** `message(owner, evBroadcast, cmX, this)` — the
->   return is ignored; the only thing carried is *which view* it is about. These
->   become a posted **`Broadcast { command: Command, source: Option<ViewId> }`**:
->   the `void* infoPtr` is reinstated as a **resolvable `ViewId`**, not a pointer.
->   A receiver's C++ `infoPtr == hScrollBar` becomes `source == self.h_scroll_bar`.
+> * **39/42 are the broadcast-subject case** — fire-and-forget `message(owner,
+>   evBroadcast, cmX, this)`: the return is ignored; the only thing carried is
+>   *which view* it is about. These become a posted **`Broadcast { command:
+>   Command, source: Option<ViewId> }`** (**built now** — Phase A): the `void*
+>   infoPtr` is reinstated as a **resolvable `ViewId`**, not a pointer. A receiver's
+>   C++ `infoPtr == hScrollBar` becomes `source == self.h_scroll_bar`. Threaded
+>   from each emitter (`source = self.state().id()` = C++ `this`); pump-internal
+>   broadcasts about no view (`cmCommandSetChanged`, `cmTimerExpired`) pass `None`.
+> * **The command-target case** (`cmZoom`/`cmClose`, `infoPtr = owner`) is **not
+>   carried and not needed.** It is *not* a broadcast subject — it is a *target*
+>   hint on an `Event::Command`. The frame posts these **only while `sfActive`**
+>   (`tframe.cpp` 152/171), so the target is always the *active* window;
+>   focused-command routing already delivers each such command only to the
+>   desktop's `current` child = the active window; and the queue drains before the
+>   next `poll_event`, so the active window cannot change between post and dispatch.
+>   The `infoPtr == 0 || == this` guard is therefore **provably vacuous** — adding a
+>   target field to `Event::Command` would feed a check that rejects nothing.
+> * **The integer-argument case** (`cmSelectWindowNum`, `infoInt = window number`)
+>   is **not** served by `source` — a window number is a plain integer, not a
+>   `ViewId`. It joins `cmTimerExpired` under "different payload type, own design"
+>   (below), realized at 33d via a **direct walk** (the program asks the desktop to
+>   select the child whose `number` matches, gated by `canMoveFocus`).
 > * **3/42 consume the return** (Alt-N `cmSelectWindowNum`; an app's
 >   `cmCanCloseForm` veto-poll inside `valid()`; one test) — a **synchronous
 >   "broadcast a question, get back *was it claimed*"**. Every one is
@@ -296,9 +314,15 @@ translates directly.
 > called from. `query(id, …) -> Option<T>` is the read-only sibling (`find` +
 > read). The synchronous `valid(cmd)` aggregate (`Group::valid`) is the same shape
 > already in the tree, and `cmCanCloseForm` is an app-specific specialization of it.
+> This return-consuming `message()`/`query` primitive is **designed but not built**;
+> the sketch above is the design of record. Its first real consumer is **row 34**'s
+> dialog `cmCanCloseForm` veto — build it there.
 >
 > **Not solved by this** (different payload type, own design when needed): the
-> `cmTimerExpired` `TTimerId` payload — that carries *which timer*, not a `ViewId`.
+> `cmTimerExpired` `TTimerId` payload (carries *which timer*) and the
+> `cmSelectWindowNum` window number (carries *which window number*, an integer) —
+> neither is a `ViewId`, so `Broadcast` `source` does not serve them. Alt-N is
+> realized via a direct walk at 33d (see the program/window breadcrumbs).
 
 ---
 

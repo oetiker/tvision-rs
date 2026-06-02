@@ -168,7 +168,7 @@ mod tests {
                 // the doc contract on `CaptureHandler::handle` promises a handler
                 // may: post / broadcast / schedule a timer / push a nested capture.
                 ctx.post(Command::OK);
-                ctx.broadcast(Command::COMMAND_SET_CHANGED);
+                ctx.broadcast(Command::COMMAND_SET_CHANGED, None);
                 let _tid = ctx.set_timer(Duration::from_millis(50), None);
                 let inner = Recorder::new(self.pushed_log.clone(), || CaptureFlow::Consumed);
                 ctx.push_capture(Box::new(inner));
@@ -354,7 +354,13 @@ mod tests {
         // post / broadcast landed in out_events.
         assert_eq!(out.len(), 2);
         assert_eq!(out[0], Event::Command(Command::OK));
-        assert_eq!(out[1], Event::Broadcast(Command::COMMAND_SET_CHANGED));
+        assert_eq!(
+            out[1],
+            Event::Broadcast {
+                command: Command::COMMAND_SET_CHANGED,
+                source: None
+            }
+        );
         // set_timer registered in the queue.
         assert_eq!(timers.len(), 1);
 

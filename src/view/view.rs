@@ -596,19 +596,25 @@ pub trait View {
     /// (`cmReceivedFocus`/`cmReleasedFocus`) via `ctx` — the **carryover #2**
     /// focus broadcast that row 23 deferred to here.
     ///
-    /// The C++ `message(owner, evBroadcast, …, this)` is reduced under D3/D4: the
-    /// `owner` receiver and the `this` `infoPtr` payload are dropped; we broadcast
-    /// the bare [`Command`]. `TGroup` (row 26) overrides this to also propagate to
-    /// its children. The dropped D8 `setState` cases (`sfVisible`/`sfExposed`/
-    /// `sfShadow`/`sfCursor*` redraw/occlusion) have no analogue here.
+    /// The C++ `message(owner, evBroadcast, …, this)` is reduced under D3/D4: only
+    /// the `owner` receiver is dropped (the broadcast goes to the loop's queue, not
+    /// a receiver); the `this` `infoPtr` payload is **carried** as the broadcast's
+    /// `source` (D4 amendment) — `self.state().id()`, the view whose focus changed.
+    /// `TGroup` (row 26) overrides this to also propagate to its children. The
+    /// dropped D8 `setState` cases (`sfVisible`/`sfExposed`/`sfShadow`/`sfCursor*`
+    /// redraw/occlusion) have no analogue here.
     fn set_state(&mut self, flag: StateFlag, enable: bool, ctx: &mut Context) {
         self.state_mut().set_flag(flag, enable);
         if flag == StateFlag::Focused {
-            ctx.broadcast(if enable {
-                Command::RECEIVED_FOCUS
-            } else {
-                Command::RELEASED_FOCUS
-            });
+            let source = self.state().id(); // self == C++ `this`
+            ctx.broadcast(
+                if enable {
+                    Command::RECEIVED_FOCUS
+                } else {
+                    Command::RELEASED_FOCUS
+                },
+                source,
+            );
         }
     }
 

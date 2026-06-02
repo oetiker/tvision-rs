@@ -6,19 +6,22 @@
 //! [`key`] submodule ([`Key`], [`KeyEvent`], [`KeyModifiers`]); the sum type,
 //! the mouse record, and the trimmed [`EventMask`] opt-in live here.
 //!
-//! **`infoPtr` / `MessageEvent` dropped (D4).** `TEvent`'s `MessageEvent`
-//! carried a `command` plus a `void* infoPtr` union used to round-trip a result
-//! back to the sender. We drop that round-trip entirely: [`Event::Command`] and
-//! [`Event::Broadcast`] carry **only** the [`Command`]. Payloaded messages
-//! become typed `Context` queries returning `Option<T>` at a later row, so
-//! there is no `MessageEvent` analogue.
+//! **`infoPtr` / `MessageEvent` (D4).** `TEvent`'s `MessageEvent` carried a
+//! `command` plus a `void* infoPtr` union used three unrelated ways. We do not
+//! reinstate the synchronous round-trip on the event itself: [`Event::Command`]
+//! carries **only** the [`Command`]. [`Event::Broadcast`] additionally carries an
+//! optional **`source: ViewId`** — the broadcast-subject successor to `infoPtr`,
+//! naming *which view this broadcast is about* (e.g. which scrollbar changed) as a
+//! resolvable [`ViewId`] rather than a `void*`. The synchronous return-consuming
+//! `message()` primitive (the `cmCanCloseForm` veto and friends) is deferred to
+//! row 34, where it lives on the tree owner over `find_mut`, not on the event.
 
 mod key;
 
 pub use key::{Key, KeyEvent, KeyModifiers};
 
 use crate::command::Command;
-use crate::view::Point;
+use crate::view::{Point, ViewId};
 
 /// A Turbo Vision event — deviation **D4**. Replaces the `TEvent` tagged union
 /// (`what` bitmask + `union { mouse; keyDown; message; }`; `system.h`) with a
@@ -44,8 +47,16 @@ pub enum Event {
     KeyDown(KeyEvent),
     /// `evCommand` — a command targeted at a specific receiver.
     Command(Command),
-    /// `evBroadcast` — a command broadcast to interested views.
-    Broadcast(Command),
+    /// `evBroadcast` — a command broadcast to interested views. `source`
+    /// reinstates the C++ `message.infoPtr` for the broadcast-subject case (D4
+    /// amendment): it names *which view this broadcast is about* (e.g. which
+    /// scrollbar changed), as a resolvable [`ViewId`] rather than a `void*`.
+    /// `None` for broadcasts that are about no particular view (pump-internal
+    /// `cmCommandSetChanged`, `cmTimerExpired`).
+    Broadcast {
+        command: Command,
+        source: Option<ViewId>,
+    },
     /// `evNothing`, or an event that a handler has consumed via
     /// [`Event::clear`].
     Nothing,
@@ -158,7 +169,10 @@ mod tests {
         let _ = Event::MouseAuto(m);
         let _ = Event::KeyDown(KeyEvent::from(Key::Enter));
         let _ = Event::Command(Command::OK);
-        let _ = Event::Broadcast(Command::OK);
+        let _ = Event::Broadcast {
+            command: Command::OK,
+            source: None,
+        };
         let _ = Event::Nothing;
     }
 

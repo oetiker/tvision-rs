@@ -22,6 +22,7 @@ use crate::screen::Buffer;
 use crate::theme::{Glyphs, Role, Theme};
 use crate::timer::{TimerId, TimerQueue};
 use crate::view::geometry::{Point, Rect};
+use crate::view::id::ViewId;
 use std::collections::VecDeque;
 use std::time::Duration;
 use unicode_width::UnicodeWidthChar;
@@ -237,9 +238,11 @@ impl<'a> DrawCtx<'a> {
 /// (row 31) owns the backing `VecDeque` / [`TimerQueue`] / pending-capture
 /// `Vec` and constructs a fresh `Context` per dispatch.
 ///
-/// `query(ViewId, …) -> Option<T>` and focus operations are **deferred to row
-/// 26 (`TGroup`)** — they need the view tree to route through, which does not
-/// exist yet, so they are intentionally not stubbed here.
+/// `query(ViewId, …) -> Option<T>` / `message(ViewId, …)` are **tree-owner**
+/// primitives (Group/Program over `find_mut`), *not* `Context` methods — a
+/// `Context` deliberately holds no tree to route through. They are **deferred to
+/// row 34** (their first return-consumer, a dialog `cmCanCloseForm` veto), so
+/// they are intentionally not stubbed here.
 pub struct Context<'a> {
     /// Posted commands / broadcasts, drained by the loop after dispatch.
     out_events: &'a mut VecDeque<Event>,
@@ -294,9 +297,12 @@ impl<'a> Context<'a> {
         self.out_events.push_back(Event::Command(cmd));
     }
 
-    /// Broadcast a command (`Event::Broadcast`) into the loop's queue.
-    pub fn broadcast(&mut self, cmd: Command) {
-        self.out_events.push_back(Event::Broadcast(cmd));
+    /// Broadcast a command (`Event::Broadcast`) into the loop's queue. `source`
+    /// names the view the broadcast is about (the `infoPtr` successor; D4
+    /// amendment), or `None` if it concerns no particular view.
+    pub fn broadcast(&mut self, command: Command, source: Option<ViewId>) {
+        self.out_events
+            .push_back(Event::Broadcast { command, source });
     }
 
     /// Arm a timer, returning its handle. `now_ms` is supplied from this
@@ -621,11 +627,17 @@ mod tests {
         {
             let mut ctx = Context::new(&mut out, &mut timers, 0, &mut pending, &mut cmd_changes);
             ctx.post(Command::OK);
-            ctx.broadcast(Command::QUIT);
+            ctx.broadcast(Command::QUIT, None);
         }
         assert_eq!(out.len(), 2);
         assert_eq!(out[0], Event::Command(Command::OK));
-        assert_eq!(out[1], Event::Broadcast(Command::QUIT));
+        assert_eq!(
+            out[1],
+            Event::Broadcast {
+                command: Command::QUIT,
+                source: None
+            }
+        );
     }
 
     #[test]

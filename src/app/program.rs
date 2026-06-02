@@ -15,9 +15,11 @@
 //!   The deferred-capture handshake is exactly the [`compose_full_protocol`]
 //!   blueprint from `capture.rs`, now driven by the real pump.
 //!
-//! * **D4 — events carry no payload.** `cmTimerExpired` dropped its `TTimerId`
-//!   `infoPtr` and `cmSelectWindowNum` dropped its window number — broadcasts
-//!   carry only the [`Command`]. See the timer-payload and Alt-N breadcrumbs.
+//! * **D4 — `Event::Broadcast` carries a `source: ViewId`** (the broadcast-subject
+//!   successor to `infoPtr`); `Event::Command` carries only the [`Command`]. The
+//!   *integer*-argument payloads (`cmTimerExpired`'s `TTimerId`, `cmSelectWindowNum`'s
+//!   window number) are **not** served by `source` (they are not `ViewId`s) and have
+//!   their own designs. See the timer-payload and Alt-N breadcrumbs.
 //!
 //! * **D8 — whole-tree redraw + diff every pass.** No damage tracking, no
 //!   `sfExposed`; `setScreenMode`/`cmScreenChanged` collapse into the resize
@@ -35,8 +37,10 @@
 //!   wrapper + data marshalling) → **row 34 (`TDialog`)**, built on top of the
 //!   [`ModalFrame`] mechanism proven here. The sync-vs-event-driven return is
 //!   decided there.
-//! * Alt-1..9 window selection → **row 33+** (needs numbered windows + a payload
-//!   story, D4 dropped `infoPtr`).
+//! * Alt-1..9 window selection → **row 33d** (a direct walk: the program asks the
+//!   desktop to select the child whose `number` matches, gated by `canMoveFocus`;
+//!   needs `View::number()` + `select()`/`canMoveFocus`). Not a payload broadcast —
+//!   the window number is an integer, not a `ViewId`.
 //! * Status-line / menu-bar real subviews + the `getEvent` status-line
 //!   pre-handling + `statusLine->update()` → **Phase 4** (factories return `None`
 //!   for now).
@@ -441,7 +445,10 @@ impl Program {
             //    the redraw (do NOT early-return).
             None => {
                 if *command_set_changed {
-                    out_events.push_back(Event::Broadcast(Command::COMMAND_SET_CHANGED));
+                    out_events.push_back(Event::Broadcast {
+                        command: Command::COMMAND_SET_CHANGED,
+                        source: None,
+                    });
                     *command_set_changed = false;
                 }
                 // collectExpiredTimers: D4 drops the TimerId payload — broadcast
@@ -450,7 +457,10 @@ impl Program {
                 // fired, revisit the payload story (D4 dropped infoPtr; several
                 // designs are possible — do not invent one now).
                 for _id in timers.collect_expired(now) {
-                    out_events.push_back(Event::Broadcast(Command::TIMER_EXPIRED));
+                    out_events.push_back(Event::Broadcast {
+                        command: Command::TIMER_EXPIRED,
+                        source: None,
+                    });
                 }
                 // TODO(TStatusLine row): statusLine->update() is a no-op until the
                 // status line lands (Phase 4).
@@ -584,9 +594,13 @@ fn program_handle_event(
     ctx: &mut Context,
     end_state: &mut Option<Command>,
 ) {
-    // TODO(row 33+): Alt-1..9 window select; needs numbered windows + a payload
-    // story (D4 dropped infoPtr that carried the window number). Stubbed here so
-    // no half path exists.
+    // TODO(33d): Alt-1..9 window select. Realize it as a **direct walk** — the
+    // program (a tree owner) asks the desktop to select the child window whose
+    // `number` matches, gated by `canMoveFocus`. Needs `View::number() ->
+    // Option<u16>` (default None, Window overrides) + `select()`/`canMoveFocus`
+    // (all 33d). NOT a payload-carrying broadcast: the window number is an integer
+    // argument, not a ViewId, so the new Broadcast `source` substrate does not
+    // serve it. Stubbed here so no half path exists.
 
     group.handle_event(ev, ctx);
 
@@ -775,9 +789,10 @@ mod tests {
 
         // Arm the timer by sending a broadcast the probe records and reacts to.
         program.out_events.clear();
-        program
-            .out_events
-            .push_back(Event::Broadcast(Command::SCROLL_BAR_CHANGED));
+        program.out_events.push_back(Event::Broadcast {
+            command: Command::SCROLL_BAR_CHANGED,
+            source: None,
+        });
         program.pump_once(); // probe arms a 50ms timer at now=0
         assert_eq!(program.timers.len(), 1, "probe armed a timer");
 
@@ -787,18 +802,20 @@ mod tests {
         log.borrow_mut().clear();
         program.pump_once(); // idle: collect -> queue TIMER_EXPIRED
         assert!(
-            program
-                .out_events
-                .iter()
-                .any(|e| *e == Event::Broadcast(Command::TIMER_EXPIRED)),
+            program.out_events.iter().any(|e| matches!(
+                e,
+                Event::Broadcast { command, .. } if *command == Command::TIMER_EXPIRED
+            )),
             "expired timer queued a TIMER_EXPIRED broadcast"
         );
 
         // Next pump routes the queued broadcast; the probe records it.
         program.pump_once();
         assert!(
-            log.borrow()
-                .contains(&Event::Broadcast(Command::TIMER_EXPIRED)),
+            log.borrow().iter().any(|e| matches!(
+                e,
+                Event::Broadcast { command, .. } if *command == Command::TIMER_EXPIRED
+            )),
             "probe received cmTimerExpired"
         );
     }
@@ -1018,7 +1035,12 @@ mod tests {
         let count = program
             .out_events
             .iter()
-            .filter(|e| **e == Event::Broadcast(Command::COMMAND_SET_CHANGED))
+            .filter(|e| {
+                matches!(
+                    e,
+                    Event::Broadcast { command, .. } if *command == Command::COMMAND_SET_CHANGED
+                )
+            })
             .count();
         assert_eq!(count, 1, "command-set change broadcasts exactly once");
 
@@ -1029,7 +1051,12 @@ mod tests {
         let count2 = program
             .out_events
             .iter()
-            .filter(|e| **e == Event::Broadcast(Command::COMMAND_SET_CHANGED))
+            .filter(|e| {
+                matches!(
+                    e,
+                    Event::Broadcast { command, .. } if *command == Command::COMMAND_SET_CHANGED
+                )
+            })
             .count();
         assert_eq!(count2, 0, "no re-broadcast after the flag is cleared");
     }

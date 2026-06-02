@@ -347,8 +347,17 @@ impl View for Window {
     /// **first** (faithful order), then:
     ///
     /// * `cmZoom` (if `wfZoom`) → [`zoom`](Self::zoom) + `clearEvent` (33c). The
-    ///   C++ `infoPtr == 0 || == this` guard is gone (D4 dropped payloads) — a
-    ///   `cmZoom` that routes here is for us.
+    ///   C++ `infoPtr == 0 || == this` target guard is **not ported** — it is
+    ///   provably vacuous in this architecture, not merely "payloads dropped".
+    ///   The frame posts `cmZoom`/`cmClose` with `infoPtr = owner` **only while
+    ///   `sfActive`** (`tframe.cpp` 152/171), so the target is always the *active*
+    ///   window; `cmZoom`/`cmClose` are *focused* (`Event::Command`) events, which
+    ///   the desktop routes solely to its `current` child = the active window; and
+    ///   the internal queue drains fully before the next `poll_event`, so the
+    ///   active window cannot change between post and dispatch. A `cmZoom`/`cmClose`
+    ///   therefore always reaches exactly the window it targets, so
+    ///   `infoPtr == 0 || == this` can never reject anything. **Trip-wire:** revisit
+    ///   only if a future emitter targets a *non-active* window via a command.
     /// * `kbTab` → `focusNext(False)` (forwards) + `clearEvent`.
     /// * `kbShiftTab` → `focusNext(True)` (backwards) + `clearEvent`. Shift+Tab
     ///   is `Key::Tab` + the `shift` modifier (there is no `Key::BackTab`).
@@ -360,9 +369,13 @@ impl View for Window {
     ///   at push time from `ctx.owner_size()`).
     /// * `cmClose` → `close()` (or post `cmCancel` if `sfModal`) — **TODO(33d):**
     ///   needs a close-removal channel; the modal path is **row 34**.
-    /// * `evBroadcast cmSelectWindowNum` matching `number` → `select()` —
-    ///   **deferred:** D4 dropped event payloads, so the broadcast cannot carry the
-    ///   target window number (the Alt-N deferral already noted in `program.rs`).
+    /// * `cmSelectWindowNum` matching `number` → `select()` — **deferred to 33d.**
+    ///   The blocker is the missing select machinery (`select()`/`canMoveFocus`),
+    ///   not a payload story: the window number is an *integer* argument (not a
+    ///   `ViewId`), so the `Broadcast` `source` substrate does not serve it. Alt-N
+    ///   is realized at 33d as a **direct walk** — the program asks the desktop to
+    ///   select the child whose `number` matches — not a payload-carrying broadcast
+    ///   (the Alt-N deferral already noted in `program.rs`).
     fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
         self.group.handle_event(ev, ctx);
         // A consumed event is already `Nothing`, so each branch self-guards.

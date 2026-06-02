@@ -17,11 +17,16 @@
 //! When the value changes, `scroll_draw` broadcasts
 //! [`Command::SCROLL_BAR_CHANGED`] via `ctx.broadcast(…)`. The C++ equivalent
 //! is `message(owner, evBroadcast, cmScrollBarChanged, this)`; the `this`
-//! `infoPtr` payload is dropped per D4 (no `MessageEvent`).
+//! `infoPtr` payload is **no longer dropped** — it is carried as the broadcast's
+//! `source` (D4 amendment), so a scroller/editor with two bars can tell which bar
+//! fired (C++ `infoPtr == hScrollBar` becomes `source == self.h_scroll_bar`).
 //!
 //! The C++ also sends `cmScrollBarClicked` on mouse-down / keyboard action via
 //! `message(owner, evBroadcast, cmScrollBarClicked, this)`. We broadcast
-//! [`Command::SCROLL_BAR_CLICKED`] the same way (no payload).
+//! [`Command::SCROLL_BAR_CLICKED`] the same way, also carrying `source`.
+//!
+//! **This widget adds no receiver logic** — `source` is purely emitted here; it
+//! is consumed by a future two-bar owner (Batch B), not by the scrollbar itself.
 //!
 //! ## Press-and-hold auto-repeat (D9 — **deferred to row 31**)
 //!
@@ -264,9 +269,10 @@ impl ScrollBar {
     /// `TScrollBar::scrollDraw` — broadcast `cmScrollBarChanged` (D4).
     ///
     /// C++ equivalent: `message(owner, evBroadcast, cmScrollBarChanged, this)`.
-    /// The `this` payload is dropped per D4.
+    /// The `this` payload is carried as the broadcast `source` (D4 amendment) so a
+    /// two-bar owner can tell which bar fired.
     fn scroll_draw(&self, ctx: &mut Context) {
-        ctx.broadcast(Command::SCROLL_BAR_CHANGED);
+        ctx.broadcast(Command::SCROLL_BAR_CHANGED, self.state().id());
     }
 
     // -----------------------------------------------------------------------
@@ -471,7 +477,7 @@ impl View for ScrollBar {
                     }
                 };
                 if step != 0 {
-                    ctx.broadcast(Command::SCROLL_BAR_CLICKED);
+                    ctx.broadcast(Command::SCROLL_BAR_CLICKED, self.state().id());
                     self.set_value(self.value + 3 * step, ctx);
                     ev.clear();
                 }
@@ -481,7 +487,7 @@ impl View for ScrollBar {
             // Mouse down (evMouseDown)
             // ------------------------------------------------------------------
             Event::MouseDown(me) => {
-                ctx.broadcast(Command::SCROLL_BAR_CLICKED);
+                ctx.broadcast(Command::SCROLL_BAR_CLICKED, self.state().id());
 
                 // Compute the local mark (axis position) and thumb position.
                 let local = me.position; // already in view-local coords per D3
@@ -592,7 +598,7 @@ impl View for ScrollBar {
                 };
 
                 if let Some(act) = action {
-                    ctx.broadcast(Command::SCROLL_BAR_CLICKED);
+                    ctx.broadcast(Command::SCROLL_BAR_CLICKED, self.state().id());
                     let new_val = match act {
                         PartOrValue::P(part) => {
                             self.value + part.scroll_step(self.arrow_step, self.page_step)
@@ -722,7 +728,55 @@ mod tests {
             sb.set_value(5, &mut ctx);
         }
         assert_eq!(out.len(), 1);
-        assert_eq!(out[0], Event::Broadcast(Command::SCROLL_BAR_CHANGED));
+        assert!(matches!(
+            out[0],
+            Event::Broadcast { command, .. } if command == Command::SCROLL_BAR_CHANGED
+        ));
+    }
+
+    #[test]
+    fn broadcast_source_is_the_inserted_scrollbars_id() {
+        // D4 amendment: the `cmScrollBarChanged` broadcast must carry `source ==
+        // the emitting scrollbar's id` (the C++ `this`), not `None`. The id is
+        // stamped at `Group::insert`, so the scrollbar must be inserted first.
+        use crate::view::Group;
+
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut pending: Vec<Box<dyn crate::capture::CaptureHandler>> = vec![];
+        let mut cmd_changes: Vec<(crate::command::Command, bool)> = vec![];
+
+        // Build a scrollbar with a real range, then insert it into a group so it
+        // is assigned a process-global id.
+        let mut sb = ScrollBar::new(Rect::new(0, 0, 1, 10));
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut pending, &mut cmd_changes);
+            sb.set_params(5, 0, 20, 1, 1, &mut ctx);
+        }
+        let mut group = Group::new(Rect::new(0, 0, 20, 10));
+        let id = group.insert(Box::new(sb));
+        out.clear();
+
+        // Drive a value change on the inserted scrollbar (a vertical bar accepts
+        // Key::Down) and capture its broadcast. We send the key straight to the
+        // resolved child via the `View` trait — we only care that the *emitter*
+        // threads its own stamped id, not about group focus routing.
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut pending, &mut cmd_changes);
+            let child = group.find_mut(id).expect("scrollbar resolves by id");
+            let mut ev = key_ev(Key::Down);
+            child.handle_event(&mut ev, &mut ctx);
+        }
+
+        // The queued CHANGED broadcast must name the scrollbar as its source.
+        assert!(
+            out.iter().any(|e| matches!(
+                e,
+                Event::Broadcast { command, source }
+                    if *command == Command::SCROLL_BAR_CHANGED && *source == Some(id)
+            )),
+            "scroll-bar broadcast must carry source == the emitting scrollbar's id, not None"
+        );
     }
 
     #[test]
@@ -768,7 +822,10 @@ mod tests {
         }
         assert_eq!(sb.value, 10, "value clamped to new max");
         assert_eq!(out.len(), 1);
-        assert_eq!(out[0], Event::Broadcast(Command::SCROLL_BAR_CHANGED));
+        assert!(matches!(
+            out[0],
+            Event::Broadcast { command, .. } if command == Command::SCROLL_BAR_CHANGED
+        ));
     }
 
     #[test]
@@ -862,14 +919,14 @@ mod tests {
         assert!(ev.is_nothing(), "event consumed");
         assert_eq!(sb.value, 9, "arrow_step 1 → value decremented by 1");
         // Should have broadcast CLICKED then CHANGED.
-        assert!(
-            out.iter()
-                .any(|e| *e == Event::Broadcast(Command::SCROLL_BAR_CLICKED))
-        );
-        assert!(
-            out.iter()
-                .any(|e| *e == Event::Broadcast(Command::SCROLL_BAR_CHANGED))
-        );
+        assert!(out.iter().any(|e| matches!(
+            e,
+            Event::Broadcast { command, .. } if *command == Command::SCROLL_BAR_CLICKED
+        )));
+        assert!(out.iter().any(|e| matches!(
+            e,
+            Event::Broadcast { command, .. } if *command == Command::SCROLL_BAR_CHANGED
+        )));
     }
 
     #[test]
@@ -970,10 +1027,10 @@ mod tests {
         }
         assert!(ev.is_nothing());
         assert_eq!(sb.value, 9);
-        assert!(
-            out.iter()
-                .any(|e| *e == Event::Broadcast(Command::SCROLL_BAR_CLICKED))
-        );
+        assert!(out.iter().any(|e| matches!(
+            e,
+            Event::Broadcast { command, .. } if *command == Command::SCROLL_BAR_CLICKED
+        )));
     }
 
     #[test]
@@ -1039,8 +1096,10 @@ mod tests {
         );
         // Must broadcast CLICKED (not just CHANGED).
         assert!(
-            out.iter()
-                .any(|e| *e == Event::Broadcast(Command::SCROLL_BAR_CLICKED)),
+            out.iter().any(|e| matches!(
+                e,
+                Event::Broadcast { command, .. } if *command == Command::SCROLL_BAR_CLICKED
+            )),
             "SCROLL_BAR_CLICKED must be broadcast on mouse-down"
         );
     }
