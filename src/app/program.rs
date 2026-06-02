@@ -410,6 +410,21 @@ impl Program {
     /// view-/menu-triggered async modal (`Deferred::OpenModal` + a posted
     /// completion command) is **Phase 4** — only the sync `exec_view` is built here.
     ///
+    /// **D9 DEVIATION — program-level handling runs during the modal pump (NOT a
+    /// faithful 1:1).** Under our single loop, the nested
+    /// [`pump_once`](Self::pump_once) calls below still run
+    /// [`program_handle_event`] every iteration — so the Alt-N window-selection
+    /// block and the `cmQuit` catch are live *during* the modal. C++ does NOT do
+    /// this: `TGroup::execView` → `p->execute()` (`tgroup.cpp:205`) dispatches via
+    /// `p->handleEvent` (the **dialog's**), so `TProgram::handleEvent` — where
+    /// `cmQuit → endModal(cmQuit)` (`tprogram.cpp:205`) and Alt-N live — is NOT in
+    /// the modal dispatch path. Consequence: here a `cmQuit` arriving during a
+    /// modal ends the modal (with `QUIT`); in C++ it reaches the dialog, goes
+    /// unhandled, is discarded, and the modal stays open. We KEEP this behavior
+    /// ("cmQuit ends the modal + app even from a dialog" is defensible UX, and no
+    /// menu/Alt-N trigger exists at row 34) — see the Phase-4 modal-isolation
+    /// breadcrumb on the Alt-N block in [`program_handle_event`].
+    ///
     /// **HEADLESS HANG WARNING:** [`pump_once`](Self::pump_once) does not block on a
     /// headless backend, so the inner `while end_state.is_none()` loop spins until
     /// something sets `end_state`. The caller MUST ensure the modal reaches
@@ -502,6 +517,12 @@ impl Program {
         let retval = loop {
             self.end_state = None;
             while self.end_state.is_none() {
+                // D9 DEVIATION (see this fn's doc): pump_once runs
+                // program_handle_event each pass, so Alt-N + the cmQuit catch are
+                // live during the modal. C++ execView -> p->execute() (tgroup.cpp:205)
+                // dispatches to the dialog's handleEvent, NOT TProgram::handleEvent
+                // (where cmQuit->endModal + Alt-N live, tprogram.cpp:205) — so program
+                // handling is out of the modal dispatch path there. We keep ours.
                 self.pump_once();
             }
             let es = self.end_state.unwrap();
@@ -552,6 +573,12 @@ impl Program {
         //    command_set_changed (no re-broadcast): the modal's command enables were
         //    transient and unwinding them is internal bookkeeping, not a state the
         //    app reacts to.
+        //
+        //    DEVIATION: C++ TView::setCommands DOES set commandSetChanged when the
+        //    sets differ — and here they do differ (the modal enabled
+        //    cmNext/cmPrev/cmClose/cmZoom), so C++ fires a post-modal
+        //    cmCommandSetChanged broadcast we omit. Deliberate, and moot at row 34
+        //    (no observer of the command set exists yet); align when one does.
         self.command_set = save_commands;
 
         // TheTopView dropped (D8: no occlusion/exposed); no consumer.
@@ -788,6 +815,14 @@ fn program_handle_event(
     ctx: &mut Context,
     end_state: &mut Option<Command>,
 ) {
+    // TODO(Phase 4: modal isolation): when menus + multiple windows + a modal
+    // coexist, program-level interception (this Alt-N block + the cmQuit catch
+    // below) should be SUPPRESSED while a modal is active — C++'s nested
+    // `p->execute()` (tgroup.cpp:205) structurally prevents it by dispatching to
+    // the dialog's handleEvent, not TProgram's. Our single loop (D9) runs this on
+    // every pump, including modal pumps (deviation documented on `exec_view`). No
+    // trigger exists yet (no menu/Alt-N source at row 34), so this is a breadcrumb.
+    //
     // Alt+digit window selection (cmSelectWindowNum). Faithful TProgram::handleEvent
     // order: the Alt-N block runs BEFORE the group dispatch. The window NUMBER is an
     // integer, not a ViewId, so this is a DIRECT walk (the program asks the desktop
@@ -1785,12 +1820,17 @@ mod tests {
     /// `group.valid(QUIT)` -> true (the dialog's `valid` defers to the group, no
     /// child vetoes QUIT), so `exec_view` returns `QUIT` and pops the frame.
     ///
-    /// Faithful behavior: in C++ `cmQuit` inside a modal ends the *modal* with
-    /// `cmQuit`; the caller (an app's outer `run`) is expected to re-post / propagate
-    /// the quit. We assert `exec_view` returns `QUIT` and the frame is popped (no
-    /// hang, no panic). App-level quit propagation is NOT built (no app exists).
+    /// **This asserts a DELIBERATE D9 DEVIATION, not faithful C++ behavior.** Under
+    /// our single loop, `program_handle_event` (the `cmQuit` catch) runs during the
+    /// modal pump, so `cmQuit` ends the modal with `QUIT`. In C++,
+    /// `TGroup::execView` → `p->execute()` (`tgroup.cpp:205`) dispatches to the
+    /// **dialog's** `handleEvent`, so the `cmQuit → endModal` catch in
+    /// `TProgram::handleEvent` (`tprogram.cpp:205`) is out of the modal dispatch
+    /// path — there `cmQuit` reaches the dialog, goes unhandled, is discarded, and
+    /// the modal STAYS OPEN. We keep our behavior (see `exec_view`'s doc); the
+    /// assertions below verify it (no hang, no panic, frame popped).
     #[test]
-    fn exec_view_cm_quit_ends_modal_with_quit() {
+    fn exec_view_cm_quit_ends_modal_deviation_from_cpp() {
         let (mut program, _screen, _clock) = program_with_desktop(40, 12);
 
         program.out_events.push_back(Event::Command(Command::QUIT));

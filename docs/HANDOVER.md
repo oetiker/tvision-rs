@@ -114,6 +114,17 @@ menu or msgbox needs it, NOT now).
   (`group.rs` `TODO(row 33)`), **row-9 glyphs** continue per-widget.
 - **View-/menu-triggered async modal** (`Deferred::OpenModal` + posted completion)
   → Phase 4 (no menu/button exists yet); guide D9 carries the design.
+- **Modal isolation (Phase 4, D9 deviation).** Our single loop runs
+  `program_handle_event` (Alt-N + the cmQuit→`end_state` catch) during the modal
+  pumps too — UNLIKE C++ `execView`→`p->execute()`→the dialog's `handleEvent`
+  (program-level handling out of the modal path). Today that means cmQuit ends a
+  modal here (C++ discards it at the dialog — a deliberate, documented deviation,
+  see `program.rs` `exec_view` doc + the `..._deviation_from_cpp` test) and Alt-N
+  could reach the desktop under a modal. `TODO(Phase 4: modal isolation)` in
+  `program_handle_event`: suppress program-level command interception while a
+  modal is active, once menus + windows + modals coexist. (Also: `exec_view`'s
+  command-set restore omits the C++ `cmCommandSetChanged` re-broadcast — moot, no
+  observer; align when one exists.)
 
 ## Process reminders
 - **The fan-out changes the cadence:** Phase 0–2 were serial main-thread

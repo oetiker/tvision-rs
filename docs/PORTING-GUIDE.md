@@ -496,6 +496,20 @@ never `sleep` (this is also what makes timing deterministic under test, D11).
 >   completion `Command`** (the original note's mechanism). *Designed, not built —
 >   no menu/button exists until Phase 4; row 34 builds only the sync path.*
 >
+> **Known deviation — program-level handling runs during modal pumps (row 34).**
+> Because our single loop keeps calling `program_handle_event` on every pump,
+> the Alt-N window-selection block and the `cmQuit → end_state` catch are live
+> *during* a modal. C++ does the opposite: `TGroup::execView` → `p->execute()`
+> (`tgroup.cpp:205`) dispatches via the **dialog's** `handleEvent`, so
+> `TProgram::handleEvent` (Alt-N + `cmQuit → endModal`, `tprogram.cpp:205`) is
+> out of the modal dispatch path. Consequence: here a `cmQuit` during a modal
+> ends the modal (with `QUIT`) and Alt-N could reach the desktop under a modal;
+> in C++ the dialog discards `cmQuit` (modal stays open) and Alt-N can't switch
+> background windows. We KEEP this (defensible UX; no menu/Alt-N trigger exists
+> at row 34). **Phase-4 breadcrumb:** when menus + multiple windows + a modal
+> coexist, suppress program-level command interception while a modal is active
+> (C++'s nested `p->execute()` does this structurally).
+>
 > **`endModal` is downward (no up-pointer, D3).** `TDialog::handleEvent` cannot call
 > `Program::endModal` (it has `&mut Context`, not the program). It signals through a
 > new **`Deferred::EndModal(Command)`** variant (`ctx.end_modal(cmd)`); the pump
