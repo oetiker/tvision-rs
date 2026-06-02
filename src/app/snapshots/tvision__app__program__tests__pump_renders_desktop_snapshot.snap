@@ -5,10 +5,10 @@ expression: screen.snapshot()
 size: 12x4
 cursor: hidden
 text:
-|▒▒▒▒▒▒▒▒▒▒▒▒|
-|▒▒▒▒▒▒▒▒▒▒▒▒|
-|▒▒▒▒▒▒▒▒▒▒▒▒|
-|▒▒▒▒▒▒▒▒▒▒▒▒|
+|░░░░░░░░░░░░|
+|░░░░░░░░░░░░|
+|░░░░░░░░░░░░|
+|░░░░░░░░░░░░|
 attr:
 |aaaaaaaaaaaa|
 |aaaaaaaaaaaa|

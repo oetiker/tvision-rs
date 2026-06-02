@@ -566,7 +566,7 @@ mod tests {
     use super::*;
     use crate::backend::{HeadlessBackend, HeadlessHandle};
     use crate::color::{Color, Style};
-    use crate::desktop::Background;
+    use crate::desktop::Desktop;
     use crate::event::{Event, Key, KeyEvent, KeyModifiers, MouseButtons, MouseEvent};
     use crate::theme::Theme;
     use crate::timer::ManualClock;
@@ -667,14 +667,12 @@ mod tests {
             Box::new(backend),
             Box::new(clock.clone()),
             theme,
+            // The desktop: a faithful `Desktop` (a `Group` owning a `Background`,
+            // filled with the default ░ U+2591 light shade).
             |r| {
-                // The desktop: a Group covering the desktop area, with a Background.
-                let mut desk = Group::new(r);
-                desk.insert(Box::new(Background::new(
-                    Rect::new(0, 0, r.b.x - r.a.x, r.b.y - r.a.y),
-                    '▒',
-                )));
-                Some(Box::new(desk))
+                Some(Box::new(Desktop::new(r, |r2| {
+                    Some(Desktop::init_background(r2))
+                })))
             },
             |_r| None, // status line stubbed (Phase 4)
             |_r| None, // menu bar stubbed (Phase 4)

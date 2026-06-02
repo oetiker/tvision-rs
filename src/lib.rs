@@ -82,7 +82,7 @@ pub use backend::{Backend, CrosstermBackend, HeadlessBackend, HeadlessHandle, Re
 pub use capture::{CaptureFlow, CaptureHandler, CaptureStack};
 pub use color::{Color, Modifiers, Style};
 pub use command::{Command, CommandSet};
-pub use desktop::Background;
+pub use desktop::{Background, Desktop};
 pub use event::{
     Event, EventMask, Key, KeyEvent, KeyModifiers, MouseButtons, MouseEvent, MouseEventFlags,
     MouseWheel,

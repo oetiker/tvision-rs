@@ -1,0 +1,19 @@
+---
+source: src/desktop/desktop.rs
+expression: screen.snapshot()
+---
+size: 8x4
+cursor: hidden
+text:
+|░░░░░░░░|
+|░░░░░░░░|
+|░░░░░░░░|
+|░░░░░░░░|
+attr:
+|aaaaaaaa|
+|aaaaaaaa|
+|aaaaaaaa|
+|aaaaaaaa|
+legend:
+  . default
+  a fg=BIOS(7) bg=BIOS(1)
