@@ -37,9 +37,10 @@
 //!   wrapper + data marshalling) → **row 34 (`TDialog`)**, built on top of the
 //!   [`ModalFrame`] mechanism proven here. The sync-vs-event-driven return is
 //!   decided there.
-//! * Alt-1..9 window selection → **row 33d** (a direct walk: the program asks the
-//!   desktop to select the child whose `number` matches, gated by `canMoveFocus`;
-//!   needs `View::number()` + `select()`/`canMoveFocus`). Not a payload broadcast —
+//! * Alt-1..9 window selection (`cmSelectWindowNum`) → **realized at row 33d-2**
+//!   in [`program_handle_event`] as a direct walk (the program asks the desktop to
+//!   select the child whose [`number`](View::number) matches, gated by
+//!   `canMoveFocus` == `deskTop.valid(cmReleasedFocus)`). Not a payload broadcast —
 //!   the window number is an integer, not a `ViewId`.
 //! * Status-line / menu-bar real subviews + the `getEvent` status-line
 //!   pre-handling + `statusLine->update()` → **Phase 4** (factories return `None`
@@ -54,7 +55,7 @@ use std::time::Duration;
 use crate::backend::{Backend, Renderer};
 use crate::capture::{CaptureFlow, CaptureHandler, CaptureStack};
 use crate::command::{Command, CommandSet};
-use crate::event::Event;
+use crate::event::{Event, Key};
 use crate::theme::Theme;
 use crate::timer::Clock;
 use crate::timer::TimerQueue;
@@ -406,7 +407,7 @@ impl Program {
             out_events,
             deferred,
             command_set,
-            desktop: _,
+            desktop,
             end_state,
             command_set_changed,
         } = self;
@@ -479,7 +480,7 @@ impl Program {
                         // routing.
                         let consumed = captures.dispatch(&mut ev, &mut ctx);
                         if !consumed {
-                            program_handle_event(group, &mut ev, &mut ctx, end_state);
+                            program_handle_event(group, *desktop, &mut ev, &mut ctx, end_state);
                         }
                     }
                     // Apply the deferred queue AFTER dispatch — one drain, in
@@ -607,17 +608,48 @@ fn event_wait_timeout(timers: &TimerQueue, now: u64) -> Option<Duration> {
 /// disjoint borrows (the brief's borrow discipline).
 fn program_handle_event(
     group: &mut Group,
+    desktop: Option<ViewId>,
     ev: &mut Event,
     ctx: &mut Context,
     end_state: &mut Option<Command>,
 ) {
-    // TODO(33d): Alt-1..9 window select. Realize it as a **direct walk** — the
-    // program (a tree owner) asks the desktop to select the child window whose
-    // `number` matches, gated by `canMoveFocus`. Needs `View::number() ->
-    // Option<u16>` (default None, Window overrides) + `select()`/`canMoveFocus`
-    // (all 33d). NOT a payload-carrying broadcast: the window number is an integer
-    // argument, not a ViewId, so the new Broadcast `source` substrate does not
-    // serve it. Stubbed here so no half path exists.
+    // Alt+digit window selection (cmSelectWindowNum). Faithful TProgram::handleEvent
+    // order: the Alt-N block runs BEFORE the group dispatch. The window NUMBER is an
+    // integer, not a ViewId, so this is a DIRECT walk (the program asks the desktop
+    // to select the child whose `number` matches), NOT a Broadcast{source} — that
+    // substrate serves the polymorphic infoPtr *subject* case, not an int payload.
+    //
+    // The three-way clear matrix (faithful to the C++):
+    //   can && matched  -> clear (the select consumed it).
+    //   can && !matched -> do NOT clear (event stays live, falls through to the
+    //                      group; C++ `message()==0` path: no clearEvent).
+    //   !can            -> clear (C++ else branch).
+    if let Event::KeyDown(k) = *ev
+        && let Key::Char(c) = k.key
+        && ('1'..='9').contains(&c)
+        && k.modifiers.alt
+        && !k.modifiers.ctrl
+        && !k.modifiers.shift
+    {
+        let num = (c as i16) - ('0' as i16);
+        // canMoveFocus(): deskTop->valid(cmReleasedFocus) — desktop-specific, NOT
+        // the root group's valid().
+        let can = desktop
+            .and_then(|id| group.find_mut(id))
+            .is_some_and(|dt| dt.valid(Command::RELEASED_FOCUS));
+        if can {
+            let matched = desktop
+                .and_then(|id| group.find_mut(id))
+                .is_some_and(|dt| dt.select_window_num(num, ctx));
+            if matched {
+                ev.clear();
+            }
+            // can-but-no-match: leave the event LIVE — it falls through to
+            // group.handle_event below.
+        } else {
+            ev.clear(); // !canMoveFocus -> clearEvent.
+        }
+    }
 
     group.handle_event(ev, ctx);
 
@@ -768,6 +800,225 @@ mod tests {
         // tests assert on their own injected events.
         program.out_events.clear();
         (program, handle, clock)
+    }
+
+    /// Build a `Program` whose desktop holds `n` selectable numbered windows
+    /// (numbered `1..=n`, all `wfMove|wfGrow|wfClose|wfZoom` defaults). Returns the
+    /// program and the window ids (index 0 == window #1). Window #1 is selected by
+    /// injecting `Alt+'1'` and running a real `pump_once` — so the *production*
+    /// path selects it AND drains `deferred`, enabling `{cmNext, cmPrev}` through
+    /// the program's command set exactly as it would at runtime (no test-only
+    /// command-enable shortcut). The round-trip tests therefore start from a
+    /// genuinely focused-window state whose command enables came from the pump.
+    ///
+    /// Windows must live *inside the desktop* (the cmNext/cmPrev/Alt-N handlers are
+    /// on the desktop), so they are inserted in the `create_desktop` closure where
+    /// the `Desktop` is still concrete, and their ids leak out via an `Rc<RefCell>`.
+    fn program_with_windows(
+        screen_w: u16,
+        screen_h: u16,
+        n: i16,
+    ) -> (Program, Vec<crate::view::ViewId>) {
+        let (backend, _handle) = HeadlessBackend::new(screen_w, screen_h);
+        let theme = Theme::classic_blue();
+        let clock = Rc::new(ManualClock::new(0));
+        let ids: Rc<RefCell<Vec<crate::view::ViewId>>> = Rc::new(RefCell::new(Vec::new()));
+        let ids_cap = ids.clone();
+        let mut program = Program::new(
+            Box::new(backend),
+            Box::new(clock),
+            theme,
+            move |r| {
+                let mut desktop = Desktop::new(r, |r2| Some(Desktop::init_background(r2)));
+                for num in 1..=n {
+                    // Stagger the windows so each occupies a distinct rect.
+                    let x = 2 + (num as i32) * 2;
+                    let win = Window::new(
+                        Rect::new(x, num as i32, x + 20, num as i32 + 8),
+                        Some(format!("W{num}")),
+                        num,
+                    );
+                    ids_cap
+                        .borrow_mut()
+                        .push(desktop.insert_view(Box::new(win)));
+                }
+                Some(Box::new(desktop))
+            },
+            |_r| None,
+            |_r| None,
+        );
+        program.out_events.clear();
+
+        // Select window #1 through the *production* path: inject Alt+'1' and pump.
+        // At construction the desktop is root-current with its own `current == None`,
+        // so `desktop.valid(cmReleasedFocus)` (canMoveFocus) is true and the Alt-N
+        // walk selects window 1. The pump then drains `deferred`, so the
+        // `EnableCommand(cmNext/cmPrev)` that `set_state(Selected)` queued is really
+        // applied to `command_set` — exactly the enable-filter path the cmNext/cmPrev
+        // round-trip tests exercise. No test-only command-enable shortcut.
+        program.out_events.push_back(alt_digit('1'));
+        program.pump_once();
+        program.out_events.clear();
+
+        let id_vec = ids.borrow().clone();
+        (program, id_vec)
+    }
+
+    /// Read whether the window `id` is the desktop's selected (current) window —
+    /// its own `sfSelected`, set by `set_current`'s `Selected` propagation.
+    fn win_selected(program: &mut Program, id: crate::view::ViewId) -> bool {
+        program
+            .group_mut()
+            .find_mut(id)
+            .map(|v| v.state().state.selected)
+            .unwrap_or(false)
+    }
+
+    fn alt_digit(c: char) -> Event {
+        Event::KeyDown(KeyEvent::new(
+            Key::Char(c),
+            KeyModifiers {
+                alt: true,
+                ..Default::default()
+            },
+        ))
+    }
+
+    // -- 33d-2: Alt-N selects a numbered window ------------------------------
+
+    #[test]
+    fn alt_n_selects_numbered_window() {
+        let (mut program, ids) = program_with_windows(80, 25, 2);
+        let (w1, w2) = (ids[0], ids[1]);
+        assert!(win_selected(&mut program, w1), "window 1 starts selected");
+        assert!(
+            !win_selected(&mut program, w2),
+            "window 2 starts unselected"
+        );
+
+        // Alt+2 selects window 2.
+        program.out_events.push_back(alt_digit('2'));
+        program.pump_once();
+        assert!(win_selected(&mut program, w2), "Alt+2 selects window 2");
+        assert!(
+            !win_selected(&mut program, w1),
+            "window 1 deselected (focus moved)"
+        );
+        // The Alt-N keydown was consumed (can && matched -> clear). It must not
+        // survive as a KeyDown in the queue (selection legitimately *does* enqueue
+        // focus-change Broadcasts, so the queue is not empty — assert on KeyDown).
+        assert!(
+            !program
+                .out_events
+                .iter()
+                .any(|e| matches!(e, Event::KeyDown(_))),
+            "Alt+2 was consumed: no KeyDown survives"
+        );
+    }
+
+    #[test]
+    fn alt_n_no_match_does_not_change_selection() {
+        let (mut program, ids) = program_with_windows(80, 25, 2);
+        let (w1, w2) = (ids[0], ids[1]);
+        assert!(win_selected(&mut program, w1));
+
+        // Insert a recording probe into the ROOT group with `ofPreProcess` (NOT
+        // current — making it current would release the desktop's focus and muddy
+        // the selection-unchanged assertion). PreProcess puts it in the focused-event
+        // path regardless of who is current, so it sees any KeyDown that survives the
+        // program-level Alt-N block and reaches `group.handle_event`.
+        let probe_log = Rc::new(RefCell::new(Vec::new()));
+        {
+            let mut probe = Probe::new(Rect::new(0, 0, 4, 2), 'P', probe_log.clone());
+            probe.st.options.pre_process = true;
+            program.group_mut().insert(Box::new(probe));
+        }
+        program.out_events.clear();
+
+        // Alt+9: no window 9. can && !matched -> event stays LIVE, falls through to
+        // group.handle_event (C++ message()==0 path: no clearEvent). This is the
+        // discriminating teeth: a wrongly-cleared event would ALSO leave selection
+        // unchanged, so we must prove the event was NOT cleared — i.e. the probe
+        // received it. (The matched-case sibling asserts the inverse: no KeyDown
+        // survives.)
+        program.out_events.push_back(alt_digit('9'));
+        program.pump_once();
+        assert!(
+            win_selected(&mut program, w1),
+            "current unchanged on no match"
+        );
+        assert!(!win_selected(&mut program, w2), "window 2 still unselected");
+        assert!(
+            probe_log
+                .borrow()
+                .iter()
+                .any(|e| matches!(e, Event::KeyDown(k) if k.key == Key::Char('9'))),
+            "can && !matched: the live Alt+9 fell through to the group (not cleared)"
+        );
+    }
+
+    // -- 33d-2: cmNext cycles windows ----------------------------------------
+
+    #[test]
+    fn cm_next_cycles_to_findnext_window() {
+        let (mut program, ids) = program_with_windows(80, 25, 2);
+        let (w1, w2) = (ids[0], ids[1]);
+        assert!(win_selected(&mut program, w1), "w1 current at start");
+
+        // cmNext: must be ENABLED (selecting w1 enabled {cmNext,cmPrev}); the
+        // command survives the program's command-set filter, routes to the desktop's
+        // current child = the desktop, whose handle_event runs focus_next(false).
+        program.out_events.push_back(Event::Command(Command::NEXT));
+        program.pump_once();
+        assert!(
+            win_selected(&mut program, w2),
+            "cmNext advanced to window 2"
+        );
+        assert!(!win_selected(&mut program, w1), "window 1 deselected");
+    }
+
+    /// If cmNext were dropped by the command-set filter (i.e. not enabled), this
+    /// would be a no-op — guarding the enable-filter path the brief calls out.
+    #[test]
+    fn cm_next_is_dropped_when_disabled() {
+        let (mut program, ids) = program_with_windows(80, 25, 2);
+        let (w1, w2) = (ids[0], ids[1]);
+        program.disable_command(Command::NEXT);
+        program.out_events.clear();
+
+        program.out_events.push_back(Event::Command(Command::NEXT));
+        program.pump_once();
+        assert!(
+            win_selected(&mut program, w1),
+            "disabled cmNext is filtered: no cycle"
+        );
+        assert!(!win_selected(&mut program, w2));
+    }
+
+    // -- 33d-2: cmPrev sends current to back ---------------------------------
+
+    #[test]
+    fn cm_prev_sends_current_to_back_and_cycles() {
+        // Three windows so the Z-order change is observable as a focus move.
+        let (mut program, ids) = program_with_windows(80, 25, 3);
+        let w1 = ids[0];
+        assert!(win_selected(&mut program, w1), "w1 current at start");
+
+        // cmPrev: current->putInFrontOf(background) sends w1 to the back; the
+        // trailing resetCurrent (in put_in_front_of, ofSelectable) re-selects the
+        // new front-most selectable window — so w1 is no longer current.
+        program.out_events.push_back(Event::Command(Command::PREV));
+        program.pump_once();
+        assert!(
+            !win_selected(&mut program, w1),
+            "cmPrev sent w1 to the back; a different window is now current"
+        );
+        // Some other window became current (Z-order changed).
+        let some_other_current = ids[1..].iter().any(|&id| win_selected(&mut program, id));
+        assert!(
+            some_other_current,
+            "another window became current after cmPrev"
+        );
     }
 
     // -- 1. End-to-end loop snapshot (mandatory gate) ------------------------

@@ -17,8 +17,10 @@
 //! * **D7** [`Role::Background`](crate::theme::Role) styles the fill (handled
 //!   inside [`Background`]).
 //! * **D8** whole-tree redraw; no `shutDown` redraw bracket.
-//! * **D9** the `cmNext`/`cmPrev` Z-reorder behaviour of `TDeskTop::handleEvent`
-//!   defers to row 33 — see the breadcrumb in [`Desktop::handle_event`].
+//! * **D9** the `cmNext`/`cmPrev` window cycling of `TDeskTop::handleEvent` is
+//!   implemented at 33d-2 (see [`Desktop::handle_event`]); Alt-N's
+//!   `cmSelectWindowNum` arm is realized as the [`Desktop::select_window_num`]
+//!   direct walk.
 //! * **D12** streamable `read`/`write`/`build`/`name` dropped.
 //!
 //! ## Deferred (no dead stubs)
@@ -54,9 +56,10 @@ pub struct Desktop {
     group: Group,
     /// The inserted background child's id — `TDeskTop::background`.
     ///
-    /// Consumed by `cmPrev`'s `putInFrontOf(background)` at row 33; exposed via
-    /// [`background`](Self::background) now so the field stays live under
-    /// `-D warnings`.
+    /// Consumed by the `cmPrev` arm in [`handle_event`](Self::handle_event), which
+    /// reads `self.background` directly for `current->putInFrontOf(background)`
+    /// (send the current window to the back). Also exposed via
+    /// [`background`](Self::background).
     background: Option<ViewId>,
 }
 
@@ -106,6 +109,16 @@ impl Desktop {
     pub fn background(&self) -> Option<ViewId> {
         self.background
     }
+
+    /// Test hook: insert an arbitrary view (a window) directly into the embedded
+    /// group, returning its id. Used by the 33d-2 round-trip tests, which must
+    /// place windows *inside the desktop* (the cmNext/cmPrev/Alt-N handlers live
+    /// on the desktop) — there is no production window-insert seam yet
+    /// (`tile`/`cascade` land later).
+    #[cfg(test)]
+    pub(crate) fn insert_view(&mut self, view: Box<dyn View>) -> ViewId {
+        self.group.insert(view)
+    }
 }
 
 impl View for Desktop {
@@ -122,20 +135,52 @@ impl View for Desktop {
         self.group.draw(ctx);
     }
 
-    /// `TDeskTop::handleEvent` — for row 30 this only delegates to the embedded
-    /// group's three-phase router.
-    ///
-    // TODO(row 33, D9): TDeskTop::handleEvent's command override. After delegating
-    // to the group, if event is a command:
-    //   cmNext: if valid(cmReleasedFocus) { selectNext(false) }   // findNext+select
-    //   cmPrev: if valid(cmReleasedFocus) { current.putInFrontOf(background) }  // Z-reorder
-    //   default: return WITHOUT clearing the event.
-    // clearEvent is reached ONLY for cmNext/cmPrev. Needs ofTopSelect/makeFirst/
-    // putInFrontOf (row 33) + numbered windows, so deferred whole. Both commands
-    // start disabled in default_command_set and there are no windows at row 30, so
-    // the override has zero observable effect here.
+    /// `TDeskTop::handleEvent` — delegate to the embedded group's three-phase
+    /// router, then handle the desktop's own `cmNext`/`cmPrev` window cycling
+    /// (33d-2). Faithful to `tdesktop.cpp`:
+    /// ```cpp
+    /// TGroup::handleEvent( event );
+    /// if( event.what == evCommand ) switch( event.message.command ) {
+    ///     case cmNext: if( valid(cmReleasedFocus) ) selectNext( False ); break;
+    ///     case cmPrev: if( valid(cmReleasedFocus) ) current->putInFrontOf( background ); break;
+    ///     default: return;          // NO clearEvent for other commands
+    /// }
+    /// clearEvent( event );          // reached ONLY for cmNext/cmPrev
+    /// ```
     fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
         self.group.handle_event(ev, ctx);
+        if let Event::Command(cmd) = *ev {
+            match cmd {
+                Command::NEXT => {
+                    if self.group.valid(Command::RELEASED_FOCUS) {
+                        // selectNext(False): findNext + select. `focus_next` is that
+                        // (focus_child raises ofTopSelect windows == C++ select();
+                        // its outgoing validation is already gated by valid() above,
+                        // so it is redundant-but-always-passes). `false` == C++
+                        // `forwards == False`.
+                        self.group.focus_next(false, ctx);
+                    }
+                    // C++ `break` falls through to clearEvent: clear even when
+                    // !valid (the valid() guard wraps only the *action*).
+                    ev.clear();
+                }
+                Command::PREV => {
+                    if self.group.valid(Command::RELEASED_FOCUS)
+                        && let Some(cur) = self.group.current()
+                    {
+                        // current->putInFrontOf(background): send current to the
+                        // back, exposing the next window. NB: put_in_front_of's
+                        // `target: None` means TO-TOP (the inverse); pass the
+                        // resolved Some(background) so a future refactor cannot
+                        // silently flip cmPrev into a raise.
+                        self.group.put_in_front_of(cur, self.background, ctx);
+                    }
+                    ev.clear();
+                }
+                // C++ `default: return;` — no clearEvent for other commands.
+                _ => {}
+            }
+        }
     }
 
     fn set_state(&mut self, flag: StateFlag, enable: bool, ctx: &mut Context) {
@@ -176,6 +221,15 @@ impl View for Desktop {
     /// the faithful removal + `reset_current`).
     fn remove_descendant(&mut self, id: ViewId, ctx: &mut Context) -> bool {
         self.group.remove_descendant(id, ctx)
+    }
+
+    /// `cmSelectWindowNum` (Alt-N) — select the desktop window numbered `num`
+    /// (33d-2). Realizes the C++ broadcast arm as a direct walk into the embedded
+    /// group (see [`Group::focus_by_number`]). The program reaches this through the
+    /// `select_window_num` trait method — **not** an `as_any_mut` downcast — so it
+    /// stays decoupled from the concrete `Desktop` type.
+    fn select_window_num(&mut self, num: i16, ctx: &mut Context) -> bool {
+        self.group.focus_by_number(num, ctx)
     }
 }
 

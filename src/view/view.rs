@@ -695,6 +695,23 @@ pub trait View {
         false
     }
 
+    /// `TView`/`TWindow::number` — the window number for Alt-N selection. Base
+    /// views are unnumbered (`None`); [`Window`](crate::window::Window) overrides
+    /// to return its number when `> 0` (`wnNoNumber == 0` → `None`).
+    fn number(&self) -> Option<i16> {
+        None
+    }
+
+    /// Tree-op: ask this subtree to select the window numbered `num`. Returns
+    /// whether one matched. Consistent with the [`find_mut`](View::find_mut) /
+    /// [`remove_descendant`](View::remove_descendant) tree-op family: the live
+    /// loop holds a subtree only by id (here, the desktop) and asks it to act.
+    /// Default: no-op (`false`). [`Desktop`](crate::desktop::Desktop) overrides.
+    fn select_window_num(&mut self, num: i16, ctx: &mut Context) -> bool {
+        let _ = (num, ctx);
+        false
+    }
+
     /// Downcast hook for the rare owner→child push that needs the concrete type
     /// (e.g. `TWindow::zoom` pushing `set_zoomed` to its `TFrame`). Base returns
     /// `None`; only views that must be reached concretely override it. (`Any`
@@ -996,6 +1013,23 @@ mod tests {
         assert!(!ev.is_nothing());
         assert_eq!(v.st.state, before);
         assert!(out.is_empty());
+    }
+
+    #[test]
+    fn base_number_is_none_and_select_window_num_is_noop() {
+        let mut v = FillView {
+            st: ViewState::new(Rect::new(0, 0, 4, 2)),
+            ch: '#',
+        };
+        assert_eq!(v.number(), None, "base view is unnumbered");
+        let mut out = std::collections::VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<crate::view::Deferred> = Vec::new();
+        let mut ctx = Context::new(&mut out, &mut timers, 0, &mut deferred);
+        assert!(
+            !v.select_window_num(1, &mut ctx),
+            "base select_window_num is a no-op (false)"
+        );
     }
 
     #[test]

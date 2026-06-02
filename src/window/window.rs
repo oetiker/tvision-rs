@@ -193,10 +193,9 @@ impl Window {
         self.zoom_rect
     }
 
-    /// `TWindow::number` — the window number.
-    pub fn number(&self) -> i16 {
-        self.number
-    }
+    // NOTE: `TWindow::number` is exposed via the `View::number()` trait override
+    // below (returning `Option<i16>` — `None` for `wnNoNumber == 0`), so Alt-N can
+    // query any `&dyn View` for its number. No inherent getter.
 
     /// `TWindow::palette` — the colour scheme.
     pub fn palette(&self) -> WindowPalette {
@@ -588,13 +587,14 @@ impl View for Window {
     ///   so a handler would be unreachable; per 33c's principle we must not *enable*
     ///   a command we do not handle, so `cmResize` is omitted from the `set_state`
     ///   enable set.
-    /// * `cmSelectWindowNum` matching `number` → `select()` — **deferred to 33d-2.**
-    ///   The blocker is the missing select machinery (`select()`/`canMoveFocus`),
-    ///   not a payload story: the window number is an *integer* argument (not a
-    ///   `ViewId`), so the `Broadcast` `source` substrate does not serve it. Alt-N
-    ///   is realized at 33d as a **direct walk** — the program asks the desktop to
-    ///   select the child whose `number` matches — not a payload-carrying broadcast
-    ///   (the Alt-N deferral already noted in `program.rs`).
+    /// * `cmSelectWindowNum` matching `number` → `select()` — **realized at 33d-2
+    ///   as a direct walk, NOT on the window.** The window number is an *integer*
+    ///   argument (not a `ViewId`), so the `Broadcast` `source` substrate does not
+    ///   serve it; instead `program_handle_event` asks the desktop
+    ///   ([`Desktop::select_window_num`](crate::desktop::Desktop)) to select the
+    ///   child whose [`number`](View::number) matches
+    ///   ([`Group::focus_by_number`](crate::view::Group)). So the window has no
+    ///   `cmSelectWindowNum` arm of its own.
     fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
         self.group.handle_event(ev, ctx);
         // A consumed event is already `Nothing`, so each branch self-guards.
@@ -701,20 +701,34 @@ impl View for Window {
     /// **DIVERGENCE from C++ (the spec reviewer will check this):** C++
     /// `TWindow::setState` enables the **full set** `{cmNext, cmPrev, cmResize if
     /// (grow|move), cmClose if close, cmZoom if zoom}` atomically on `sfSelected`.
-    /// We enable only the **subset whose handlers exist** ("enable only commands
-    /// whose handlers exist" staging; enabling an inert command — routed to a window
-    /// that ignores it, or filtered — is a worse state than leaving it disabled):
+    /// We enable every member **whose handler exists** ("enable only commands whose
+    /// handlers exist" staging; enabling an inert command — routed to a window that
+    /// ignores it, or filtered — is a worse state than leaving it disabled):
+    ///   cmNext, cmPrev: UNCONDITIONAL (handler in `TDeskTop::handleEvent`, 33d-2).
     ///   33c: cmZoom (if `wfZoom`; handler in [`handle_event`](Self::handle_event)).
     ///   33d-1: cmClose (if `wfClose`; handler in `handle_event`).
-    ///   DEFERRED to 33d-2: cmNext, cmPrev (need the TDeskTop handler).
-    ///   DEFERRED (no handler): cmResize (the keyboard resize sub-mode).
+    ///   DROPPED (no handler): cmResize (the keyboard resize sub-mode).
     fn set_state(&mut self, flag: StateFlag, enable: bool, ctx: &mut Context) {
         self.group.set_state(flag, enable, ctx);
         if flag == StateFlag::Selected {
             self.group.set_state(StateFlag::Active, enable, ctx);
             // Window commands enabled/disabled together while selected (C++
-            // enableCommands). 33d-1 subset: cmClose (if wfClose), cmZoom (if
-            // wfZoom) — both handled in handle_event.
+            // enableCommands).
+            //
+            // cmNext/cmPrev are UNCONDITIONAL (C++ `windowCommands += cmNext; +=
+            // cmPrev;` has NO flag guard — every selectable window can be cycled),
+            // so they do NOT go through the flag-gated `toggle` closure. Their
+            // handler is `TDeskTop::handleEvent` (33d-2).
+            if enable {
+                ctx.enable_command(Command::NEXT);
+                ctx.enable_command(Command::PREV);
+            } else {
+                ctx.disable_command(Command::NEXT);
+                ctx.disable_command(Command::PREV);
+            }
+            // The flag-gated subset: cmClose (if wfClose), cmZoom (if wfZoom) —
+            // both handled in handle_event. cmResize stays DROPPED (no keyboard
+            // resize handler yet — the `TODO(33d-2/later, D9)` in handle_event).
             let mut toggle = |cmd: Command, cond: bool| {
                 if cond {
                     if enable {
@@ -770,6 +784,16 @@ impl View for Window {
     /// the faithful removal + `reset_current`).
     fn remove_descendant(&mut self, id: ViewId, ctx: &mut Context) -> bool {
         self.group.remove_descendant(id, ctx)
+    }
+
+    /// `TWindow::number` — the window number, or `None` for `wnNoNumber` (`0`). A
+    /// window numbered `0` is never an Alt-N (`cmSelectWindowNum`) target.
+    fn number(&self) -> Option<i16> {
+        if self.number > 0 {
+            Some(self.number)
+        } else {
+            None
+        }
     }
 }
 
@@ -854,8 +878,8 @@ mod tests {
         assert_eq!(w.zoom_rect(), Rect::new(0, 0, 40, 15));
         // palette == Blue.
         assert_eq!(w.palette(), WindowPalette::Blue);
-        // number stored.
-        assert_eq!(w.number(), 3);
+        // number stored (now via the View::number() trait override).
+        assert_eq!(View::number(&w), Some(3));
         // group state: shadow, selectable, top_select.
         let st = w.state();
         assert!(st.state.shadow, "sfShadow set");
@@ -1454,5 +1478,59 @@ mod tests {
         };
         let r = move_grow(Point::new(10, 5), Point::new(20, 8), limits, min, max, mode);
         assert_eq!(r, Rect::new(10, 5, 30, 13), "in-range move passes through");
+    }
+
+    // -- View::number override (33d-2) ---------------------------------------
+
+    #[test]
+    fn view_number_some_when_positive_none_when_zero() {
+        // Positive number -> Some(n).
+        let w = Window::new(Rect::new(0, 0, 20, 6), Some("A".into()), 4);
+        assert_eq!(View::number(&w), Some(4), "number > 0 -> Some");
+        // wnNoNumber (0) -> None (never an Alt-N target).
+        let w0 = Window::new(Rect::new(0, 0, 20, 6), Some("B".into()), 0);
+        assert_eq!(View::number(&w0), None, "number == 0 (wnNoNumber) -> None");
+    }
+
+    #[test]
+    fn set_state_select_enables_cm_next_and_prev_unconditionally() {
+        let mut w = window_with_frame();
+        let mut out = VecDeque::new();
+        let mut timers = TimerQueue::new();
+        let mut deferred: Vec<crate::view::Deferred> = Vec::new();
+        {
+            let mut ctx = Context::new(&mut out, &mut timers, 0, &mut deferred);
+            View::set_state(&mut w, StateFlag::Selected, true, &mut ctx);
+        }
+        use crate::view::Deferred;
+        assert!(
+            deferred
+                .iter()
+                .any(|d| matches!(d, Deferred::EnableCommand(Command::NEXT))),
+            "select enables cmNext (unconditional)"
+        );
+        assert!(
+            deferred
+                .iter()
+                .any(|d| matches!(d, Deferred::EnableCommand(Command::PREV))),
+            "select enables cmPrev (unconditional)"
+        );
+        deferred.clear();
+        {
+            let mut ctx = Context::new(&mut out, &mut timers, 0, &mut deferred);
+            View::set_state(&mut w, StateFlag::Selected, false, &mut ctx);
+        }
+        assert!(
+            deferred
+                .iter()
+                .any(|d| matches!(d, Deferred::DisableCommand(Command::NEXT))),
+            "deselect disables cmNext"
+        );
+        assert!(
+            deferred
+                .iter()
+                .any(|d| matches!(d, Deferred::DisableCommand(Command::PREV))),
+            "deselect disables cmPrev"
+        );
     }
 }

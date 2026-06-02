@@ -373,6 +373,41 @@ impl Group {
         }
     }
 
+    /// Select (raise + focus) the selectable child whose [`number`](View::number)
+    /// matches `num`. Returns whether a match was found. Realizes the C++
+    /// `cmSelectWindowNum` broadcast arm as a **direct walk** (`TWindow::handleEvent`:
+    /// `infoInt == number && (options & ofSelectable)` → `select()`).
+    ///
+    /// **`focus_child` is the faithful realization of C++ `select()` here** (not a
+    /// raw `set_current`): `focus_child` is C++ `select()` *plus* an outgoing
+    /// `valid(cmReleasedFocus)` re-check. The Alt-N call site is already gated on
+    /// `canMoveFocus()` (== `deskTop->valid(cmReleasedFocus)`) upstream, so that
+    /// re-check is **redundant and always passes** — it cannot refuse focus the
+    /// upstream gate permitted. Windows carry `ofTopSelect`, so `focus_child` →
+    /// `make_first` **raises** the window, exactly matching C++ `select()` →
+    /// `makeFirst`.
+    ///
+    /// **The `ofSelectable` filter is explicit here** — unlike `cmNext` (whose
+    /// `find_next` already filters selectable), the by-number path must check it
+    /// itself (faithful to the C++ arm's `(options & ofSelectable) != 0`).
+    pub fn focus_by_number(&mut self, num: i16, ctx: &mut Context) -> bool {
+        let target = self.children.iter().find_map(|c| {
+            let s = c.view.state();
+            if s.options.selectable && c.view.number() == Some(num) {
+                Some(c.id)
+            } else {
+                None
+            }
+        });
+        match target {
+            Some(id) => {
+                self.focus_child(id, ctx);
+                true
+            }
+            None => false,
+        }
+    }
+
     // -- Z-reorder (putInFrontOf / makeFirst, realized in the owner, D3) ------
 
     /// `TView::putInFrontOf(target)` realized in the owner (D3 — a child cannot
@@ -1928,5 +1963,74 @@ mod tests {
             Some(idb),
             "reset_current selected the remaining child"
         );
+    }
+
+    // -- focus_by_number (33d-2) ---------------------------------------------
+
+    /// A numbered, selectable probe (the `cmSelectWindowNum` target shape).
+    struct NumberedProbe {
+        st: ViewState,
+        number: i16,
+    }
+    impl NumberedProbe {
+        fn boxed(number: i16, selectable: bool) -> Box<dyn View> {
+            let mut st = ViewState::new(Rect::new(0, 0, 5, 3));
+            st.options.selectable = selectable;
+            st.options.top_select = true; // like a window: focus_child raises it
+            Box::new(NumberedProbe { st, number })
+        }
+    }
+    impl View for NumberedProbe {
+        fn state(&self) -> &ViewState {
+            &self.st
+        }
+        fn state_mut(&mut self) -> &mut ViewState {
+            &mut self.st
+        }
+        fn draw(&mut self, _ctx: &mut DrawCtx) {}
+        fn number(&self) -> Option<i16> {
+            Some(self.number)
+        }
+    }
+
+    #[test]
+    fn focus_by_number_matches_selectable_skips_nonselectable_misses_absent() {
+        let mut out = VecDeque::new();
+        let mut timers = TimerQueue::new();
+        let mut group = Group::new(Rect::new(0, 0, 40, 20));
+
+        // Insert a non-selectable backstop at the BOTTOM (children[0]) — mirrors a
+        // real desktop's background, so `reset_current`/`firstMatch` (which checks
+        // children[0] first, faithful to C++ starting at `last`) skips it and lands
+        // on the raised window. Then: selectable #1, selectable #2, NON-selectable #3.
+        let (id1, id2, _id3) = with_ctx(&mut out, &mut timers, |_ctx| {
+            group.insert(NumberedProbe::boxed(0, false)); // background backstop
+            let id1 = group.insert(NumberedProbe::boxed(1, true));
+            let id2 = group.insert(NumberedProbe::boxed(2, true));
+            let id3 = group.insert(NumberedProbe::boxed(3, false));
+            (id1, id2, id3)
+        });
+        // Establish a current so focus_child's outgoing-validate path is exercised.
+        with_ctx(&mut out, &mut timers, |ctx| {
+            group.set_current(Some(id1), SelectMode::Normal, ctx)
+        });
+
+        // Match #2 (selectable) -> true; raised + becomes current (the backstop
+        // means firstMatch skips children[0] and selects the raised window).
+        let matched = with_ctx(&mut out, &mut timers, |ctx| group.focus_by_number(2, ctx));
+        assert!(matched, "selectable #2 matched");
+        assert_eq!(group.current(), Some(id2), "#2 is now current");
+
+        // Absent number #9 -> false, current unchanged.
+        let absent = with_ctx(&mut out, &mut timers, |ctx| group.focus_by_number(9, ctx));
+        assert!(!absent, "no window 9 -> false");
+        assert_eq!(group.current(), Some(id2), "current unchanged on no match");
+
+        // Non-selectable #3 is skipped by the explicit ofSelectable filter -> false.
+        let non_sel = with_ctx(&mut out, &mut timers, |ctx| group.focus_by_number(3, ctx));
+        assert!(!non_sel, "non-selectable #3 is filtered out -> false");
+        assert_eq!(group.current(), Some(id2), "current unchanged");
+
+        let _ = id1;
     }
 }
