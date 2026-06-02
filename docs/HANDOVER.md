@@ -1,4 +1,4 @@
-# Session handover — resume at row 33c (interactive window) → 33d → TDialog 34
+# Session handover — resume at row 33d (drag + close) → TDialog 34
 
 > Living handover for the **next** rstv session. Read this, then
 > [CLAUDE.md](file:///home/oetiker/checkouts/rstv/CLAUDE.md) (orientation /
@@ -13,14 +13,15 @@
 | `c80a20d` | **Row 30 `TDeskTop`** — `Desktop` = Group + Background (D2); embed-and-delegate-a-Group exemplar; faithful `defaultBkgrnd` ░ |
 | `4da4f52` | **Row 33a** — Group/Context primitives for TWindow |
 | `d44e39b` | **Row 33b** — TWindow core (static selectable window) |
+| `432c01a` | **Row 33c** — TWindow zoom (owner-extent channel + downcast seam + zoom/locate + cmZoom enable) |
 
-**Build state:** 262 unit + 3 integration tests green; `cargo clippy --all-targets
+**Build state:** 269 unit + 3 integration tests green; `cargo clippy --all-targets
 -- -D warnings` and `cargo fmt --check` clean. Working tree clean.
 
-**Phase 2 progress:** row 30 done; **row 33 is staged** — 33a + 33b done, **33c +
-33d remain**; then **row 34 `TDialog`**. The goal is still "a window you can see
-and drive": you can now **see** and **select/raise** a window; 33c/33d make it
-**drivable** (zoom/move/resize/close).
+**Phase 2 progress:** row 30 done; **row 33 is staged** — 33a + 33b + 33c done,
+**33d remains**; then **row 34 `TDialog`**. The goal is still "a window you can see
+and drive": you can now **see**, **select/raise**, and **zoom** a window; 33d makes
+it **draggable + closable** (move/resize/close + cmNext/cmPrev).
 
 ## The row-33 staging (decided + partly executed)
 
@@ -79,45 +80,41 @@ the `View` trait, overriding `draw`/`handle_event`/`set_state`/`size_limits`.
   cmResize/move/grow drag, close/destroy, the setState command-enable set,
   cmSelectWindowNum match (D4 dropped the payload).
 
-## NEXT: 33c (zoom + command-enable + owner-extent) then 33d (drag + close)
+### ✅ 33c (commit `432c01a`) — `docs/briefs/row33c-twindow-zoom.md`
+- **Owner-extent-down channel on `Context`**: a transient `owner_size: Point` field
+  + `owner_size()`/`set_owner_size()`. **Decided (advisor): a defaulted field +
+  setter, NOT a `Context::new` param** — `Group::handle_event` mutates it during
+  dispatch so a setter exists regardless; a param would be pure churn over ~17 call
+  sites and conceptually muddies the disjoint-borrow model (the other four fields
+  are loop-owned `&mut` channels; this is transient routing state). Each
+  `Group::handle_event` sets it to its own size before routing and **restores
+  unconditionally** — the three-phase body was extracted into `Group::route_event`
+  so the positional arm's early `return` can't skip the restore. So when
+  `Window`'s cmZoom arm runs after `self.group.handle_event`, `owner_size` is back
+  to the *desktop's* size. **Caveat (33d):** `owner_size` is valid only during
+  group-routed dispatch; a capture handler sees `(0,0)`, so 33d's drag handler must
+  capture its limits at *push time* (inside `Window::handle_event`), not read them
+  at drag time.
+- **Downcast seam**: defaulted `View::as_any_mut() -> Option<&mut dyn Any>` (base
+  `None` → no ripple; `Frame` overrides `Some(self)`) + `Group::child_mut(id) ->
+  Option<&mut dyn View>`. `Window::zoom` pushes `set_zoomed` through it.
+- **`zoom()` + `locate()`** (faithful `TWindow::zoom`/`TView::locate`): size!=max
+  toggle, zoom_rect save/restore, `range`-clamp to sizeLimits; locate's
+  owner!=0/drawUnderRect tail dropped (D8); local `range` (tview.cpp). cmZoom in
+  `handle_event` (after the group delegate; infoPtr guard dropped, D4).
+- **`setState` enables cmZoom only** (33a channel). **DIVERGENCE (documented):**
+  C++ enables {cmNext,cmPrev,cmResize,cmClose,cmZoom} atomically; 33c enables only
+  cmZoom — the one command whose handler exists. Rest → 33d/row 34.
+- Milestone snapshots: window restored vs zoomed-to-fill (frame fills, scrollbar
+  resizes, `[↑]`→`[↕]` icon). Two-stage reviewed (SPEC-PASS + QUALITY-PASS).
+
+## NEXT: 33d (drag + close + cmNext/cmPrev) then TDialog 34
 
 Run these the established way: own the design on the main thread, **advisor
 consult before writing**, dispatch an Opus implementer against a self-contained
-brief (`docs/briefs/` has the 33a/33b templates), **two-stage review**
+brief (`docs/briefs/` has the 33a/33b/33c templates), **two-stage review**
 (spec-compliance → code-quality, fresh agents), fix via a fresh agent with a
 precise change-list, integrate, commit at the stage boundary.
-
-### 33c — make the window **zoomable** (the simplest interactive command)
-Design pieces, mostly decided:
-1. **Owner-extent-down channel on `Context`** (needed by zoom AND 33d's drag).
-   `zoom`/`dragView` need `owner->getExtent()`/`owner->size` for maxSize + limits,
-   which a child can't reach (D3). Add `owner_size: Point` (extent = `(0,0,size)`)
-   to `Context`; each `Group::handle_event` sets it to its own extent before
-   delivering to children and **restores on exit** (save/restore so nesting
-   root→desktop→window works — when `Window::handle_event` runs its own command
-   handling after delegating to `self.group.handle_event`, `owner_size` is back to
-   the *desktop's* extent, which is what zoom wants). `Program` initializes it to
-   the root extent. Window reads `ctx.owner_size()` in zoom.
-2. **Downcast seam** for the `zoom`→`set_zoomed` push (window must mutate its frame
-   child post-ctor). Add a defaulted `fn as_any_mut(&mut self) -> Option<&mut dyn
-   core::any::Any> { None }` to `View` (object-safe; default `None` so **no ripple**
-   — only `Frame` overrides with `{ Some(self) }`) + `Group::child_mut(id) ->
-   Option<&mut dyn View>`. Window: `group.child_mut(frame_id)?.as_any_mut()?
-   .downcast_mut::<Frame>()?.set_zoomed(z)`.
-3. **`zoom()`** (faithful `TWindow::zoom`): `sizeLimits`(owner_size)→min/max; if
-   `size != max` { `zoom_rect = get_bounds()`; `locate((0,0,max))` } else
-   `locate(zoom_rect)`. `locate(r)` = clamp r to sizeLimits then `change_bounds(r)`
-   (port `TView::locate`; the owner!=0 redraw is D8-moot). Push `set_zoomed(size ==
-   max)` to the frame (drives the unzoom/zoom icon — frame already supports it).
-4. **`setState` command-enable** (use 33a's channel): on sfSelected, enable
-   cmZoom (handler now exists) — and optionally the rest (see note). On deselect,
-   disable. The full faithful set is {cmNext, cmPrev, cmResize(if grow|move),
-   cmClose(if close), cmZoom(if zoom)}; **enable only commands whose handlers
-   exist** to avoid inert commands — so 33c enables cmZoom; 33d extends to
-   cmResize/cmClose (and lands TDeskTop's cmNext/cmPrev, now unblocked by 33a's
-   Z-reorder). Document the staging.
-5. **`handle_event`** cmZoom → `zoom()` + consume.
-- Milestone artifact: snapshot a window zoomed-to-fill-desktop vs restored.
 
 ### 33d — make the window **draggable + closable**
 1. **Drag capture handlers** (port `dragView`/`moveGrow` mouse branch as transient
@@ -174,9 +171,11 @@ path until row 34; breadcrumb `row 34` in `program.rs`.
 - **Commit at clean reviewed stage boundaries** (the project workflow).
 
 ## Outstanding TODOs seeded in code (grep for them)
-- `TODO(33c)` in `src/window/window.rs` — the createFrame hook (needs downcast
-  seam), zoom, the setState command-enable set, cmSelectWindowNum, cmResize/cmClose
-  handling.
+- `TODO(33d)` in `src/window/window.rs` — cmResize (drag), cmClose (close-removal),
+  cmNext/cmPrev in the setState command-enable set, and re-pushing `set_zoomed` on
+  owner resize (the pushed-bool staleness vs C++'s per-draw recompute). The
+  cmSelectWindowNum match stays deferred (D4 dropped the payload). The downcast
+  seam + owner-extent channel that 33d's drag reuses are **already in** (33c).
 - `row 34` in `src/app/program.rs` — `exec_view`/`executeDialog`/getData/setData +
   the `ModalFrame` pop lifecycle (conditional on `valid(end_state)`).
 - `TODO(row 33, D9)` in `src/frame.rs` — close press-and-hold confirm, `wfMove`

@@ -280,10 +280,15 @@ vendored ratatui cell-buffer+diff (MIT) → retained view tree + event loop.
   (`a08412d`); **Batch A rows 29+25 (`TBackground`/`TScrollBar`) committed**
   (`91c50a6`); **Phase-1 row 26 (`TGroup`) committed** (`4d12a32`); **Phase-1 row
   24 (`TFrame`) committed** (`25d10b6`); **Phase-1 row 31 (`TProgram`) committed**
-  (`bff4885`) at the row boundary. Working tree clean.
+  (`bff4885`); **Phase-2 row 30 (`TDeskTop`) committed** (`c80a20d`); **row 33a
+  (Group/Context primitives) committed** (`4da4f52`); **row 33b (`TWindow` core)
+  committed** (`d44e39b`); **row 33c (`TWindow` zoom) committed** (`432c01a`) at
+  the stage boundary. Working tree clean. Phase-2 stage detail (per-stage
+  decisions, deferrals, the 33d/34 plan) lives in
+  [`docs/HANDOVER.md`](docs/HANDOVER.md), not duplicated here.
 
 ## Next step
-**Phase 1 in progress.** Continue subagent-driven (see "How to run the port"
+**Phase 2 in progress.** Continue subagent-driven (see "How to run the port"
 above). Sequence:
 
 1. ~~**Row 23 `TView`**~~ ✅ DONE. The pattern every widget embeds: embed
@@ -300,19 +305,22 @@ above). Sequence:
    The single event loop (D9); capture stack + timer queue now live; modality
    mechanism (`ModalFrame`) shipped, the blocking `exec_view` + frame-pop deferred
    to row 34. Implementer brief in `docs/briefs/`.
-6. **NEXT — Phase 2: `TDeskTop` 30 → `TWindow` 33 → `TDialog` 34**, FOUNDATION,
-   main thread/Opus. The path to "a window you can see and drive." **`TDeskTop` 30**
-   (module `desktop`) is a small `TGroup`+owned-`TBackground` warm-up that gives
-   `Program` a named real desktop. **`TWindow` 33** (module `window`) is the D2
-   embed-and-delegate exemplar: builds a `TFrame` and **pushes title/flags/number/
-   zoomed down** (the owner-data-down seam in `src/frame.rs`), adds
-   `standardScrollBar` (25), owns zoom/move/close (frame posts intents; TWindow's
-   **capture handlers** run the drags — now buildable), lands the row-26/24
-   deferrals (`ofTopSelect`/`makeFirst` Z-reorder, child `sfActive` activation,
-   shadow casting, scrollbar auto-repeat/thumb-drag), and **relocates `WindowFlags`**
-   to the `window` module. **`TDialog` 34** designs `exec_view`/`executeDialog` +
-   the `ModalFrame` push→pop lifecycle on `Program` (pop conditional on
-   `valid(end_state)` — the crux). See [`docs/HANDOVER.md`](docs/HANDOVER.md).
+6. **Phase 2 — `TDeskTop` 30 → `TWindow` 33 → `TDialog` 34**, FOUNDATION, main
+   thread/Opus. The path to "a window you can see and drive."
+   - ~~**`TDeskTop` 30**~~ ✅ DONE (`c80a20d`). `Group`+owned-`TBackground`; gives
+     `Program` a real named desktop.
+   - **`TWindow` 33** (module `window`) — the D2 embed-and-delegate exemplar,
+     **staged**: ~~33a Group/Context primitives~~ ✅, ~~33b core (static selectable
+     window)~~ ✅, ~~33c zoom (owner-extent channel + downcast seam)~~ ✅.
+     **NEXT → 33d**: drag/move/grow (transient capture handlers; owner-extent
+     channel + downcast seam from 33c are reusable), `close`/destroy (close-removal
+     channel), the rest of the setState command-enable set (cmResize/cmClose) +
+     TDeskTop's cmNext/cmPrev, scrollbar auto-repeat/thumb-drag. See
+     [`docs/HANDOVER.md`](docs/HANDOVER.md) (the per-stage plan + the
+     `docs/briefs/row33{a,b,c}-*.md` templates).
+   - **`TDialog` 34** designs `exec_view`/`executeDialog` + the `ModalFrame`
+     push→pop lifecycle on `Program` (pop conditional on `valid(end_state)` — the
+     crux). Gray window scheme drives the deferred multi-scheme theming.
 7. **Then the widget batches fan out hard** (PORT-ORDER Batches B–E): Phase-3
    leaves, validators, menus, dialogs, editor — the bulk `MECHANICAL` rows; run as
    parallel worktree implementer+reviewer trios, committing at batch boundaries.
