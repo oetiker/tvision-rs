@@ -1,164 +1,196 @@
-# Session handover — resume at Phase 2 (TDeskTop 30 → TWindow 33 → TDialog 34)
+# Session handover — resume at row 33c (interactive window) → 33d → TDialog 34
 
 > Living handover for the **next** rstv session. Read this, then
 > [CLAUDE.md](file:///home/oetiker/checkouts/rstv/CLAUDE.md) (orientation /
-> Current state / Next step), then start the next row. When it lands, update or
+> Current state / Next step), then start the next stage. When it lands, update or
 > replace this file for the session after.
 
 ## Where things stand (git `main`)
 
 | commit | what |
 |--------|------|
-| `8045847` | Phase 0 complete (primitives + INFRA substrate + snapshot format) |
-| `a08412d` | **Row 23 `TView`** — `View` trait + `ViewState` + D5 flag structs + `HelpCtx` |
-| `91c50a6` | **Batch A — `TBackground` (29) + `TScrollBar` (25)**; `Glyphs` became a real struct |
-| `4d12a32` | **Row 26 `TGroup`** — view container + 3-phase router + focus machinery + `View::set_state` |
-| `25d10b6` | **Row 24 `TFrame`** — border/title/icons + `DrawCtx::put_cstr` + frame `Glyphs` |
 | `bff4885` | **Row 31 `TProgram`** — the live event loop (D9): capture stack + timer queue made live |
+| `c80a20d` | **Row 30 `TDeskTop`** — `Desktop` = Group + Background (D2); embed-and-delegate-a-Group exemplar; faithful `defaultBkgrnd` ░ |
+| `4da4f52` | **Row 33a** — Group/Context primitives for TWindow |
+| `d44e39b` | **Row 33b** — TWindow core (static selectable window) |
 
-**Build state:** 238 unit + 3 integration tests green; `cargo clippy --all-targets
+**Build state:** 262 unit + 3 integration tests green; `cargo clippy --all-targets
 -- -D warnings` and `cargo fmt --check` clean. Working tree clean.
 
-**Phase 1 rows done:** 23, 24, 25, 26, 29, **31**. The live loop now exists and
-unblocks the pile of deferred capture/modal/drag work. **Next:** the path to "a
-window you can see and drive" — **`TDeskTop` 30 → `TWindow` 33 → `TDialog` 34**.
+**Phase 2 progress:** row 30 done; **row 33 is staged** — 33a + 33b done, **33c +
+33d remain**; then **row 34 `TDialog`**. The goal is still "a window you can see
+and drive": you can now **see** and **select/raise** a window; 33c/33d make it
+**drivable** (zoom/move/resize/close).
 
-## What row 31 (`TProgram`) delivered — context for what builds on it
-New module `src/app/` (`mod.rs` + `program.rs`). The implementer brief is
-[`docs/briefs/row31-tprogram.md`](file:///home/oetiker/checkouts/rstv/docs/briefs/row31-tprogram.md)
-(a good template for future FOUNDATION briefs).
+## The row-33 staging (decided + partly executed)
 
-- **`Program` embeds a `Group`** (D2 embed-and-delegate) plus the loop machinery:
-  `Renderer`, `CaptureStack`, `TimerQueue`, injected `Box<dyn Clock>`, `Theme`,
-  `out_events: VecDeque<Event>`, `pending_captures`, `CommandSet`, the desktop's
-  `ViewId`, `end_state: Option<Command>`, `command_set_changed`.
-- **`Program::new(backend, clock, theme, create_desktop, create_status_line,
-  create_menu_bar)`** — factory-injected ctor (factories are
-  `impl FnOnce(Rect) -> Option<Box<dyn View>>`; the factory owns the extent
-  shrink). For now desktop is a real `Group`+`Background`; status-line/menu-bar
-  are `None` stubs (Phase 4). The ctor sets the group's active/selected/focused/
-  modal bits directly and **makes the desktop `current`** (row-26 `insert` never
-  auto-selects).
-- **`pump_once`** is the D9 realization of `getEvent`→`handleEvent`→(eventError):
-  drain `out_events` before polling; offer the event to the **capture stack
-  first**; else `program_handle_event` (Alt-N stubbed, `group.handle_event`,
-  `cmQuit → end_modal`); apply deferred `pending_captures` *after* dispatch;
-  resetCursor; whole-tree redraw + diff each pass. **Borrow model:** a top-of-fn
-  `let Program { .. } = self` destructure + free fns with explicit field borrows
-  (preserves `Context`'s disjoint-field design — copy this pattern).
-- **`run()`** ports `TGroup::execute` incl. the outer `while(!valid(end_state))`
-  re-loop; **`end_modal(cmd)`** sets `end_state`. Production entry; tests drive
-  `pump_once` directly with `ManualClock` + `HeadlessBackend` (never blocks, D11).
-- **resetCursor:** a new defaulted **`View::cursor_request`** (base: `Some(cursor)`
-  iff `focused && cursor_vis`) + a **`Group` override** that descends into
-  `current` accumulating origin. `Program` turns it into the absolute hardware
-  cursor (set *before* `render`, since `Renderer::render` reads `self.cursor`).
-- **Command-enable:** `curCommandSet` is an explicit **allowlist** (the
-  ">255 always enabled" rule **DROPPED**, D1); `cmZoom`/`cmClose`/`cmResize`/
-  `cmNext`/`cmPrev` seeded **disabled** (`tview.cpp`). `enable_command`/
-  `disable_command` flip `command_set_changed` (idle broadcasts
-  `cmCommandSetChanged`); a disabled `Event::Command` is filtered at the program
-  boundary. **Sharp edge for app authors:** a custom command not in the seed is
-  silently dropped unless explicitly enabled.
+Row 33 (`TWindow`) is too big for one pass; it was decomposed (advisor-sharpened).
+The gating realization: **`pump_once` drops disabled commands at the program
+boundary**, and `cmZoom`/`cmClose`/`cmResize`/`cmNext`/`cmPrev` start **disabled**;
+only `TWindow::setState(sfSelected)`→`enableCommands` turns them on. So a view must
+reach the program's command set — a D3 view→owner problem. There are **three**
+such view→owner effects in TWindow, each needs a downward channel:
 
-### The modality seam — IMPORTANT for row 34
-Row 31 shipped the modality **mechanism only**: a **`ModalFrame`** capture handler
-that gates *positional* events to the modal view (mouse outside its bounds →
-`Consumed`; keyboard/command `Pass` and reach it via focus; broadcasts `Pass` and
-fan to all, by design). **What row 34 must add:**
-- The **frame-pop is row 34's job, not the frame's.** `CaptureStack` has no
-  external pop API (handlers self-pop via `CaptureFlow::ConsumedPop`), and a
-  `ModalFrame` only gets `&mut Context` — it **cannot observe `end_state`**. And
-  the pop must be **conditional on `valid(end_state)`** (per `execute`'s outer
-  loop). So the push→run-until-valid→pop lifecycle belongs to **`exec_view`** (a
-  `Program` method that owns `end_state`/`valid_end`), which is exactly the right
-  place: a view never calls into the loop (D3 — it has no `Program` handle), so
-  TV's "a view's `handleEvent` calls `execView`" is impossible by construction and
-  the capture-frame model is the only faithful path.
-- **`exec_view` / `executeDialog` / `getData`/`setData`** (the blocking modal
-  wrapper + data marshalling) — design them in row 34 against the real `TDialog`.
-  There is **zero test coverage of the pop path** until then; the row-31 breadcrumb
-  is in `program.rs` (grep `row 34`).
+1. **`select()`→`makeFirst`** (Z-reorder) — internal to `Group`. ✅ **done in 33a.**
+2. **`setState`→enable/disable commands** — deferred command-enable channel on
+   `Context`. ✅ **channel done in 33a; used by 33c/33d's setState.**
+3. **`close()`→`destroy(this)`** (self-removal) — a close-removal channel. **33d.**
 
-## What the next session does: **TDeskTop 30 → TWindow 33 → TDialog 34**
+### ✅ 33a (commit `4da4f52`) — `docs/briefs/row33a-group-context-primitives.md`
+- **Deferred command-enable channel** on `Context`: `command_changes:
+  Vec<(Command,bool)>` + `Context::enable_command`/`disable_command`; `Program`
+  has `pending_command_changes`, applied after dispatch (mirrors
+  `pending_captures`), flips `command_set_changed`. Threaded the new 5th
+  `Context::new` arg through all ~17 call sites.
+- **Z-reorder on `Group`**: `put_in_front_of(id, target, ctx)` + `make_first(id,
+  ctx)` (faithful `putInFrontOf`/`makeFirst`, D8 drawHide/drawShow dropped,
+  `ofSelectable`→`resetCurrent` tail kept). **`None` is a deliberate to-top
+  sentinel for `make_first`, NOT C++ `Target==0` (which is send-to-bottom — has no
+  consumer, unimplemented).** Documented.
+- **`ofTopSelect` rewire**: selecting a `top_select` child raises it via
+  `make_first` (faithful `select()`); validate gate (`focus()`) preserved;
+  `focusNext`→`focus()` raises `ofTopSelect` views (faithful). Raise-on-click test
+  uses the realistic desktop layout (non-selectable Background at `children[0]`/
+  bottom, so `firstMatch` skips it and returns the raised window as current).
 
-Run these the way TProgram/TFrame/TGroup went: own the design on the main thread,
-**advisor consult before writing** (proceed if it times out — the C++ is the real
-spec), dispatch an Opus implementer against a self-contained brief (the row-31
-brief in `docs/briefs/` is the template), then **two-stage review**
+### ✅ 33b (commit `d44e39b`) — `docs/briefs/row33b-twindow-core.md`
+New module `src/window/{mod,window.rs}`. `Window` embeds a `Group` (D2), delegates
+the `View` trait, overriding `draw`/`handle_event`/`set_state`/`size_limits`.
+- ctor ports `TWindow::TWindow` verbatim (flags wfMove|wfGrow|wfClose|wfZoom,
+  zoom_rect=bounds, palette=Blue, sfShadow + ofSelectable|ofTopSelect, growMode
+  gfGrowAll|gfGrowRel). Builds the `Frame` directly + pushes title/flags/number
+  down (D3) + inserts as a group child. **No frame factory** (under D3 a custom
+  frame needs the downcast seam → reintroduce at 33c if needed; `TODO(33c)` in
+  `window.rs`).
+- **`WindowFlags` relocated** from `frame.rs` to the `window` module (crate-root
+  re-export preserved). **`WindowPalette`** enum (Blue/Cyan/Gray; getPalette under
+  D7 — blue scheme only, multi-scheme → row 34 gray dialogs).
+- `getTitle`; `sizeLimits` override (min `minWinSize {16,6}`); **`calc_bounds`
+  deliberately NOT overridden** so the trait default routes through
+  `Window::size_limits` (the 16×6 floor — delegating to `group.calc_bounds` would
+  use its 0×0 min; load-bearing, commented — do NOT add a delegating override).
+- `set_state`: **activation only** (sfSelected → sfActive self-recursion → frame
+  goes active via `Group::set_state(Active)` propagation, no manual frame push).
+  **Command-enable DEFERRED** (`TODO(33c)` names the exact set).
+- `standard_scroll_bar` (vertical/horizontal edge rects + sbHandleKeyboard →
+  ofPostProcess); `handle_event`: delegate group + kbTab/kbShiftTab → `focus_next`
+  (Shift+Tab is `Key::Tab` + `shift`; no `BackTab`).
+- **Deferred to 33c/33d** (breadcrumbs in `window.rs`, no dead stubs): zoom,
+  cmResize/move/grow drag, close/destroy, the setState command-enable set,
+  cmSelectWindowNum match (D4 dropped the payload).
+
+## NEXT: 33c (zoom + command-enable + owner-extent) then 33d (drag + close)
+
+Run these the established way: own the design on the main thread, **advisor
+consult before writing**, dispatch an Opus implementer against a self-contained
+brief (`docs/briefs/` has the 33a/33b templates), **two-stage review**
 (spec-compliance → code-quality, fresh agents), fix via a fresh agent with a
-precise change-list, integrate, commit at the row boundary.
+precise change-list, integrate, commit at the stage boundary.
 
-1. **`TDeskTop` (row 30, FOUNDATION-ish, module `desktop`)** — small: a `TGroup`
-   subclass owning a `TBackground` via a factory mixin (both ready). Adds
-   tile/cascade later. Mostly it gives `Program` a *named* real desktop instead of
-   the ad-hoc `Group`+`Background` the row-31 tests use. Probably the quickest win
-   and a good warm-up; the `Program::new` desktop factory already accepts it.
-2. **`TWindow` (row 33, FOUNDATION, module `window`)** — the D2 embed-and-delegate
-   exemplar. It:
-   - builds a `TFrame` (row 24) via the factory mixin and **pushes title/flags/
-     number/zoomed down** (the owner-data-down seam `TFrame` is waiting for — see
-     `src/frame.rs` setters `set_title`/`set_flags`/`set_number`/`set_zoomed`);
-   - adds `standardScrollBar` (row 25);
-   - owns zoom/move/close — the frame *posts the intents* (`cmClose`/`cmZoom`), and
-     **TWindow's capture handlers run the drags** (now possible: the loop + capture
-     stack are live). This lands the row-24 `TODO(row 33, D9)` deferrals
-     (press-and-hold close confirm, `wfMove` frame-drag, grow drags, middle-button
-     move) and the row-25 `TODO(row 31, D9)` scrollbar auto-repeat + thumb-drag —
-     all as **transient within-frame capture handlers** (distinct from modal
-     `exec_view`).
-   - lands the **row-26/24 deferrals**: `ofTopSelect`/`makeFirst`/`putInFrontOf`
-     Z-reorder, child `sfActive` activation, shadow casting.
-   - **Relocate `WindowFlags`** from `src/frame.rs` to the `window` module (keep the
-     crate-root re-export).
-3. **`TDialog` (row 34)** — consumes the modality seam above: design `exec_view`/
-   `executeDialog` + the `ModalFrame` push→pop lifecycle on `Program` (see "The
-   modality seam" — the frame-pop conditional on `valid(end_state)` is the crux).
+### 33c — make the window **zoomable** (the simplest interactive command)
+Design pieces, mostly decided:
+1. **Owner-extent-down channel on `Context`** (needed by zoom AND 33d's drag).
+   `zoom`/`dragView` need `owner->getExtent()`/`owner->size` for maxSize + limits,
+   which a child can't reach (D3). Add `owner_size: Point` (extent = `(0,0,size)`)
+   to `Context`; each `Group::handle_event` sets it to its own extent before
+   delivering to children and **restores on exit** (save/restore so nesting
+   root→desktop→window works — when `Window::handle_event` runs its own command
+   handling after delegating to `self.group.handle_event`, `owner_size` is back to
+   the *desktop's* extent, which is what zoom wants). `Program` initializes it to
+   the root extent. Window reads `ctx.owner_size()` in zoom.
+2. **Downcast seam** for the `zoom`→`set_zoomed` push (window must mutate its frame
+   child post-ctor). Add a defaulted `fn as_any_mut(&mut self) -> Option<&mut dyn
+   core::any::Any> { None }` to `View` (object-safe; default `None` so **no ripple**
+   — only `Frame` overrides with `{ Some(self) }`) + `Group::child_mut(id) ->
+   Option<&mut dyn View>`. Window: `group.child_mut(frame_id)?.as_any_mut()?
+   .downcast_mut::<Frame>()?.set_zoomed(z)`.
+3. **`zoom()`** (faithful `TWindow::zoom`): `sizeLimits`(owner_size)→min/max; if
+   `size != max` { `zoom_rect = get_bounds()`; `locate((0,0,max))` } else
+   `locate(zoom_rect)`. `locate(r)` = clamp r to sizeLimits then `change_bounds(r)`
+   (port `TView::locate`; the owner!=0 redraw is D8-moot). Push `set_zoomed(size ==
+   max)` to the frame (drives the unzoom/zoom icon — frame already supports it).
+4. **`setState` command-enable** (use 33a's channel): on sfSelected, enable
+   cmZoom (handler now exists) — and optionally the rest (see note). On deselect,
+   disable. The full faithful set is {cmNext, cmPrev, cmResize(if grow|move),
+   cmClose(if close), cmZoom(if zoom)}; **enable only commands whose handlers
+   exist** to avoid inert commands — so 33c enables cmZoom; 33d extends to
+   cmResize/cmClose (and lands TDeskTop's cmNext/cmPrev, now unblocked by 33a's
+   Z-reorder). Document the staging.
+5. **`handle_event`** cmZoom → `zoom()` + consume.
+- Milestone artifact: snapshot a window zoomed-to-fill-desktop vs restored.
 
-Then the widget batches fan out hard (PORT-ORDER Batches B–E) as parallel worktree
-implementer+reviewer trios, committing at batch boundaries.
+### 33d — make the window **draggable + closable**
+1. **Drag capture handlers** (port `dragView`/`moveGrow` mouse branch as transient
+   `CaptureHandler`s — the live loop + capture stack make this buildable). On a
+   `wfMove` frame row-0 click (the frame currently leaves it unconsumed — see
+   `frame.rs` `TODO(row 33, D9)`) the window pushes a **move** capture that tracks
+   MouseMove and `moveGrow`s `origin` until MouseUp; on a `wfGrow` bottom-corner
+   click, a **grow** capture. Use `ctx.owner_size()` (33c channel) for limits.
+   Defer the **keyboard-resize** sub-mode (arrows-until-Enter/Esc, `cmResize` from a
+   menu) unless cheap — separate capture mode.
+2. **Close-removal channel** (the "genuinely hard" one). A window can't remove
+   itself (no owner pointer; doesn't know its own `ViewId`). Recipe: `Context`
+   gains a close-request signal (`request_close()` setting a flag/Option); the
+   **owning `Group`**, right after the `deliver` that ran a child's `handle_event`,
+   checks-and-clears the flag and records that child's idx; removes it **after the
+   group's full dispatch completes** (not mid-phase — index shifts). Check-and-clear
+   at the *innermost* deliver makes nesting (root→desktop→window) unambiguous.
+   Window `cmClose`: `valid(cmClose)`; if `sfModal` → post `cmCancel` (do NOT
+   remove — row 34 owns modal teardown); else request close.
+3. **setState**: extend the enabled set to cmResize/cmClose; land TDeskTop's
+   deferred cmNext/cmPrev (`src/desktop/desktop.rs` `TODO(row 33, D9)` — now
+   buildable: `focus_next` + `put_in_front_of` exist).
+4. Also land the row-25 scrollbar **auto-repeat + thumb-drag** (capture handlers)
+   if not split into a Batch-B widget pass — it's independent of the window.
 
-## Open process reminders
-- Subagent-driven worked again for TProgram: main-thread design + **advisor
-  consult** (it answered this time and reshaped the modal approach — capture-frame,
-  not nested loop), Opus implementer against the written `docs/briefs/` brief,
-  fresh-agent two-stage review (SPEC-PASS, then QUALITY-FAIL on two doc bugs →
-  fixed by a fresh Sonnet agent → clean). Keep reviewers adversarial against the
-  **C++**, not just the brief — the spec reviewer independently re-derived the
-  `valid(end_state)` argument for the modal-pop deferral.
-- **`SendMessage` IS available here** (agent ids are returned) — but spawning a
-  **fresh agent with a precise change-list** for review fixes worked cleanly again.
-- **Worktrees:** branch from the last **commit** — commit completed rows before
-  dispatching worktree agents that build on them. `TDeskTop`/`TWindow`/`TDialog`
-  are single main-thread FOUNDATION rows (no parallel fan-out), so no worktree
-  needed; the later widget batches (B–E) are the parallel ones.
-- **Commit policy:** committing at clean, reviewed **row/batch boundaries** (the
-  project's established workflow; this session committed row 31 as `bff4885`).
-- **Briefs:** `docs/briefs/` now holds the row-31 brief — a reusable template for
-  the self-contained FOUNDATION implementer prompt.
+### Row 34 — `TDialog` (the modality payoff)
+Consumes the `ModalFrame` seam shipped in row 31. Design `exec_view`/
+`executeDialog` + the push→run-until-`valid(end_state)`→pop lifecycle on
+`Program` — **the pop is conditional on `valid(end_state)`** (the crux; a view
+can't reach the loop, so `exec_view` owns it). `cmOK`/`cmCancel`; gather/scatter
+typed values (D10). Gray window scheme (`WindowPalette::Gray`) drives the
+multi-scheme theming deferred in 33b (introduce cyan/gray `Role`s or a scheme
+mechanism in the `Theme`). See the row-31 "modality seam" notes (below) + the
+`row 34` breadcrumbs in `src/app/program.rs`.
+
+## The row-31 modality seam — still the plan for row 34
+Row 31 shipped the modality **mechanism only**: a `ModalFrame` capture handler
+gating positional events to the modal view. **Row 34 adds:** the frame-pop is
+row 34's job (`CaptureStack` has no external pop; a `ModalFrame` only gets `&mut
+Context` and can't observe `end_state`), and it must be **conditional on
+`valid(end_state)`** — so the push→run→pop lifecycle belongs to `exec_view` (a
+`Program` method that owns `end_state`/`valid_end`). Zero test coverage of the pop
+path until row 34; breadcrumb `row 34` in `program.rs`.
+
+## Process reminders
+- Subagent-driven worked well again (30/33a/33b): main-thread design + **advisor
+  consult before writing** + Opus implementer against a written `docs/briefs/`
+  brief + fresh-agent two-stage review (spec then quality) + fresh-agent fixes.
+- Keep reviewers **adversarial against the C++**, not just the brief — the 33a
+  spec reviewer re-derived the `firstMatch`/raise-on-click ring math; the 33b
+  quality reviewer caught the hollow `create_frame` factory.
+- These are single main-thread FOUNDATION stages (no parallel fan-out) → **no
+  worktree**. The later widget batches (B–E) are the parallel ones.
+- **Commit at clean reviewed stage boundaries** (the project workflow).
 
 ## Outstanding TODOs seeded in code (grep for them)
-- `row 34` in `src/app/program.rs` — the blocking `exec_view`/`executeDialog`/
-  `getData`/`setData` + the `ModalFrame` pop lifecycle (conditional on
-  `valid(end_state)`).
-- `TODO(row 33+)` in `src/app/program.rs` — Alt-1..9 window select (needs numbered
-  windows + a D4 payload story for the window number).
-- `TODO(timer payload)` in `src/app/program.rs` — the timer-id payload dropped
-  (D4); revisit when a widget needs to know *which* timer fired.
-- `TODO(TStatusLine row)` in `src/app/program.rs` — `getEvent` status-line
-  pre-handling + `statusLine->update()` (Phase 4 stubs).
-- `TODO(row 33, D9)` in `src/frame.rs` — frame press-and-hold close confirm +
-  `wfMove` drag + grow drags + middle-button move (now buildable: capture is live).
-- `TODO(row 31, D9)` in `src/widgets/scrollbar.rs` — scrollbar press-and-hold
-  auto-repeat + thumb-drag become capture handlers (now buildable; land at row 33
-  with the window's scrollbars).
-- `TODO/NOTE(ctrlToArrow)` in `src/widgets/scrollbar.rs` — WordStar nav helper.
-- `TODO(row 33)` in `src/view/group.rs` — shadow casting in `Group::draw`.
+- `TODO(33c)` in `src/window/window.rs` — the createFrame hook (needs downcast
+  seam), zoom, the setState command-enable set, cmSelectWindowNum, cmResize/cmClose
+  handling.
+- `row 34` in `src/app/program.rs` — `exec_view`/`executeDialog`/getData/setData +
+  the `ModalFrame` pop lifecycle (conditional on `valid(end_state)`).
+- `TODO(row 33, D9)` in `src/frame.rs` — close press-and-hold confirm, `wfMove`
+  drag, grow drags, middle-button move (now buildable: capture is live).
+- `TODO(row 31, D9)` in `src/widgets/scrollbar.rs` — scrollbar auto-repeat +
+  thumb-drag (capture handlers).
+- `TODO(row 33, D9)` in `src/desktop/desktop.rs` — TDeskTop cmNext/cmPrev (now
+  unblocked by 33a's Z-reorder + select).
+- `TODO(row 33)` in `src/view/group.rs` — shadow casting in `Group::draw` (still
+  deferred; needs a shadow-dim mechanism in DrawCtx/Theme).
 - Sibling tee-walk + full `framelin.cpp` machinery — deferred (see `src/frame.rs`).
 - Row 9 `Glyphs` continues to fill in per-widget.
-- **Relocate `WindowFlags`** from `src/frame.rs` to the `window` module at row 33.
 
 ## `cargo doc` cleanup (opportunistic)
 `cargo doc -D warnings` is pre-existing-broken project-wide on
-`private_intra_doc_links` in several committed files. Not in the normal gate
-(test/clippy/fmt). A small separate cleanup pass would make `cargo doc` clean.
+`private_intra_doc_links`. Not in the normal gate (test/clippy/fmt). A small
+separate cleanup pass would make `cargo doc` clean.
