@@ -1,4 +1,4 @@
-# Session handover — row 34 (`TDialog`) COMPLETE; resume at Batch B (Phase 3 leaf widgets)
+# Session handover — Batch B in progress; resume at the FOUNDATION rows (key helpers → TButton 37 / TLabel 41 → validator wave 35/39)
 
 > Living handover for the **next** rstv session. Read this, then
 > [CLAUDE.md](file:///home/oetiker/checkouts/rstv/CLAUDE.md) (orientation /
@@ -9,151 +9,188 @@
 
 | commit | what |
 |--------|------|
-| `15c601d` | Row 33d-2 — window selection (`TWindow` COMPLETE) |
-| `7011a1c` | docs: row 33d-2 done; row 34 handover |
-| `b265a28` | **Row 34 — `TDialog` + the modal `exec_view` lifecycle** |
-| `233179e` | docs: row 34 done (Phase 2 complete); Batch B handover |
-| `c7d3cf6` | docs: record the row-34 modal program-handling deviation (D9) |
+| `b265a28` | Row 34 — `TDialog` + the modal `exec_view` lifecycle (Phase 2 done) |
+| `3aaba20` | Demo + ModalFrame follow-the-drag fix |
+| `8399d2b` | Pre-seed Theme roles for Batch B gating wave (StaticText + Cluster) |
+| `45ae919` | **Batch B gating wave — TStaticText (36) + TCluster family (38/42/43/44)** |
+| `8662624` | Pre-seed Theme roles + glyphs for TIndicator (45) |
+| `249a56f` | **Batch B no-validator wave (part 1) — TIndicator (45) + TParamText (40)** |
 
-**Build state:** 299 lib + 3 integration + 1 doctest green; `cargo clippy
+**Build state:** 338 lib + 3 integration + 1 doctest green; `cargo clippy
 --all-targets -- -D warnings` and `cargo fmt --check` clean. Working tree clean.
 
-**Phase 2 is COMPLETE** (`TDeskTop` 30 → `TWindow` 33 → `TDialog` 34). The path
-to "a window/dialog you can see and drive modally" is done. The next work is the
-**Phase 3 leaf-widget fan-out** (PORT-ORDER Batch B) — the bulk `MECHANICAL`
-rows, run as **parallel worktree implementer+reviewer trios**.
+**Phase 2 is COMPLETE.** **Batch B is ~7 rows in:** 36, 38, 42, 43, 44, 45, 40
+done (all two-stage reviewed SPEC-PASS + QUALITY-PASS). The **remaining Batch B
+rows all have a FOUNDATION gap** and need careful per-row design (Opus / main
+thread), not a clean MECHANICAL fan-out — see the seam analysis below.
 
-## What row 34 did (just landed — the modality payoff)
+## What landed this session (Batch B, rows 36/38/42/43/44/45/40)
 
-Brief: [`docs/briefs/row34-tdialog-modal.md`](briefs/row34-tdialog-modal.md).
-Guide amended: **D9 "exec_view — corrected"** (the two modal-invocation paths).
-New module `dialog` = `src/dialog/{mod.rs,dialog.rs}`.
+- **TStaticText (36)** — `src/widgets/static_text.rs`. Faithful `tstatict.cpp`
+  word-wrap draw (D13 via `crate::text::{scroll,next,width}`), `\x03`
+  line-centering, `\n` breaks, `Role::StaticText` (D7), gfFixed, no events.
+- **TCluster + TCheckBoxes/TRadioButtons/TMultiCheckBoxes (38/42/43/44)** —
+  `src/widgets/cluster.rs`. **The seam that absorbed 42/43/44 into 38:** one
+  `Cluster` engine + a closed **`ClusterKind`** enum (D1) carrying per-kind
+  icon/marker/value semantics; three thin **D2 embed-delegate wrappers** via a
+  module-local `cluster_wrapper!` macro. Faithful drawMultiBox/column/row/findSel/
+  buttonState + the four arrow-nav loops; D7 lo/hi AttrPairs → `put_cstr` with
+  `Cluster*` roles. Quality review caught **two real panic bugs** (fixed):
+  `size_y==0` divide-by-zero, and shift-overflow at item 16 in the multi path —
+  both now guarded to mirror `button_state`'s 32-item cap, with regression tests.
+- **TIndicator (45)** — `src/widgets/indicator.rs`. Editor row:col strip; frame
+  glyph + `IndicatorNormal/Dragging` roles, modified marker (☼), colon aligned to
+  column 8 (`start_col = 7 − digits`, negative only past 8-digit rows — tested).
+- **TParamText (40)** — in `src/widgets/static_text.rs`. `TStaticText` subclass
+  with dynamic text; D2 embed-delegate; **printf → `format!`-at-call-site** (the
+  256-byte cap dropped). Snapshot byte-identical to StaticText proves delegation.
 
-- **`Dialog { window: Window }`** — the D2 embed-and-delegate exemplar one level
-  deeper (`Dialog` is-a `Window` is-a `Group`). Delegates *all* of `View` to the
-  window **except** `handle_event` + `valid`. Ctor (`tdialog.cpp`): `flags =
-  wfMove|wfClose` (re-pushed to the frame via new `Window::set_flags` so no zoom
-  icon), `growMode = 0`, `palette = Gray`, `wnNoNumber`.
-- **`handle_event`** ports `TDialog::handleEvent`: `Window::handle_event` **first**,
-  then Esc→post `cmCancel`, Enter→broadcast `cmDefault`, `cmOK/cmCancel/cmYes/cmNo`
-  →`endModal` **iff `sfModal`** (else left live). **`valid`** = `cmCancel`→true else
-  `Group::valid`.
-- **`Program::exec_view(view) -> Command`** — the FOUNDATION crux. Ports
-  `TGroup::execView` + `execute` as a **nested `while end_state.is_none() {
-  pump_once() }`** loop (+ the outer `while !valid`). **Sound because a `View` holds
-  only `&mut Context`, never `&mut Program`** — the compiler bars a view from
-  re-entering the loop, so the sync loop only ever runs top-level (startup / app
-  `main` / a test driving pre-queued events). Faithful: save/restore `current` +
-  `command_set`, insert at root (faithful to `application->execView`), clear
-  `ofSelectable`, set `sfModal` **directly** (C++ `setState` never propagates it),
-  `set_current(Enter)`, push `ModalFrame` directly, run the loops, then
-  `captures.pop()` + `remove` — **validation scoped to the modal's OWN `valid`,
-  NOT the root group's** (the spec-review blocker: `tgroup.cpp:184/205` — the
-  `while(!valid)` is virtual on `p`=the dialog; root-scoping ANDs the desktop
-  sibling → latent hang).
-- **`endModal` is downward (D3):** the dialog requests `ctx.end_modal(cmd)` →
-  **`Deferred::EndModal`** → the pump sets `Program::end_state` (the `69897fe`
-  "new capability adds a `Deferred` variant" rule). **`CaptureStack::pop`** added
-  (the loop owns the stack, so `exec_view` — not the handler — does the
-  `valid(end_state)`-conditional pop).
+### Theme roles already pre-seeded (orchestrator-owned, committed)
+`src/theme.rs` now carries (beyond Phase 0–2): `StaticText`; the cluster palette
+`ClusterNormal/Selected/NormalShortcut/SelectedShortcut/Disabled`; and
+`IndicatorNormal/Dragging` + three `indicator_*` glyphs. **Provisional gray-dialog
+colours** (realign with the deferred `TODO(row 34 gray theming)`).
 
-Two-stage reviewed: SPEC-FAIL → fixed the validation-scope **blocker** (+ a
-bite-verified discriminating sibling-veto test + a root-insert deviation
-breadcrumb), then QUALITY-PASS (one `find_mut`-consolidation nit applied).
+## NEXT — the remaining Batch B rows (FOUNDATION; do per-row, full two-stage review)
 
-## NEXT — Batch B: the Phase 3 leaf-widget fan-out begins
+These were deliberately **not** fanned out: each needs a substrate decision first.
+Run them serially-ish with full per-row two-stage review (spec then quality, fresh
+C++-adversarial agents — the row-34 lesson: a brief itself can be wrong). The
+orchestrator pre-seeds the Theme roles/glyphs each row needs (avoids worktree
+`theme.rs` conflicts), as done for the rows above.
 
-This is where the port **stops being serial FOUNDATION and fans out**. PORT-ORDER
-**Batch B** (lines ~197–202). Run as **parallel worktree implementer+reviewer
-trios** (`isolation: "worktree"`), Sonnet for `MECHANICAL`, committing at batch
-boundaries. **Commit completed rows before dispatching worktree agents that build
-on them** (the worktree-gotcha: a worktree branches from the last *commit*).
+### Prereq (do FIRST) — shared key helpers (task #6)
+TButton, TLabel, TScrollBar, and TCluster **all** converge on the accelerator/key
+helpers, which every one of them deferred. Build them **once**, before 37/41:
+- `hotKey(label) -> Option<char>` — the char after `~` (uppercased), the shortcut.
+- `getAltCode(c) -> Key` — `tvtext2.cpp:82`; maps a letter to its Alt-keycode.
+- `ctrlToArrow(key) -> Key` — WordStar Ctrl-letter → arrow aliases (scrollbar's
+  `TODO/NOTE(ctrlToArrow)`; cluster's literal-arrows-only deferral).
+Likely a small `src/event/keys.rs` (or extend `src/event/key.rs`). Faithful ports
+from `tvtext2.cpp` / `tkeys`/`syskeys`. With these, the cluster/scrollbar
+accelerator + WordStar TODOs can also be retired opportunistically.
 
-The dependency-ordered waves:
+### Row 37 — TButton (FOUNDATION; task #7). **Resolve the timer-id payload first.**
+`tbutton.cpp`: press animation via the row-20 `Clock`, the grab/release-default
+broadcast protocol, the natural **first `exec_view` consumer** (an OK/Cancel
+dialog round-trip).
+- **BLOCKER to decide:** the timer-expiry broadcast **drops the `TimerId`**
+  (`src/app/program.rs:654`, `TODO(timer payload)` — it broadcasts
+  `cmTimerExpired` with `source: None`). C++ TButton checks
+  `event.message.infoPtr == animationTimer` to know it's *its* timer. With the id
+  gone, our button can only check `animationTimer != 0` → **it fires on ANY
+  timer's expiry the moment a second timer source exists** (latent-but-real, not a
+  rare race). Two resolution shapes — **pick before implementing**:
+  (a) carry the `TimerId` in the expiry event, or (b) **target** the expiry to the
+  owning `ViewId` (the truer `infoPtr` successor; routes like a directed message).
+  **Recommendation: resolve it now** (TButton is the forcing function, it's small,
+  and it keeps the animation faithful) rather than the defer-animation fallback
+  (press immediately, no flash). This is the next session's call — state the
+  tradeoff in the brief.
+- Commands: `DEFAULT`/`COMMAND_SET_CHANGED`/`TIMER_EXPIRED`/`RECORD_HISTORY`
+  already exist in `command.rs`. `cmGrabDefault`/`cmReleaseDefault` →
+  **button-local consts** in `button.rs` (D1: view-specific consts live with the
+  view — no `command.rs` edit).
+- Pre-seed **8 cpButton roles** (`"\x0A\x0B\x0C\x0D\x0E\x0E\x0E\x0F"`):
+  Button{Normal,Default,Selected,Disabled} text + {Normal,Default,Selected}Shortcut
+  + ButtonShadow. getColor map: `0x0501`=(Normal,NormalShortcut),
+  `0x0602`=(Default,DefaultShortcut), `0x0703`=(Selected,SelectedShortcut),
+  `0x0404`=(Disabled,Disabled), `getColor(8)`=Shadow. Plus shadow glyphs
+  (`shadows[3]` in `tvtext1.cpp`).
+- Defer (faithful to scrollbar/cluster): the mouse `do{}while(mouseEvent(...,move))`
+  press-tracking loop → row 31, D9 (single-shot fallback: down inside clickRect →
+  press). `showMarkers` dropped. Accelerators use the new shared key helpers.
+- `setState`: sfFocused → `makeDefault` (grab/release-default broadcast);
+  sfSelected/sfActive → redraw (D8 no-op). `press()` → broadcast (bfBroadcast) or
+  post `Event::Command` (the `infoPtr`/`this` → `Broadcast{source}` or command).
 
-1. **`TCluster` (38, FOUNDATION-ish) + `TStaticText` (36, MECHANICAL)** first —
-   they gate the rest of the wave. `TCluster` is the base for checkboxes/radio;
-   `TStaticText` is the base for `TParamText`/`TLabel`. Build these (and review)
-   **before** fanning out their dependents.
-2. **No-validator wave (parallel once 36/38 land):** `TButton` (37, press
-   animation via the row-20 `Clock`; broadcast/command flags), `TIndicator` (45),
-   `TParamText`/`TLabel` (40/41, need 36), `TCheckBoxes`/`TRadioButtons`/
-   `TMultiCheckBoxes` (42/43/44, need `TCluster` 38).
-3. **Validator wave:** `TValidator` trait (35, the abstract base — D2 `transfer`
-   hook feeds D10) → `TInputLine` (39, FOUNDATION: typed `value`/`set_value`).
+### Row 41 — TLabel (FOUNDATION-ish; task #8). focus-by-id + first `Broadcast{source}` consumer.
+`tlabel.cpp`: a caption that **links** to a control and focuses it on click/hotkey,
+and **highlights** while its linked control is focused.
+- **link is an `Option<ViewId>` (D3)** — not a `TView*`. `TLabel` is the **first
+  consumer of `Broadcast{source}`** (Phase A `7efecb3`): on
+  `Broadcast{RECEIVED_FOCUS|RELEASED_FOCUS, source}` where `source == link_id` →
+  `light = received`. Nice payoff of Phase A.
+- **focusLink needs a focus-by-`ViewId` deferred tree-op.** Reuse the **row-33d-2
+  shape** (`select_window_num`/`focus_by_number`): a `View` trait tree-op (default
+  no-op) + container override that resolves the id and calls `focus_child`, routed
+  through a **new `Deferred` variant** (loop-owned focus state). **`request_set_state(id,
+  Focused, true)` is NOT a substitute** — it bypasses `current`/select/the active
+  chain. This is the row's design crux.
+- Embeds `StaticText` (D2; reuse/promote the delegate boilerplate — see the
+  `cluster_wrapper!` / ParamText breadcrumb). Pre-seed **4 cpLabel roles**
+  (`"\x07\x08\x09\x09"`): Label{Normal,Light} text + {Normal,Light}Shortcut;
+  `0x0301`=(Normal,NormalShortcut) when not lit, `0x0402`=(Light,LightShortcut)
+  when lit. Accelerators via the shared key helpers.
 
-**`TButton` is the natural first exec_view *consumer*:** a dialog with an OK/Cancel
-button posting `cmOK`/`cmCancel` is the first realistic `exec_view` round-trip with
-real controls. **`msgbox` (63)** (`messageBox`/`inputBox`) becomes buildable once
-`TButton` + `TStaticText` exist — it is also the first consumer of the **D9
-view-triggered async-modal path** (result via a posted completion `Command`); the
-guide's D9 "exec_view — corrected" carries that design (built at Phase 4 / when a
-menu or msgbox needs it, NOT now).
+### Validator wave (task #5) — TValidator (35) → TInputLine (39)
+- **TValidator (35, FOUNDATION):** the abstract `Validator` trait
+  (`is_valid_input`/`is_valid`/`transfer` — D2 hook feeding D10). `tvalidat.cpp`/
+  `svalid.cpp`.
+- **TInputLine (39, FOUNDATION):** the first **data-bearing** control — builds the
+  **D10 typed `value`/`set_value` protocol** (this is where the row-34/38 deferred
+  `getData`/`setData`/`dataSize` finally lands; the dialog gather/scatter
+  group-walk). Optional `Validator`; text selection; arrow glyphs (D7).
+  `tinputli.cpp`/`sinputli.cpp`.
+- This wave is independent of 37/41 (shares no state) and could run concurrently
+  with them, but both halves here are FOUNDATION → main thread / Opus.
 
-## Row-34 deferrals that become buildable as controls land (don't forget these)
-- **`getData`/`setData`/`dataSize` (D10) — build at `TInputLine` (39)**, the first
-  data-bearing control. The typed `value`/`set_value` protocol + the dialog
-  gather/scatter group-walk. No stub exists today (correctly).
-- **Gray multi-scheme theming** — `Dialog` records `palette = Gray` but the frame
-  still renders the blue `Frame*` roles. Mapping `Gray`/`Cyan` → distinct `Theme`
-  roles (push palette to the frame + branch role selection + new `Theme` entries)
-  is a standalone cosmetic chunk. `TODO(row 34 gray theming)` in `window.rs`
-  (`set_palette`) + the `dialog` module doc. Good first-thing when a dialog's look
-  matters (e.g. the color dialog, Batch E).
-- **The return-consuming `message()`/`query` tree-owner primitive + `cmCanCloseForm`
-  veto** — `Dialog::valid` uses only `Group::valid` today. The veto needs a
-  *validating control* (`TInputLine` + a `TValidator`); build the primitive at its
-  first real consumer (guide D4 "message() — corrected" is the design of record,
-  "designed but not built").
+### After Batch B: `msgbox` (63) becomes buildable
+Once `TButton` + `TStaticText` (+ `TInputLine`) exist, `messageBox`/`inputBox`
+(`msgbox.cpp`) is the first consumer of the **D9 view-triggered async-modal path**
+(result via a posted completion `Command`) — guide D9 "exec_view — corrected"
+carries that design; build when a menu/msgbox needs it (Phase 4), not before.
 
-## Still deferred (older, unchanged by row 34)
-- **`cmResize` keyboard resize sub-mode** (`window.rs` `TODO(33d-2/later, D9)`) —
-  enable in `setState` only when a menu can trigger `cmResize`.
-- **Scrollbar auto-repeat + thumb-drag** (`scrollbar.rs` `TODO(row 31, D9)`) →
-  Batch B widget pass (good to fold in while touching widgets).
-- **Close press-and-hold release-confirm** (`frame.rs` `TODO(row 33, D9)`).
-- **Sibling tee-walk** (`framelin.cpp` `FrameMask`), **shadow casting**
-  (`group.rs` `TODO(row 33)`), **row-9 glyphs** continue per-widget.
+## Row-34/38 deferrals that become buildable as controls land (unchanged)
+- **`getData`/`setData`/`dataSize` (D10) — build at `TInputLine` (39).** The
+  cluster recorded the breadcrumb (`TRadioButtons::setData` also sets `sel=value`).
+- **Gray multi-scheme theming** — all the provisional `*` colours realign here
+  (`TODO(row 34 gray theming)` in `window.rs`). Good first-thing when a dialog's
+  look matters (color dialog, Batch E).
+- **`message()`/`query` + `cmCanCloseForm` veto** — needs a validating control
+  (`TInputLine` + a `TValidator`); guide D4 "message() — corrected" is the design.
+
+## Still deferred (older, unchanged)
+- **Timer-id payload (D4)** — `program.rs:654`; **TButton 37 forces this** (above).
+- **`cmResize` keyboard resize sub-mode** (`window.rs`).
+- **Scrollbar auto-repeat + thumb-drag** (`scrollbar.rs` `TODO(row 31, D9)`).
+- **Cluster mouse drag-cursor loop** (`cluster.rs` `TODO(row 31, D9)`); cluster +
+  scrollbar **ctrlToArrow / accelerator** TODOs (retire via the shared key helpers).
+- **Close press-and-hold confirm** (`frame.rs`); **sibling tee-walk**
+  (`framelin.cpp`); **shadow casting** (`group.rs`); **row-9 glyphs** per-widget.
 - **View-/menu-triggered async modal** (`Deferred::OpenModal` + posted completion)
-  → Phase 4 (no menu/button exists yet); guide D9 carries the design.
-- **Modal isolation (Phase 4, D9 deviation).** Our single loop runs
-  `program_handle_event` (Alt-N + the cmQuit→`end_state` catch) during the modal
-  pumps too — UNLIKE C++ `execView`→`p->execute()`→the dialog's `handleEvent`
-  (program-level handling out of the modal path). Today that means cmQuit ends a
-  modal here (C++ discards it at the dialog — a deliberate, documented deviation,
-  see `program.rs` `exec_view` doc + the `..._deviation_from_cpp` test) and Alt-N
-  could reach the desktop under a modal. `TODO(Phase 4: modal isolation)` in
-  `program_handle_event`: suppress program-level command interception while a
-  modal is active, once menus + windows + modals coexist. (Also: `exec_view`'s
-  command-set restore omits the C++ `cmCommandSetChanged` re-broadcast — moot, no
-  observer; align when one exists.)
+  → Phase 4. **Modal isolation (Phase 4, D9)** — `program.rs` `exec_view` doc.
 
 ## Process reminders
-- **The fan-out changes the cadence:** Phase 0–2 were serial main-thread
-  FOUNDATION. Batch B is **parallel `MECHANICAL` leaves** → dispatch
-  implementer+reviewer trios in **worktrees** (`isolation: "worktree"`), Sonnet for
-  `MECHANICAL`, Opus for the FOUNDATION rows (`TCluster` 38, `TValidator` 35,
-  `TInputLine` 39). The orchestrator owns shared-file edits (`lib.rs`,
-  `widgets/mod.rs` re-exports) to avoid races. Commit at batch boundaries.
-- **Per-row brief is still inline + self-contained** (the PORT-ORDER row + the C++
-  + the D-rules from Appendix B + the existing types it builds on + "run
-  test/clippy/fmt + add a snapshot test"). Never "go read the plan."
-- **Two-stage review stays mandatory** (spec → quality, fresh adversarial agents
-  against the **C++ + guide**, not just the brief — row 34 proved the brief itself
-  can be wrong: a brief error put the modal validation at the wrong scope, and only
-  a C++-adversarial spec reviewer caught it). **Make round-trip tests
-  discriminating + bite-checked.**
-- **Snapshot-test workflow** (Appendix B step 4) is fully unlocked: build a widget
-  on a `HeadlessBackend`, `render`, `assert_snapshot!` against the frozen format.
-  NB cargo-insta is **not installed** in this env — `insta::assert_snapshot!`
-  compares against the committed `.snap`; for a new snapshot, run with
-  `INSTA_UPDATE=always cargo test <name>` to generate, then review the `.snap` by
-  hand (row 34 hand-wrote one and verified it regenerates identically).
+- **The fan-out cadence applies only to gap-free MECHANICAL leaves** (as the 7
+  done rows were: parallel worktree implementers, `isolation: "worktree"`, Sonnet,
+  orchestrator integrates the shared `mod.rs` + pre-seeds `theme.rs`). The
+  remaining rows are FOUNDATION → **per-row, Opus, full two-stage review** (revert
+  the combined-review shortcut used for the two trivial leaves).
+- **Two-stage review stays mandatory** (spec → quality, fresh C++-adversarial
+  agents against the **C++ + guide**, not the brief — the brief can be wrong).
+  Make round-trip tests **discriminating + bite-checked**. The cluster quality
+  pass caught two reachable panics the spec pass rated NITs — quality review earns
+  its keep.
+- **Commit completed rows before dispatching worktree agents that build on them**
+  (worktree-gotcha: a worktree branches from the last *commit*). Pre-seed shared
+  files (`theme.rs` roles/glyphs) in their own commit first.
+- **Per-row brief is inline + self-contained** (the row + the C++ + the D-rules +
+  the existing types it builds on + "run test/clippy/fmt + add a snapshot test").
+  Keep briefs **tight** — an over-long brief crashed a Sonnet implementer's
+  context this session (it still produced correct code; verify worktree output
+  directly if an agent fails to report).
+- **Snapshot workflow** (Appendix B step 4): `cargo-insta` is NOT installed →
+  generate a new `.snap` with `INSTA_UPDATE=always cargo test <name>`, verify by
+  hand, re-run plain, commit the `.snap`.
 
 ## Outstanding TODOs seeded in code (grep)
-- `TODO(row 34 gray theming)` in `src/window/window.rs` — gray/cyan scheme roles.
+- `TODO(timer payload)` in `src/app/program.rs` — **TButton 37 forces this**.
+- `TODO(row 31, D9)` in `src/widgets/scrollbar.rs` + `src/widgets/cluster.rs` —
+  press-and-hold / drag-tracking loops.
+- `TODO(row 41, accelerators)` / `TODO(ctrlToArrow)` in `src/widgets/cluster.rs` —
+  retire via the shared key helpers (task #6).
+- `TODO(row 34 gray theming)` in `src/window/window.rs`.
 - `TODO(33d-2/later, D9)` in `src/window/window.rs` — cmResize keyboard sub-mode.
-- `TODO(row 31, D9)` in `src/widgets/scrollbar.rs` — auto-repeat + thumb-drag.
-- `TODO(row 33, D9)` in `src/frame.rs` — close press-and-hold confirm.
-- `TODO(row 33)` in `src/view/group.rs` — shadow casting in `Group::draw`.
+- `TODO(row 33, D9)` in `src/frame.rs`; `TODO(row 33)` in `src/view/group.rs`.
 - Row 9 `Glyphs` continues to fill in per-widget.

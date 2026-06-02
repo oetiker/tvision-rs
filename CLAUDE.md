@@ -454,6 +454,35 @@ vendored ratatui cell-buffer+diff (MIT) → retained view tree + event loop.
     SIGINT/SIGTERM/SIGHUP handler (dev-dep `signal-hook`) to restore the terminal on
     kill (`CrosstermBackend` still owns no terminal setup). 300 lib + 3 integration +
     1 doctest green; clippy/fmt clean.
+  - **Batch B started (Phase-3 leaf widgets)** — 7 rows done, all parallel
+    worktree implementers (orchestrator-integrated) + two-stage reviewed:
+    - **Gating wave (`45ae919`)** — **TStaticText (36)** (`src/widgets/static_text.rs`;
+      faithful `tstatict.cpp` word-wrap, `\x03` centering, `Role::StaticText`,
+      gfFixed) + **TCluster family (38/42/43/44)** (`src/widgets/cluster.rs`). The
+      cluster seam that **absorbed 42/43/44 into 38**: one `Cluster` engine + a
+      closed **`ClusterKind`** enum (D1) for per-kind icon/marker/value, three thin
+      D2 embed-delegate wrappers via a `cluster_wrapper!` macro; `put_cstr` lo/hi
+      `Cluster*` roles (D7). Quality review caught + fixed **two reachable panics**
+      (`size_y==0` `%0`; shift-overflow at item 16 in the multi path) — guarded to
+      mirror `button_state`'s 32-item cap, with regression tests.
+    - **No-validator wave part 1 (`249a56f`)** — **TIndicator (45)**
+      (`src/widgets/indicator.rs`; editor row:col strip, colon at col 8,
+      `Indicator{Normal,Dragging}` roles + frame/modified glyphs) + **TParamText
+      (40)** (in `static_text.rs`; D2 embed of `StaticText`, printf→`format!`).
+    - **Theme pre-seeds** (`8399d2b`, `8662624`): orchestrator-owned `theme.rs`
+      role/glyph additions ahead of the worktree implementers (StaticText, the
+      5-role cluster palette, Indicator). Provisional gray-dialog colours.
+    - **Remaining Batch B rows all have a FOUNDATION gap** (do per-row, full
+      two-stage review — see `docs/HANDOVER.md`): shared key helpers
+      (`hotKey`/`getAltCode`/`ctrlToArrow`, prereq for 37+41) → **TButton (37)**
+      (must resolve the **timer-id payload** gap, `program.rs:654` — the id-less
+      `cmTimerExpired` broadcast makes a button fire on any timer once a 2nd timer
+      source exists; first `exec_view` consumer) → **TLabel (41)** (link by
+      `ViewId`; **first `Broadcast{source}` consumer**; needs a **focus-by-id**
+      deferred tree-op, reuse the row-33d-2 `focus_by_number` shape) →
+      **validator wave** TValidator (35) → TInputLine (39, the **D10
+      `value`/`set_value`** protocol). 338 lib + 3 integration + 1 doctest green;
+      clippy/fmt clean.
 
 ## Next step
 **Phase 2 in progress.** Continue subagent-driven (see "How to run the port"
@@ -491,9 +520,15 @@ above). Sequence:
      re-entering the loop). **Scoped to the modal mechanism**; gray theming /
      `getData`-`setData` (D10) / `message()`-`query` veto deferred (no consumers
      yet — see the row-34 deferrals).
-7. **Then the widget batches fan out hard** (PORT-ORDER Batches B–E): Phase-3
-   leaves, validators, menus, dialogs, editor — the bulk `MECHANICAL` rows; run as
-   parallel worktree implementer+reviewer trios, committing at batch boundaries.
+7. **Batch B — Phase-3 leaves (IN PROGRESS).** Done: 36/38/42/43/44/45/40 (see
+   Current state). **Remaining rows are FOUNDATION, not a clean fan-out** — do them
+   per-row with full two-stage review (see [`docs/HANDOVER.md`](docs/HANDOVER.md)):
+   shared key helpers → TButton (37, resolve the timer-id payload) → TLabel (41,
+   focus-by-id + `Broadcast{source}`) → validator wave (35 `TValidator` → 39
+   `TInputLine`, the D10 `value`/`set_value` protocol). Then `msgbox` (63).
+8. **Then Batches C–E fan out hard** (validators, menus, dialogs, editor): the
+   bulk `MECHANICAL` rows; parallel worktree implementer+reviewer trios, commit at
+   batch boundaries.
 
 The snapshot-test workflow (Appendix B step 4) is fully unlocked: build a view on
 a `HeadlessBackend`, `render`, `assert_snapshot!` against the frozen format.
