@@ -8,6 +8,10 @@
 //! [`DrawCtx`]: crate::view::DrawCtx
 //! [`Context`]: crate::view::Context
 
+mod cluster;
 mod scrollbar;
+mod static_text;
 
+pub use cluster::{CheckBoxes, Cluster, ClusterKind, MultiCheckBoxes, RadioButtons};
 pub use scrollbar::ScrollBar;
+pub use static_text::StaticText;

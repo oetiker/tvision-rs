@@ -1,0 +1,15 @@
+---
+source: src/widgets/static_text.rs
+expression: screen.snapshot()
+---
+size: 12x2
+cursor: hidden
+text:
+|  centered  |
+|plain       |
+attr:
+|aaaaaaaaaaaa|
+|aaaaaaaaaaaa|
+legend:
+  . default
+  a fg=BIOS(0) bg=BIOS(7)

@@ -1,0 +1,18 @@
+---
+source: src/widgets/cluster.rs
+expression: "snapshot_cluster(&mut c, 14, 3)"
+---
+size: 14x3
+cursor: hidden
+text:
+| [X] Red      |
+| [O] Green    |
+| [ ] Blue     |
+attr:
+|aaaaaaaaaaaaaa|
+|bbbbbbbbbbbbbb|
+|bbbbbbbbbbbbbb|
+legend:
+  . default
+  a fg=BIOS(15) bg=BIOS(2)
+  b fg=BIOS(0) bg=BIOS(7)

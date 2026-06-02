@@ -1,0 +1,17 @@
+---
+source: src/widgets/static_text.rs
+expression: screen.snapshot()
+---
+size: 12x3
+cursor: hidden
+text:
+|hello world |
+|foo         |
+|            |
+attr:
+|aaaaaaaaaaaa|
+|aaaaaaaaaaaa|
+|aaaaaaaaaaaa|
+legend:
+  . default
+  a fg=BIOS(0) bg=BIOS(7)

@@ -1,0 +1,18 @@
+---
+source: src/widgets/cluster.rs
+expression: "snapshot_cluster(&mut c, 14, 3)"
+---
+size: 14x3
+cursor: hidden
+text:
+| ( ) One      |
+| (•) Two      |
+| ( ) Three    |
+attr:
+|aaaaaaaaaaaaaa|
+|bbbbbbbbbbbbbb|
+|aaaaaaaaaaaaaa|
+legend:
+  . default
+  a fg=BIOS(0) bg=BIOS(7)
+  b fg=BIOS(15) bg=BIOS(2)

@@ -1,0 +1,19 @@
+---
+source: src/widgets/cluster.rs
+expression: "snapshot_cluster(&mut c, 14, 3)"
+---
+size: 14x3
+cursor: hidden
+text:
+| [X] Alpha    |
+| [ ] Beta     |
+| [X] Gamma    |
+attr:
+|aaaaabaaaaaaaa|
+|cccccccccccccc|
+|aaaaaaaaaaaaaa|
+legend:
+  . default
+  a fg=BIOS(0) bg=BIOS(7)
+  b fg=BIOS(4) bg=BIOS(7)
+  c fg=BIOS(15) bg=BIOS(2)
