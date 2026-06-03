@@ -67,7 +67,7 @@
 //!   streamable `read`/`write`/`build` (D12); `showMarkers`/`errorAttr` statics
 //!   (`errorAttr` → [`Role::Error`](crate::theme::Role); `showMarkers` dropped).
 
-use crate::command::Command;
+use crate::command::{Command, CommandSet};
 use crate::data::FieldValue;
 use crate::event::{Event, EventMask};
 use crate::help::HelpCtx;
@@ -775,6 +775,24 @@ pub trait View {
     /// downcast is impossible. The two read-sync mechanisms could later unify;
     /// out of scope for row 28.
     fn apply_list_scroll(&mut self, _h: Option<i32>, _v: Option<i32>, _ctx: &mut Context) {}
+
+    /// The `TMenuView` command-graying broker hook (row 49). Defaulted no-op;
+    /// menu views override to regray their menu tree against the program's live
+    /// command set (the free fn
+    /// [`menu::menu_view::update_menu_commands`](crate::menu::menu_view::update_menu_commands),
+    /// the port of `TMenuView::updateMenu`).
+    ///
+    /// This is the §2 broker, the exact precedent of
+    /// [`apply_list_scroll`](View::apply_list_scroll): a menu view (a child, D3)
+    /// cannot read the program's [`CommandSet`](crate::CommandSet) inline — the
+    /// pump owns it, and storing a `&CommandSet` on [`Context`] would alias the
+    /// apply-loop's `&mut command_set` mutation (the
+    /// `EnableCommand`/`DisableCommand` arms). So the view requests
+    /// [`Deferred::UpdateMenu`](crate::view::Deferred::UpdateMenu) by its own id,
+    /// and the pump calls back here at apply time with the live set in hand. The
+    /// C++ `updateMenu` return-bool (`if changed drawView`) is dropped — under
+    /// whole-tree redraw (D8) the next pump repaints unconditionally.
+    fn update_menu_commands(&mut self, _cs: &CommandSet) {}
 
     /// Downcast hook for the rare owner→child push that needs the concrete type
     /// (e.g. `TWindow::zoom` pushing `set_zoomed` to its `TFrame`). Base returns

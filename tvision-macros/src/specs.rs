@@ -63,6 +63,8 @@ fn view(f: &Ident, k: &TokenStream) -> Vec<(&'static str, TokenStream)> {
          quote! { fn select_window_num(&mut self, num: i16, ctx: &mut #k::Context) -> bool { self.#f.select_window_num(num, ctx) } }),
         ("apply_list_scroll",
          quote! { fn apply_list_scroll(&mut self, h: ::core::option::Option<i32>, v: ::core::option::Option<i32>, ctx: &mut #k::Context) { self.#f.apply_list_scroll(h, v, ctx) } }),
+        ("update_menu_commands",
+         quote! { fn update_menu_commands(&mut self, cs: &#k::CommandSet) { self.#f.update_menu_commands(cs) } }),
         ("as_any_mut",
          quote! { fn as_any_mut(&mut self) -> ::core::option::Option<&mut dyn ::core::any::Any> { self.#f.as_any_mut() } }),
     ]

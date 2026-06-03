@@ -2,7 +2,7 @@
 //! currently-known `View` method.
 //!
 //! The empty `impl View for D {}` compiling at all proves every one of the
-//! 21 generated signatures matches the trait exactly. The behavioral assertions
+//! 22 generated signatures matches the trait exactly. The behavioral assertions
 //! prove completeness: no forwarder silently missing.
 
 use std::cell::RefCell;
@@ -15,7 +15,8 @@ use tvision::theme::Theme;
 use tvision::timer::TimerQueue;
 use tvision::view::Deferred;
 use tvision::{
-    Command, Context, DrawCtx, Event, FieldValue, Point, Rect, StateFlag, View, ViewId, ViewState,
+    Command, CommandSet, Context, DrawCtx, Event, FieldValue, Point, Rect, StateFlag, View, ViewId,
+    ViewState,
 };
 
 // ---------------------------------------------------------------------------
@@ -108,6 +109,9 @@ impl View for Spy {
     fn apply_list_scroll(&mut self, _h: Option<i32>, _v: Option<i32>, _ctx: &mut Context) {
         self.mark("apply_list_scroll");
     }
+    fn update_menu_commands(&mut self, _cs: &CommandSet) {
+        self.mark("update_menu_commands");
+    }
     fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
         self.mark("as_any_mut");
         None
@@ -115,7 +119,7 @@ impl View for Spy {
 }
 
 // ---------------------------------------------------------------------------
-// D — pure delegator: empty impl, macro injects ALL 21 forwarders.
+// D — pure delegator: empty impl, macro injects ALL 22 forwarders.
 // ---------------------------------------------------------------------------
 
 struct D {
@@ -231,6 +235,9 @@ fn delegate_forwards_every_known_view_method() {
         d.apply_list_scroll(Some(0), Some(0), &mut ctx);
     }
 
+    // -- update_menu_commands -----------------------------------------------
+    d.update_menu_commands(&CommandSet::new());
+
     // -- as_any_mut ---------------------------------------------------------
     let _ = d.as_any_mut();
 
@@ -272,6 +279,7 @@ fn delegate_forwards_every_known_view_method() {
         "grabs_focus_on_click",
         "select_window_num",
         "apply_list_scroll",
+        "update_menu_commands",
         "as_any_mut",
     ];
     for m in expected {

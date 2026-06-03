@@ -103,7 +103,7 @@ pub use event::{
 };
 pub use frame::Frame;
 pub use help::HelpCtx;
-pub use menu::{Menu, MenuBuilder, MenuItem};
+pub use menu::{Menu, MenuBuilder, MenuItem, MenuViewState};
 pub use screen::{Buffer, Cell, DrawBuffer};
 pub use theme::{Role, Theme};
 pub use timer::{Clock, ManualClock, SystemClock, TimerId, TimerQueue};

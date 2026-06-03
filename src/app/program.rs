@@ -870,6 +870,21 @@ impl Program {
                                         view.apply_list_scroll(hv, vv, &mut ctx);
                                     }
                                 }
+                                // -- row 49: TMenuView command-graying broker --
+                                //
+                                // The menu view (a child, D3) cannot read the
+                                // command set inline — the pump owns it. Resolve
+                                // the menu view and call back through the defaulted
+                                // View::update_menu_commands trait method with the
+                                // live `command_set` in hand (it regrays the menu
+                                // tree). `group` and `command_set` are disjoint
+                                // destructured fields, so no `ctx` is needed (like
+                                // ChangeBounds).
+                                Deferred::UpdateMenu(id) => {
+                                    if let Some(v) = group.find_mut(id) {
+                                        v.update_menu_commands(command_set);
+                                    }
+                                }
                             }
                         }
                     }
@@ -2911,6 +2926,181 @@ mod tests {
                 .iter()
                 .any(|d| matches!(d, Deferred::SyncListViewer { .. })),
             "foreign-source broadcast ignored (source filter bites)"
+        );
+    }
+
+    // -- row 49: TMenuView command-graying broker end-to-end -----------------
+
+    /// A concrete, test-only menu view (the FakeList precedent: a *real*
+    /// consumer of the broker, not a dead stub). It embeds [`MenuViewState`] and
+    /// wires `handle_event` + `update_menu_commands` to the row-49 free
+    /// functions, exactly as the row-50/51 menu views will. `as_any_mut` lets the
+    /// test observe its menu's regrayed `disabled` flags through the tree.
+    struct MenuProbe {
+        mv: crate::menu::MenuViewState,
+    }
+
+    impl MenuProbe {
+        fn new(bounds: Rect, menu: crate::menu::Menu) -> Self {
+            MenuProbe {
+                mv: crate::menu::MenuViewState::new(ViewState::new(bounds), menu),
+            }
+        }
+        /// The `disabled` flag of the first (command) item — what the broker
+        /// regrays.
+        fn first_disabled(&self) -> bool {
+            match &self.mv.menu.items[0] {
+                crate::menu::MenuItem::Command { disabled, .. } => *disabled,
+                _ => panic!("items[0] must be a command item"),
+            }
+        }
+    }
+
+    impl View for MenuProbe {
+        fn state(&self) -> &ViewState {
+            &self.mv.state
+        }
+        fn state_mut(&mut self) -> &mut ViewState {
+            &mut self.mv.state
+        }
+        fn draw(&mut self, _ctx: &mut DrawCtx) {}
+        fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
+            crate::menu::menu_view::handle_event(&self.mv, ev, ctx);
+        }
+        fn update_menu_commands(&mut self, cs: &crate::command::CommandSet) {
+            crate::menu::menu_view::update_menu_commands(&mut self.mv.menu, cs);
+        }
+        fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
+            Some(self)
+        }
+    }
+
+    /// The §2 broker, end-to-end through the real pump: a command-set change
+    /// broadcasts `cmCommandSetChanged`, which reaches the menu view, which
+    /// requests `UpdateMenu`, which the pump applies → the menu item regrays.
+    ///
+    /// **Discriminating** (per the brief): we first ENABLE the command and prove
+    /// the item reads *enabled*, then DISABLE it and prove it reads *disabled* —
+    /// so a pass cannot come from the command merely never being in the default
+    /// set. It passes ONLY via the broadcast → request → regray path; remove the
+    /// broker arm (or the request) and the item never flips.
+    #[test]
+    fn command_set_change_regrays_menu_through_pump() {
+        let cmd = Command::custom("test.menu_probe_cmd");
+        let menu = crate::menu::Menu::builder()
+            .command_key(
+                "~P~robe",
+                cmd,
+                KeyEvent::new(Key::F(9), KeyModifiers::default()),
+                "F9",
+            )
+            .build();
+
+        let (mut program, _screen, _clock) = program_with_desktop(40, 10);
+        let probe_id = program
+            .group_mut()
+            .insert(Box::new(MenuProbe::new(Rect::new(0, 0, 40, 1), menu)));
+        program.out_events.clear();
+
+        // Pump until idle settles so any pre-existing command-set churn from
+        // insertion clears.
+        program.pump_once();
+
+        // Helper: read the probe's first-item disabled flag through the tree.
+        fn probe_disabled(p: &mut Program, id: crate::view::ViewId) -> bool {
+            p.group_mut()
+                .find_mut(id)
+                .and_then(|v| v.as_any_mut())
+                .and_then(|a| a.downcast_mut::<MenuProbe>())
+                .map(|mp| mp.first_disabled())
+                .expect("probe reachable")
+        }
+
+        // 1. ENABLE the command → idle pump broadcasts cmCommandSetChanged →
+        //    next pump delivers it → probe requests UpdateMenu → apply regrays.
+        program.enable_command(cmd);
+        program.pump_once(); // idle: emits the broadcast, clears the flag
+        program.pump_once(); // delivers the broadcast → probe requests UpdateMenu
+        program.pump_once(); // applies UpdateMenu (any residual)
+        assert!(
+            !probe_disabled(&mut program, probe_id),
+            "after ENABLE + regray the item must be ENABLED (disabled == false)"
+        );
+
+        // 2. DISABLE the command → same path → the item regrays to disabled.
+        program.disable_command(cmd);
+        program.pump_once(); // idle: emits the broadcast
+        program.pump_once(); // delivers it → probe requests UpdateMenu
+        program.pump_once(); // applies UpdateMenu
+        assert!(
+            probe_disabled(&mut program, probe_id),
+            "after DISABLE + regray the item must be DISABLED (disabled == true)"
+        );
+    }
+
+    /// The passive accelerator path through the real pump: a `KeyDown` matching a
+    /// menu item's `key_code` makes the menu view post that command.
+    ///
+    /// Discriminating in two directions:
+    /// - **Enabled** + regrayed → the accelerator posts the command.
+    /// - **Disabled** + regrayed → `hot_key`'s cached-`disabled` filter (kept
+    ///   current by the §2 broker) skips the item, so **nothing is posted** — the
+    ///   primary safety net for the omitted C++ `commandEnabled` re-check. (The
+    ///   pump's boundary `drop_disabled` filter is the secondary net for the
+    ///   one-idle-cycle staleness window; it is already covered by
+    ///   `cm_next_is_dropped_when_disabled`.)
+    #[test]
+    fn accelerator_key_posts_enabled_command_and_skips_when_regrayed_disabled() {
+        let cmd = Command::custom("test.menu_accel_cmd");
+        let accel = KeyEvent::new(Key::F(9), KeyModifiers::default());
+        let menu = crate::menu::Menu::builder()
+            .command_key("~P~robe", cmd, accel, "F9")
+            .build();
+
+        let (mut program, _screen, _clock) = program_with_desktop(40, 10);
+        {
+            let mut probe = MenuProbe::new(Rect::new(0, 0, 40, 1), menu);
+            // ofPreProcess so the probe sees the KeyDown regardless of who is
+            // current (the desktop is current after startup).
+            probe.mv.state.options.pre_process = true;
+            program.group_mut().insert(Box::new(probe));
+        }
+        program.out_events.clear();
+
+        // ENABLE + regray so the cached `disabled` is false, then inject the key.
+        program.enable_command(cmd);
+        program.pump_once(); // idle: emits cmCommandSetChanged
+        program.pump_once(); // delivers it → probe regrays (enabled)
+        program.pump_once(); // applies UpdateMenu
+        program.out_events.clear();
+
+        program.out_events.push_back(Event::KeyDown(accel));
+        program.pump_once();
+        assert!(
+            program
+                .out_events
+                .iter()
+                .any(|e| matches!(e, Event::Command(c) if *c == cmd)),
+            "enabled accelerator posts its command"
+        );
+
+        // DISABLE + regray so the cached `disabled` is true, then inject the key:
+        // hot_key skips the now-disabled item → nothing is posted.
+        program.out_events.clear();
+        program.disable_command(cmd);
+        program.pump_once(); // idle: emits cmCommandSetChanged
+        program.pump_once(); // delivers it → probe regrays (disabled)
+        program.pump_once(); // applies UpdateMenu
+        program.out_events.clear();
+
+        program.out_events.push_back(Event::KeyDown(accel));
+        program.pump_once();
+        assert!(
+            !program
+                .out_events
+                .iter()
+                .any(|e| matches!(e, Event::Command(c) if *c == cmd)),
+            "a regrayed-disabled item's accelerator posts nothing (cached-disabled filter)"
         );
     }
 }

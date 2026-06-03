@@ -162,6 +162,26 @@ pub enum Deferred {
         /// The vertical scrollbar to read `value` from (`None` = no v bar).
         v: Option<ViewId>,
     },
+
+    // -- row 49: the TMenuView command-graying broker (D3) --------------------
+    /// **Command-graying broker for `TMenuView`** (ports `updateMenu`, triggered
+    /// by the `cmCommandSetChanged` broadcast). Resolve the menu view by `id` and
+    /// call [`View::update_menu_commands`](crate::view::View::update_menu_commands)
+    /// with the pump's **live** [`CommandSet`](crate::command::CommandSet), which
+    /// regrays the menu tree (`disabled = !commandEnabled(command)` per command
+    /// item, recursing submenus).
+    ///
+    /// A broker — **not** a `&CommandSet` read-accessor on [`Context`] — because
+    /// the command set lives on `Program` and the apply-phase `Context` is alive
+    /// across a loop whose `EnableCommand`/`DisableCommand` arms mutate
+    /// `command_set` (`&mut`); a `&CommandSet` on `Context` would alias that
+    /// borrow. The view (a child, D3) cannot read the command set inline, so it
+    /// requests this by its own id and the pump calls back at apply time, exactly
+    /// like [`SyncListViewer`](Self::SyncListViewer) + `apply_list_scroll`.
+    ///
+    /// Touches the **view-tree** family (same as the scroller/list broker ops), so
+    /// the insertion-order drain stays order-equivalent.
+    UpdateMenu(ViewId),
 }
 
 // ---------------------------------------------------------------------------
@@ -603,6 +623,16 @@ impl<'a> Context<'a> {
     /// `h`/`v` are the bar [`ViewId`]s (`None` = no bar).
     pub fn request_sync_list_viewer(&mut self, list: ViewId, h: Option<ViewId>, v: Option<ViewId>) {
         self.deferred.push(Deferred::SyncListViewer { list, h, v });
+    }
+
+    /// Request the menu view `id` regray its menu tree against the program's live
+    /// command set — **deferred** ([`Deferred::UpdateMenu`]). The menu view (a
+    /// child, D3) cannot read the command set itself; the pump brokers it and
+    /// calls back through
+    /// [`View::update_menu_commands`](crate::view::View::update_menu_commands).
+    /// `TMenuView`'s `cmCommandSetChanged` handler requests this by its own id.
+    pub fn request_update_menu(&mut self, id: ViewId) {
+        self.deferred.push(Deferred::UpdateMenu(id));
     }
 
     /// The clock value sampled for this dispatch pass.

@@ -1,4 +1,4 @@
-# Session handover — Row 46 `TMenu` data tree DONE (Phase 4 begun). Next (per PORT-ORDER): Row 49 `TMenuView` → 50/51/52, then status line 47/53
+# Session handover — Row 49 `TMenuView` passive layer DONE (Phase 4). Next (per PORT-ORDER): Row 50 `TMenuBar` / 51 `TMenuBox` / 52 `TMenuPopup` (the D9 popup-exec path + drawing + `execute()`), then status line 47/53
 
 > Living handover for the **next** rstv session. Read this, then
 > [CLAUDE.md](file:///home/oetiker/checkouts/rstv/CLAUDE.md) (orientation /
@@ -15,39 +15,119 @@
 
 | commit | what |
 |--------|------|
-| _(this commit)_ | **TMenu data tree (46)** — `MenuItem`/`Menu`/`MenuBuilder` (FOUNDATION) ← THIS session |
+| _(staged, pending commit)_ | **TMenuView passive layer (49)** — command-graying broker + hotkey dispatch (FOUNDATION) ← THIS session |
+| `c5c061d` | **TMenu data tree (46)** — `MenuItem`/`Menu`/`MenuBuilder` (FOUNDATION) |
 | `fc66637` | **TListBox (48)** — first concrete `TListViewer` (MECHANICAL) |
 | `3e6645f` | **TApplication (32)** — thin D2 wrapper over `Program` (MECHANICAL) |
 | `47894f0…66ab55f` | **`#[delegate]` proc-macro** — `tvision-macros` crate + workspace, then **adopted** across cluster/Window/Dialog/ParamText/Label/Desktop + the hello example (replaces `cluster_wrapper!`) |
 
-**Build state:** 500 lib (+6 menu) + 5 integration (3 `render_pipeline` + 2
-`delegate_view`) + 2 doctests green; `cargo clippy --workspace --all-targets --
--D warnings` and `cargo fmt --all --check` clean. **It is a Cargo workspace**
-(`tvision` + `tvision-macros`) — use `--workspace` for test/clippy/fmt. (Cargo
-artifacts land in `/home/oetiker/scratch/cargo-target` — set `CARGO_TARGET_DIR`.)
+**Build state:** 510 lib + 5 integration (3 `render_pipeline` + 2 `delegate_view`)
++ 2 doctests green; `cargo clippy --workspace --all-targets -- -D warnings` and
+`cargo fmt --all --check` clean. **It is a Cargo workspace** (`tvision` +
+`tvision-macros`) — use `--workspace` for test/clippy/fmt. (Cargo artifacts land in
+`/home/oetiker/scratch/cargo-target` — set `CARGO_TARGET_DIR`.)
 
 **Phase 2 COMPLETE. Batch B (Phase-3 leaves) COMPLETE. Phase-1 row 32 COMPLETE.**
-**Row 32 `TApplication` DONE** + the **`#[delegate]` macro landed and was adopted
-codebase-wide** (see the two sections below). Phase-4 (46+) + the remaining
-list/dialog leaf rows remain. Next incomplete in PORT-ORDER sequence: **Phase 4**
-(menus 46/49/50/51/52, status 47/53). Batch C concrete validators 58–62 are an
+**Phase 4 in progress — Row 46 `TMenu` data tree + Row 49 `TMenuView` passive
+layer DONE** (row 49 = THIS session, see below; row 46 + the `#[delegate]` macro +
+row 32 landed in prior sessions, sections further down).
+**Next incomplete in PORT-ORDER sequence: Row 50 `TMenuBar`** (then 51 `TMenuBox`,
+52 `TMenuPopup`), then status line 47/53. Batch C concrete validators 58–62 are an
 available parallel fan-out.
 
-> **Repo note:** the `feat/delegate-macro` work (the deliberately-revisited
-> row-48 delegation-macro idea) **is now MERGED into `main`** — `tvision-macros`
-> is a real workspace member and `#[delegate(to = field)]` is adopted everywhere
-> a D2 embed forwards the `View` trait. Row 32 was branched from `main`
-> (independent of the macro) and integrated first; the macro adoption landed on
-> top of it. **Worktrees:** they live under
-> `/scratch/oetiker/claude-worktrees/<project>-<name>` (global CLAUDE.md). A
-> `WorktreeCreate` hook (`~/.claude/settings.json` → `~/.claude/worktree-create.sh`)
-> now redirects the Agent/Workflow `isolation:"worktree"` worktrees there, so
-> **isolation IS usable** — BUT the hook only activates on a session **restart**
-> (hooks load at startup); until then, isolation lands in the project's
-> `.claude/worktrees/` and you should create the worktree manually at the
-> `/scratch` path + dispatch a non-isolated subagent.
+> **Worktrees** live under `/scratch/oetiker/claude-worktrees/<project>-<name>`
+> (global CLAUDE.md). A `WorktreeCreate` hook (`~/.claude/settings.json` →
+> `~/.claude/worktree-create.sh`) redirects the Agent/Workflow
+> `isolation:"worktree"` worktrees there, so **isolation IS usable** — BUT the
+> hook only activates on a session **restart** (hooks load at startup); until
+> then, isolation lands in the project's `.claude/worktrees/` and you should
+> create the worktree manually at the `/scratch` path + dispatch a non-isolated
+> subagent.
 
-## What landed THIS session — Row 46 `TMenu` data tree (FOUNDATION)
+## What landed THIS session — Row 49 `TMenuView` passive layer (FOUNDATION)
+The **passive (non-modal) layer** of `TMenuView` (`tmnuview.cpp`): command-graying
++ hotkey-accelerator dispatch, **no drawing / no modal loop** (those are 50–52).
+`src/menu/menu_view.rs`. Built main-thread/Opus-orchestrated: advisor-vetted brief
+(`docs/briefs/row49-tmenuview.md`) → Opus implementer → **full two-stage review**
+(spec then quality, fresh C++-adversarial Opus agents, both PASS) → one MINOR
+doc-link fix → integrate. **Scope was deliberately split** (advisor-confirmed): the
+interactive `execute()` modal loop maps to the *unbuilt* D9 view-triggered
+async-modal path and lands with the drawing subclasses.
+
+- **Command-graying = a BROKER, NOT a `Context` read-accessor** (this **overturned**
+  the prior HANDOVER note that said "add a read accessor on `Context`"). The command
+  set lives on `Program`; the pump's apply-phase `Context` is alive across a loop
+  whose `EnableCommand`/`DisableCommand` arms mutate `command_set` (`&mut`), so a
+  `&CommandSet` on `Context` would alias that borrow (+ would add a `Context::new`
+  param at every call site). Instead: new **`Deferred::UpdateMenu(ViewId)`** +
+  **`Context::request_update_menu`** + defaulted **`View::update_menu_commands(&mut
+  self, &CommandSet)`** (no-op default), applied in the pump where `group` and
+  `command_set` are **disjoint destructured fields** (no `ctx` needed). The exact
+  `Deferred::SyncListViewer` + `View::apply_list_scroll` precedent — *a new deferred
+  capability ADDS A VARIANT*. Delegate forwarder added to `tvision-macros/specs.rs`
+  + the `delegate_view` spy test (count 21→22).
+- **`updateMenu` ported** as `menu_view::update_menu_commands(&mut Menu, &CommandSet)`:
+  recurse submenus, `disabled = !cs.has(command)` on command items only (never a
+  submenu's own flag), skip separators. The C++ `Boolean` return is **dropped** (D8
+  whole-tree redraw makes `if updateMenu drawView` moot; the guarded write collapses
+  to an unconditional flip).
+- **`hotKey`/`findHotKey` ported** as `menu_view::hot_key(&Menu, KeyEvent) ->
+  Option<Command>`: depth-first, skip separators, recurse submenus **regardless of
+  the submenu's own `disabled`** (C++ `!disabled` guard is only on the command
+  branch), match a command item iff `!disabled && key_code == Some(key)`. The passive
+  `evKeyDown` handler posts the matched command. **The C++ `commandEnabled(p->command)`
+  re-check is dropped** — safe because (a) the cached `disabled` is kept current by
+  the broker and `hot_key` already filters it, and (b) the pump's `drop_disabled`
+  boundary filter drops a stale-enabled post; only a one-idle-cycle staleness window
+  remains (documented).
+- **evBroadcast mask is MOOT** — `Group::handle_event` fans broadcasts to **every**
+  child unconditionally (test `broadcast_reaches_all_children_including_disabled`), so
+  the C++ `eventMask |= evBroadcast` opt-in needs no port; no gate added.
+- **`MenuViewState { state, menu }`** is the embed target for 50/51. **No `MenuView`
+  trait yet** and **`current`/`parentMenu` omitted** (omit-until-consumer: only
+  `execute()`/`trackMouse`/`getHelpCtx` use them — added with the modal layer at
+  50–52). Free functions, not a trait, since the passive layer dispatches into no
+  overridable virtual.
+- **Deferred + breadcrumbed (NOT stubbed):** `execute()` (the nested modal loop →
+  D9 `OpenModal`), `trackMouse`/`trackKey`/`nextItem`/`prevItem` (modal nav),
+  `findItem`/`findAltShortcut`, `do_a_select`/`newSubView`/`mouseInOwner`/
+  `mouseInMenus`/`topMenu`, `getItemRect`/`draw`/`getPalette` (`cpMenuView`),
+  `getHelpCtx`, streaming (D12). The activation branches of `handle_event`
+  (`evMouseDown`, `cmMenu`, alt-shortcut) are breadcrumbed (leave the event live).
+- **Verification (no snapshot — nothing draws):** 8 unit tests on `hot_key` (submenu
+  recursion, disabled-skip bite, separator/no-key, submenu-own-key-no-match) +
+  `update_menu_commands` (recursive regray, negated-predicate bite, submenu-flag
+  untouched); **2 integration tests** through real `pump_once` — a `#[cfg(test)]
+  MenuProbe` (FakeList precedent) proving the broker end-to-end (enable→regray→enabled,
+  disable→`cmCommandSetChanged`→request→apply→disabled, bite-checked) + the
+  accelerator-post path (enabled posts, regrayed-disabled posts nothing).
+
+### NEXT — Row 50 `TMenuBar` / 51 `TMenuBox` / 52 `TMenuPopup` (the menu modal layer)
+This is where the deferred `execute()` and the **D9 view-triggered async-modal path**
+(`Deferred::OpenModal(Box<dyn View>)` + a posted completion `Command`, guide D9
+"exec_view — corrected") get **built** — both `execView` calls in the C++
+(`do_a_select`→`owner->execView(this)` and `execute`'s submenu
+`owner->execView(target)`) are view-triggered modals needing this path. Each menu
+view also needs `getItemRect` + `draw` (so `execute()`'s navigation is testable). At
+that point introduce the `MenuView` trait + the `current`/`parentMenu` fields (the
+row-28 `ListViewer` trait + free-fn-over-state shape), and port the modal navigation
+(`trackMouse`/`trackKey`/`nextItem`/`prevItem` — note the subtle separator-skipping +
+`prevItem`-via-`nextItem`). `TMenuBar` (50) = horizontal layout; `TMenuBox` (51) =
+vertical popup box w/ frame glyphs (D7); `TMenuPopup` (52) = `popupMenu()` free fn +
+exec. **Initial-regray gap to close at 50/51:** the C++ `TMenuItem` ctor reads
+`commandEnabled` at construction, but our row-46 builder has no command set, so
+menus are born **all-enabled** and the row-49 broker only corrects them on a
+`cmCommandSetChanged` broadcast — which does **not** fire at startup
+(`default_command_set` seeds directly, no toggle). So a menu with a startup-disabled
+command (`cmZoom`/`cmClose`/`cmResize`/`cmNext`/`cmPrev`) would *draw* enabled until
+the first broadcast. Trigger an initial `Deferred::UpdateMenu` on menu-bar insert
+(or have `Program` broadcast `cmCommandSetChanged` once at startup) so the first
+paint is correct. Wiring a real menu bar into `Program` is the first emitter of
+`cmTile`/`cmCascade`/`cmDosShell` → then wire the row-32 breadcrumb in
+`program_handle_event` + build `Desktop::tile`/`cascade` geometry (see the row-32
+breadcrumb section below).
+
+## Prior session — Row 46 `TMenu` data tree (FOUNDATION)
 First Phase-4 row: the **menu data tree** (`TMenuItem`/`TSubMenu`/`TMenu`,
 `menus.h`/`menu.cpp`) — pure data + a builder, **no `View`** (that's row 49).
 `src/menu/mod.rs`, wired into `lib.rs` (`pub use menu::{Menu, MenuBuilder,
@@ -332,9 +412,9 @@ agents). Brief: `docs/briefs/row35-39-validator-inputline.md`.
 
 Lowest-numbered incomplete rows = the work. Next up:
 
-### Row 32 `TApplication` — ✅ DONE this session (`3e6645f`)
-See "What landed THIS session" above. Note for Phase 4: when menus emit
-cmTile/cmCascade/cmDosShell, the deferred bodies land **together** — build
+### Phase-4 breadcrumb from Row 32 `TApplication` (`3e6645f`, done a prior session)
+When menus emit cmTile/cmCascade/cmDosShell, the deferred bodies land
+**together** — build
 `Desktop::tile`/`cascade` geometry (`mostEqualDivisors`/`iSqr`/`calcTileRect`/
 `dividerLoc`/`doCascade`, `tdesktop.cpp`) + wire the breadcrumb in
 `program_handle_event` (after `group.handle_event`, beside the QUIT catch, calling
