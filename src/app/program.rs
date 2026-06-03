@@ -370,6 +370,18 @@ impl Program {
         self.command_set.has(cmd)
     }
 
+    /// `TApplication::getTileRect` — the rectangle tile/cascade lay windows into:
+    /// the **desktop child's extent** (`(0,0,w,h)` in desktop-local coords), so it
+    /// stays correct once Phase 4 insets the desktop under a menu/status bar.
+    /// Returns `None` if no desktop was created. Used by `Application::tile`/`cascade`
+    /// (Phase 4) and the `Application::get_tile_rect` forwarding method.
+    ///
+    /// Note: requires `&mut self` because `Group::find_mut` requires `&mut`.
+    pub fn get_tile_rect(&mut self) -> Option<Rect> {
+        let id = self.desktop?;
+        self.group.find_mut(id).map(|v| v.state().get_extent())
+    }
+
     // -- the run loop --------------------------------------------------------
 
     /// `TProgram::run` → `TGroup::execute` — the production entry point.
@@ -1002,6 +1014,15 @@ fn program_handle_event(
         *end_state = Some(Command::QUIT);
         ev.clear();
     }
+
+    // TODO(Phase 4: TApplication command handling): cmTile/cmCascade/cmDosShell are
+    // program-level commands (TApplication::handleEvent, tapplica.cpp). C++ calls
+    // TProgram::handleEvent FIRST, then handles cmTile/cmCascade/cmDosShell — so the
+    // faithful future slot is here, after group dispatch, beside the QUIT catch.
+    // (group.find_mut(desktop) -> desktop.tile/cascade(get_tile_rect()); dosShell ->
+    // backend suspend). Deferred: tile/cascade need Desktop::tile/cascade geometry +
+    // a menu to emit the commands; dosShell needs a backend suspend seam. No source
+    // emits these commands yet (no menus).
 }
 
 #[cfg(test)]

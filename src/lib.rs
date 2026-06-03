@@ -85,7 +85,7 @@ pub mod window;
 
 // --- House-style root re-exports (so `tv::Point` etc. resolve without `use`) ---
 
-pub use app::{ModalFrame, Program};
+pub use app::{Application, ModalFrame, Program};
 pub use backend::{Backend, CrosstermBackend, HeadlessBackend, HeadlessHandle, Renderer};
 pub use capture::{CaptureFlow, CaptureHandler, CaptureStack};
 pub use color::{Color, Modifiers, Style};
