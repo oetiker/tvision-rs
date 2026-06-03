@@ -79,10 +79,33 @@ pub enum Role {
     IndicatorNormal,
     /// `TIndicator` while its owner is dragging — `cpIndicator` idx 2.
     IndicatorDragging,
+    /// `TButton` normal (inactive) face text — `cpButton` idx 1
+    /// (`getColor(0x0501)` lo).
+    ButtonNormal,
+    /// `TButton` default-button face text (active, `amDefault`) — `cpButton`
+    /// idx 2 (`getColor(0x0602)` lo).
+    ButtonDefault,
+    /// `TButton` selected (active + `sfSelected`) face text — `cpButton` idx 3
+    /// (`getColor(0x0703)` lo).
+    ButtonSelected,
+    /// `TButton` disabled face text — `cpButton` idx 4 (`getColor(0x0404)`,
+    /// used for both lo and hi).
+    ButtonDisabled,
+    /// `TButton` shortcut highlight in the normal state — `cpButton` idx 5
+    /// (`getColor(0x0501)` hi).
+    ButtonNormalShortcut,
+    /// `TButton` shortcut highlight in the default state — `cpButton` idx 6
+    /// (`getColor(0x0602)` hi).
+    ButtonDefaultShortcut,
+    /// `TButton` shortcut highlight in the selected state — `cpButton` idx 7
+    /// (`getColor(0x0703)` hi).
+    ButtonSelectedShortcut,
+    /// `TButton` drop-shadow cells — `cpButton` idx 8 (`getColor(8)`).
+    ButtonShadow,
 }
 
 /// Number of [`Role`] variants — the fixed length of [`Theme`]'s style array.
-const ROLE_COUNT: usize = 27;
+const ROLE_COUNT: usize = 35;
 
 impl Role {
     /// Total mapping of each variant to its index into the style array.
@@ -118,6 +141,14 @@ impl Role {
             Role::ClusterDisabled => 24,
             Role::IndicatorNormal => 25,
             Role::IndicatorDragging => 26,
+            Role::ButtonNormal => 27,
+            Role::ButtonDefault => 28,
+            Role::ButtonSelected => 29,
+            Role::ButtonDisabled => 30,
+            Role::ButtonNormalShortcut => 31,
+            Role::ButtonDefaultShortcut => 32,
+            Role::ButtonSelectedShortcut => 33,
+            Role::ButtonShadow => 34,
         }
     }
 }
@@ -240,6 +271,16 @@ pub struct Glyphs {
     pub indicator_frame_dragging: char,
     /// The "buffer modified" marker drawn at column 0 (`char 15`, ☼).
     pub indicator_modified: char,
+
+    // --- Button shadow glyphs (row 37) ---
+    /// `TButton::shadows[0]` (`\xDC` ▄) — drawn at the top of the button's
+    /// right-edge shadow column (`y == 0`).
+    pub button_shadow_top: char,
+    /// `TButton::shadows[1]` (`\xDB` █) — drawn down the button's right-edge
+    /// shadow column (`y > 0`).
+    pub button_shadow_side: char,
+    /// `TButton::shadows[2]` (`\xDF` ▀) — the button's bottom-row shadow fill.
+    pub button_shadow_bottom: char,
 }
 
 impl Default for Glyphs {
@@ -295,6 +336,11 @@ impl Default for Glyphs {
             indicator_frame_normal: '\u{2550}',
             indicator_frame_dragging: '\u{2500}',
             indicator_modified: '\u{263C}',
+
+            // Button shadow (row 37): ▄ (0xDC) top, █ (0xDB) side, ▀ (0xDF) bottom.
+            button_shadow_top: '\u{2584}',
+            button_shadow_side: '\u{2588}',
+            button_shadow_bottom: '\u{2580}',
         }
     }
 }
@@ -366,6 +412,21 @@ impl Theme {
         set(&mut styles, Role::IndicatorNormal, 0x0, 0x3); // black on cyan
         set(&mut styles, Role::IndicatorDragging, 0xF, 0x3); // white on cyan
 
+        // Button family (row 37). Provisional values resolved through the classic
+        // palette chain `cpButton` → `cpGrayDialog` → `cpAppColor` for a gray
+        // dialog: green-faced buttons (black text, white when selected, yellow
+        // shortcut), darkgray-on-lightgray when disabled. The shadow uses the
+        // classic dark drop-shadow attribute rather than the literal chain value
+        // (which is not shadow-like). Realigns with `TODO(row 34 gray theming)`.
+        set(&mut styles, Role::ButtonNormal, 0x0, 0x2); // black on green
+        set(&mut styles, Role::ButtonDefault, 0xB, 0x2); // light cyan on green
+        set(&mut styles, Role::ButtonSelected, 0xF, 0x2); // white on green
+        set(&mut styles, Role::ButtonDisabled, 0x8, 0x7); // darkgray on lightgray
+        set(&mut styles, Role::ButtonNormalShortcut, 0xE, 0x2); // yellow on green
+        set(&mut styles, Role::ButtonDefaultShortcut, 0xE, 0x2); // yellow on green
+        set(&mut styles, Role::ButtonSelectedShortcut, 0xE, 0x2); // yellow on green
+        set(&mut styles, Role::ButtonShadow, 0x8, 0x0); // darkgray on black
+
         Theme {
             styles,
             glyphs: Glyphs::default(),
@@ -422,6 +483,14 @@ mod tests {
         Role::ClusterDisabled,
         Role::IndicatorNormal,
         Role::IndicatorDragging,
+        Role::ButtonNormal,
+        Role::ButtonDefault,
+        Role::ButtonSelected,
+        Role::ButtonDisabled,
+        Role::ButtonNormalShortcut,
+        Role::ButtonDefaultShortcut,
+        Role::ButtonSelectedShortcut,
+        Role::ButtonShadow,
     ];
 
     #[test]
