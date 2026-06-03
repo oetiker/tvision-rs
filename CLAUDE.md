@@ -510,10 +510,56 @@ vendored ratatui cell-buffer+diff (MIT) → retained view tree + event loop.
       QUALITY-PASS after adding the validator reject/restore test). Brief:
       `docs/briefs/row35-39-validator-inputline.md`. 439 lib + 3 integration + 2
       doctests green; clippy/fmt clean.
+  - **Row 27 `TScroller` DONE (`543b2c8`, FOUNDATION)** — module
+    `src/widgets/scroller.rs`. The scrollable-content base (for `TEditor` 66,
+    `TTextDevice`/`TTerminal`, `TOutlineViewer`) that drives two sibling scrollbars.
+    **Establishes THE cross-view sibling-broker pattern (reused by `TListViewer` 28
+    + `TEditor` 66):** a leaf view holds only `&mut Context` (D3) and so can neither
+    **read** nor **mutate** its window-frame sibling scrollbars — the **pump is the
+    cross-view broker in both directions**, performing every sibling read/write at
+    deferred-apply via `group.find_mut(id)` + `as_any_mut`/`View::value()`.
+    **`Event::Broadcast` left UNTOUCHED** (advisor-blessed): `{command, source}` —
+    `source` is only the **filter** (react iff `source ∈ {h_id,v_id}`); the faithful
+    successor to C++ "read `value` off the `infoPtr` subject" is "the pump resolves
+    the subject + reads its `value`," NOT stuffing value into the message (first real
+    consumer of `Broadcast{source}`). **3 new `Deferred` variants:**
+    `SyncScrollerDelta{scroller,h,v}` (read → pump reads each bar's `value` via
+    `View::value()→FieldValue::Int`, downcasts the scroller, calls `apply_delta` =
+    `setCursor(cursor+delta-d)`+`delta=d` guarded by `d!=delta`),
+    `ScrollBarSetParams{id, value/min/max/page_step/arrow_step: Option}` with
+    **per-field `Option`="preserve the bar's LIVE field where `None`"** (write →
+    `setLimit`/`scrollTo`; serves 28/66's `setRange`/`setStep` too), `SetVisible(id,
+    bool)` (`showSBar`; no `StateFlag::Visible` — D8 dropped it, painter honors
+    `state.visible`). **New seams:** `FieldValue::Int(i32)` (first consumer);
+    `ScrollBar::value()`→`Int` + `ScrollBar`/`Scroller` `as_any_mut`;
+    `Role::ScrollerNormal` (provisional, `TODO(window-scheme remap)`). **Dropped
+    (D8):** `drawLock`/`drawFlag`/`checkDraw`/all `drawView()`. **Deferred +
+    breadcrumbed:** `changeBounds` resize-republish (`TODO(resize)`; no consumer
+    until `TEditor` 66 calls `set_limit(ctx)` post-resize), `Role::ScrollerSelected`
+    (cpScroller idx 2 → row 66; base `TScroller` inherits `TView::draw`'s **uniform**
+    `getColor(1)` fill — a spec-review catch). Brief: `docs/briefs/row27-tscroller.md`.
+    Two-stage reviewed (SPEC-PASS after reverting an invented active/selected draw
+    branch; QUALITY-PASS, `core::any::Any` + stale-doc nits applied). 457 lib + 3
+    integration + 2 doctests green; clippy/fmt clean.
 
 ## Next step
-**Phase 2 in progress.** Continue subagent-driven (see "How to run the port"
-above). Sequence:
+**Direction = [`docs/PORT-ORDER.md`](docs/PORT-ORDER.md)** — dependency-ordered;
+walk it in sequence (lowest-numbered incomplete row is the work). Its
+"Parallelizable batches" section lists fan-outs (e.g. Batch C validators 58–62)
+that *may* run concurrently — an efficiency, not a competing direction. Continue
+subagent-driven (see "How to run the port" above; FOUNDATION → Opus + two-stage
+review, MECHANICAL → Sonnet worktree fan-out).
+
+**Immediate next: row 28 `TListViewer`** (FOUNDATION, `tlstview.cpp`) — the list
+base. It drives 2 scrollbars exactly like `TScroller`, so **reuse the row-27
+cross-view broker verbatim** (`Deferred::SyncScrollerDelta`/`ScrollBarSetParams`/
+`SetVisible` + `View::value()`). New work: the list-render matrix (D7
+`ListNormal`/`ListSelected*` roles, already seeded), `numCols` layout,
+`focusItem`/`selectItem`, nav, and the abstract `getText`/`isSelected` hooks. Then
+`TListBox` (48) → `TApplication` (32) → Phase 4 (menus/status). Full per-row detail
+in [`docs/HANDOVER.md`](docs/HANDOVER.md).
+
+Phase sequence so far (all ✅ except where noted):
 
 1. ~~**Row 23 `TView`**~~ ✅ DONE. The pattern every widget embeds: embed
    `ViewState`, `impl View`, draw through `DrawCtx`, events through `Context`.
@@ -552,9 +598,14 @@ above). Sequence:
    (TInputLine) + the D10 `value`/`set_value` protocol** (`43e5c68`, see Current
    state). `msgbox` (63) is now *buildable* but deferred to its first consumer
    (the D9 view-triggered async-modal path — Phase 4), per the row-34 design.
-8. **Then Batches C–E fan out hard** (validators, menus, dialogs, editor): the
-   bulk `MECHANICAL` rows; parallel worktree implementer+reviewer trios, commit at
-   batch boundaries.
+8. ~~**Row 27 `TScroller`**~~ ✅ DONE (`543b2c8`, FOUNDATION, see Current state).
+   Established the cross-view scrollbar-broker pattern (pump brokers all
+   scroller↔scrollbar reads/writes at deferred-apply); `Broadcast` untouched.
+9. **Row 28 `TListViewer`** (FOUNDATION) ← **NEXT**, then `TListBox` 48 /
+   `TApplication` 32, then **Phase 4** (menus 46/49/50/51/52, status 47/53).
+10. **Batches C–E fan out** (concrete validators 58–62, dialog families): the bulk
+    `MECHANICAL` rows; parallel worktree implementer+reviewer trios, commit at batch
+    boundaries — runnable concurrently alongside the in-sequence FOUNDATION work.
 
 The snapshot-test workflow (Appendix B step 4) is fully unlocked: build a view on
 a `HeadlessBackend`, `render`, `assert_snapshot!` against the frozen format.

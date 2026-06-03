@@ -1,29 +1,78 @@
-# Session handover — Batch B COMPLETE (validator wave landed). Next: Phase 4 (menus/status/lists) ∥ Batch C (concrete validators)
+# Session handover — Row 27 `TScroller` DONE. Next (per PORT-ORDER): Row 28 `TListViewer` → list substrate → Phase 4
 
 > Living handover for the **next** rstv session. Read this, then
 > [CLAUDE.md](file:///home/oetiker/checkouts/rstv/CLAUDE.md) (orientation /
 > Current state / Next step), then start. When the next stage lands, update or
 > replace this file for the session after.
+>
+> **Direction = [`docs/PORT-ORDER.md`](file:///home/oetiker/checkouts/rstv/docs/PORT-ORDER.md).**
+> It is dependency-ordered; follow it in sequence rather than treating "tracks" as
+> an open choice. Lowest-numbered incomplete rows are the work. The
+> "Parallelizable batches" section (e.g. Batch C validators 58–62) lists fan-outs
+> that *may* run concurrently — an efficiency, not a competing direction.
 
 ## Where things stand (git `main`)
 
 | commit | what |
 |--------|------|
-| `3483760` | **TLabel (41)** + focus-by-ViewId deferred tree-op seam |
-| `b6e029b` | docs: HANDOVER disambiguation (prior session) |
-| `43e5c68` | **Validator wave — TValidator (35) + TInputLine (39) + D10 `value`/`set_value`** ← THIS session |
-| `32fbb0e` | docs: validator wave DONE → Batch B COMPLETE; HANDOVER → Phase 4 |
+| `43e5c68` | **Validator wave — TValidator (35) + TInputLine (39) + D10 `value`/`set_value`** → Batch B COMPLETE |
 | `8ea87cb` | test: end-to-end modal `valid()`-veto (exec_view → Dialog → Group → InputLine) |
+| `44c404e` | docs: HANDOVER — sync commit table + 440 tests + the valid()-veto test |
+| `543b2c8` | **TScroller (27)** — cross-view scrollbar broker (FOUNDATION) ← THIS session |
 
-**Build state:** 440 lib + 3 integration + 2 doctests green; `cargo clippy
+**Build state:** 457 lib + 3 integration + 2 doctests green; `cargo clippy
 --all-targets -- -D warnings` and `cargo fmt --check` clean. Working tree clean.
 (Cargo artifacts land in `/home/oetiker/scratch/cargo-target` — set
 `CARGO_TARGET_DIR`.)
 
-**Phase 2 COMPLETE. Batch B (Phase-3 leaves) COMPLETE** — 36, 38, 42, 43, 44, 45,
-40, 37, 41, **35, 39** all done + two-stage reviewed.
+**Phase 2 COMPLETE. Batch B (Phase-3 leaves) COMPLETE.** Phase-1 rows 27/28/32 +
+Phase-4 (46+) remain. **Row 27 `TScroller` DONE** this session (FOUNDATION; the
+cross-view broker pattern — see below). Next incomplete in PORT-ORDER sequence:
+**row 28 `TListViewer`** (FOUNDATION), then 48 `TListBox` / 32 `TApplication`,
+then Phase 4 (menus/status).
 
-## What landed THIS session (validator wave, `43e5c68`)
+## What landed THIS session — Row 27 `TScroller` (`543b2c8`, FOUNDATION)
+`TScroller` (base for `TEditor` 66, `TTextDevice`/`TTerminal`, `TOutlineViewer`)
+holds two sibling scrollbars and mirrors their `value` into its own `delta`. Built
+main-thread/Opus: brief → Opus implementer → two-stage review (SPEC then QUALITY,
+fresh C++-adversarial agents). Brief: `docs/briefs/row27-tscroller.md`.
+
+**THE pattern this row establishes — the cross-view scrollbar broker (reused by
+rows 28 + 66):** a leaf view holds only `&mut Context` during dispatch (D3) and so
+can neither **read** nor **mutate** its window-frame sibling scrollbars. So the
+**pump is the cross-view broker in both directions** — it owns the tree and
+performs every sibling read/write at deferred-apply time (`group.find_mut(id)` +
+`as_any_mut`/`View::value()`), mirroring the existing `ChangeBounds`/`FocusById`
+apply arms.
+- **`Event::Broadcast` left UNTOUCHED** (the advisor-blessed call): `{command,
+  source}` stays as is; `source` is only the **filter** (scroller reacts iff
+  `source ∈ {h_id, v_id}`). The faithful successor to C++ "read `value` off the
+  `infoPtr` subject" is "the pump resolves the subject and reads its `value`" —
+  **not** stuffing the value into the message. (First real consumer of
+  `Broadcast{source}`.)
+- **Read** (`scrollDraw`): `Deferred::SyncScrollerDelta{scroller,h,v}` → pump reads
+  each bar's `value` via `View::value() → FieldValue::Int`, then downcasts the
+  scroller (`as_any_mut`) and calls `apply_delta` (the `setCursor(cursor+delta-d)`
+  adjust + `delta = d`, guarded by `d != delta`).
+- **Write** (`setLimit`/`scrollTo`): one flexible `Deferred::ScrollBarSetParams{id,
+  value,min,max,page_step,arrow_step}` with **per-field `Option` = "preserve the
+  bar's LIVE field where `None`"** (pump fills `None` from the live scrollbar, then
+  `set_params`). Serves rows 28/66 too (`tlstview.cpp`'s `setRange`/`setStep`).
+- **Visibility** (`showSBar`): `Deferred::SetVisible(id,bool)` (no `StateFlag::
+  Visible` — D8 dropped it; the painter honors `ViewState.state.visible`).
+- **Dropped (D8):** `drawLock`/`drawFlag`/`checkDraw`/all `drawView()` — deferred
+  mutation + whole-tree redraw make the synchronous re-entrancy guard structural.
+- **New seams:** `FieldValue::Int(i32)` (first consumer); `ScrollBar::value()` →
+  `Int` + `ScrollBar`/`Scroller` `as_any_mut` overrides; `Role::ScrollerNormal`
+  (provisional, `TODO(window-scheme remap)`).
+- **Deferred + breadcrumbed:** `changeBounds` does **not** re-publish bar params on
+  resize (`TODO(resize)`) — faithful-safe because no consumer resizes a scroller
+  until `TEditor` (66), which must call `set_limit(ctx)` after its resize.
+  `Role::ScrollerSelected` (cpScroller idx 2) deferred to row 66 (the base
+  `TScroller` inherits `TView::draw` — a **uniform** `getColor(1)` fill, no
+  selected branch; a spec-review catch).
+
+## What landed the PRIOR session (validator wave, `43e5c68`)
 The full row-35→39 wave + the **D10 typed-value protocol**, built as one Opus
 implementer + full two-stage review (SPEC then QUALITY, fresh C++-adversarial
 agents). Brief: `docs/briefs/row35-39-validator-inputline.md`.
@@ -68,7 +117,7 @@ agents). Brief: `docs/briefs/row35-39-validator-inputline.md`.
   field can never close, which IS faithful). + a `#[cfg(test)] Dialog::insert_child`
   hook.
 
-### Deferred + breadcrumbed THIS session (grep the TODOs)
+### Deferred + breadcrumbed in the validator wave (prior session; grep the TODOs)
 - **clipboard** cmCut/cmCopy/cmPaste — no `Context` clipboard seam (backend has
   set/get_clipboard; not surfaced to views). `TODO(clipboard)` in `input_line.rs`.
 - **command-graying** `updateCommands`/`canUpdateCommands` (enable/disable cmCut/
@@ -89,18 +138,31 @@ agents). Brief: `docs/briefs/row35-39-validator-inputline.md`.
   Unreachable now (abstract validator never mutates); re-clamp when the first
   auto-fill validator (Range/PXPicture) lands.
 
-## NEXT — two unblocked tracks (pick by goal)
+## NEXT — follow PORT-ORDER in sequence
 
-### Track 1 (recommended thrust) — Phase 4: menus + status line + lists (FOUNDATION)
-The path to a **fully drivable** TV app (menu bar you can pull down, status line,
-list boxes). Per `docs/PORT-ORDER.md` Phase 4 + the Batch ordering, do per-row
-(FOUNDATION, full two-stage review), roughly:
-- **List substrate first:** `TScroller` (27) → `TListViewer` (28) [need
-  `TScrollBar` 25 ✅] → `TScrollGroup`/`TScrollBar` glue (32) → **`TListBox` (48)**
-  (owns a collection; typed value D10 — first consumer of the `value`/`set_value`
-  beyond TInputLine; may pull the **dialog gather/scatter group-walk** in).
-  *(Verify exact row #s / prereqs against PORT-ORDER Phase 3/4 tables — rows 27/28/32.)*
-- **Menus:** `TMenuItem`/`TSubMenu`/`TMenu` (46, FOUNDATION — the menu data tree;
+Lowest-numbered incomplete rows = the work. Next up:
+
+### Row 28 `TListViewer` (FOUNDATION) — the immediate next row
+Base for all list widgets (`TListBox` 48, history, color/file lists). Like
+`TScroller` it drives 2 scrollbars — **reuse the row-27 cross-view broker verbatim**
+(`Deferred::SyncScrollerDelta`/`ScrollBarSetParams`/`SetVisible`, `View::value()`).
+C++ `source/tvision/tlstview.cpp` (already previewed in the row-27 work: `setRange`
+→ `ScrollBarSetParams`, `focusItem` → `setValue`, `setState` → show/hide, broadcast
+read → sync). New for 28: the **list-render matrix** (focused/selected/normal/
+disabled cells, D7 roles — `ListNormal`/`ListSelected*` already seeded in theme.rs),
+multi-column layout (`numCols`), `focusItem`/`selectItem`, hot mouse/keyboard nav,
+and the abstract `getText`/`isSelected` hooks subclasses fill. FOUNDATION → Opus +
+two-stage review.
+
+### Then, in PORT-ORDER order
+- **`TListBox` (48, MECHANICAL)** — concrete `TListViewer` over a collection
+  (`Vec`); typed value (D10) — first `value`/`set_value` consumer beyond TInputLine;
+  may pull in the **dialog gather/scatter group-walk** (still deferred, see below).
+- **`TApplication` (32, MECHANICAL)** — thin tile/cascade/dosShell wrapper over
+  `TProgram`; independent, slot in anytime.
+- **Phase 4 — menus + status line** (the path to a fully drivable app):
+
+  **Menus:** `TMenuItem`/`TSubMenu`/`TMenu` (46, FOUNDATION — the menu data tree;
   C++ `operator+` builders → a Rust builder API) → `TMenuView` (49, FOUNDATION —
   hotkey/shortcut dispatch, the `evBroadcast` mask) → `TMenuBar` (50) / `TMenuBox`
   (51) / `TMenuPopup` (52, popup exec via D9). **Menus force the deferred
@@ -113,13 +175,16 @@ list boxes). Per `docs/PORT-ORDER.md` Phase 4 + the Batch ordering, do per-row
   a real menu bar + status line (and shifts the desktop down — revisit the
   `ModalFrame`/`DragCapture` "(0,0)-desktop absolute-coords" caveats then).
 
-### Track 2 (easy parallel win) — Batch C: concrete validators (58–62, MECHANICAL)
-Now fully unblocked by `TValidator` (35); **fully parallel among themselves** →
-the clean worktree fan-out cadence (Sonnet implementers, `isolation:"worktree"`,
-orchestrator integrates + pre-seeds any shared files). C++ all in `tvalidat.cpp`:
+### Available parallel fan-out (efficiency, not a competing direction) — Batch C: concrete validators (58–62, MECHANICAL)
+Fully unblocked by `TValidator` (35); **fully parallel among themselves** → the
+clean worktree fan-out cadence (Sonnet implementers, `isolation:"worktree"`,
+orchestrator integrates + pre-seeds any shared files). These are PORT-ORDER's
+"Parallelizable batches" — run them concurrently whenever convenient; they don't
+displace the in-sequence FOUNDATION work above. C++ all in `tvalidat.cpp`:
 - **58 `TFilterValidator`** (char allow-list), **59 `TRangeValidator`** (int range;
-  **resolves the deferred `transfer`/`FieldValue::Int` hook + the `cur_pos`
-  re-clamp hazard** above — so this one is FOUNDATION-ish, do it carefully),
+  **resolves the deferred `transfer` hook + the `cur_pos` re-clamp hazard** above —
+  and now has `FieldValue::Int` ready [added by row 27]; so this one is
+  FOUNDATION-ish, do it carefully),
   **60 `TLookupValidator`** (abstract lookup), **61 `TStringLookupValidator`**,
   **62 `TPXPictureValidator`** (Paradox picture-mask state machine — the big one;
   `picture()`/`process()`/`scan()`/`group()`/`iteration()` — sets `status=vsSyntax`,
@@ -143,10 +208,13 @@ once their leaf prereqs exist.
   agents that build on them (worktree branches from the last *commit*).
 - **Two-stage review stays mandatory** (SPEC then QUALITY, fresh C++-adversarial
   agents against the **C++ + guide, NOT the brief** — the brief can be wrong, as
-  the `first_pos` mis-statement proved THIS session). Make round-trip/unit tests
+  the validator wave's `first_pos` mis-statement proved). Make round-trip/unit tests
   **discriminating + bite-checked** (verify a finding fails before/passes after).
-  Quality review earns its keep — it caught the untested validator reject/restore
-  path THIS session; spec review caught the dropped double-click scroll.
+  Both stages keep earning their keep: at row 27, **spec** review caught an invented
+  active/selected `draw` branch (the base inherits `TView::draw`'s uniform fill) and
+  **quality** caught `std::any`-vs-`core::any` + a stale doc; in the validator wave,
+  quality caught the untested validator reject/restore path and spec caught a dropped
+  double-click scroll.
 - **Snapshot workflow** (Appendix B step 4): `cargo-insta` is NOT installed →
   generate a `.snap` with `INSTA_UPDATE=always cargo test <name>`, verify by hand,
   re-run plain, commit the `.snap`.
