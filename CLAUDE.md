@@ -729,3 +729,13 @@ a `HeadlessBackend`, `render`, `assert_snapshot!` against the frozen format.
 - English for all code/comments/identifiers (user-facing strings may be localized).
 - Commit messages end with the project's Co-Authored-By trailer; commit/push only
   when asked.
+- **Delegation (D2 embed-and-delegate):** a type that embeds an inner view forwards
+  the un-overridden `View` methods via `#[delegate(to = <field>)]` (proc-macro in
+  `tvision-macros`; re-exported as `tvision::delegate`). Write only the methods that
+  differ; `skip(<m>)` leaves a method at its trait default. **When you add a `View`
+  trait method, add a matching forwarder to `tvision-macros/src/specs.rs`** — the
+  spy test `tests/delegate_view.rs` catches a forgotten forwarder for existing
+  methods, but a brand-new defaulted method would silently not forward. Adopting
+  the macro at an existing site is behaviour-preserving (`skip(...)` = exactly what
+  the site leaves defaulted, verified by a `cargo expand` method-set diff). Full
+  rationale: [`docs/design/delegation-macros.md`](docs/design/delegation-macros.md).
