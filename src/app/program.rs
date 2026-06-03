@@ -3595,4 +3595,452 @@ mod tests {
             },
         ))
     }
+
+    // -- rows 50-52, Step-2 stage 2: the MenuSession MOUSE arms ----------------
+    //
+    // Geometry for the `modal_menu` bar (computed from item_rect_local, mirrored in
+    // these comments so the click points are auditable):
+    //
+    //   Bar (Rect(0,0,40,1)): File = item_rect_local(0) = Rect(1,0,7,1)  → x∈[1,7)
+    //                         Edit = item_rect_local(1) = Rect(7,0,13,1) → x∈[7,13)
+    //   File box opened below File: hint = Rect(0,1,40,12) (bar shift a.x--),
+    //     menu_box_rect → Rect(0,1,14,5). Box rows (item_rect_global, +(0,1)):
+    //       Open(0)  → Rect(2,2,12,3)  (y=2, x∈[2,12))
+    //       More(1)  → Rect(2,3,12,4)  (y=3)
+    //     A box-interior margin point not on any item: (1,2) (left frame column,
+    //     x=1 < 2 so off every item rect, inside the box bounds).
+
+    /// MouseDown at root-frame `(x, y)` with the left button held.
+    fn m_down(x: i32, y: i32) -> Event {
+        mouse_down_at(x, y)
+    }
+    /// MouseMove at root-frame `(x, y)` with the left button held (drag).
+    fn m_move(x: i32, y: i32) -> Event {
+        mouse_move_at(x, y)
+    }
+    /// MouseUp at root-frame `(x, y)` (no button — release).
+    fn m_up(x: i32, y: i32) -> Event {
+        mouse_up_at(x, y)
+    }
+
+    /// Click the bar's File title to open its box via the mouse activation path
+    /// (`activate_mouse` → re-posted click → evMouseDown arm → open-gate). Needs two
+    /// pumps: pump 1 reaches the bar's `handle_event` (pushes the session, re-posts
+    /// the click); pump 2 runs the session's evMouseDown arm (opens the File box).
+    fn click_file_title(program: &mut Program) {
+        program.out_events.push_back(m_down(2, 0));
+        program.pump_once(); // bar handle_event: activate_mouse, re-post the click
+        program.pump_once(); // session evMouseDown: track File → open-gate → File box
+    }
+
+    /// (1) A MouseDown on a bar title opens its dropdown — the `do_a_select`
+    /// activation flow (`tmnuview.cpp:505-516`) + the evMouseDown open-gate.
+    ///
+    /// DEVIATION FROM THE BRIEF (test 1 expectation): the brief asserts
+    /// `top_box_current == Some(Some(0))`, but the C++ is faithful to `Some(None)` —
+    /// the carried MouseDown (still at the bar row y=0) re-applies into the freshly
+    /// opened box, whose `trackMouse` (`tmnuview.cpp:97-108`) finds no box item under
+    /// (2,0) and so leaves `current == 0` (None). Real Turbo Vision shows the
+    /// dropdown UNhighlighted until the mouse moves into it. So we assert the
+    /// faithful `Some(None)`.
+    ///
+    /// BITE: if the bar's evMouseDown arm did not set `auto_select` (or the open-gate
+    /// did not `continue`/open), no box would open (len stays baseline).
+    #[test]
+    fn click_bar_title_opens_box() {
+        let (mut program, _bar_id, baseline) = program_with_menu_bar(40, 12);
+
+        click_file_title(&mut program);
+
+        assert_eq!(
+            program.group_mut().len(),
+            baseline + 1,
+            "clicking File opened its dropdown"
+        );
+        assert_eq!(
+            program.capture_len(),
+            1,
+            "the MenuSession is armed on the capture stack"
+        );
+        assert_eq!(
+            top_box_current(&mut program),
+            Some(None),
+            "the freshly opened box is unhighlighted (carried click at the bar row \
+             hits no box item — faithful to C++ trackMouse leaving current == 0)"
+        );
+    }
+
+    /// (2) THE CRUX (brief §3.1): clicking an OPEN title closes its box.
+    /// Click File (opens box), click File again → box closes, bar still highlights
+    /// File. Driven by the pop-time `last_target_item = current` (set when the box
+    /// pops) which makes the second click's `auto_select` come out False.
+    ///
+    /// BITE: drop the pop-time `parent.last_target_item = Some(cur)` assignment → the
+    /// second click's `auto_select = !current || last_target != current` is True
+    /// again → the File box REOPENS (len == baseline+1), failing the "closed" assert.
+    #[test]
+    fn click_open_title_closes_box() {
+        let (mut program, bar_id, baseline) = program_with_menu_bar(40, 12);
+
+        click_file_title(&mut program);
+        assert_eq!(program.group_mut().len(), baseline + 1, "File box open");
+
+        // Second click on the SAME (now open) title → closes it.
+        program.out_events.push_back(m_down(2, 0));
+        program.pump_once();
+
+        assert_eq!(
+            program.group_mut().len(),
+            baseline,
+            "clicking the open File title closed its box (back to baseline)"
+        );
+        assert_eq!(
+            program.capture_len(),
+            1,
+            "the session stays armed at the bar (only the box closed)"
+        );
+        assert_eq!(
+            bar_current(&mut program, bar_id),
+            Some(0),
+            "the bar still highlights File after the close-click"
+        );
+    }
+
+    /// (3) Dragging (button held) from an open title to a neighbour title closes the
+    /// first box and opens the neighbour's — the cross-level re-apply: the box's
+    /// evMouseMove `!(mouseInView||mouseInOwner) && mouseInMenus → doReturn` arm
+    /// (`tmnuview.cpp:267-269`) unwinds the box onto the bar, which trackMouses to the
+    /// neighbour and re-opens it (the bar's persisted `auto_select` from activation,
+    /// reinforced by the evMouseMove bar drag-open arm `:273`).
+    ///
+    /// BITE: drop the box's evMouseMove `mouse_in_menus → doReturn` arm → the box
+    /// never returns to the bar, so the bar stays on File (`bar_current == Some(0)`),
+    /// failing the "walked File → Edit" assert.
+    #[test]
+    fn drag_to_neighbour_title_reopens() {
+        let (mut program, bar_id, baseline) = program_with_menu_bar(40, 12);
+
+        click_file_title(&mut program); // File box open
+        assert_eq!(program.group_mut().len(), baseline + 1, "File box open");
+
+        // Drag (button held) onto the Edit title (x∈[7,13), y=0).
+        program.out_events.push_back(m_move(8, 0));
+        program.pump_once();
+
+        assert_eq!(
+            bar_current(&mut program, bar_id),
+            Some(1),
+            "the drag walked the bar File → Edit"
+        );
+        assert_eq!(
+            program.group_mut().len(),
+            baseline + 1,
+            "exactly one box open (File closed, Edit opened)"
+        );
+    }
+
+    /// (4) A MouseDown OUTSIDE the bar and box closes the whole menu AND re-posts the
+    /// click to the view tree (brief §3.5, `tmnuview.cpp:220-222`
+    /// `putClickEventOnExit`), so the view under the click recovers focus.
+    ///
+    /// BITE: drop the `ctx.put_event(ev)` re-post in the bar exit-click branch → the
+    /// click is consumed/lost; the "MouseDown survives in out_events" assert fails.
+    #[test]
+    fn click_outside_closes_and_reposts() {
+        let (mut program, _bar_id, baseline) = program_with_menu_bar(40, 12);
+
+        click_file_title(&mut program); // File box open
+        assert_eq!(program.group_mut().len(), baseline + 1, "File box open");
+        program.out_events.clear(); // drop any pending set-current echoes
+
+        // Click well outside the bar (y=0) and the File box (Rect(0,1,14,5)):
+        // (30, 8) is on the bare desktop.
+        program.out_events.push_back(m_down(30, 8));
+        program.pump_once();
+
+        assert_eq!(
+            program.capture_len(),
+            0,
+            "clicking outside closed the session"
+        );
+        assert_eq!(
+            program.group_mut().len(),
+            baseline,
+            "every box closed (back to baseline)"
+        );
+        assert!(
+            program.out_events.iter().any(|e| matches!(
+                e,
+                Event::MouseDown(m) if m.position == Point::new(30, 8)
+            )),
+            "the exit click was re-posted to the view tree (putClickEventOnExit)"
+        );
+    }
+
+    /// (5) Releasing on a submenu item inside a box opens its nested box and KEEPS
+    /// it open (the child's `first_event` guard stops the instant-close).
+    ///
+    /// DEVIATION FROM THE BRIEF (test 5 description): the brief says a
+    /// `MouseMove(button)` onto More opens the nested box, but per the C++ a BOX's
+    /// `evMouseMove`/`evMouseDown` arms never set `autoSelect` (only the bar does,
+    /// `tmnuview.cpp:273`), so a hover/press inside a box does NOT auto-open a
+    /// submenu — only a `MouseUp` on it does (the `current != lastTargetItem →
+    /// doSelect` arm, `tmnuview.cpp:233`, which feeds the open-gate). So we drag onto
+    /// More to highlight it, then RELEASE on it to open the nested box.
+    ///
+    /// The brief's §3.3 mouse-down/move `continue` (re-applying the carried event
+    /// into a freshly opened child) is the SEPARATE discriminator exercised by
+    /// `click_bar_title_opens_box` (test 1): the carried bar-row MouseDown re-applies
+    /// into the File box and `track_mouse` clears its `current` to None — which is
+    /// exactly what makes test 1 assert `Some(None)` instead of `Some(Some(0))`. If
+    /// the open-gate returned `Consumed` instead of `continue` for the mouse path,
+    /// the carried click would not re-apply and test 1 would observe `Some(Some(0))`.
+    ///
+    /// BITE: break the evMouseUp `current != lastTargetItem → doSelect` arm (so a
+    /// release on More does not feed the open-gate) → the nested box never opens
+    /// (len stays baseline / the session even closes), failing the "+2" assert. (The
+    /// `first_event` guard is independently load-bearing: forcing every box's
+    /// `first_event` to false also breaks this test, since the File box's carried
+    /// opening click would then instant-close it.)
+    #[test]
+    fn drag_into_submenu_keeps_open() {
+        let (mut program, _bar_id, baseline) = program_with_menu_bar(40, 12);
+
+        click_file_title(&mut program); // File box open (baseline + 1)
+        // Drag onto the More submenu row (item 1 → Rect(2,3,12,4), y=3) to highlight.
+        program.out_events.push_back(m_move(5, 3));
+        program.pump_once();
+        assert_eq!(
+            top_box_current(&mut program),
+            Some(Some(1)),
+            "the drag highlighted More in the File box"
+        );
+        assert_eq!(
+            program.group_mut().len(),
+            baseline + 1,
+            "a box hover does NOT auto-open the submenu (box never sets auto_select)"
+        );
+
+        // Release on More → doSelect (current != lastTargetItem) → open the nested
+        // box, which stays open (first_event guard).
+        program.out_events.push_back(m_up(5, 3));
+        program.pump_once();
+
+        assert_eq!(
+            program.group_mut().len(),
+            baseline + 2,
+            "releasing on the More submenu opened its nested box (and it stays open)"
+        );
+        assert_eq!(
+            program.capture_len(),
+            1,
+            "the session is still active (nested box did not instantly close)"
+        );
+    }
+
+    /// (6) A MouseUp on a command item posts that command and closes the session —
+    /// the evMouseUp `current != lastTargetItem → doSelect` arm (`tmnuview.cpp:233`).
+    /// Click File to open its box, then release on Open: `current(Some(0)) !=
+    /// last_target(None)` → doSelect → cmOpen posts + session ends.
+    ///
+    /// BITE: drop the evMouseUp `doSelect` arm (treat a release on a command as
+    /// doNothing) → no command posts and the session stays open.
+    #[test]
+    fn mouseup_on_command_posts() {
+        let (mut program, _bar_id, baseline) = program_with_menu_bar(40, 12);
+
+        click_file_title(&mut program); // File box open (baseline + 1)
+        program.out_events.clear();
+
+        // Release on the Open row (Rect(2,2,12,3), y=2).
+        program.out_events.push_back(m_up(4, 2));
+        program.pump_once();
+
+        assert_eq!(
+            program.capture_len(),
+            0,
+            "releasing on a command ended the whole session"
+        );
+        assert_eq!(
+            program.group_mut().len(),
+            baseline,
+            "every box closed (back to baseline)"
+        );
+        assert!(
+            program
+                .out_events
+                .iter()
+                .any(|e| matches!(e, Event::Command(c) if *c == Cmd::OPEN)),
+            "releasing on Open posted cmOpen"
+        );
+    }
+
+    /// (7) A MouseUp on a box margin (not on any item row) resets the highlight to
+    /// the box default and KEEPS the box open — the evMouseUp box-margin arm
+    /// (`tmnuview.cpp:251-261`, the `else if size.y != 1` reset). First move the
+    /// highlight to More, then release on the left-frame margin → back to the
+    /// default (Open, idx 0).
+    ///
+    /// BITE: drop the `else if !is_bar` reset arm → `track_mouse` left `current ==
+    /// None` (the margin hit no item) and nothing restores it, so `top_box_current`
+    /// is `Some(None)`, failing the "reset to default" assert.
+    #[test]
+    fn mouseup_on_box_margin_resets_to_default() {
+        let (mut program, _bar_id, baseline) = program_with_menu_bar(40, 12);
+
+        click_file_title(&mut program); // File box open, current = None
+        // Drag onto More (idx 1) so the highlight is NOT the default before release.
+        program.out_events.push_back(m_move(5, 3));
+        program.pump_once();
+        assert_eq!(
+            top_box_current(&mut program),
+            Some(Some(1)),
+            "More highlighted before the margin release",
+        );
+
+        // Release on a box-interior margin point (1,2): inside the box bounds,
+        // off every item rect (x = 1 < 2).
+        program.out_events.push_back(m_up(1, 2));
+        program.pump_once();
+
+        assert_eq!(
+            program.group_mut().len(),
+            baseline + 1,
+            "the File box stays open after a margin release",
+        );
+        assert_eq!(
+            top_box_current(&mut program),
+            Some(Some(0)),
+            "the margin release reset the highlight to the box default (Open)",
+        );
+    }
+
+    /// (8) `cmMenu` while a NESTED box is open closes every box back to the bar and
+    /// leaves the session armed with the bar highlighted — the `execute()` evCommand
+    /// arm (`tmnuview.cpp:343-350`): a box (`parentMenu != 0`) doReturns (not
+    /// cleared), the tail re-posts cmMenu up, unwinding through every box to the bar,
+    /// which resets autoSelect/lastTargetItem and stays open (`doNothing`).
+    ///
+    /// BITE: the OLD "reset the top level and return Consumed" (no doReturn) leaves
+    /// the open box(es) on the stack — `group.len()` stays `baseline + 2`, failing
+    /// the "closed back to the bar" assert.
+    #[test]
+    fn cmmenu_from_nested_box_closes_to_bar() {
+        let (mut program, bar_id, baseline) = program_with_menu_bar(40, 12);
+
+        // Open File box, then the nested More box (two box levels) via the keyboard.
+        open_file_box(&mut program); // File box (baseline + 1), on Open
+        program.out_events.push_back(key(Key::Down));
+        program.pump_once(); // highlight More (idx 1)
+        program.out_events.push_back(key(Key::Enter));
+        program.pump_once(); // open the nested More box (baseline + 2)
+        assert_eq!(program.group_mut().len(), baseline + 2, "two boxes open");
+
+        // cmMenu arrives while the nested box is active → unwind to the bar.
+        program.out_events.push_back(Event::Command(Cmd::MENU));
+        program.pump_once();
+
+        assert_eq!(
+            program.group_mut().len(),
+            baseline,
+            "cmMenu closed every box back to the bar"
+        );
+        assert_eq!(
+            program.capture_len(),
+            1,
+            "the session stays armed at the bar (cmMenu does not end it)"
+        );
+        assert_eq!(
+            bar_current(&mut program, bar_id),
+            Some(0),
+            "the bar stays highlighted on File after cmMenu unwound"
+        );
+    }
+
+    /// (9) A MouseUp whose position is on the PARENT title (mouseInOwner) resets the
+    /// box highlight to the menu default and keeps the box open — the evMouseUp
+    /// `mouseInOwner → current = menu->deflt` arm (`tmnuview.cpp:227-228`). Open File,
+    /// drag-highlight More (idx 1, NOT the default), then release ON the File title
+    /// in the bar → the box's highlight snaps back to Open (idx 0, File's default).
+    ///
+    /// BITE: drop the `mouse_in_owner → default` arm → `track_mouse` (which ran on a
+    /// bar-row point that hits no box item) left `current == None`, so
+    /// `top_box_current` is `Some(None)`, failing the "reset to default" assert.
+    #[test]
+    fn mouseup_on_parent_title_resets_box_to_default() {
+        let (mut program, _bar_id, baseline) = program_with_menu_bar(40, 12);
+
+        click_file_title(&mut program); // File box open (baseline + 1), current = None
+        // Drag onto More (idx 1 → Rect(2,3,12,4), y=3) so current != the default (0).
+        program.out_events.push_back(m_move(5, 3));
+        program.pump_once();
+        assert_eq!(
+            top_box_current(&mut program),
+            Some(Some(1)),
+            "More highlighted before the release"
+        );
+
+        // Release with the position ON the File title in the bar (Rect(1,0,7,1)):
+        // mouseInOwner is true → current = menu->deflt (Open, idx 0).
+        program.out_events.push_back(m_up(2, 0));
+        program.pump_once();
+
+        assert_eq!(
+            program.group_mut().len(),
+            baseline + 1,
+            "the File box stays open after a release on its parent title"
+        );
+        assert_eq!(
+            program.capture_len(),
+            1,
+            "the session is still armed (the release did not close anything)"
+        );
+        assert_eq!(
+            top_box_current(&mut program),
+            Some(Some(0)),
+            "the release on the parent title reset the box highlight to File's default"
+        );
+    }
+
+    /// (10) A MouseUp OUTSIDE the box after the mouse has activated closes the menu —
+    /// the evMouseUp `mouseActive && !mouseInView → doReturn` arm
+    /// (`tmnuview.cpp:248-249`), distinct from the evMouseDown-outside path. Open File
+    /// (the activation click sets the BAR's `mouse_active`), drag onto a box item (sets
+    /// the BOX's `mouse_active`), then release at a point outside the box entirely:
+    /// the box doReturns and re-applies up to the bar, whose own `mouse_active &&
+    /// !mouseInView` arm ends the session.
+    ///
+    /// BITE: drop the `mouse_active && !mouse_in_view → doReturn` arm → the
+    /// release-outside does nothing (action doNothing), the box stays open and the
+    /// session stays armed, failing the "closed / popped" asserts.
+    #[test]
+    fn mouseup_outside_box_after_activating_closes() {
+        let (mut program, _bar_id, baseline) = program_with_menu_bar(40, 12);
+
+        click_file_title(&mut program); // File box open; bar mouse_active set
+        // Drag (button held) onto the Open row (Rect(2,2,12,3), y=2) → box mouse_active.
+        program.out_events.push_back(m_move(5, 2));
+        program.pump_once();
+        assert_eq!(
+            top_box_current(&mut program),
+            Some(Some(0)),
+            "Open highlighted (box mouse_active set)"
+        );
+
+        // Release well outside the File box (Rect(0,1,14,5)) and off the bar:
+        // (30, 8) is bare desktop.
+        program.out_events.push_back(m_up(30, 8));
+        program.pump_once();
+
+        assert_eq!(
+            program.group_mut().len(),
+            baseline,
+            "releasing outside the box after activating closed it (back to baseline)"
+        );
+        assert_eq!(
+            program.capture_len(),
+            0,
+            "the session popped (the box returned, the bar's mouse_active arm ended it)"
+        );
+    }
 }

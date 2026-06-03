@@ -343,9 +343,31 @@ pub fn handle_event(mv: &MenuViewState, ev: &mut Event, ctx: &mut Context) {
                 ev.clear();
             }
         }
-        // STAGE-2 breadcrumb: evMouseDown activation (`do_a_select` — open the menu
-        // under the click) is mouse; the session's mouse arms land then. Other
-        // un-handled events are inert (a box's events are owned by the session).
+        // evMouseDown activation (`do_a_select`, tmnuview.cpp:505-516, reached from
+        // handleEvent's evMouseDown arm :522-524): a click ON the bar opens the
+        // session, which then (via the re-posted click) opens the clicked title's
+        // box. Bar only (`size.y == 1`) and only when the click lands inside the
+        // bar's bounds (a click elsewhere on the desktop must NOT activate). The
+        // bar is at the root frame's `(0,0)`, so the position delivered here is
+        // already root-frame.
+        Event::MouseDown(m)
+            if mv.state.size.y == 1
+                && mv.state.id().is_some()
+                && mv.state.get_bounds().contains(m.position) =>
+        {
+            let bar_id = mv.state.id().expect("guarded by id().is_some()");
+            crate::menu::menu_session::activate_mouse(
+                bar_id,
+                mv.menu.clone(),
+                mv.state.get_bounds(),
+                ctx.owner_size(),
+                *m,
+                ctx,
+            );
+            ev.clear();
+        }
+        // Other un-handled events are inert (a box's events are owned by the
+        // session on the capture stack; a bar click outside its bounds is not ours).
         _ => {}
     }
 }

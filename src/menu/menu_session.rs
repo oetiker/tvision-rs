@@ -1,6 +1,6 @@
 //! `TMenuView::execute()` — the **modal layer**, flattened onto the single event
-//! loop (D9) as one [`MenuSession`] capture handler (rows 50–52, Step-2 stage 1:
-//! keyboard navigation).
+//! loop (D9) as one [`MenuSession`] capture handler (rows 50–52, Step-2 stages 1
+//! (keyboard navigation) + 2 (mouse)).
 //!
 //! ## The architecture (settled in `docs/briefs/row50-52-menu-modal.md`)
 //!
@@ -35,17 +35,32 @@
 //! `findAltShortcut`. Submenu recursion pushes a level; command selection ends the
 //! session and posts the command; Esc/left close levels.
 //!
-//! ## What is deferred to stage 2 (mouse) — breadcrumbed, NOT implemented
+//! ## What is implemented (Step-2 stage 2 — mouse)
 //!
-//! The `evMouseDown`/`evMouseUp`/`evMouseMove` arms, `trackMouse`/`mouseInOwner`/
-//! `mouseInMenus`/`autoSelect`/`lastTargetItem`/`putClickEventOnExit`, and the
-//! `evMouseDown`-activation branch in [`menu_view::handle_event`]. The structs
-//! already hold per-level `bounds` so the mouse gate drops in without a rewrite.
-//! Stage 3 is `TMenuPopup` (row 52).
+//! The `evMouseDown`/`evMouseUp`/`evMouseMove` arms of `execute()`'s switch
+//! (`tmnuview.cpp:201-276`), plus `trackMouse` (`:97`), `mouseInOwner` (`:148`),
+//! `mouseInMenus` (`:160`), and the per-level loop-locals `lastTargetItem` /
+//! `mouseActive` / `firstEvent`. The keyboard and mouse steps share one re-apply
+//! [`run`](MenuSession::run) loop tail (set-current → reset-lastTarget → open-gate
+//! → command-result → doReturn-pop/re-apply). The open-gate re-applies the
+//! triggering mouse-down/move into the freshly-opened child (`:374` `putEvent(e)`);
+//! the child-pop sets the parent's `lastTargetItem`/`menu.default`/`firstEvent`
+//! (`:385-386,:400`, the "click an open title to close it" mechanism). The bar's
+//! `evMouseDown`-activation branch lives in [`menu_view::handle_event`]
+//! ([`activate_mouse`]). `putClickEventOnExit` is modelled as **always True** here
+//! (the bar/box default); stage 3 gates it for `TMenuPopup`.
+//!
+//! ## What is deferred to stage 3 (`TMenuPopup`, row 52) — breadcrumbed
+//!
+//! `TMenuPopup`'s `execute`/`handleEvent` overrides: `menu->deflt = 0` (no default
+//! highlight), `putClickEventOnExit = False` (an exit-click is NOT re-posted — the
+//! [`exit_click`](MenuSession) re-post here is unconditional, the bar/box default,
+//! and `TMenuPopup` will gate it off), and the `popupMenu()` free function. Plus
+//! mouse auto-repeat / press-hold (no `evMouseAuto` arm in `execute()`).
 
 use crate::capture::{CaptureFlow, CaptureHandler};
 use crate::command::Command;
-use crate::event::{Event, Key, KeyEvent};
+use crate::event::{Event, Key, KeyEvent, MouseEvent};
 use crate::menu::menu_box::menu_box_rect;
 use crate::menu::menu_view::hot_key;
 use crate::menu::{Menu, MenuItem};
@@ -84,6 +99,30 @@ struct MenuLevel {
     /// `False` only by `cmMenu` (`tmnuview.cpp:346`). It is what makes a Left/Right
     /// walk along the bar **re-open** the adjacent title's box (Blocker 3).
     auto_select: bool,
+    /// `execute()`'s `lastTargetItem` loop-local — **per level** (C++ inits it `0`
+    /// at every `execute()` frame entry, `tmnuview.cpp:188`). The item whose submenu
+    /// was most recently opened **from this level**, set when the child box pops back
+    /// (`tmnuview.cpp:385` `lastTargetItem = current`, in the flattened loop the pop
+    /// point). Drives the "click an open title to close it" behaviour: the bar's
+    /// evMouseDown `autoSelect = !current || lastTargetItem != current`
+    /// (`tmnuview.cpp:210`) and the evMouseUp `current != lastTargetItem → doSelect`
+    /// arm (`tmnuview.cpp:233`). The keyboard arms never read it. Mouse-only.
+    last_target_item: Option<usize>,
+    /// `execute()`'s `mouseActive` loop-local — **per level** (C++ inits it `False`,
+    /// `tmnuview.cpp:195`). Set `True` by [`track_mouse`](MenuSession::track_mouse)
+    /// when the mouse lands on an item; **monotonic** — never reset to `False` within
+    /// a level's lifetime. Gates the evMouseUp "released outside after activating"
+    /// arm (`tmnuview.cpp:249`) and the evMouseMove bar drag-open arm
+    /// (`tmnuview.cpp:273`). Mouse-only.
+    mouse_active: bool,
+    /// `execute()`'s `firstEvent` loop-local — **per level** (C++ inits it `True`,
+    /// `tmnuview.cpp:182`; set `False` at every do/while iteration end,
+    /// `tmnuview.cpp:400`). `True` only while the level has not yet finished
+    /// processing its first event (the re-applied triggering event after an open
+    /// counts). Guards exactly one thing: the bar/box evMouseDown
+    /// `!firstEvent && mouseInOwner → doReturn` (`tmnuview.cpp:213`), so a box just
+    /// opened by a press is NOT instantly closed by the re-applied press. Mouse-only.
+    first_event: bool,
 }
 
 impl MenuLevel {
@@ -149,6 +188,25 @@ pub struct MenuSession {
     /// `b` corner when sizing a submenu box (`tmnuview.cpp:379`). Captured at
     /// activation.
     owner_size: Point,
+    /// The C++ `e.what` discriminator for the in-flight mouse event, set by
+    /// [`run`](Self::run) before each [`step_mouse`](Self::step_mouse) so the three
+    /// `evMouseDown`/`evMouseUp`/`evMouseMove` arms can branch without re-threading
+    /// the whole [`Event`] (the `position`/`buttons` ride on the
+    /// [`MouseEvent`](crate::event::MouseEvent) passed to `step_mouse`). Unused for
+    /// the keyboard path.
+    mouse_kind: MouseKind,
+}
+
+/// Which `evMouse*` arm of `execute()` the in-flight event selects — the C++
+/// `e.what` discriminator for the mouse switch (`tmnuview.cpp:201/225/263`).
+#[derive(Clone, Copy)]
+enum MouseKind {
+    /// `evMouseDown`.
+    Down,
+    /// `evMouseUp`.
+    Up,
+    /// `evMouseMove`.
+    Move,
 }
 
 /// What a single `execute()` step decided — the C++ `menuAction` enum
@@ -174,7 +232,11 @@ impl MenuSession {
     /// there is nothing to restore on close (the C++ `execView` focus save/restore
     /// is moot here).
     fn new(levels: Vec<MenuLevel>, owner_size: Point) -> Self {
-        MenuSession { levels, owner_size }
+        MenuSession {
+            levels,
+            owner_size,
+            mouse_kind: MouseKind::Down,
+        }
     }
 
     /// The active (top) level — the running `execute()` frame. The session is never
@@ -187,6 +249,75 @@ impl MenuSession {
         self.levels
             .last_mut()
             .expect("session has at least one level")
+    }
+
+    // -- mouse geometry + gates (tmnuview.cpp:97-166) -----------------------
+
+    /// `getItemRect(index)` for `level` in the **root group frame** — the
+    /// view-local [`item_rect_local`](MenuLevel::item_rect_local) offset by the
+    /// level's origin (`level.bounds.a`). C++ `getItemRect` returns view-local
+    /// coords; the mouse arms compare against a root-frame `e.mouse.where` after
+    /// `makeLocal`, which is the same as offsetting the rect by the origin (the
+    /// session never `makeLocal`s the incoming event — it is already root-frame; see
+    /// the module's coordinate model).
+    fn item_rect_global(level: &MenuLevel, index: usize) -> Rect {
+        let r = level.item_rect_local(index);
+        let o = level.bounds.a;
+        Rect::new(r.a.x + o.x, r.a.y + o.y, r.b.x + o.x, r.b.y + o.y)
+    }
+
+    /// `TMenuView::mouseInView` (`tview` base) for `level` — does the level's bounds
+    /// contain the root-frame `pos`.
+    fn mouse_in_view(level: &MenuLevel, pos: Point) -> bool {
+        level.bounds.contains(pos)
+    }
+
+    /// `TMenuView::mouseInOwner` (`tmnuview.cpp:148`) — does the **parent** level's
+    /// `current`-item rect contain `pos`. C++ `parentMenu == 0 → False`; the parent
+    /// is `levels[len-2]` (a box always has the bar or another box above it). A
+    /// parent with `current == None` (C++ `getItemRect(0)`) never contains a point.
+    fn mouse_in_owner(&self, pos: Point) -> bool {
+        let n = self.levels.len();
+        if n < 2 {
+            return false; // parentMenu == 0
+        }
+        let parent = &self.levels[n - 2];
+        match parent.current {
+            Some(cur) => Self::item_rect_global(parent, cur).contains(pos),
+            None => false,
+        }
+    }
+
+    /// `TMenuView::mouseInMenus` (`tmnuview.cpp:160`) — does ANY **parent** level
+    /// (every level except the top, C++ walks the `parentMenu` chain excluding
+    /// `this`) contain `pos` in its bounds.
+    fn mouse_in_menus(&self, pos: Point) -> bool {
+        let n = self.levels.len();
+        self.levels[..n - 1]
+            .iter()
+            .any(|l| Self::mouse_in_view(l, pos))
+    }
+
+    /// `TMenuView::trackMouse` (`tmnuview.cpp:97`) on the **top** level — set
+    /// `current` to the item whose rect contains `pos` (and `mouse_active = true`),
+    /// or `None` if nothing is hit (C++ loop ends with `current == 0`). C++ iterates
+    /// **all** items (separators included), so in a **box** a separator — which has a
+    /// full-width row rect (`tmenubox.cpp:125`, `getItemRect` ignores `name`) — CAN
+    /// be hit; the up/down arms then treat its `name == 0` as "not a real target". On
+    /// the **bar** a separator's `item_rect_local` is **zero-width** (the
+    /// `r.b.x += …` advance is skipped for a separator, `tmenubar.cpp:101`), so
+    /// `Rect::contains` can never be satisfied and a bar separator is never hit.
+    fn track_mouse(&mut self, pos: Point) {
+        let n = self.top().menu.items.len();
+        for i in 0..n {
+            if Self::item_rect_global(self.top(), i).contains(pos) {
+                let top = self.top_mut();
+                top.current = Some(i);
+                top.mouse_active = true;
+                return;
+            }
+        }
+        self.top_mut().current = None; // C++ loop ends with current == 0
     }
 
     // -- nav primitives (tmnuview.cpp:111-146) ------------------------------
@@ -417,23 +548,178 @@ impl MenuSession {
         crate::menu::menu_view::matching_item(&self.levels[0].menu, ke, true)
     }
 
-    /// The flattened keyboard event loop — the heart of the fix. Steps the active
-    /// level, runs the post-switch open-gate, and on a non-cleared `doReturn` pops
-    /// the level and **re-applies the SAME event** to the new top level, looping
-    /// until a level produces a non-Return action (or a cleared Return), or the bar
-    /// ends the whole session. This is the faithful flattening of C++ `execute()`'s
-    /// nested `execView` re-post (`tmnuview.cpp:401-405`: `putEvent(e)` →
-    /// parent-`getEvent`).
-    fn handle_key(&mut self, k: KeyEvent, ctx: &mut Context) -> CaptureFlow {
+    /// One `execute()` switch pass on the active level (mouse arms,
+    /// `tmnuview.cpp:201-276`). Mirrors [`step_keyboard`](Self::step_keyboard)'s
+    /// `(action, cleared)` contract, widened with `exit_click`: no mouse arm ever
+    /// calls `clearEvent` (so `cleared == false` for every mouse `doReturn` that
+    /// comes from a box — the re-apply loop always carries it up to the parent),
+    /// except where noted; `exit_click` flags the evMouseDown **outside** branch so
+    /// the loop tail re-posts the click to the view tree when the **bar** ends from
+    /// it (`putClickEventOnExit`, `tmnuview.cpp:220-222`). Mutates the top level's
+    /// `current` / `auto_select` / `mouse_active` / `last_target_item`.
+    fn step_mouse(&mut self, m: MouseEvent) -> (MenuAction, bool, bool) {
+        let pos = m.position;
+        let is_bar = self.top().is_bar;
+        let mut action = MenuAction::Nothing;
+        let mut exit_click = false;
+
+        match self.mouse_kind {
+            MouseKind::Down => {
+                // evMouseDown (tmnuview.cpp:201).
+                if Self::mouse_in_view(self.top(), pos) || self.mouse_in_owner(pos) {
+                    self.track_mouse(pos); // sets top.current (maybe None) + mouse_active
+                    if is_bar {
+                        // autoSelect makes a click OPEN the clicked title's box, yet
+                        // CLOSE it on the second click of the same title (after a box
+                        // closed it set last_target_item == that title; §3.1).
+                        let cur = self.top().current;
+                        self.top_mut().auto_select =
+                            cur.is_none() || self.top().last_target_item != cur;
+                    } else if !self.top().first_event && self.mouse_in_owner(pos) {
+                        // A box closes when the press lands on its parent's title,
+                        // except when the box was just opened (firstEvent guard).
+                        action = MenuAction::Return;
+                    }
+                    // (otherwise action stays doNothing; the open-gate may still fire
+                    // via auto_select for a bar click.)
+                } else {
+                    // Click outside this level's bounds and outside the parent item:
+                    // the menu closes. putClickEventOnExit is True for bar+box, so the
+                    // exit click is re-posted to the view tree — but the re-post only
+                    // happens at the BAR (the loop tail handles it via exit_click); a
+                    // box just returns and the re-apply loop carries the click up.
+                    action = MenuAction::Return;
+                    exit_click = true;
+                }
+            }
+            MouseKind::Up => {
+                // evMouseUp (tmnuview.cpp:225) — always trackMouse first (no gate).
+                self.track_mouse(pos);
+                if self.mouse_in_owner(pos) {
+                    // Released on the parent item → reset to the menu default.
+                    self.top_mut().current = self.top().menu.default;
+                } else if let Some(cur) = self.top().current {
+                    // A named (non-separator) item: select / close / re-arm.
+                    if !matches!(self.top().menu.items.get(cur), Some(MenuItem::Separator)) {
+                        if Some(cur) != self.top().last_target_item {
+                            action = MenuAction::Select;
+                        } else if is_bar {
+                            // A bar entry just closed → exit and stop listening.
+                            action = MenuAction::Return;
+                        } else {
+                            // A box: MouseUp won't reopen a submenu just closed by a
+                            // name-click; but the NEXT one will (clear last_target).
+                            self.top_mut().last_target_item = None;
+                        }
+                    }
+                    // A separator (name == 0): nothing — action stays doNothing.
+                } else if self.top().mouse_active && !Self::mouse_in_view(self.top(), pos) {
+                    // Released outside the view after activating → return.
+                    action = MenuAction::Return;
+                } else if !is_bar {
+                    // Released inside the box but not on a highlightable entry (a
+                    // margin / separator): highlight the default, else the first
+                    // (TV 2.0). Nonsensical in a bar, so bar-only-excluded.
+                    self.top_mut().current = self.top().menu.default.or(Some(0));
+                }
+            }
+            MouseKind::Move => {
+                // evMouseMove (tmnuview.cpp:263) — only while a button is held.
+                if m.buttons.left || m.buttons.right || m.buttons.middle {
+                    self.track_mouse(pos);
+                    if !(Self::mouse_in_view(self.top(), pos) || self.mouse_in_owner(pos))
+                        && self.mouse_in_menus(pos)
+                    {
+                        // Dragged off this box onto an ancestor menu → return.
+                        action = MenuAction::Return;
+                    } else if is_bar
+                        && self.top().mouse_active
+                        && self.top().current != self.top().last_target_item
+                    {
+                        // Drag to a new bar title → open it automatically.
+                        self.top_mut().auto_select = true;
+                    }
+                }
+                // buttons == 0 → no-op (action doNothing).
+            }
+        }
+        (action, false, exit_click)
+    }
+
+    /// The `evCommand cmMenu` arm of `execute()`'s switch (`tmnuview.cpp:343-350`),
+    /// run on the active level: `autoSelect = False; lastTargetItem = 0; if
+    /// (parentMenu != 0) action = doReturn`. So a **box** (`parentMenu != 0`, i.e.
+    /// not the bar) returns (NOT cleared — the tail re-applies the cmMenu up to the
+    /// parent, unwinding to the bar); the **bar** just resets its locals and stays
+    /// open (`doNothing`). Mirrors the `(action, cleared)` step contract.
+    fn step_cmd_menu(&mut self) -> (MenuAction, bool) {
+        let is_bar = self.top().is_bar;
+        let top = self.top_mut();
+        top.auto_select = false;
+        top.last_target_item = None;
+        if is_bar {
+            (MenuAction::Nothing, true)
+        } else {
+            // parentMenu != 0 → doReturn, not cleared (the tail re-posts cmMenu up).
+            (MenuAction::Return, false)
+        }
+    }
+
+    /// The flattened event loop — the heart of the fix, **shared** by the keyboard
+    /// and mouse paths. Steps the active level (by event kind), runs the post-switch
+    /// open-gate, and on a non-cleared `doReturn` pops the level and **re-applies the
+    /// SAME event** to the new top level, looping until a level produces a non-Return
+    /// action (or a cleared Return), or the bar ends the whole session. This is the
+    /// faithful flattening of C++ `execute()`'s nested `execView` re-post
+    /// (`tmnuview.cpp:401-405`: `putEvent(e)` → parent-`getEvent`).
+    fn run(&mut self, ev: Event, ctx: &mut Context) -> CaptureFlow {
+        // Cache the event kind for the per-iteration step + the open-gate's
+        // mouse-down/move `continue` divergence (§3.3, tmnuview.cpp:374).
+        let is_mouse_carry = matches!(ev, Event::MouseDown(_) | Event::MouseMove(_));
         loop {
             let mut pending_command = None;
-            let (action, cleared) = self.step_keyboard(k, &mut pending_command);
+            let (action, cleared, exit_click) = match ev {
+                Event::KeyDown(k) => {
+                    let (a, c) = self.step_keyboard(k, &mut pending_command);
+                    (a, c, false)
+                }
+                Event::MouseDown(m) => {
+                    self.mouse_kind = MouseKind::Down;
+                    self.step_mouse(m)
+                }
+                Event::MouseUp(m) => {
+                    self.mouse_kind = MouseKind::Up;
+                    self.step_mouse(m)
+                }
+                Event::MouseMove(m) => {
+                    self.mouse_kind = MouseKind::Move;
+                    self.step_mouse(m)
+                }
+                // evCommand cmMenu (tmnuview.cpp:343-350): a box doReturns (re-applies
+                // up, the tail's `putEvent(e)` for an evCommand), the bar resets +
+                // stays. Routed through run() so it shares the doReturn pop/re-apply.
+                Event::Command(Command::MENU) => {
+                    let (a, c) = self.step_cmd_menu();
+                    (a, c, false)
+                }
+                // run() is only entered for the step-bearing kinds.
+                _ => unreachable!("run() dispatches only keyboard/mouse/cmMenu events"),
+            };
 
             // Post the (possibly changed) highlight of the active level to its view
             // (execute()'s `if itemShown != current drawView`, tmnuview.cpp:362).
             let top_id = self.top().view_id;
             let top_current = self.top().current;
             ctx.request_set_menu_current(top_id, top_current);
+
+            // Post-switch reset (tmnuview.cpp:359): if a submenu was closed by a
+            // name-click and the mouse is dragged to another entry, the submenu
+            // opens again the next time it is hovered. Runs every iteration, before
+            // the open-gate, on the TOP level (inert for keyboard, which never sets
+            // last_target_item).
+            if self.top().last_target_item != self.top().current {
+                self.top_mut().last_target_item = None;
+            }
 
             // Post-switch open-gate (tmnuview.cpp:368-390):
             //   (doSelect || (doNothing && autoSelect)) && current names a NAMED
@@ -447,6 +733,14 @@ impl MenuSession {
                     Some(MenuItem::SubMenu { menu, disabled, .. }) if !*disabled => {
                         let submenu = menu.clone();
                         self.open_submenu(idx, submenu, ctx);
+                        // C++ putEvent(e) into the child's frame is gated on
+                        // (evMouseDown | evMouseMove) (tmnuview.cpp:374): re-apply the
+                        // SAME mouse-down/move to the freshly-opened child (its
+                        // first_event == true guards the instant-close). Keyboard +
+                        // mouseUp: the child opens and waits.
+                        if is_mouse_carry {
+                            continue;
+                        }
                         return CaptureFlow::Consumed;
                     }
                     // A command item, not disabled → select it ONLY on doSelect
@@ -467,7 +761,7 @@ impl MenuSession {
             // menu, posting the command, regardless of depth (`tmnuview.cpp:392`).
             // Check it BEFORE the per-level Return-pop, else a deep hotKey would be
             // dropped (the box-level pop returns Consumed without posting).
-            // Esc/Left/Right carry no pending_command, so they fall through.
+            // Esc/Left/Right/mouse carry no pending_command, so they fall through.
             if let Some(cmd) = pending_command {
                 return self.end_session_with(Some(cmd), ctx);
             }
@@ -475,9 +769,19 @@ impl MenuSession {
             // doReturn — close the active level; re-apply upward unless cleared.
             if action == MenuAction::Return {
                 if self.levels.len() > 1 {
-                    // Pop + close the top box; the parent becomes active.
+                    // Pop + close the top box; the parent becomes active. C++
+                    // `execView` returns here → set the parent's lastTargetItem /
+                    // menu.default to its current (the "click an open title to close
+                    // it" crux, §3.1, tmnuview.cpp:385-386) and flip firstEvent
+                    // (tmnuview.cpp:400, runs after execView returns).
                     let top = self.levels.pop().expect("len > 1");
                     ctx.request_close(top.view_id);
+                    let parent = self.top_mut();
+                    if let Some(cur) = parent.current {
+                        parent.last_target_item = Some(cur);
+                        parent.menu.default = Some(cur);
+                    }
+                    parent.first_event = false;
                     if cleared {
                         // clearEvent → stop; the parent stays open.
                         return CaptureFlow::Consumed;
@@ -485,12 +789,23 @@ impl MenuSession {
                     // Not cleared → re-apply the SAME event to the new top level.
                     continue;
                 } else {
-                    // The bar returned (Esc at the bar) → end the session.
-                    return self.end_session_with(None, ctx);
+                    // The bar returned → end the session. For an exit-click (a
+                    // mouse-down outside the bar), re-post the click to the view tree
+                    // so the view under it recovers focus (putClickEventOnExit at the
+                    // bar, tmnuview.cpp:220-222); the bar's final-tail putEvent does
+                    // NOT fire (parentMenu == 0 && e.what != evCommand).
+                    let r = self.end_session_with(None, ctx);
+                    if exit_click {
+                        ctx.put_event(ev);
+                    }
+                    return r;
                 }
             }
 
-            // doNothing with no open → consume; the active level stays open.
+            // doNothing with no open → consume; the active level stays open. Flip
+            // first_event (a level that processed an event without opening a child or
+            // getting popped is no longer on its first event, tmnuview.cpp:400).
+            self.top_mut().first_event = false;
             return CaptureFlow::Consumed;
         }
     }
@@ -536,6 +851,11 @@ impl MenuSession {
             bounds,
             is_bar: false,
             auto_select: false,
+            // The mouse loop-locals, re-init per level (C++ inits them at every
+            // execute() frame entry, so they never leak across levels).
+            last_target_item: None,
+            mouse_active: false,
+            first_event: true,
         });
         // Push the new level's initial highlight to its (about-to-exist) box.
         ctx.request_set_menu_current(id, current);
@@ -567,19 +887,21 @@ impl MenuSession {
 impl CaptureHandler for MenuSession {
     /// The flattened `execute()` `do { getEvent; switch } while` body — one pass
     /// per offered event. Consumes every menu-directed event (Clean Architecture
-    /// A). Keyboard navigation only (stage 1).
+    /// A). Keyboard + mouse navigation (stages 1 + 2).
     fn handle(&mut self, ev: &mut Event, ctx: &mut Context) -> CaptureFlow {
         match *ev {
-            Event::KeyDown(k) => self.handle_key(k, ctx),
-            // evCommand cmMenu while active (tmnuview.cpp:343-350): autoSelect =
-            // False, lastTargetItem = 0; if parentMenu != 0 → doReturn. On the bar
-            // (the only active level reachable in stage 1) it just resets
-            // autoSelect and stays open (no box re-opens on the next nav until a
-            // fresh kbDown). We reset the active level's auto_select and consume.
-            Event::Command(Command::MENU) => {
-                self.top_mut().auto_select = false;
-                CaptureFlow::Consumed
-            }
+            // Keyboard + mouse + cmMenu share the flattened re-apply loop (run); the
+            // per-kind switch arm runs inside it (step_keyboard / step_mouse /
+            // step_cmd_menu). cmMenu is an `execute()` evCommand arm
+            // (tmnuview.cpp:343-350): at a BOX it doReturns (closes + re-applies up,
+            // unwinding to the bar); at the BAR it resets autoSelect/lastTargetItem
+            // and stays open. It MUST go through the same post-switch/doReturn tail as
+            // the other arms (not a top-only reset), else a box stays open on cmMenu.
+            Event::KeyDown(_)
+            | Event::MouseDown(_)
+            | Event::MouseUp(_)
+            | Event::MouseMove(_)
+            | Event::Command(Command::MENU) => self.run(*ev, ctx),
             // A non-cmMenu command → doReturn (close the whole menu). C++
             // execute()'s tail re-posts the command (`putEvent(e)` when
             // `e.what == evCommand`, tmnuview.cpp:403-405) so it still reaches the
@@ -594,24 +916,18 @@ impl CaptureHandler for MenuSession {
             // and ignored, so disabled stays frozen and boxes never regray
             // mid-menu). Consume so it does not reach the (idle) menu broker.
             Event::Broadcast { .. } => CaptureFlow::Consumed,
-            // Stage 2 (mouse): evMouseDown / evMouseUp / evMouseMove +
-            // trackMouse / mouseInOwner / mouseInMenus / autoSelect /
-            // lastTargetItem / putClickEventOnExit + click-outside-close. The
-            // per-level `bounds` are already cached for the gate. For stage 1 we
-            // consume mouse events (the session is modal: nothing beneath it sees
-            // them) but take no action.
-            Event::MouseDown(_) | Event::MouseUp(_) | Event::MouseMove(_) | Event::MouseAuto(_) => {
-                CaptureFlow::Consumed
-            }
+            // evMouseAuto: execute() has NO evMouseAuto arm (no auto-repeat /
+            // press-hold in a menu). Consume to keep the session modal.
+            Event::MouseAuto(_) => CaptureFlow::Consumed,
             // Anything else (Timer, Nothing): consume to keep the session modal.
             _ => CaptureFlow::Consumed,
         }
     }
 
     fn view(&self) -> Option<ViewId> {
-        // The session is associated with the bar (level 0). Bounds gating is
-        // stage 2 and uses the per-level cache, not set_gate_bounds (boxes never
-        // move), so this is informational only.
+        // The session is associated with the bar (level 0). Bounds gating uses the
+        // per-level cache, not set_gate_bounds (boxes never move), so this is
+        // informational only.
         self.levels.first().map(|l| l.view_id)
     }
 }
@@ -665,14 +981,7 @@ pub fn activate(
         return;
     }
 
-    let bar_level = MenuLevel {
-        view_id: bar_id,
-        menu: bar_menu.clone(),
-        current: initial,
-        bounds: bar_bounds,
-        is_bar: true,
-        auto_select,
-    };
+    let bar_level = bar_level(bar_id, bar_menu.clone(), initial, bar_bounds, auto_select);
     let mut session = MenuSession::new(vec![bar_level], owner_size);
 
     // Push the bar's initial highlight for draw.
@@ -690,4 +999,66 @@ pub fn activate(
     }
 
     ctx.push_capture(Box::new(session));
+}
+
+/// Build the bar [`MenuLevel`] with the mouse loop-locals freshly initialized
+/// (`last_target_item: None`, `mouse_active: false`, `first_event: true` — C++
+/// re-inits each at `execute()` frame entry). Shared by [`activate`] (keyboard)
+/// and [`activate_mouse`].
+fn bar_level(
+    bar_id: ViewId,
+    menu: Menu,
+    current: Option<usize>,
+    bounds: Rect,
+    auto_select: bool,
+) -> MenuLevel {
+    MenuLevel {
+        view_id: bar_id,
+        menu,
+        current,
+        bounds,
+        is_bar: true,
+        auto_select,
+        last_target_item: None,
+        mouse_active: false,
+        first_event: true,
+    }
+}
+
+/// Open a menu session from the **bar** on an `evMouseDown` — the flattened C++
+/// `do_a_select` (`tmnuview.cpp:505-516`, reached from `handleEvent`'s evMouseDown
+/// arm `:522-524`): `putEvent(event); execView(this)` — re-post the click, then
+/// enter `execute()`.
+///
+/// Unlike the alt-shortcut [`activate`], this opens **no box up front**: the
+/// re-posted click + the session's evMouseDown arm (`trackMouse` to the clicked
+/// title + `autoSelect = !current || lastTargetItem != current`) + the open-gate
+/// do it, which is the faithful `do_a_select` flow and yields the correct
+/// `auto_select`/`last_target_item` for the second-click-closes behaviour.
+///
+/// `bar_menu` is a clone of the bar's `menu`; `bar_bounds` its bounds in the root
+/// frame (the bar is at `(0,0)`, so the bar-local click delivered to
+/// `handle_event` equals root-frame); `owner_size` the root group size; `mouse`
+/// the click to re-post.
+pub fn activate_mouse(
+    bar_id: ViewId,
+    bar_menu: Menu,
+    bar_bounds: Rect,
+    owner_size: Point,
+    mouse: MouseEvent,
+    ctx: &mut Context,
+) {
+    // execute()'s prologue sets current = menu->deflt; the re-posted click's
+    // evMouseDown arm trackMouses to the clicked title and sets auto_select.
+    let initial = bar_menu.default;
+    let bar_level = bar_level(bar_id, bar_menu, initial, bar_bounds, false);
+    let session = MenuSession::new(vec![bar_level], owner_size);
+
+    // Initial highlight (the menu default) for draw.
+    ctx.request_set_menu_current(bar_id, initial);
+    // Push the session, then re-post the click so the session (now on the stack)
+    // processes it through its evMouseDown arm on the next pump and opens the
+    // clicked title's box.
+    ctx.push_capture(Box::new(session));
+    ctx.put_event(Event::MouseDown(mouse));
 }
