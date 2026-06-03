@@ -408,6 +408,28 @@ dragging frames; `*Normal`/`*Focused`/`*Disabled`/`*Pressed`; the
 normal/focused/selected/selected-focused list matrix; an error/warning/info/
 success family). The default theme reproduces the classic blue look.
 
+**`Role` is a *closed enum* — but that is a port-phase default, not a hard rule.**
+Note this does **not** follow the D1 "open newtype for extensible families" rule
+(`Command`/`HelpCtx`): those need *open runtime identity* because their values
+cross the app↔framework boundary and are routed/dispatched by code that never saw
+them. A `Role` is different — it is always resolved at draw time *by the code that
+owns it* (`ctx.style(Role::X)` is written by whoever draws `X`), so even an app's
+custom widget knows its roles at compile time. What an app would actually need is
+not open identity but a *`Theme` extension point* (register new role→`Style`
+entries) — a separate mechanism we have **not** built, because nothing in the TV
+port (a fixed class set) consumes it. The closed enum is chosen for the *porting*
+phase because it buys: a fixed `[Style; ROLE_COUNT]` array with a total,
+compile-time-exhaustive `index()` (so `style()` never panics, no `HashMap`, no
+default-on-miss), and compiler-guided growth (`match` + `ROLE_COUNT` + `ALL_ROLES`
+turn a forgotten role into a build error) during exactly the phase roles churn
+fastest. It does **not** restrict theming *refinement* — every `Style` is already
+overridable via a custom `Theme`. The only deferred capability is apps minting
+*new role names*; when a real app-author audience with custom-themed widgets
+needs it, reopen additively (a `Role::Custom(&'static str)` arm backed by an
+overflow map — built-ins stay array-fast, customs pay a `HashMap` — or a `Theme`
+builder accepting extra entries). Revisit the open-newtype option on its merits
+then; do not mistake the closed enum for a permanent boundary.
+
 ---
 
 ## D8 — Per-write occlusion + damage-tracking → whole-tree redraw + diff · *chosen*
