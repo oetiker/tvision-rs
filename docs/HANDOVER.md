@@ -15,7 +15,7 @@
 
 | commit | what |
 |--------|------|
-| _(uncommitted at handover write — see "What landed THIS session")_ | **TMenuBar/TMenuBox DRAW/DATA layer (50/51)** — `MenuView` trait + `current` + draw/getItemRect + 6 menu theme roles (FOUNDATION) ← THIS session |
+| `0687530` | **TMenuBar/TMenuBox DRAW/DATA layer (50/51)** — `MenuView` trait + `current` + draw/getItemRect + 6 menu theme roles (FOUNDATION) ← THIS session |
 | `dfe66b1` | **TMenuView passive layer (49)** — command-graying broker + hotkey dispatch (FOUNDATION) |
 | `c5c061d` | **TMenu data tree (46)** — `MenuItem`/`Menu`/`MenuBuilder` (FOUNDATION) |
 | `fc66637` | **TListBox (48)** — first concrete `TListViewer` (MECHANICAL) |
