@@ -653,93 +653,35 @@ fn cstrlen(s: &str) -> i32 {
 // Concrete subclasses — thin D2 embed-and-delegate wrappers
 // ---------------------------------------------------------------------------
 
-/// Generate a concrete cluster type that embeds [`Cluster`] and delegates every
-/// [`View`] method to it (the D2 embed-and-delegate pattern). The constructor
-/// and `kind` differ per type; the `View` impl is identical, so it is macro-ed.
-macro_rules! cluster_wrapper {
-    ($(#[$meta:meta])* $name:ident) => {
-        $(#[$meta])*
-        pub struct $name {
-            /// The shared engine (state + layout + nav + draw + events).
-            pub cluster: Cluster,
-        }
-
-        impl View for $name {
-            fn state(&self) -> &ViewState {
-                self.cluster.state()
-            }
-            fn state_mut(&mut self) -> &mut ViewState {
-                self.cluster.state_mut()
-            }
-            fn draw(&mut self, ctx: &mut DrawCtx) {
-                self.cluster.draw(ctx)
-            }
-            fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
-                self.cluster.handle_event(ev, ctx)
-            }
-            fn set_state(
-                &mut self,
-                flag: crate::view::StateFlag,
-                enable: bool,
-                ctx: &mut Context,
-            ) {
-                self.cluster.set_state(flag, enable, ctx)
-            }
-            fn valid(&self, cmd: crate::command::Command) -> bool {
-                self.cluster.valid(cmd)
-            }
-            fn awaken(&mut self) {
-                self.cluster.awaken()
-            }
-            fn size_limits(&self, owner_size: Point) -> (Point, Point) {
-                self.cluster.size_limits(owner_size)
-            }
-            fn calc_bounds(&mut self, owner_size: Point, delta: Point) -> Rect {
-                self.cluster.calc_bounds(owner_size, delta)
-            }
-            fn change_bounds(&mut self, bounds: Rect) {
-                self.cluster.change_bounds(bounds)
-            }
-            fn cursor_request(&self) -> Option<Point> {
-                self.cluster.cursor_request()
-            }
-            fn find_mut(&mut self, id: crate::view::ViewId) -> Option<&mut dyn View> {
-                self.cluster.find_mut(id)
-            }
-            fn remove_descendant(
-                &mut self,
-                id: crate::view::ViewId,
-                ctx: &mut Context,
-            ) -> bool {
-                self.cluster.remove_descendant(id, ctx)
-            }
-            fn number(&self) -> Option<i16> {
-                self.cluster.number()
-            }
-            fn select_window_num(&mut self, num: i16, ctx: &mut Context) -> bool {
-                self.cluster.select_window_num(num, ctx)
-            }
-        }
-    };
+/// `TCheckBoxes` — a column of independent checkboxes; `value` is a bitmask.
+/// D2 embed-delegate wrapper over [`Cluster`] with [`ClusterKind::CheckBoxes`].
+pub struct CheckBoxes {
+    /// The shared engine (state + layout + nav + draw + events).
+    pub cluster: Cluster,
 }
 
-cluster_wrapper! {
-    /// `TCheckBoxes` — a column of independent checkboxes; `value` is a bitmask.
-    /// D2 embed-delegate wrapper over [`Cluster`] with [`ClusterKind::CheckBoxes`].
-    CheckBoxes
+#[crate::delegate(to = cluster, skip(apply_list_scroll, as_any_mut, focus_descendant, grabs_focus_on_click, set_value, value))]
+impl View for CheckBoxes {}
+
+/// `TRadioButtons` — a column of mutually-exclusive buttons; `value` is the
+/// selected index. D2 wrapper with [`ClusterKind::RadioButtons`].
+pub struct RadioButtons {
+    /// The shared engine (state + layout + nav + draw + events).
+    pub cluster: Cluster,
 }
 
-cluster_wrapper! {
-    /// `TRadioButtons` — a column of mutually-exclusive buttons; `value` is the
-    /// selected index. D2 wrapper with [`ClusterKind::RadioButtons`].
-    RadioButtons
+#[crate::delegate(to = cluster, skip(apply_list_scroll, as_any_mut, focus_descendant, grabs_focus_on_click, set_value, value))]
+impl View for RadioButtons {}
+
+/// `TMultiCheckBoxes` — checkboxes with multi-state items; `value` packs an
+/// n-bit state per item. D2 wrapper with [`ClusterKind::MultiCheckBoxes`].
+pub struct MultiCheckBoxes {
+    /// The shared engine (state + layout + nav + draw + events).
+    pub cluster: Cluster,
 }
 
-cluster_wrapper! {
-    /// `TMultiCheckBoxes` — checkboxes with multi-state items; `value` packs an
-    /// n-bit state per item. D2 wrapper with [`ClusterKind::MultiCheckBoxes`].
-    MultiCheckBoxes
-}
+#[crate::delegate(to = cluster, skip(apply_list_scroll, as_any_mut, focus_descendant, grabs_focus_on_click, set_value, value))]
+impl View for MultiCheckBoxes {}
 
 impl CheckBoxes {
     /// `TCheckBoxes::TCheckBoxes` — build from `bounds` + `strings`.
