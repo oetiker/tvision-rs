@@ -5,7 +5,24 @@ use syn::{Ident, ImplItem, ItemImpl, Token};
 
 mod specs;
 
-/// `#[delegate(to = <field>)]` — inject forwarders for un-provided trait methods.
+/// `#[delegate(to = <field>, skip(method1, method2, ...))]`
+///
+/// Injects forwarders for every method of the trait that the `impl` block does
+/// not already provide, each forwarding to `self.<field>.<method>(<args>)`.
+/// This is the boilerplate half of the embed-and-delegate pattern (the port's
+/// stand-in for C++ implementation inheritance). Only the `View` trait is
+/// currently supported.
+///
+/// - `to = <field>` (required): the field to forward un-provided methods to.
+/// - `skip(...)` (optional): methods to leave at the trait's own default rather
+///   than forwarding — use when a delegating type intentionally inherits the
+///   default instead of the inner field's behavior.
+///
+/// # Errors
+///
+/// Emits a compile error if `to` is missing or duplicated, if the macro is on a
+/// plain `impl` (not `impl Trait for Type`), if the trait is not a known
+/// delegatable trait, or if a `skip(...)` name is not a method of that trait.
 #[proc_macro_attribute]
 pub fn delegate(attr: TokenStream, item: TokenStream) -> TokenStream {
     let args = syn::parse_macro_input!(attr as DelegateArgs);
@@ -28,6 +45,9 @@ impl syn::parse::Parse for DelegateArgs {
         while !input.is_empty() {
             let key: Ident = input.parse()?;
             if key == "to" {
+                if field.is_some() {
+                    return Err(syn::Error::new(key.span(), "#[delegate]: duplicate `to`"));
+                }
                 input.parse::<Token![=]>()?;
                 field = Some(input.parse()?);
             } else if key == "skip" {
@@ -74,7 +94,13 @@ fn expand(args: DelegateArgs, mut item_impl: ItemImpl) -> syn::Result<TokenStrea
             "#[delegate] must be placed on an `impl Trait for Type` block",
         )
     })?;
-    let trait_ident = trait_path.1.segments.last().unwrap().ident.to_string();
+    let trait_ident = trait_path
+        .1
+        .segments
+        .last()
+        .expect("an impl trait path has at least one segment")
+        .ident
+        .to_string();
 
     let provided: std::collections::HashSet<String> = item_impl
         .items
@@ -95,6 +121,18 @@ fn expand(args: DelegateArgs, mut item_impl: ItemImpl) -> syn::Result<TokenStrea
             format!("#[delegate]: unknown delegatable trait `{trait_ident}`"),
         )
     })?;
+
+    // A `skip(...)` name that is not a method of the trait is almost certainly a
+    // typo, and would silently forward instead of skipping — make it a hard error.
+    let known: std::collections::HashSet<&str> = candidates.iter().map(|(n, _)| *n).collect();
+    for s in &args.skip {
+        if !known.contains(s.to_string().as_str()) {
+            return Err(syn::Error::new(
+                s.span(),
+                format!("#[delegate]: `skip({s})` is not a method of trait `{trait_ident}`"),
+            ));
+        }
+    }
 
     for (name, tokens) in candidates {
         if !provided.contains(name) && !skip.contains(name) {

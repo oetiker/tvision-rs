@@ -249,6 +249,8 @@ fn delegate_forwards_every_known_view_method() {
 
     // -- Assert every method was reached ------------------------------------
     let seen = d.inner.seen.borrow();
+    // MAINTENANCE: keep in sync with trait View's methods and
+    // tvision-macros/src/specs.rs (`view()`). See the note in view.rs.
     let expected: &[&str] = &[
         "state",
         "state_mut",

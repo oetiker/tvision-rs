@@ -2,7 +2,7 @@
 name = "tvision-macros"
 version = "0.1.0"
 edition = "2024"
-description = "Internal proc-macros for the tvision crate (delegation boilerplate)."
+description = "Delegation proc-macros for the tvision crate."
 license = "MIT"
 publish = true
 
@@ -15,5 +15,3 @@ quote = "1"
 syn = { version = "2", features = ["full"] }
 proc-macro-crate = "3"
 
-[dev-dependencies]
-trybuild = "1"

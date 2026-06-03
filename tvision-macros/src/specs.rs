@@ -17,6 +17,9 @@ pub fn forwarders(
     }
 }
 
+// MAINTENANCE: must list every method of `trait View` (src/view/view.rs). A
+// missing defaulted method silently leaves `#[delegate]` sites on the trait
+// default instead of forwarding. See the maintenance note in view.rs.
 #[rustfmt::skip]
 fn view(f: &Ident, k: &TokenStream) -> Vec<(&'static str, TokenStream)> {
     vec![
