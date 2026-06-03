@@ -15,7 +15,7 @@
 
 | commit | what |
 |--------|------|
-| _(staged, pending commit)_ | **TMenuView passive layer (49)** — command-graying broker + hotkey dispatch (FOUNDATION) ← THIS session |
+| `dfe66b1` | **TMenuView passive layer (49)** — command-graying broker + hotkey dispatch (FOUNDATION) ← THIS session |
 | `c5c061d` | **TMenu data tree (46)** — `MenuItem`/`Menu`/`MenuBuilder` (FOUNDATION) |
 | `fc66637` | **TListBox (48)** — first concrete `TListViewer` (MECHANICAL) |
 | `3e6645f` | **TApplication (32)** — thin D2 wrapper over `Program` (MECHANICAL) |
