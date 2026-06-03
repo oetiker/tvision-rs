@@ -2,7 +2,10 @@
 
 use crate::command::Command;
 use crate::event::{Event, Key};
-use crate::view::{Context, DrawCtx, GrowMode, Point, Rect, StateFlag, View, ViewId, ViewState};
+use crate::view::{Context, GrowMode, Rect, View};
+// These are used by the test module (via `use super::*`) and by `insert_child`.
+#[cfg(test)]
+use crate::view::{DrawCtx, StateFlag, ViewId, ViewState};
 use crate::window::{Window, WindowFlags, WindowPalette};
 
 // ---------------------------------------------------------------------------
@@ -62,22 +65,19 @@ impl Dialog {
     }
 }
 
+#[crate::delegate(
+    to = window,
+    skip(
+        apply_list_scroll,
+        as_any_mut,
+        calc_bounds,
+        grabs_focus_on_click,
+        select_window_num,
+        set_value,
+        value
+    )
+)]
 impl View for Dialog {
-    // -- delegated to the embedded window (D2) ------------------------------
-
-    fn state(&self) -> &ViewState {
-        self.window.state()
-    }
-
-    fn state_mut(&mut self) -> &mut ViewState {
-        self.window.state_mut()
-    }
-
-    /// `TDialog` does not override `draw`; it inherits `TWindow`/`TGroup` drawing.
-    fn draw(&mut self, ctx: &mut DrawCtx) {
-        self.window.draw(ctx);
-    }
-
     /// `TDialog::handleEvent` — delegate to `TWindow::handleEvent` **first**
     /// (faithful order), then the dialog's own keys + modal-result commands:
     /// ```cpp
@@ -139,52 +139,6 @@ impl View for Dialog {
         } else {
             self.window.valid(cmd)
         }
-    }
-
-    fn set_state(&mut self, flag: StateFlag, enable: bool, ctx: &mut Context) {
-        self.window.set_state(flag, enable, ctx);
-    }
-
-    fn awaken(&mut self) {
-        self.window.awaken();
-    }
-
-    fn size_limits(&self, owner_size: Point) -> (Point, Point) {
-        self.window.size_limits(owner_size)
-    }
-
-    // NOTE: `calc_bounds` is deliberately NOT overridden (mirrors `Window`): the
-    // trait default routes through `Dialog::size_limits` -> `Window::size_limits`
-    // (the 16x6 floor), so an owner-driven resize still honours the window
-    // minimum. Delegating to `Window::calc_bounds` is impossible (it is not on the
-    // trait surface as a delegate); the default is exactly right here.
-
-    fn change_bounds(&mut self, bounds: Rect) {
-        self.window.change_bounds(bounds);
-    }
-
-    fn cursor_request(&self) -> Option<Point> {
-        self.window.cursor_request()
-    }
-
-    fn find_mut(&mut self, id: ViewId) -> Option<&mut dyn View> {
-        self.window.find_mut(id)
-    }
-
-    fn remove_descendant(&mut self, id: ViewId, ctx: &mut Context) -> bool {
-        self.window.remove_descendant(id, ctx)
-    }
-
-    /// Delegate focus-by-id into the embedded window (a dialog's labels + controls
-    /// live in its group), so a `TLabel` inside a dialog can focus its link.
-    fn focus_descendant(&mut self, id: ViewId, ctx: &mut Context) -> bool {
-        self.window.focus_descendant(id, ctx)
-    }
-
-    /// `TDialog` is constructed with `wnNoNumber`, so `Window::number` already
-    /// returns `None`; delegate for faithfulness.
-    fn number(&self) -> Option<i16> {
-        self.window.number()
     }
 }
 
