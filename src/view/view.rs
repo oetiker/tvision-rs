@@ -702,6 +702,19 @@ pub trait View {
         None
     }
 
+    /// Whether a mouse-down inside this view should auto-select (focus) it — the
+    /// per-view opt-out for the relocated `TView::handleEvent` mouse-down
+    /// auto-select (carryover #1, see `Group::route_event`). C++ views opt in by
+    /// calling `TView::handleEvent`'s base body; the canonical opt-OUT is
+    /// `TButton`, which calls it only when `bfGrabFocus` is set. Default `true`
+    /// (the common case — matches every view that calls the base auto-select);
+    /// `Button` overrides to return its `bfGrabFocus` flag. A view returning
+    /// `false` is **not** focused by a click but still **receives** the click
+    /// (so it can act, e.g. press, without becoming `current`).
+    fn grabs_focus_on_click(&self) -> bool {
+        true
+    }
+
     /// Tree-op: ask this subtree to select the window numbered `num`. Returns
     /// whether one matched. Consistent with the [`find_mut`](View::find_mut) /
     /// [`remove_descendant`](View::remove_descendant) tree-op family: the live

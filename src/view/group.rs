@@ -800,13 +800,20 @@ impl Group {
                 });
                 if let Some(ti) = target {
                     // carryover #1: relocated TView::handleEvent mouse-down auto-select.
+                    // Gated on `grabs_focus_on_click()`: in C++ each view chooses
+                    // whether to invoke the base auto-select; the default is to
+                    // invoke it (true), and TButton is the canonical opt-OUT
+                    // (it auto-selects only when `bfGrabFocus` is set). A view
+                    // returning false is not focused by the click but still
+                    // receives it below (it can press without becoming current).
                     if matches!(ev, Event::MouseDown(_)) {
                         let s = self.children[ti].view.state();
                         let (selectable, selected, disabled) =
                             (s.options.selectable, s.state.selected, s.state.disabled);
                         let first_click = s.options.first_click;
+                        let grabs = self.children[ti].view.grabs_focus_on_click();
                         let id = self.children[ti].id;
-                        if selectable && !selected && !disabled {
+                        if grabs && selectable && !selected && !disabled {
                             let ok = self.focus_child(id, ctx);
                             if !ok || !first_click {
                                 ev.clear();
@@ -872,6 +879,9 @@ mod tests {
         st: ViewState,
         ch: char,
         log: Rc<RefCell<Vec<Event>>>,
+        /// Mirrors `View::grabs_focus_on_click` (default true). Set false to
+        /// model a TButton-without-`bfGrabFocus` (the carryover-#1 opt-out).
+        grabs: bool,
     }
 
     impl Probe {
@@ -880,6 +890,7 @@ mod tests {
                 st: ViewState::new(bounds),
                 ch,
                 log,
+                grabs: true,
             }
         }
         fn boxed(bounds: Rect, ch: char, log: Rc<RefCell<Vec<Event>>>) -> Box<dyn View> {
@@ -906,6 +917,9 @@ mod tests {
             if !matches!(ev, Event::Broadcast { .. } | Event::Timer(_)) {
                 ev.clear();
             }
+        }
+        fn grabs_focus_on_click(&self) -> bool {
+            self.grabs
         }
     }
 
@@ -1083,6 +1097,52 @@ mod tests {
         });
         assert_eq!(group2.current(), None, "disabled child not selected");
         assert!(log2.borrow().is_empty(), "disabled child receives no event");
+    }
+
+    #[test]
+    fn mouse_down_does_not_select_when_grabs_focus_on_click_is_false() {
+        // A selectable, not-selected, not-disabled child whose
+        // grabs_focus_on_click() == false (a TButton without bfGrabFocus) must
+        // NOT become current on click, but MUST still receive the click so it
+        // can act (press) without stealing focus.
+        //
+        // This test BITES against the old unconditional code: there, the
+        // `selectable && !selected && !disabled` block would call focus_child
+        // and make this child current (first_click defaults to false, so the
+        // click would also be consumed and never reach the child). The
+        // grabs_focus_on_click() gate is the only thing keeping current == None
+        // and the event live — remove it and both assertions below fail.
+        let mut out = VecDeque::new();
+        let mut timers = TimerQueue::new();
+        let log = Rc::new(RefCell::new(Vec::new()));
+
+        let mut group = Group::new(Rect::new(0, 0, 20, 10));
+        with_ctx(&mut out, &mut timers, |_ctx| {
+            let mut p = Probe::new(Rect::new(0, 0, 5, 5), 'A', log.clone());
+            p.st.options.selectable = true; // selectable, first_click = false
+            p.grabs = false; // opts OUT of auto-select (no bfGrabFocus)
+            group.insert(Box::new(p));
+        });
+
+        let mut ev = mouse_down_at(2, 2);
+        with_ctx(&mut out, &mut timers, |ctx| {
+            group.handle_event(&mut ev, ctx)
+        });
+
+        assert_eq!(
+            group.current(),
+            None,
+            "grabs_focus_on_click()==false: child not made current by the click"
+        );
+        assert!(
+            !group.children[0].view.state().state.selected,
+            "child not selected"
+        );
+        assert_eq!(
+            log.borrow().len(),
+            1,
+            "child still receives the mouse-down (event left live by the group)"
+        );
     }
 
     // -- 4. carryover #2: focus broadcast ------------------------------------
