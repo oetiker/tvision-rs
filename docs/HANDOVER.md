@@ -1,4 +1,4 @@
-# Session handover — Rows 50/51 `TMenuBar`/`TMenuBox` **DRAW/DATA layer** DONE (Phase 4). Next: the **Step-2 menu modal layer** — `execute()` as a capture-stack state machine + submenu recursion + `TMenuPopup` (52), then status line 47/53
+# Session handover — menu **modal layer Step-2 stage 1 (keyboard nav)** DONE (Phase 4). Next: **stage 2 = mouse**, **stage 3 = `TMenuPopup` (52)**, then wire a real menu bar into `Program` + status line 47/53
 
 > Living handover for the **next** rstv session. Read this, then
 > [CLAUDE.md](file:///home/oetiker/checkouts/rstv/CLAUDE.md) (orientation /
@@ -15,29 +15,31 @@
 
 | commit | what |
 |--------|------|
-| `0687530` | **TMenuBar/TMenuBox DRAW/DATA layer (50/51)** — `MenuView` trait + `current` + draw/getItemRect + 6 menu theme roles (FOUNDATION) ← THIS session |
+| `ed0abfa` | **Menu MODAL layer Step-2 stage 1 (50–52)** — `MenuSession` capture handler = flattened `execute()`; keyboard nav + submenu recursion + the `putEvent`→parent re-apply loop; new `Deferred::OpenMenuBox`/`SetMenuCurrent` + `ctx.put_event` + `Group::insert_with_id` + `View::set_menu_current` (FOUNDATION) ← THIS session |
+| `0687530` | **TMenuBar/TMenuBox DRAW/DATA layer (50/51)** — `MenuView` trait + `current` + draw/getItemRect + 6 menu theme roles (FOUNDATION) |
 | `dfe66b1` | **TMenuView passive layer (49)** — command-graying broker + hotkey dispatch (FOUNDATION) |
 | `c5c061d` | **TMenu data tree (46)** — `MenuItem`/`Menu`/`MenuBuilder` (FOUNDATION) |
 | `fc66637` | **TListBox (48)** — first concrete `TListViewer` (MECHANICAL) |
 | `3e6645f` | **TApplication (32)** — thin D2 wrapper over `Program` (MECHANICAL) |
 | `47894f0…66ab55f` | **`#[delegate]` proc-macro** — `tvision-macros` crate + workspace, then **adopted** across cluster/Window/Dialog/ParamText/Label/Desktop + the hello example (replaces `cluster_wrapper!`) |
 
-**Build state:** 524 lib (was 510; +4 row-49 broker tests landed earlier, + the
-new menu draw/data tests this session) + 5 integration (3 `render_pipeline` + 2
-`delegate_view`) + 2 doctests green; `cargo clippy --workspace --all-targets -- -D
-warnings` and `cargo fmt --all --check` clean. **It is a Cargo workspace**
+**Build state:** 535 lib (was 524; +11 menu-modal `pump_once` integration tests
+this session) + 5 integration (3 `render_pipeline` + 2 `delegate_view`) + 2
+doctests green; `cargo clippy --workspace --all-targets -- -D warnings` and `cargo
+fmt --all --check` clean (verify clippy with a forced re-lint — a cached run can
+mask a fresh warning). **It is a Cargo workspace**
 (`tvision` + `tvision-macros`) — use `--workspace` for test/clippy/fmt. (Cargo
 artifacts land in `/home/oetiker/scratch/cargo-target` — set `CARGO_TARGET_DIR`.)
 
 **Phase 2 COMPLETE. Batch B (Phase-3 leaves) COMPLETE. Phase-1 row 32 COMPLETE.**
 **Phase 4 in progress — Row 46 `TMenu` data tree + Row 49 `TMenuView` passive
-layer + Rows 50/51 `TMenuBar`/`TMenuBox` DRAW/DATA layer DONE** (50/51 draw = THIS
-session, see below). **Deliberate split (advisor-vetted):** rows 50/51/52 were
-NOT landed together — this session shipped only the *draw/data* slice (independently
-snapshot-testable + committable), de-risking the modal work by giving it a verified
-substrate. **Next: the Step-2 menu modal layer** (`execute()` + navigation + submenu
-recursion + `TMenuPopup` 52), then status line 47/53. Batch C concrete validators
-58–62 are an available parallel fan-out.
+layer + Rows 50/51 draw/data + the menu MODAL layer Step-2 stage 1 (keyboard) DONE**
+(stage 1 = THIS session, see below). **The modal layer is itself staged** (advisor-
+vetted): **stage 1 = keyboard** (landed), **stage 2 = mouse**, **stage 3 =
+`TMenuPopup` 52** — each independently testable/committable, the same de-risking
+split as draw-vs-modal. **Next: stage 2 (mouse)**, then stage 3, then wiring a real
+menu bar into `Program` + status line 47/53. Batch C concrete validators 58–62 are
+an available parallel fan-out.
 
 > **Worktrees** live under `/scratch/oetiker/claude-worktrees/<project>-<name>`
 > (global CLAUDE.md). A `WorktreeCreate` hook (`~/.claude/settings.json` →
@@ -48,7 +50,100 @@ recursion + `TMenuPopup` 52), then status line 47/53. Batch C concrete validator
 > create the worktree manually at the `/scratch` path + dispatch a non-isolated
 > subagent.
 
-## What landed THIS session — Rows 50/51 `TMenuBar`/`TMenuBox` DRAW/DATA layer (FOUNDATION)
+## What landed THIS session — menu MODAL layer Step-2 stage 1 (keyboard nav) (FOUNDATION)
+The interactive `TMenuView::execute()` (`tmnuview.cpp:179`), flattened onto our single
+event loop (D9). Brief: [`docs/briefs/row50-52-menu-modal.md`](file:///home/oetiker/checkouts/rstv/docs/briefs/row50-52-menu-modal.md)
+(advisor-vetted **twice** — architecture then concrete mechanism) → Opus implementer →
+**full two-stage review** (SPEC then QUALITY, fresh C++-adversarial Opus agents) → two
+fix rounds → integrate. `src/menu/menu_session.rs`.
+
+- **THE ARCHITECTURE DECISION (settled, do not relitigate).** C++ `execute()` is a STACK
+  of nested `execView` modal loops (opening a submenu *recurses* `owner->execView`). Two
+  mappings were weighed and **the advisor + C++ evidence killed the re-entrant one:**
+  - **REJECTED — re-entrant `exec_view` per level.** The guide's "`exec_view` = the
+    `TGroup::execute` shape" ratifies `exec_view`/`OpenModal` for **`TGroup::execute`**
+    (`tgroup.cpp:173`, the *dialog* loop). `execView` calls `p->execute()` **virtually**
+    (`tgroup.cpp:205`); for a menu, `p` runs the **overridden `TMenuView::execute`**
+    (`menus.h:152`) — a *different function*. So the guide reserved `OpenModal` for "a
+    menu *command* launches a dialog," and **never licensed it for menu nav.** Also
+    `ModalFrame` *swallows* outside clicks (menus must *close* on them) and per-level
+    bounds-gating can't express cross-level mouse (`mouseInMenus`/`mouseInOwner` walk the
+    whole `parentMenu` chain). **My initial lean conflated the two `execute()`s — caught
+    by the advisor.**
+  - **CHOSEN — one `MenuSession` capture handler** owning the WHOLE open stack (bar + every
+    open box), the flattened `execute()`. Clean Architecture A: while active it **consumes
+    every event**; bar + boxes are **display-only** (never focused). `OpenModal`/`exec_view`
+    stays reserved for the menu-command→dialog case (msgbox / Batch E).
+- **The flattening insight (the "beautiful" part).** C++'s `doReturn` pops a level and
+  **re-posts the triggering event** to the parent's `getEvent` **unless that arm cleared
+  it** (`tmnuview.cpp:401-405`). Flattened: `MenuSession::handle_key` is a **re-apply-across-
+  levels loop** — on a non-cleared `doReturn`, pop the level and re-deliver the SAME event
+  to the new top. This one mechanism produces all the cross-level keyboard behaviors:
+  one-Esc-closes-the-whole-menu (from a 1st-level box), Esc-closes-one-level (from a 2nd+
+  box), and Left/Right unwinding the stack to the bar + walking to the neighbour title.
+- **State:** `MenuSession { levels: Vec<MenuLevel>, owner_size }`; each `MenuLevel {
+  view_id, menu (clone-at-open), current, bounds, is_bar, auto_select }`. **Clone-at-open
+  is FAITHFUL** (execute() has no `evBroadcast` case → `disabled` frozen for the menu's
+  lifetime; the session **swallows broadcasts** while active). **`auto_select` is a keyboard
+  concern** (not mouse-only): set on bar kbDown/kbEnter/alt-activation, reset by `cmMenu`;
+  it drives the Left/Right title-walk re-open. Bounds cached at open (a box never moves →
+  no `sync_gate_bounds`); shaped for stage-2 mouse.
+- **New seams (all additive — "a new deferred capability ADDS A VARIANT"):**
+  `Deferred::OpenMenuBox { id, menu, bounds }` (the session **pre-mints** the id via
+  `ViewId::next`, the pump `Group::insert_with_id`s the box into the root group, **no focus
+  move**) + `Deferred::SetMenuCurrent(id, Option<usize>)` (write-only highlight cache, via
+  the new defaulted `View::set_menu_current` trait hook — no downcast, mirrors
+  `update_menu_commands`; forwarder added to `tvision-macros/specs.rs`) + `ctx.put_event`
+  (raw-event sibling of `post`, ports `putEvent`).
+- **Activation** (replaces the row-49 `_ => {}` breadcrumb in `menu_view::handle_event`):
+  bar `cmMenu`/kbF10 → highlight the default title, **no box** (F10 waits — the `autoSelect=
+  False` path); bar **alt-shortcut** → open the matched submenu's box (or post directly if
+  it's a top-level command). Pushes the session + the first `OpenMenuBox` in the **same
+  deferred batch** (no dead first event).
+- **Two-stage review earned its keep (twice over):** SPEC caught 3 keyboard-faithfulness
+  blockers (F10-wrongly-opens-box; one-Esc should close the whole menu; Left/Right should
+  walk+reopen → `autoSelect` is keyboard, not mouse). QUALITY caught a **real bug SPEC
+  missed** — a hotKey accelerator pressed while a box is open was *silently dropped* instead
+  of closing the menu + firing the command (the unreachable "defensive" branch was the
+  tell) — plus a dead/semantically-broken `first_event` field and 3 clean wins (shared
+  `matching_item` helper, stale doc, untested `put_event` path).
+- **Verification:** 11 discriminating, bite-checked `pump_once` integration tests
+  (F10-no-box, arrow-move, submenu-recurse, command-post+close, Esc 1st-vs-2nd-level
+  asymmetry, Right-walk-reopen, F10-then-Right-no-box, alt-shortcut-at-matched, hotKey-
+  accelerator-closes-whole-menu, foreign-command-close+repost). 535 lib tests green.
+
+### NEXT — Step-2 **stage 2 = mouse**, then **stage 3 = `TMenuPopup` (52)**, then `Program` wiring
+The keyboard substrate + the `MenuSession` are in place and the structs are already shaped
+for mouse (per-level `bounds` cached; `auto_select`/`first_event` semantics noted in the
+brief). All breadcrumbs live in `src/menu/menu_session.rs` (`MenuSession::handle` mouse
+arms) + `menu_view::handle_event` (the `evMouseDown` activation). Brief (authoritative for
+the whole modal layer): [`docs/briefs/row50-52-menu-modal.md`](file:///home/oetiker/checkouts/rstv/docs/briefs/row50-52-menu-modal.md).
+
+- **Stage 2 — mouse:** the `evMouseDown`/`evMouseUp`/`evMouseMove` arms of `execute()` +
+  `trackMouse`/`mouseInOwner`/`mouseInMenus`/`autoSelect`/`lastTargetItem`/
+  `putClickEventOnExit` + **click-outside-closes** (gate against the cached per-level bounds
+  set — the session knows ALL open box bounds, which is exactly why the cross-level
+  `mouseInMenus`/`mouseInOwner` logic wanted ONE session object). `first_event` was REMOVED
+  in stage 1 (it was dead + a broken breadcrumb) — reintroduce it correctly when a reader
+  exists. The `evMouseDown` activation branch in `menu_view::handle_event` gets wired.
+- **Stage 3 — `TMenuPopup` (52)** = `TMenuBox` + the `execute()`/`handleEvent` overrides
+  (`menu->deflt = 0`; `putClickEventOnExit = False`; ctrl-char + hotKey dispatch) + the
+  `popupMenu()` free fn (`tmenupop.cpp` — note: the file is `tmenupop.cpp`, and
+  `TMenuPopup::execute` is `menus.h:380`, a *separate* override from `TMenuView::execute`).
+- **Initial-regray gap to close (carried from row 49):** menus are born all-enabled (the
+  row-46 builder has no command set); the row-49 broker only regrays on a
+  `cmCommandSetChanged` broadcast, which does NOT fire at startup. So a menu holding a
+  startup-disabled command (`cmZoom`/`cmClose`/…) draws enabled until the first broadcast.
+  Fix at menu-bar insert: trigger an initial `Deferred::UpdateMenu` (or have `Program`
+  broadcast `cmCommandSetChanged` once at startup). `TODO(menu insert: trigger initial
+  UpdateMenu)` is breadcrumbed in `menu_bar.rs`.
+- **Wiring a real menu bar into `Program`** is the first emitter of `cmTile`/`cmCascade`/
+  `cmDosShell` → then wire the row-32 breadcrumb in `program_handle_event` + build
+  `Desktop::tile`/`cascade` geometry (see the row-32 breadcrumb section below), and revisit
+  the `program_handle_event` modal-isolation breadcrumb (suppress program-level interception
+  while a `MenuSession` is active — C++'s nested `p->execute()` does this structurally).
+
+## Prior session — Rows 50/51 `TMenuBar`/`TMenuBox` DRAW/DATA layer (FOUNDATION)
 The **draw/data slice** of the menu views — drawing + geometry + the polymorphism
 seam, **no modal loop**. Brief: [`docs/briefs/row50-51-menu-draw.md`](file:///home/oetiker/checkouts/rstv/docs/briefs/row50-51-menu-draw.md)
 (advisor-vetted scope split) → Opus implementer → **full two-stage review** (spec
@@ -104,40 +199,10 @@ then quality, fresh C++-adversarial Opus agents, both PASS) → 6 polish items (
   `cargo-insta` NOT installed → `.snap`s generated via `INSTA_UPDATE=always`, hand-verified,
   committed.
 
-### NEXT — Step-2: the menu **modal layer** (`execute()` + nav + submenu recursion + `TMenuPopup` 52)
-**This is a fresh FOUNDATION design session — get the advisor to vet the approach before
-building.** The substrate is now in place (draw + geometry verified). The core challenge:
-map the C++ `TMenuView::execute()` (`tmnuview.cpp:179`) — a nested `getEvent` loop with
-loop-locals (`current`/`autoSelect`/`lastTargetItem`/`mouseActive`/`firstEvent`/`itemShown`)
-that opens submenus by **recursively** calling `owner->execView(target)` — onto our
-single-loop + capture-stack model (D9).
-
-- **Likely shape (verify before building — the old HANDOVER's "execute() = `OpenModal`" is a
-  mis-read):** D9 says modality is a **handler, not a loop**, so menu navigation is a
-  **capture stack** — one frame per open level; opening a submenu **pushes a capture frame +
-  inserts a `TMenuBox`** (a new deferred *insert-view* variant, NOT `OpenModal`), closing
-  pops. `execute()`'s loop-locals become **persistent state on the capture frame**.
-  `Deferred::OpenModal(Box<dyn View>)` is for a dialog a menu *command* launches (msgbox /
-  Batch E), **not** menu nav itself — confirm this distinction with the advisor first.
-- Adds to the trait: `parentMenu` + the nav methods (`trackMouse`/`trackKey`/`nextItem`/
-  `prevItem` — note the separator-skipping + `prevItem`-via-`nextItem`), `findItem`/
-  `findAltShortcut`, `do_a_select`/`newSubView`/`mouseInOwner`/`mouseInMenus`/`topMenu`,
-  `getHelpCtx`. The activation branches of `menu_view::handle_event` (evMouseDown / cmMenu /
-  alt-shortcut) get wired (currently breadcrumbed).
-- **`TMenuPopup` (52)** = `TMenuBox` + the `execute()`/`handleEvent` overrides (`menu->deflt
-  = 0`; `putClickEventOnExit = False`; ctrl-char + hotKey dispatch) + the `popupMenu()` free fn.
-- **Initial-regray gap to close (carried from row 49):** menus are born all-enabled (the
-  row-46 builder has no command set); the row-49 broker only regrays on a
-  `cmCommandSetChanged` broadcast, which does NOT fire at startup. So a menu holding a
-  startup-disabled command (`cmZoom`/`cmClose`/…) draws enabled until the first broadcast.
-  Fix at menu-bar insert: trigger an initial `Deferred::UpdateMenu` (or have `Program`
-  broadcast `cmCommandSetChanged` once at startup). `TODO(menu insert: trigger initial
-  UpdateMenu)` is breadcrumbed in `menu_bar.rs`.
-- **Wiring a real menu bar into `Program`** is the first emitter of `cmTile`/`cmCascade`/
-  `cmDosShell` → then wire the row-32 breadcrumb in `program_handle_event` + build
-  `Desktop::tile`/`cascade` geometry (see the row-32 breadcrumb section below), and revisit
-  the `program_handle_event` modal-isolation breadcrumb (suppress program-level interception
-  during a modal — C++'s nested `p->execute()` does this structurally).
+_(The Step-2 modal-layer plan that previously lived here was **executed this session** —
+its capture-stack hypothesis was advisor-refined into the `MenuSession` architecture and
+the re-apply loop; see **What landed THIS session** + the **NEXT** section above, and the
+brief [`docs/briefs/row50-52-menu-modal.md`](file:///home/oetiker/checkouts/rstv/docs/briefs/row50-52-menu-modal.md).)_
 
 ## Prior session — Row 49 `TMenuView` passive layer (FOUNDATION)
 The **passive (non-modal) layer** of `TMenuView` (`tmnuview.cpp`): command-graying
