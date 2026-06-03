@@ -4,9 +4,7 @@ use crate::capture::{CaptureFlow, CaptureHandler};
 use crate::command::Command;
 use crate::event::{Event, Key};
 use crate::frame::Frame;
-use crate::view::{
-    Context, DragMode, DrawCtx, Group, GrowMode, Point, Rect, StateFlag, View, ViewId, ViewState,
-};
+use crate::view::{Context, DragMode, Group, GrowMode, Point, Rect, StateFlag, View, ViewId};
 use crate::widgets::ScrollBar;
 
 // ---------------------------------------------------------------------------
@@ -816,6 +814,7 @@ mod tests {
     use crate::screen::Buffer;
     use crate::theme::{Role, Theme};
     use crate::timer::TimerQueue;
+    use crate::view::{DrawCtx, ViewState};
     use std::collections::VecDeque;
 
     // -- test harness --------------------------------------------------------
