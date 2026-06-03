@@ -1,4 +1,4 @@
-# Session handover — Batch B; TButton (37) DONE. Resume at TLabel (41) → validator wave (35/39)
+# Session handover — Batch B; TLabel (41) DONE. Resume at validator wave (TValidator 35 → TInputLine 39)
 
 > Living handover for the **next** rstv session. Read this, then
 > [CLAUDE.md](file:///home/oetiker/checkouts/rstv/CLAUDE.md) (orientation /
@@ -17,14 +17,43 @@
 | `71fc6c3` | docs: D7 — `Role` closed-enum is a port-phase default, not a hard rule |
 | `53d011e` | **`View::grabs_focus_on_click`** — per-view opt-out for the mouse-down auto-select (restores `bfGrabFocus`) |
 | `6d763dc` | **TButton (37)** — clickable command button + animation |
+| `6b890a1` | Pre-seed 4 cpLabel Theme roles for TLabel (41) |
+| `3483760` | **TLabel (41)** + focus-by-ViewId deferred tree-op seam |
 
-**Build state:** 388 lib + 3 integration + 2 doctests green; `cargo clippy
+**Build state:** 408 lib + 3 integration + 2 doctests green; `cargo clippy
 --all-targets -- -D warnings` and `cargo fmt --check` clean. Working tree clean.
 
-**Phase 2 is COMPLETE.** **Batch B:** 36, 38, 42, 43, 44, 45, 40, **37** done
-(all two-stage reviewed SPEC-PASS + QUALITY-PASS). The **remaining Batch B rows
-still have a FOUNDATION gap** and need careful per-row design (Opus / main
-thread), not a clean MECHANICAL fan-out — see the seam analysis below.
+**Phase 2 is COMPLETE.** **Batch B:** 36, 38, 42, 43, 44, 45, 40, **37**, **41**
+done (all two-stage reviewed SPEC-PASS + QUALITY-PASS). The **remaining Batch B
+rows still have a FOUNDATION gap** and need careful per-row design (Opus / main
+thread), not a clean MECHANICAL fan-out — see the seam analysis below. **NEXT =
+the validator wave (TValidator 35 → TInputLine 39).**
+
+## What landed THIS session (TLabel 41 + focus-by-ViewId seam)
+- **Pre-seed 4 cpLabel roles (`6b890a1`)** — `LabelNormal/LabelLight` +
+  `LabelNormalShortcut/LabelLightShortcut` in `theme.rs` (provisional gray-dialog
+  colours; `cpLabel "\x07\x08\x09\x09"` → dialog idx 7/8/9; both shortcut indices
+  map to entry 9, so the two `*Shortcut` roles share a value but stay distinct).
+- **TLabel (41) + the FOUNDATION seam (`3483760`)** — the *focus-by-`ViewId`
+  deferred tree-op*, mirroring the `remove_descendant` family:
+  `Deferred::FocusById(ViewId)` + `Context::request_focus` (context.rs);
+  `View::focus_descendant` default no-op (view.rs); `Group::focus_descendant`
+  (ofSelectable gate at the owning group → `focus_child` == C++ `select()`;
+  recurse otherwise; return `true` on any match to stop the walk); Window/Desktop/
+  Dialog/ParamText/Label delegate, leaves don't; pump applies on the deferred-drain
+  branch (program.rs). The `Label` widget (static_text.rs, D2 embed of
+  `StaticText`): single-row draw (fill + `put_cstr` at col 1), `ofPreProcess|
+  ofPostProcess` (so a non-selectable label gets its Alt-hotkey via the group's
+  pre/post phases), `focusLink → request_focus` (clearEvent **unconditional**).
+  **First consumer of `Broadcast{source}`** (Phase A): `light` tracks the link's
+  `RECEIVED/RELEASED_FOCUS` gated on `source == link`.
+  **Deferred/breadcrumbed:** plain-letter postProcess accelerator (needs the
+  `Context` phase signal — same as TButton); owner-chain `focus()` walk (flat
+  modal dialogs only); `showMarkers`. **Known substrate limitation** (documented
+  in the Label type-doc): a stale `light` survives if a *selectable link is
+  removed at runtime* — `Group::remove` is release-after-remove (row-26 ordering),
+  so no `RELEASED_FOCUS{source==link}` fires; C++ `tgroup.cpp` does `hide()`
+  before `removeView`. Revisit if a consumer ever removes a bare link.
 
 ## What landed THIS session (key helpers + Event::Timer + grabs_focus_on_click + TButton 37)
 - **Shared key helpers (`b53c618`)** — in `src/event/key.rs` (re-exported via
@@ -109,26 +138,16 @@ for the plain-letter accelerator) — see the rows below + the deferral notes ab
 The cluster/scrollbar `ctrlToArrow`/accelerator TODOs can now be retired
 opportunistically using the shared helpers.
 
-### Row 41 — TLabel (FOUNDATION-ish; task #8). focus-by-id + first `Broadcast{source}` consumer. **← START HERE**
-`tlabel.cpp`: a caption that **links** to a control and focuses it on click/hotkey,
-and **highlights** while its linked control is focused.
-- **link is an `Option<ViewId>` (D3)** — not a `TView*`. `TLabel` is the **first
-  consumer of `Broadcast{source}`** (Phase A `7efecb3`): on
-  `Broadcast{RECEIVED_FOCUS|RELEASED_FOCUS, source}` where `source == link_id` →
-  `light = received`. Nice payoff of Phase A.
-- **focusLink needs a focus-by-`ViewId` deferred tree-op.** Reuse the **row-33d-2
-  shape** (`select_window_num`/`focus_by_number`): a `View` trait tree-op (default
-  no-op) + container override that resolves the id and calls `focus_child`, routed
-  through a **new `Deferred` variant** (loop-owned focus state). **`request_set_state(id,
-  Focused, true)` is NOT a substitute** — it bypasses `current`/select/the active
-  chain. This is the row's design crux.
-- Embeds `StaticText` (D2; reuse/promote the delegate boilerplate — see the
-  `cluster_wrapper!` / ParamText breadcrumb). Pre-seed **4 cpLabel roles**
-  (`"\x07\x08\x09\x09"`): Label{Normal,Light} text + {Normal,Light}Shortcut;
-  `0x0301`=(Normal,NormalShortcut) when not lit, `0x0402`=(Light,LightShortcut)
-  when lit. Accelerators via the shared key helpers.
+### ✅ DONE — TLabel (41, `3483760`). focus-by-id seam + first `Broadcast{source}` consumer
+Shipped this session (see "What landed THIS session" above). The focus-by-`ViewId`
+deferred tree-op (`Deferred::FocusById` + `View::focus_descendant`, mirroring
+`remove_descendant`) is now substrate the validator wave can reuse if a control
+ever needs to focus another by id. `Label` is the D2 embed-of-`StaticText`
+template, alongside `ParamText` in `static_text.rs`. The promised
+`request_set_state(id, Focused, true)` non-substitute warning held — `focus_child`
+(== C++ `select()`) is what `focus_descendant` calls.
 
-### Validator wave (task #5) — TValidator (35) → TInputLine (39)
+### Validator wave (task #5) — TValidator (35) → TInputLine (39). **← START HERE**
 - **TValidator (35, FOUNDATION):** the abstract `Validator` trait
   (`is_valid_input`/`is_valid`/`transfer` — D2 hook feeding D10). `tvalidat.cpp`/
   `svalid.cpp`.
@@ -164,11 +183,20 @@ carries that design; build when a menu/msgbox needs it (Phase 4), not before.
   gray-out is missing. **Menus (Batch C) force this** — add a read-only command-set
   accessor to `Context` then (the deferred-effects refactor stabilized
   `Context::new` for *effects*; a read accessor is a separate, additive concern).
-- **NEW — phase signal on `Context`** (for the plain-letter postProcess
-  accelerator): TButton honors only Alt-hotkey + focused-Space; the C++
-  `owner->phase == phPostProcess` plain-letter branch needs the dispatch phase
-  exposed to the view. The cluster's deferred accelerators want the same. Add when
-  the first widget genuinely needs plain-letter accelerators.
+- **phase signal on `Context`** (for the plain-letter postProcess accelerator):
+  TButton honors only Alt-hotkey + focused-Space; **TLabel now also defers** the
+  same plain-letter branch (`static_text.rs` `TODO(label/button: plain-hotkey
+  postProcess accelerator …)`). The C++ `owner->phase == phPostProcess`
+  plain-letter branch needs the dispatch phase exposed to the view. The cluster's
+  deferred accelerators want the same. Add when the first widget genuinely needs
+  plain-letter accelerators (3 consumers now waiting: button, label, cluster).
+- **NEW — `Group::remove` release-after-remove ordering** (row-26 substrate): a
+  removed selectable child never gets `set_state(Focused,false)` before removal, so
+  no `RELEASED_FOCUS{source}` fires. C++ `tgroup.cpp` does `hide()` **before**
+  `removeView`. Today's only observable consequence: a `TLabel` whose **selectable
+  link is removed at runtime** keeps a stale `light` (documented in the Label
+  type-doc). No current consumer removes a bare link, so deferred; fix the ordering
+  if/when one does (or when validating the focus/destroy path generally).
 - **`cmResize` keyboard resize sub-mode** (`window.rs`).
 - **Scrollbar auto-repeat + thumb-drag** (`scrollbar.rs` `TODO(row 31, D9)`).
 - **Cluster mouse drag-cursor loop** (`cluster.rs` `TODO(row 31, D9)`); cluster +
@@ -204,8 +232,9 @@ carries that design; build when a menu/msgbox needs it (Phase 4), not before.
 ## Outstanding TODOs seeded in code (grep)
 - ✅ `TODO(timer payload)` — RESOLVED (removed; now `Event::Timer`).
 - `TODO(button: command-enabled graying ...)` + `TODO(button/cluster: plain-hotkey
-  postProcess accelerator ...)` in `src/widgets/button.rs` — the two new
-  `Context` primitives (see "Still deferred").
+  postProcess accelerator ...)` in `src/widgets/button.rs` + `TODO(label/button:
+  plain-hotkey postProcess accelerator ...)` in `src/widgets/static_text.rs` — the
+  two new `Context` primitives (see "Still deferred").
 - `TODO(row 31, D9)` in `src/widgets/scrollbar.rs` + `src/widgets/cluster.rs` +
   `src/widgets/button.rs` — press-and-hold / drag-tracking loops.
 - `TODO(row 41, accelerators)` / `TODO(ctrlToArrow)` in `src/widgets/cluster.rs` —
