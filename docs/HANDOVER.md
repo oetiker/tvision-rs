@@ -55,7 +55,7 @@ the validator wave (TValidator 35 → TInputLine 39).**
   so no `RELEASED_FOCUS{source==link}` fires; C++ `tgroup.cpp` does `hide()`
   before `removeView`. Revisit if a consumer ever removes a bare link.
 
-## What landed THIS session (key helpers + Event::Timer + grabs_focus_on_click + TButton 37)
+## What landed the PRIOR session (key helpers + Event::Timer + grabs_focus_on_click + TButton 37)
 - **Shared key helpers (`b53c618`)** — in `src/event/key.rs` (re-exported via
   `event/mod.rs` + `lib.rs`). Decomposed-model adaptations: `getAltCode`'s
   combined-scancode return has no meaning, so the accelerator idiom becomes the
@@ -91,7 +91,7 @@ the validator wave (TValidator 35 → TInputLine 39).**
   input line). **TLabel/cluster accelerators also want this.**
   (3) mouse hold-tracking + pressed-flash → row 31, D9 (single-shot for now).
 
-## What landed this session (Batch B, rows 36/38/42/43/44/45/40)
+## What landed an earlier session (Batch B, rows 36/38/42/43/44/45/40)
 
 - **TStaticText (36)** — `src/widgets/static_text.rs`. Faithful `tstatict.cpp`
   word-wrap draw (D13 via `crate::text::{scroll,next,width}`), `\x03`
@@ -127,7 +127,7 @@ orchestrator pre-seeds the Theme roles/glyphs each row needs (avoids worktree
 `theme.rs` conflicts), as done for the rows above.
 
 ### ✅ DONE — shared key helpers (task #6, `b53c618`) and TButton (37, `6d763dc`)
-Both shipped this session (see "What landed THIS session" above). The key helpers
+Both shipped the prior session (see "What landed the PRIOR session" above). The key helpers
 landed as **predicates** (`is_alt_hotkey`/`is_plain_hotkey`), not the literal
 `getAltCode`, because of the decomposed key model. The TButton timer-id blocker was
 resolved with **`Event::Timer(TimerId)`** (option (a) — carry the id; option (b)
