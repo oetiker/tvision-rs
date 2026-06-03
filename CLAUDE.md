@@ -541,6 +541,48 @@ vendored ratatui cell-buffer+diff (MIT) → retained view tree + event loop.
     Two-stage reviewed (SPEC-PASS after reverting an invented active/selected draw
     branch; QUALITY-PASS, `core::any::Any` + stale-doc nits applied). 457 lib + 3
     integration + 2 doctests green; clippy/fmt clean.
+  - **Row 28 `TListViewer` DONE (`c1ad789`, FOUNDATION)** — module
+    `src/widgets/list_viewer.rs`. The abstract base for all list widgets
+    (`TListBox` 48, history, color/file lists). Drives two sibling scrollbars like
+    `TScroller`, but **diverges structurally in two ways** the "reuse verbatim"
+    line glossed over (advisor-confirmed before building):
+    **(1) `ListViewer` is a TRAIT, not a concrete struct** (the `Validator`
+    pattern, NOT the `Scroller` embed shape): `TListBox` reuses `TListViewer::draw`
+    while *overriding* `getText`/`isSelected`, which a D2 embed cannot dispatch back
+    into. So: `ListViewer: View` trait (`lv()`/`lv_mut()` accessor + defaulted
+    `get_text`/`is_selected`/`select_item`) + a `ListViewerState` data struct + the
+    shared draw/event/nav logic as **free functions generic over `<L: ListViewer +
+    ?Sized>`** (`draw`/`handle_event`/`focus_item`/`focus_item_num`/`set_range`/
+    `update_steps`/`apply_scroll`/`set_state`/`focused_cursor`); a `#[cfg(test)]`
+    `FakeList` (Vec-backed) is the first consumer (not a dead stub). Row-48
+    `TListBox` will impl both traits + delegate the 6 `View` methods to the free fns.
+    **(2) The read-sync WRITES BACK** (`focusItem → vbar setValue`), unlike the
+    scroller (which only mutates self). New **defaulted-no-op `View::apply_list_scroll`**
+    + new **`Deferred::SyncListViewer{list,h,v}`** + a pump apply arm that calls the
+    **trait method (no downcast** — can't cast `dyn View`→`dyn ListViewer`); the
+    `SyncScrollerDelta`/scroller path is **untouched** (two read-sync mechanisms,
+    optional later unification noted out-of-scope). **Termination crux:** the
+    vbar→sync→setValue cycle terminates *only* because `ScrollBar::set_params` is
+    change-guarded (`scrollbar.rs:219/224` — `scroll_draw` runs iff `old_value !=
+    a_value`); proven by a discriminating termination test driven through real
+    `pump_once` drains (bite-checked: removing the guard makes it spin). **`indent`
+    cached** on `ListViewerState` (draw can't read the sibling hbar live; refreshed
+    by the same sync). **Reused verbatim:** `ScrollBarSetParams` (setRange/ctor-
+    setStep) + `SetVisible` (setState show/hide). **setState uses the C++
+    `active && visible` AND-condition** (NOT the scroller's `active || selected` —
+    spec-review crosshair). **Theme reconciled** to the 5-entry cpListViewer palette:
+    `ListNormalActive`/`ListNormalInactive`/`ListFocused`/`ListSelected`/
+    `ListDivider` (the old guessed `ListNormal`/`ListSelectedFocused` were unused;
+    provisional colours, `TODO(window-scheme remap)`). **Deferred + breadcrumbed:**
+    mouse press-and-hold/auto-scroll `do…while(mouseEvent)` loop (`TODO(row 31,
+    D9)`; ship single-shot + double-click select); `changeBounds` step republish
+    (`TODO(resize)` — note: **distinct formula** from the ctor's `update_steps` —
+    vbar plain `size.y` + both bars *preserve* arStep; corrected in-doc after a
+    spec-review catch); `showMarkers` + streaming dropped (D8/D12). Brief:
+    `docs/briefs/row28-tlistviewer.md`. Two-stage reviewed (SPEC-PASS +
+    QUALITY-PASS; fixes applied: `num_cols` zero-guard, `focused_cursor` test,
+    resize-doc correction, wiring caveat). 482 lib + 3 integration + 2 doctests
+    green; clippy/fmt clean.
 
 ## Next step
 **Direction = [`docs/PORT-ORDER.md`](docs/PORT-ORDER.md)** — dependency-ordered;
@@ -550,14 +592,17 @@ that *may* run concurrently — an efficiency, not a competing direction. Contin
 subagent-driven (see "How to run the port" above; FOUNDATION → Opus + two-stage
 review, MECHANICAL → Sonnet worktree fan-out).
 
-**Immediate next: row 28 `TListViewer`** (FOUNDATION, `tlstview.cpp`) — the list
-base. It drives 2 scrollbars exactly like `TScroller`, so **reuse the row-27
-cross-view broker verbatim** (`Deferred::SyncScrollerDelta`/`ScrollBarSetParams`/
-`SetVisible` + `View::value()`). New work: the list-render matrix (D7
-`ListNormal`/`ListSelected*` roles, already seeded), `numCols` layout,
-`focusItem`/`selectItem`, nav, and the abstract `getText`/`isSelected` hooks. Then
-`TListBox` (48) → `TApplication` (32) → Phase 4 (menus/status). Full per-row detail
-in [`docs/HANDOVER.md`](docs/HANDOVER.md).
+**Immediate next: row 48 `TListBox`** (MECHANICAL, `tlistbox.cpp`) — the first
+**concrete** `TListViewer`: impl `ListViewer` (override `get_text`/`is_selected`
+over an owned collection) + `View` (delegate `draw`/`handle_event`/`set_state`/
+`cursor_request`/`apply_list_scroll`/`as_any_mut` to the row-28 free fns — see the
+`FakeList` test consumer for the exact wiring) + typed value (D10; first
+`value`/`set_value` consumer beyond `TInputLine` — may pull in the still-deferred
+**dialog gather/scatter group-walk**). Then `TApplication` (32, MECHANICAL, thin
+tile/cascade wrapper over `TProgram`, slot in anytime) → **Phase 4** (menus
+46/49/50/51/52, status 47/53 — the path to a fully drivable app; menus force the
+deferred `Context` command-set query). Full per-row detail in
+[`docs/HANDOVER.md`](docs/HANDOVER.md).
 
 Phase sequence so far (all ✅ except where noted):
 
@@ -601,8 +646,13 @@ Phase sequence so far (all ✅ except where noted):
 8. ~~**Row 27 `TScroller`**~~ ✅ DONE (`543b2c8`, FOUNDATION, see Current state).
    Established the cross-view scrollbar-broker pattern (pump brokers all
    scroller↔scrollbar reads/writes at deferred-apply); `Broadcast` untouched.
-9. **Row 28 `TListViewer`** (FOUNDATION) ← **NEXT**, then `TListBox` 48 /
-   `TApplication` 32, then **Phase 4** (menus 46/49/50/51/52, status 47/53).
+9. ~~**Row 28 `TListViewer`**~~ ✅ DONE (`c1ad789`, FOUNDATION, see Current state).
+   The list base as a **trait** (`ListViewer: View` + free generics; not the
+   Scroller embed shape — `TListBox` must reuse `draw` while overriding `getText`);
+   read-sync writes back (`View::apply_list_scroll` + `Deferred::SyncListViewer`),
+   bounded by the scrollbar change-guard. ← **NEXT: row 48 `TListBox`** (MECHANICAL,
+   first concrete consumer), then `TApplication` 32, then **Phase 4** (menus
+   46/49/50/51/52, status 47/53).
 10. **Batches C–E fan out** (concrete validators 58–62, dialog families): the bulk
     `MECHANICAL` rows; parallel worktree implementer+reviewer trios, commit at batch
     boundaries — runnable concurrently alongside the in-sequence FOUNDATION work.
