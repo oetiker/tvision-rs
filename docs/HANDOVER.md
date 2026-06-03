@@ -611,22 +611,25 @@ When menus emit cmTile/cmCascade/cmDosShell, the deferred bodies land
 one change. `dosShell` separately needs a backend terminal-suspend seam + SIGTSTP.
 
 ### Phase 4 — the immediate next work, in PORT-ORDER order
-- **Phase 4 — menus + status line** (the path to a fully drivable app):
+**Menus 46/49/50/51 + the modal layer stages 1 (keyboard) & 2 (mouse) DONE** (see
+the per-session sections above). The command-graying "Context command-set query"
+was resolved for menus as the row-49 **`Deferred::UpdateMenu` broker** (NOT a
+`Context` read-accessor — that earlier framing is obsolete; the broker is the
+established pattern). Remaining Phase-4 work, in order:
 
-  **Menus:** `TMenuItem`/`TSubMenu`/`TMenu` (46, FOUNDATION — the menu data tree;
-  C++ `operator+` builders → a Rust builder API) **✅ DONE this session**
-  (`src/menu/mod.rs`) → **NEXT: `TMenuView` (49, FOUNDATION** — hotkey/shortcut
-  dispatch, the `evBroadcast` mask; consumes the row-46 tree, `current` = an index
-  into `Menu::items`, command-graying via `MenuItem::disabled_mut`) → `TMenuBar`
-  (50) / `TMenuBox` (51) / `TMenuPopup` (52, popup exec via D9). **Menus force the deferred
-  `Context` command-set query** (command graying) — build that read-only accessor
-  on `Context` when you hit it (additive; the deferred-effects refactor stabilized
-  `Context::new` for *effects*, a read accessor is a separate additive concern).
+- **`TMenuPopup` (52, stage 3)** — the last modal piece: `TMenuBox` +
+  `execute()`/`handleEvent` overrides (`menu->deflt=0`; `putClickEventOnExit=False`;
+  ctrl-char + hotKey dispatch) + the `popupMenu()` free fn (`tmenupop.cpp`;
+  `TMenuPopup::execute` is `menus.h:380`). Full breadcrumb in the **NEXT** block under
+  "What landed THIS session" above.
 - **Status line:** `TStatusItem`/`TStatusDef` (47) → `TStatusLine` (53,
   FOUNDATION — hint()/help-ctx→hint mapping).
-- Wiring menus + status line into `Program` lets the `examples/hello.rs` demo grow
-  a real menu bar + status line (and shifts the desktop down — revisit the
-  `ModalFrame`/`DragCapture` "(0,0)-desktop absolute-coords" caveats then).
+- **Wire a real menu bar + status line into `Program`** — lets the
+  `examples/hello.rs` demo grow a real menu bar + status line (and shifts the desktop
+  down — revisit the `ModalFrame`/`DragCapture` "(0,0)-desktop absolute-coords"
+  caveats then). First emitter of `cmTile`/`cmCascade`/`cmDosShell` → wire the row-32
+  breadcrumb + build `Desktop::tile`/`cascade` geometry; close the carried
+  initial-regray gap (initial `Deferred::UpdateMenu` on menu-bar insert).
 
 ### Available parallel fan-out (efficiency, not a competing direction) — Batch C: concrete validators (58–62, MECHANICAL)
 Fully unblocked by `TValidator` (35); **fully parallel among themselves** → the
@@ -681,8 +684,11 @@ once their leaf prereqs exist.
   a Sonnet implementer's context earlier in Batch B).
 
 ## Older standing deferrals (still open, grep the code)
-- **`Context` command-set query** (command-graying) — TButton + TInputLine both
-  wait on it; **Phase-4 menus force it**.
+- **`Context` command-set query** (command-graying) — TButton + TInputLine still
+  wait on it (to enable/disable cmCut/Copy/Paste etc.). **Menus did NOT need it** —
+  row 49 resolved menu graying with the `Deferred::UpdateMenu` broker instead (the
+  read-accessor framing is obsolete). A button/inputline consumer would either reuse
+  that broker shape or add a read accessor when it lands.
 - **phase signal on `Context`** (plain-letter postProcess accelerator) — 3 waiting
   consumers: button, label, cluster (`is_plain_hotkey` exists but is ungated).
 - **`Group::remove` release-after-remove ordering** — a removed selectable child
