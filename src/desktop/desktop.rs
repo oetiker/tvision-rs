@@ -223,6 +223,13 @@ impl View for Desktop {
         self.group.remove_descendant(id, ctx)
     }
 
+    /// Delegate focus-by-id into the embedded group (the owning group runs the
+    /// faithful `focus_child` after the `ofSelectable` gate), so a `focus_descendant`
+    /// from `Program` descends through the desktop.
+    fn focus_descendant(&mut self, id: ViewId, ctx: &mut Context) -> bool {
+        self.group.focus_descendant(id, ctx)
+    }
+
     /// `cmSelectWindowNum` (Alt-N) — select the desktop window numbered `num`
     /// (33d-2). Realizes the C++ broadcast arm as a direct walk into the embedded
     /// group (see [`Group::focus_by_number`]). The program reaches this through the

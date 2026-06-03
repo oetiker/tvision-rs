@@ -695,6 +695,24 @@ pub trait View {
         false
     }
 
+    /// Focus (select) the descendant named by `id` within whichever group owns it
+    /// — the tree-op behind `TLabel::focusLink` (`link->focus()`). Returns `true`
+    /// if `id` was found in this subtree (selectable or not — finding it stops the
+    /// walk). Distinct from [`find_mut`](View::find_mut) because focusing happens in
+    /// the *owning group* (a view cannot select itself within itself, D3): the
+    /// owning [`Group`](crate::view::Group) calls `focus_child` after applying the
+    /// `ofSelectable` gate (faithful to C++ `focusLink`'s `link->options &
+    /// ofSelectable` check). Base: `false` (a leaf owns nothing).
+    ///
+    /// **Scope (breadcrumb):** this focuses the link *within its owning group*, not
+    /// the full ancestor chain C++ `TView::focus` walks up. That is correct for the
+    /// label/link sibling case (label and link share a group already on the focused
+    /// path); a cross-group link would need an up-chain walk, which has no consumer.
+    fn focus_descendant(&mut self, id: ViewId, ctx: &mut Context) -> bool {
+        let _ = (id, ctx);
+        false
+    }
+
     /// `TView`/`TWindow::number` — the window number for Alt-N selection. Base
     /// views are unnumbered (`None`); [`Window`](crate::window::Window) overrides
     /// to return its number when `> 0` (`wnNoNumber == 0` → `None`).

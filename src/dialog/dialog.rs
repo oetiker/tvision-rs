@@ -167,6 +167,12 @@ impl View for Dialog {
         self.window.remove_descendant(id, ctx)
     }
 
+    /// Delegate focus-by-id into the embedded window (a dialog's labels + controls
+    /// live in its group), so a `TLabel` inside a dialog can focus its link.
+    fn focus_descendant(&mut self, id: ViewId, ctx: &mut Context) -> bool {
+        self.window.focus_descendant(id, ctx)
+    }
+
     /// `TDialog` is constructed with `wnNoNumber`, so `Window::number` already
     /// returns `None`; delegate for faithfulness.
     fn number(&self) -> Option<i16> {

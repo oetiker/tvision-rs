@@ -61,6 +61,13 @@ pub enum Deferred {
     SetState(ViewId, StateFlag, bool),
     /// Remove the view from whichever group owns it (`cmClose`).
     Close(ViewId),
+    /// Focus (select) the view named by `ViewId` within its owning group
+    /// (`TLabel::focusLink` → `link->focus()`). The pump resolves it via
+    /// [`View::focus_descendant`](crate::view::View::focus_descendant), which walks
+    /// to the owning group and runs `focus_child` (the `ofSelectable` gate lives in
+    /// that group walk, not at the request site). A view (the label) holds only the
+    /// link's [`ViewId`] (D3), so it cannot select a sibling inline.
+    FocusById(ViewId),
     /// Request the (modal) loop end with `command` (`TGroup::endModal`). The pump
     /// applies it by setting `Program::end_state`; the nested `exec_view` loop then
     /// observes it. The downward (D3) replacement for a view calling `endModal` up
@@ -403,6 +410,17 @@ impl<'a> Context<'a> {
     /// The loop resolves it via `remove_descendant` (`cmClose`).
     pub fn request_close(&mut self, id: ViewId) {
         self.deferred.push(Deferred::Close(id));
+    }
+
+    /// Request the view named by `id` be focused (selected) within its owning
+    /// group — **deferred** ([`Deferred::FocusById`]; see
+    /// [`request_close`](Self::request_close)). The loop resolves it via
+    /// [`View::focus_descendant`](crate::view::View::focus_descendant)
+    /// (`TLabel::focusLink`). The `ofSelectable` gate is applied during that group
+    /// walk, so the caller (the label) need not — and cannot, holding only the id —
+    /// check it.
+    pub fn request_focus(&mut self, id: ViewId) {
+        self.deferred.push(Deferred::FocusById(id));
     }
 
     /// Request the (modal) loop end with `cmd` — **deferred** ([`Deferred::EndModal`]).

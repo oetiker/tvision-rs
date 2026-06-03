@@ -745,6 +745,13 @@ impl Program {
                                 Deferred::Close(id) => {
                                     group.remove_descendant(id, &mut ctx);
                                 }
+                                // TLabel::focusLink — select the linked view within
+                                // its owning group (the group walk applies the
+                                // ofSelectable gate). Ignore the found/not-found bool,
+                                // like Close.
+                                Deferred::FocusById(id) => {
+                                    group.focus_descendant(id, &mut ctx);
+                                }
                                 // TGroup::endModal — set the loop end state; the
                                 // nested exec_view loop (row 34) observes it.
                                 Deferred::EndModal(cmd) => {
@@ -1138,6 +1145,47 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, Event::KeyDown(_))),
             "Alt+2 was consumed: no KeyDown survives"
+        );
+    }
+
+    // -- row 41: Deferred::FocusById wires through the pump ------------------
+
+    /// The FOUNDATION seam end-to-end: a `Deferred::FocusById(id)` queued **during
+    /// an event dispatch** (exactly when `TLabel::focusLink`'s `ctx.request_focus`
+    /// runs — from inside `handle_event`) is drained by that same `pump_once` pass,
+    /// resolved via `group.focus_descendant`, and focuses (selects) the named view.
+    ///
+    /// The apply loop only runs on the event-dispatch branch (a label never queues
+    /// `FocusById` without a triggering MouseDown/key), so the test injects a benign
+    /// broadcast to drive a dispatch and pushes the `FocusById` alongside it — the
+    /// faithful shape of "a label converts the dispatched event into a focus
+    /// request". Uses the production desktop+windows tree (windows are selectable),
+    /// so `FocusById(w2)` must make window 2 the selected (current) one.
+    #[test]
+    fn deferred_focus_by_id_selects_target_through_pump() {
+        let (mut program, ids) = program_with_windows(80, 25, 2);
+        let (w1, w2) = (ids[0], ids[1]);
+        assert!(win_selected(&mut program, w1), "window 1 starts selected");
+        assert!(!win_selected(&mut program, w2));
+
+        // Queue the focus-by-id effect exactly as `Context::request_focus` would
+        // from inside a label's `handle_event`, and drive a dispatch with a benign
+        // broadcast so the pump reaches its deferred-apply loop. The apply loop then
+        // drains `FocusById` into `group.focus_descendant(w2)`.
+        program.deferred.push(Deferred::FocusById(w2));
+        program.out_events.push_back(Event::Broadcast {
+            command: Command::custom("test.noop"),
+            source: None,
+        });
+        program.pump_once();
+
+        assert!(
+            win_selected(&mut program, w2),
+            "Deferred::FocusById(w2) selected window 2 through the pump"
+        );
+        assert!(
+            !win_selected(&mut program, w1),
+            "window 1 deselected (focus moved to w2)"
         );
     }
 

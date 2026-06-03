@@ -29,10 +29,12 @@
 //!   through non-ASCII runs.
 
 use crate::command::Command;
-use crate::event::Event;
+use crate::event::{Event, hot_key, is_alt_hotkey};
 use crate::text;
 use crate::theme::Role;
-use crate::view::{Context, DrawCtx, GrowMode, Point, Rect, StateFlag, View, ViewId, ViewState};
+use crate::view::{
+    Context, DrawCtx, GrowMode, Options, Point, Rect, StateFlag, View, ViewId, ViewState,
+};
 
 // ---------------------------------------------------------------------------
 // StaticText
@@ -366,6 +368,290 @@ impl View for ParamText {
 }
 
 // ---------------------------------------------------------------------------
+// Label
+// ---------------------------------------------------------------------------
+
+/// `TLabel` — a single-line caption that **links** to a control: clicking it (or
+/// pressing its `~`-marked hotkey) focuses the linked control, and the label
+/// **highlights** while that control is focused.
+///
+/// # Model (D2 / D3)
+///
+/// Embeds [`StaticText`] as `inner` (D2 embed-and-delegate, like [`ParamText`]):
+/// a single [`ViewState`] lives in `inner`; all geometry / id / flags methods
+/// forward there. The **link is an [`Option<ViewId>`]** (D3) — a label holds a
+/// resolvable handle, never a `TView*`. The C++ `link->focus()` becomes the
+/// deferred [`Context::request_focus`] tree-op (the loop walks to the link's
+/// owning group and selects it); the C++ `link->state & sfFocused` re-read
+/// becomes a **broadcast subscription** on the link's focus transitions.
+///
+/// # `light` from `Broadcast{source}` (D4 — first consumer)
+///
+/// `TLabel` is the first consumer of the Phase-A `Broadcast { source }` payload.
+/// On `cmReceivedFocus`/`cmReleasedFocus` whose `source == link`, it sets
+/// `light = (command == cmReceivedFocus)`. For focus *changes* this matches the
+/// C++ `light = (link->state & sfFocused)` re-read: each focus transition of the
+/// link emits a `source == link` focus broadcast (`View::set_state`), so the
+/// broadcast carries the same bit the C++ re-read would. A broadcast about any
+/// *other* view (or with no link set) leaves `light` unchanged.
+///
+/// **Known limitation (row-26 substrate).** Equivalence holds for focus *changes*,
+/// not for link *removal*: C++ `TGroup::remove` calls `p->hide()` before
+/// `removeView(p)`, so removing a current selectable link emits
+/// `cmReleasedFocus(infoPtr == p)` and a lit label clears. Our `Group::remove`
+/// removes the child and nulls `current` *without* first emitting
+/// `set_state(Focused, false)` on the departing child, so no
+/// `RELEASED_FOCUS { source == link }` fires — a label whose **selectable link is
+/// removed at runtime** can keep a stale `light` highlight. This is a pre-existing
+/// release-after-remove ordering gap in the row-26 substrate (faithful C++ is
+/// `tgroup.cpp` `hide()`-before-`removeView`), to revisit there; no consumer
+/// removes a bare link today.
+///
+/// # D-rules applied
+///
+/// * **D1** the `T` prefix is dropped; `snake_case`.
+/// * **D2** embed `StaticText`; delegate all `View` methods except `draw` /
+///   `handle_event` (a label has its own single-row draw and event logic).
+/// * **D3** no owner / link pointer — `link: Option<ViewId>`; focusing is the
+///   deferred [`Context::request_focus`].
+/// * **D4** `enum Event` match; `light` driven by `Broadcast { source }`.
+/// * **D7** colors via `ctx.style(Role::Label*)`; the C++ `getColor(0x0301)` /
+///   `getColor(0x0402)` AttrPairs become the explicit (lo, hi) role pairs
+///   `(LabelNormal, LabelNormalShortcut)` / `(LabelLight, LabelLightShortcut)`.
+/// * **D8** draw into the back buffer through `DrawCtx`; `writeLine`/`TDrawBuffer`
+///   dropped.
+/// * **D12** `TStreamable` (`read`/`write`/`build`/`shutDown`) dropped.
+///
+/// # `eventMask |= evBroadcast` is a no-op here
+///
+/// As with [`Button`](crate::widgets::Button), the broadcast phase under our
+/// [`Group`](crate::view::Group) delivers to **every** child regardless of
+/// `event_mask`, so the C++ ctor's opt-in is automatic.
+///
+/// # Deferrals (documented, not built)
+///
+/// 1. **Plain-letter (postProcess) accelerator.** The C++ `owner->phase ==
+///    phPostProcess && c == toupper(charScan.charCode)` plain-letter branch needs
+///    a phase signal on [`Context`] that does not exist (shipping it ungated would
+///    steal plain letters). Only Alt+hotkey is honored — same deferral as
+///    `TButton`'s deferral #2.
+/// 2. **`showMarkers` / `specialChars` markers** dropped (always the no-markers
+///    branch), as in `TStaticText`/`TButton`/cluster.
+pub struct Label {
+    /// The delegated [`StaticText`] — its `state: ViewState` is the one true home
+    /// for all view metadata.
+    inner: StaticText,
+    /// `link` — the control this label focuses on click/hotkey and tracks for
+    /// highlighting. `None` if the label links nothing (a bare caption).
+    link: Option<ViewId>,
+    /// `light` — whether the linked control currently holds focus (drives the
+    /// lit/normal color pair). Set from the link's focus broadcasts (D4).
+    light: bool,
+}
+
+impl Label {
+    /// `TLabel::TLabel(bounds, text, link)` — build a label over `bounds` with
+    /// `text` (a `~`-marked hotkey title) optionally linking `link`.
+    ///
+    /// Faithful to the C++ ctor: `light = False`, `options |= ofPreProcess |
+    /// ofPostProcess` (both load-bearing — a non-selectable label only ever sees
+    /// its hotkey via the pre/post sweeps), `eventMask |= evBroadcast` (a no-op
+    /// under our group, see the type docs). The inherited `gfFixed` + non-selectable
+    /// come from [`StaticText::new`].
+    pub fn new(bounds: Rect, text: impl Into<String>, link: Option<ViewId>) -> Self {
+        let mut inner = StaticText::new(bounds, text);
+        // ofPreProcess | ofPostProcess — keep StaticText's gfFixed (in grow_mode,
+        // untouched) and its non-selectable default; only add the two phase opt-ins.
+        inner.state.options = Options {
+            pre_process: true,
+            post_process: true,
+            ..inner.state.options
+        };
+        Label {
+            inner,
+            link,
+            light: false,
+        }
+    }
+
+    /// The current link, if any.
+    pub fn link(&self) -> Option<ViewId> {
+        self.link
+    }
+
+    /// Whether the label is currently highlighted (its link holds focus).
+    pub fn is_light(&self) -> bool {
+        self.light
+    }
+
+    /// The (lo, hi) [`Role`] pair the current `light` state selects — the D7 form
+    /// of the C++ `getColor` AttrPairs. `lo` is the caption color, `hi` the
+    /// hotkey-shortcut color (the `~`-toggled half).
+    ///
+    /// * lit (`light`) → `(LabelLight, LabelLightShortcut)` (`getColor(0x0402)`)
+    /// * normal → `(LabelNormal, LabelNormalShortcut)` (`getColor(0x0301)`)
+    fn state_roles(&self) -> (Role, Role) {
+        if self.light {
+            (Role::LabelLight, Role::LabelLightShortcut)
+        } else {
+            (Role::LabelNormal, Role::LabelNormalShortcut)
+        }
+    }
+
+    /// `TLabel::focusLink` — focus the linked control (if any) and consume the
+    /// event. The C++ `if (link && (link->options & ofSelectable)) link->focus()`
+    /// → a deferred [`Context::request_focus`]; the `ofSelectable` gate is applied
+    /// by the owning group during the tree-walk (a label holds only the id, D3).
+    /// `clearEvent` is **unconditional** — the event is consumed whether or not a
+    /// link is present (faithful to C++ `focusLink`).
+    fn focus_link(&mut self, ev: &mut Event, ctx: &mut Context) {
+        if let Some(id) = self.link {
+            ctx.request_focus(id);
+        }
+        ev.clear();
+    }
+}
+
+// NOTE(delegation): mirrors the `ParamText` full-`View` forward (field `inner`);
+// `draw` + `handle_event` are *overridden*, not delegated. See the ParamText
+// delegation NOTE: if a third pattern of this shape grows, promote a shared
+// `delegate_view!` macro so a new trait method is added once.
+impl View for Label {
+    fn state(&self) -> &ViewState {
+        self.inner.state()
+    }
+
+    fn state_mut(&mut self) -> &mut ViewState {
+        self.inner.state_mut()
+    }
+
+    /// `TLabel::draw` — a single row: fill with the caption color, then draw the
+    /// `~`-marked text at column 1 through `put_cstr`'s lo/hi toggle.
+    ///
+    /// Faithful port of `tlabel.cpp` (markers branch dropped):
+    ///
+    /// ```text
+    /// color = light ? getColor(0x0402) : getColor(0x0301);
+    /// b.moveChar(0, ' ', color, size.x);
+    /// if (text != 0) b.moveCStr(1, text, color);
+    /// writeLine(0, 0, size.x, 1, b);
+    /// ```
+    fn draw(&mut self, ctx: &mut DrawCtx) {
+        let (lo_role, hi_role) = self.state_roles();
+        let lo = ctx.style(lo_role);
+        let hi = ctx.style(hi_role);
+        let size_x = self.state().size.x;
+        // moveChar(0, ' ', color, size.x): fill row 0 in the caption color.
+        ctx.fill(Rect::new(0, 0, size_x, 1), ' ', lo);
+        // moveCStr(1, text, color): the ~-marked title at column 1, lo/hi toggle.
+        let text = self.inner.text();
+        if !text.is_empty() {
+            ctx.put_cstr(1, 0, text, lo, hi);
+        }
+    }
+
+    /// `TLabel::handleEvent` — see the per-branch mapping inline.
+    ///
+    /// The C++ leading `TStaticText::handleEvent(event)` is a no-op (static text
+    /// has no `handleEvent`), so it is omitted. Branches:
+    /// * **MouseDown** → `focusLink` (focus the link, consume).
+    /// * **KeyDown** → if it is the Alt+hotkey accelerator → `focusLink`. (The C++
+    ///   plain-letter postProcess branch is deferred — see the type docs.)
+    /// * **Broadcast** `cmReceivedFocus`/`cmReleasedFocus` whose `source` is our
+    ///   link → update `light`; **not consumed** (other views may also react).
+    fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
+        match ev {
+            Event::MouseDown(_) => {
+                self.focus_link(ev, ctx);
+            }
+
+            Event::KeyDown(ke) => {
+                // Alt+hotkey accelerator (the C++ `getAltCode(c) == keyCode` arm).
+                // TODO(label/button: plain-hotkey postProcess accelerator — needs a
+                // phase signal on Context, same as Button deferral #2).
+                if let Some(c) = hot_key(self.inner.text())
+                    && is_alt_hotkey(ke, c)
+                {
+                    self.focus_link(ev, ctx);
+                }
+            }
+
+            // Track the link's focus transitions to drive `light`. For focus
+            // *changes* this matches the C++ `light = (link->state & sfFocused)`
+            // re-read: the link emits a `source == link` focus broadcast on each
+            // transition (D4). (Not for link *removal* — see the type-doc "Known
+            // limitation": `Group::remove` does not emit RELEASED_FOCUS, so a label
+            // whose link is removed at runtime can keep a stale highlight.) A
+            // broadcast about any other view (or with no link) is ignored. The
+            // `is_some()` guard rejects the `link == None && source == None`
+            // coincidence. Not consumed — faithful to C++ (no clearEvent here).
+            Event::Broadcast {
+                command: Command::RECEIVED_FOCUS,
+                source,
+            } if self.link.is_some() && *source == self.link => {
+                self.light = true;
+            }
+            Event::Broadcast {
+                command: Command::RELEASED_FOCUS,
+                source,
+            } if self.link.is_some() && *source == self.link => {
+                self.light = false;
+            }
+
+            _ => {}
+        }
+    }
+
+    fn set_state(&mut self, flag: StateFlag, enable: bool, ctx: &mut Context) {
+        self.inner.set_state(flag, enable, ctx)
+    }
+
+    fn valid(&self, cmd: Command) -> bool {
+        self.inner.valid(cmd)
+    }
+
+    fn awaken(&mut self) {
+        self.inner.awaken()
+    }
+
+    fn size_limits(&self, owner_size: Point) -> (Point, Point) {
+        self.inner.size_limits(owner_size)
+    }
+
+    fn calc_bounds(&mut self, owner_size: Point, delta: Point) -> Rect {
+        self.inner.calc_bounds(owner_size, delta)
+    }
+
+    fn change_bounds(&mut self, bounds: Rect) {
+        self.inner.change_bounds(bounds)
+    }
+
+    fn cursor_request(&self) -> Option<Point> {
+        self.inner.cursor_request()
+    }
+
+    fn find_mut(&mut self, id: ViewId) -> Option<&mut dyn View> {
+        self.inner.find_mut(id)
+    }
+
+    fn remove_descendant(&mut self, id: ViewId, ctx: &mut Context) -> bool {
+        self.inner.remove_descendant(id, ctx)
+    }
+
+    fn focus_descendant(&mut self, id: ViewId, ctx: &mut Context) -> bool {
+        self.inner.focus_descendant(id, ctx)
+    }
+
+    fn number(&self) -> Option<i16> {
+        self.inner.number()
+    }
+
+    fn select_window_num(&mut self, num: i16, ctx: &mut Context) -> bool {
+        self.inner.select_window_num(num, ctx)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -650,5 +936,418 @@ mod tests {
             pt.draw(&mut dc);
         });
         insta::assert_snapshot!(screen.snapshot());
+    }
+
+    // -- Label ---------------------------------------------------------------
+
+    use crate::event::{Key, KeyEvent, KeyModifiers, MouseButtons, MouseEvent};
+    use crate::timer::TimerQueue;
+    use crate::view::{Deferred, ViewId};
+
+    /// Render a `Label` to a snapshot string.
+    fn render_label(label: &mut Label) -> String {
+        let theme = Theme::classic_blue();
+        let size = label.state().size;
+        let (backend, screen) = HeadlessBackend::new(size.x as u16, size.y as u16);
+        let mut r = Renderer::new(Box::new(backend));
+        r.render(|buf: &mut Buffer| {
+            let b = label.state().get_bounds();
+            let mut dc = DrawCtx::new(buf, &theme, b, b.a);
+            label.draw(&mut dc);
+        });
+        screen.snapshot()
+    }
+
+    /// Run a closure with a fresh `Context` over loop-owned locals, returning the
+    /// drained out-events, the deferred queue, and the closure's value.
+    fn with_label_ctx<R>(
+        timers: &mut TimerQueue,
+        f: impl FnOnce(&mut Context) -> R,
+    ) -> (Vec<Event>, Vec<Deferred>, R) {
+        let mut out: std::collections::VecDeque<Event> = std::collections::VecDeque::new();
+        let mut deferred: Vec<Deferred> = Vec::new();
+        let r = {
+            let mut ctx = Context::new(&mut out, timers, 0, &mut deferred);
+            f(&mut ctx)
+        };
+        (out.into_iter().collect(), deferred, r)
+    }
+
+    fn label_mouse_down(x: i32, y: i32) -> Event {
+        Event::MouseDown(MouseEvent {
+            position: Point::new(x, y),
+            buttons: MouseButtons {
+                left: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+    }
+
+    fn alt_key(c: char) -> Event {
+        Event::KeyDown(KeyEvent::new(
+            Key::Char(c),
+            KeyModifiers {
+                alt: true,
+                ..Default::default()
+            },
+        ))
+    }
+
+    fn focus_broadcast(received: bool, source: Option<ViewId>) -> Event {
+        Event::Broadcast {
+            command: if received {
+                Command::RECEIVED_FOCUS
+            } else {
+                Command::RELEASED_FOCUS
+            },
+            source,
+        }
+    }
+
+    // -- 1. draw -------------------------------------------------------------
+
+    /// The caption is drawn at column 1 (column 0 is the fill / marker slot in
+    /// C++), `~`-markers stripped.
+    #[test]
+    fn label_draw_text_at_column_one() {
+        let mut lbl = Label::new(Rect::new(0, 0, 12, 1), "~N~ame", None);
+        let rows = text_rows(&render_label(&mut lbl));
+        assert_eq!(rows.len(), 1);
+        // Column 0 is a fill space; the caption "Name" (tildes stripped) at col 1.
+        assert_eq!(&rows[0][..1], " ", "column 0 is the fill space");
+        assert_eq!(
+            &rows[0][1..5],
+            "Name",
+            "caption drawn at column 1, ~ stripped"
+        );
+    }
+
+    /// Empty text: nothing past the fill (no panic, all spaces).
+    #[test]
+    fn label_draw_empty_text_is_all_fill() {
+        let mut lbl = Label::new(Rect::new(0, 0, 6, 1), "", None);
+        let rows = text_rows(&render_label(&mut lbl));
+        assert_eq!(rows[0], "      ", "empty label is all fill spaces");
+    }
+
+    /// Lit vs normal must differ in the rendered colors: lit uses LabelLight
+    /// (white-on-gray, BIOS 15), normal uses LabelNormal (black-on-gray, BIOS 0).
+    /// The attr *pattern* is identical (same cells, same role layout); the
+    /// difference is in the legend's fg color. The bite compares the FULL snapshot
+    /// (which carries the legend), and asserts the caption fg actually changes.
+    #[test]
+    fn label_draw_lit_attr_differs_from_normal() {
+        let mut normal = Label::new(Rect::new(0, 0, 12, 1), "~N~ame", None);
+        let normal_snap = render_label(&mut normal);
+
+        let mut lit = Label::new(Rect::new(0, 0, 12, 1), "~N~ame", None);
+        lit.light = true;
+        let lit_snap = render_label(&mut lit);
+
+        assert_ne!(
+            normal_snap, lit_snap,
+            "the rendered snapshot must differ between normal and lit"
+        );
+        // Concrete bite on the caption fg: normal is black (BIOS 0), lit is white
+        // (BIOS 15) — both over the gray-7 background.
+        assert!(
+            normal_snap.contains("fg=BIOS(0) bg=BIOS(7)"),
+            "normal caption is black-on-gray"
+        );
+        assert!(
+            lit_snap.contains("fg=BIOS(15) bg=BIOS(7)"),
+            "lit caption is white-on-gray"
+        );
+    }
+
+    /// `state_roles` returns the lit pair iff `light`.
+    #[test]
+    fn label_state_roles_track_light() {
+        let mut lbl = Label::new(Rect::new(0, 0, 12, 1), "X", None);
+        assert_eq!(
+            lbl.state_roles(),
+            (Role::LabelNormal, Role::LabelNormalShortcut)
+        );
+        lbl.light = true;
+        assert_eq!(
+            lbl.state_roles(),
+            (Role::LabelLight, Role::LabelLightShortcut)
+        );
+    }
+
+    #[test]
+    fn snapshot_label_normal() {
+        let theme = Theme::classic_blue();
+        let mut lbl = Label::new(Rect::new(0, 0, 12, 1), "~N~ame", None);
+        let (backend, screen) = HeadlessBackend::new(12, 1);
+        let mut r = Renderer::new(Box::new(backend));
+        r.render(|buf: &mut Buffer| {
+            let b = lbl.state().get_bounds();
+            let mut dc = DrawCtx::new(buf, &theme, b, b.a);
+            lbl.draw(&mut dc);
+        });
+        insta::assert_snapshot!(screen.snapshot());
+    }
+
+    #[test]
+    fn snapshot_label_lit() {
+        let theme = Theme::classic_blue();
+        let mut lbl = Label::new(Rect::new(0, 0, 12, 1), "~N~ame", None);
+        lbl.light = true;
+        let (backend, screen) = HeadlessBackend::new(12, 1);
+        let mut r = Renderer::new(Box::new(backend));
+        r.render(|buf: &mut Buffer| {
+            let b = lbl.state().get_bounds();
+            let mut dc = DrawCtx::new(buf, &theme, b, b.a);
+            lbl.draw(&mut dc);
+        });
+        insta::assert_snapshot!(screen.snapshot());
+    }
+
+    // -- 2. focus_descendant tree-op -----------------------------------------
+
+    /// A test leaf with a configurable `selectable` flag + a focus-record probe so
+    /// we can observe whether `focus_child` selected it.
+    struct Probe {
+        state: ViewState,
+    }
+    impl Probe {
+        fn new(selectable: bool) -> Self {
+            let mut state = ViewState::new(Rect::new(0, 0, 4, 1));
+            state.options = Options {
+                selectable,
+                ..Default::default()
+            };
+            Probe { state }
+        }
+    }
+    impl View for Probe {
+        fn state(&self) -> &ViewState {
+            &self.state
+        }
+        fn state_mut(&mut self) -> &mut ViewState {
+            &mut self.state
+        }
+        fn draw(&mut self, _ctx: &mut DrawCtx) {}
+    }
+
+    /// `Group::focus_descendant` focuses a selectable direct child (sets it
+    /// `current`) and returns true.
+    #[test]
+    fn focus_descendant_focuses_selectable_child() {
+        use crate::view::Group;
+        let mut group = Group::new(Rect::new(0, 0, 20, 10));
+        let mut timers = TimerQueue::new();
+        let id = group.insert(Box::new(Probe::new(true)));
+        let (_out, _def, found) =
+            with_label_ctx(&mut timers, |ctx| group.focus_descendant(id, ctx));
+        assert!(found, "selectable child is found");
+        assert_eq!(
+            group.current(),
+            Some(id),
+            "selectable child becomes current"
+        );
+    }
+
+    /// A non-selectable child is *found* (stops the walk) but **not focused**.
+    #[test]
+    fn focus_descendant_finds_but_skips_non_selectable() {
+        use crate::view::Group;
+        let mut group = Group::new(Rect::new(0, 0, 20, 10));
+        let mut timers = TimerQueue::new();
+        // Insert a selectable child first so `current` has a non-None baseline to
+        // prove the non-selectable target does NOT steal it.
+        let sel_id = group.insert(Box::new(Probe::new(true)));
+        let target_id = group.insert(Box::new(Probe::new(false)));
+        // Focus the selectable one to set current.
+        with_label_ctx(&mut timers, |ctx| group.focus_child(sel_id, ctx));
+        assert_eq!(group.current(), Some(sel_id));
+        // focus_descendant on the non-selectable: found, but current unchanged.
+        let (_o, _d, found) =
+            with_label_ctx(&mut timers, |ctx| group.focus_descendant(target_id, ctx));
+        assert!(
+            found,
+            "non-selectable child is still FOUND (stops the walk)"
+        );
+        assert_eq!(
+            group.current(),
+            Some(sel_id),
+            "non-selectable target must NOT be focused"
+        );
+    }
+
+    /// An unknown id misses (returns false, current unchanged).
+    #[test]
+    fn focus_descendant_misses_unknown_id() {
+        use crate::view::Group;
+        let mut group = Group::new(Rect::new(0, 0, 20, 10));
+        let mut timers = TimerQueue::new();
+        group.insert(Box::new(Probe::new(true)));
+        let stranger = ViewId::next();
+        let (_o, _d, found) =
+            with_label_ctx(&mut timers, |ctx| group.focus_descendant(stranger, ctx));
+        assert!(!found, "an unknown id is not found");
+    }
+
+    /// Recurses through an embedder: a child group's grandchild is found+focused.
+    #[test]
+    fn focus_descendant_recurses_through_child_group() {
+        use crate::view::Group;
+        let mut root = Group::new(Rect::new(0, 0, 30, 20));
+        let mut child = Group::new(Rect::new(0, 0, 20, 10));
+        let mut timers = TimerQueue::new();
+        // Insert a selectable grandchild into the child group.
+        let gid = child.insert(Box::new(Probe::new(true)));
+        root.insert(Box::new(child));
+        // focus_descendant from the root must recurse into the child group.
+        let (_o, _d, found) = with_label_ctx(&mut timers, |ctx| root.focus_descendant(gid, ctx));
+        assert!(found, "grandchild is found via recursion");
+    }
+
+    // -- 3. handle_event: focusLink ------------------------------------------
+
+    /// MouseDown → request_focus(link) deferred + event cleared.
+    #[test]
+    fn label_mouse_down_requests_focus_and_clears() {
+        let link = ViewId::next();
+        let mut lbl = Label::new(Rect::new(0, 0, 12, 1), "~N~ame", Some(link));
+        let mut timers = TimerQueue::new();
+        let mut ev = label_mouse_down(3, 0);
+        let (out, deferred, ()) = with_label_ctx(&mut timers, |ctx| lbl.handle_event(&mut ev, ctx));
+        assert!(ev.is_nothing(), "mouse-down on a label is consumed");
+        assert!(out.is_empty(), "no out-events");
+        assert_eq!(deferred.len(), 1, "one deferred focus request");
+        assert!(matches!(deferred[0], Deferred::FocusById(id) if id == link));
+    }
+
+    /// MouseDown with NO link: still cleared, but no focus request (focusLink
+    /// clears unconditionally, requests only when a link is present).
+    #[test]
+    fn label_mouse_down_no_link_clears_without_request() {
+        let mut lbl = Label::new(Rect::new(0, 0, 12, 1), "~N~ame", None);
+        let mut timers = TimerQueue::new();
+        let mut ev = label_mouse_down(3, 0);
+        let (_out, deferred, ()) =
+            with_label_ctx(&mut timers, |ctx| lbl.handle_event(&mut ev, ctx));
+        assert!(ev.is_nothing(), "consumed even without a link");
+        assert!(deferred.is_empty(), "no focus request when link is None");
+    }
+
+    /// Alt+hotkey → request_focus + clear.
+    #[test]
+    fn label_alt_hotkey_requests_focus_and_clears() {
+        let link = ViewId::next();
+        let mut lbl = Label::new(Rect::new(0, 0, 12, 1), "~N~ame", Some(link));
+        let mut timers = TimerQueue::new();
+        // Hotkey is 'N' (first char after ~).
+        let mut ev = alt_key('n');
+        let (_out, deferred, ()) =
+            with_label_ctx(&mut timers, |ctx| lbl.handle_event(&mut ev, ctx));
+        assert!(ev.is_nothing(), "the Alt+hotkey is consumed");
+        assert_eq!(deferred.len(), 1);
+        assert!(matches!(deferred[0], Deferred::FocusById(id) if id == link));
+    }
+
+    /// A non-matching Alt key passes through (not consumed, no request).
+    #[test]
+    fn label_non_matching_alt_key_passes_through() {
+        let link = ViewId::next();
+        let mut lbl = Label::new(Rect::new(0, 0, 12, 1), "~N~ame", Some(link));
+        let mut timers = TimerQueue::new();
+        let mut ev = alt_key('z'); // not the 'N' hotkey
+        let (_out, deferred, ()) =
+            with_label_ctx(&mut timers, |ctx| lbl.handle_event(&mut ev, ctx));
+        assert!(!ev.is_nothing(), "a non-matching key is left live");
+        assert!(deferred.is_empty(), "no focus request");
+    }
+
+    /// A plain (no-Alt) hotkey letter is NOT honored — the plain-letter
+    /// postProcess accelerator is deferred (no phase signal). Bites if someone
+    /// ungates `is_plain_hotkey`.
+    #[test]
+    fn label_plain_hotkey_is_not_honored_deferred() {
+        let link = ViewId::next();
+        let mut lbl = Label::new(Rect::new(0, 0, 12, 1), "~N~ame", Some(link));
+        let mut timers = TimerQueue::new();
+        let mut ev = Event::KeyDown(KeyEvent::new(Key::Char('n'), KeyModifiers::default()));
+        let (_out, deferred, ()) =
+            with_label_ctx(&mut timers, |ctx| lbl.handle_event(&mut ev, ctx));
+        assert!(
+            !ev.is_nothing(),
+            "a plain letter is left live (postProcess deferred)"
+        );
+        assert!(deferred.is_empty(), "no focus request on a plain letter");
+    }
+
+    // -- 4. highlight (Broadcast{source}) ------------------------------------
+
+    /// A focus broadcast whose source IS the link toggles `light`; the event is
+    /// not consumed.
+    #[test]
+    fn label_light_tracks_link_focus_broadcast() {
+        let link = ViewId::next();
+        let mut lbl = Label::new(Rect::new(0, 0, 12, 1), "~N~ame", Some(link));
+        let mut timers = TimerQueue::new();
+        assert!(!lbl.is_light(), "starts not lit");
+
+        // RECEIVED_FOCUS from the link → lit.
+        let mut ev = focus_broadcast(true, Some(link));
+        with_label_ctx(&mut timers, |ctx| lbl.handle_event(&mut ev, ctx));
+        assert!(lbl.is_light(), "lit after the link receives focus");
+        assert!(!ev.is_nothing(), "broadcast is NOT consumed");
+
+        // RELEASED_FOCUS from the link → unlit.
+        let mut ev = focus_broadcast(false, Some(link));
+        with_label_ctx(&mut timers, |ctx| lbl.handle_event(&mut ev, ctx));
+        assert!(!lbl.is_light(), "unlit after the link releases focus");
+    }
+
+    /// A focus broadcast about ANOTHER view (source != link) must NOT change
+    /// `light` — the discriminating bite for the `source == link` guard.
+    #[test]
+    fn label_light_ignores_other_source() {
+        let link = ViewId::next();
+        let other = ViewId::next();
+        let mut lbl = Label::new(Rect::new(0, 0, 12, 1), "~N~ame", Some(link));
+        let mut timers = TimerQueue::new();
+        let mut ev = focus_broadcast(true, Some(other));
+        with_label_ctx(&mut timers, |ctx| lbl.handle_event(&mut ev, ctx));
+        assert!(
+            !lbl.is_light(),
+            "a broadcast about another view must not light the label"
+        );
+        // A None source likewise must not light it.
+        let mut ev = focus_broadcast(true, None);
+        with_label_ctx(&mut timers, |ctx| lbl.handle_event(&mut ev, ctx));
+        assert!(!lbl.is_light(), "a source-less broadcast must not light it");
+    }
+
+    /// A label with NO link ignores all focus broadcasts (even a None-source one).
+    #[test]
+    fn label_no_link_ignores_focus_broadcasts() {
+        let mut lbl = Label::new(Rect::new(0, 0, 12, 1), "~N~ame", None);
+        let mut timers = TimerQueue::new();
+        let mut ev = focus_broadcast(true, None);
+        with_label_ctx(&mut timers, |ctx| lbl.handle_event(&mut ev, ctx));
+        assert!(!lbl.is_light(), "a link-less label never lights");
+    }
+
+    // -- ctor invariants -----------------------------------------------------
+
+    /// The ctor sets ofPreProcess + ofPostProcess (load-bearing for hotkey
+    /// delivery to a non-selectable view) and keeps StaticText's gfFixed +
+    /// non-selectable.
+    #[test]
+    fn label_ctor_sets_pre_post_process_keeps_fixed_unselectable() {
+        let lbl = Label::new(Rect::new(0, 0, 12, 1), "X", None);
+        let opts = lbl.state().options;
+        assert!(opts.pre_process, "ofPreProcess set");
+        assert!(opts.post_process, "ofPostProcess set");
+        assert!(!opts.selectable, "a label is not selectable");
+        assert!(
+            lbl.state().grow_mode.fixed,
+            "gfFixed inherited from StaticText"
+        );
     }
 }

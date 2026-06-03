@@ -18,4 +18,4 @@ pub use button::{Button, ButtonFlags};
 pub use cluster::{CheckBoxes, Cluster, ClusterKind, MultiCheckBoxes, RadioButtons};
 pub use indicator::Indicator;
 pub use scrollbar::ScrollBar;
-pub use static_text::{ParamText, StaticText};
+pub use static_text::{Label, ParamText, StaticText};

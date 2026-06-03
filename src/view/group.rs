@@ -701,6 +701,29 @@ impl View for Group {
         false
     }
 
+    /// `Group`'s [`View::focus_descendant`] override — route to the owning group's
+    /// [`focus_child`](Self::focus_child) (the faithful `link->focus()`, D3). If `id`
+    /// is a **direct child**, apply the `ofSelectable` gate here (C++ `focusLink`'s
+    /// `link->options & ofSelectable`) and select it; either way `id` was found, so
+    /// **return `true` to stop the walk** (a non-selectable match is still a match —
+    /// it just doesn't get focused, exactly as C++ skips the `focus()` call).
+    /// Otherwise recurse so the group that actually owns `id` does the selection.
+    fn focus_descendant(&mut self, id: ViewId, ctx: &mut Context) -> bool {
+        if let Some(i) = self.index_of(id) {
+            // Direct child: gate on ofSelectable, then select (C++ focusLink).
+            if self.children[i].view.state().options.selectable {
+                self.focus_child(id, ctx);
+            }
+            return true; // found (selectable or not) — stop walking.
+        }
+        for child in self.children.iter_mut() {
+            if child.view.focus_descendant(id, ctx) {
+                return true;
+            }
+        }
+        false
+    }
+
     /// `TGroup::valid` — for `cmReleasedFocus`, defer to the current child iff it
     /// has `ofValidate` (else `true`); otherwise every child must be `valid`.
     fn valid(&self, cmd: Command) -> bool {

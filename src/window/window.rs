@@ -828,6 +828,13 @@ impl View for Window {
         self.group.remove_descendant(id, ctx)
     }
 
+    /// Delegate focus-by-id into the embedded group (the owning group runs the
+    /// faithful `focus_child` after the `ofSelectable` gate), so a label and its
+    /// link sitting inside this window resolve correctly.
+    fn focus_descendant(&mut self, id: ViewId, ctx: &mut Context) -> bool {
+        self.group.focus_descendant(id, ctx)
+    }
+
     /// `TWindow::number` — the window number, or `None` for `wnNoNumber` (`0`). A
     /// window numbered `0` is never an Alt-N (`cmSelectWindowNum`) target.
     fn number(&self) -> Option<i16> {
