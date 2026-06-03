@@ -780,7 +780,10 @@ impl Group {
                 }
             }
             // -- broadcast: phFocused, every child (incl. disabled) -----------
-            Event::Broadcast { .. } => {
+            // Also carries timer-expiry (`Event::Timer`), which is broadcast-class
+            // (the `evBroadcast cmTimerExpired` successor) and so delivers to every
+            // child identically.
+            Event::Broadcast { .. } | Event::Timer(_) => {
                 for i in (0..n).rev() {
                     self.deliver(i, ev, ctx);
                 }
@@ -900,7 +903,7 @@ mod tests {
             // Consume key/command/mouse so we can observe "reached me". Broadcasts
             // are passed through (TV convention: multiple views react to one), so
             // they reach every child.
-            if !matches!(ev, Event::Broadcast { .. }) {
+            if !matches!(ev, Event::Broadcast { .. } | Event::Timer(_)) {
                 ev.clear();
             }
         }

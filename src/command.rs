@@ -150,8 +150,6 @@ impl Command {
     pub const LIST_ITEM_SELECTED: Command = Command("tv.list_item_selected");
     /// `cmScreenChanged`
     pub const SCREEN_CHANGED: Command = Command("tv.screen_changed");
-    /// `cmTimerExpired`
-    pub const TIMER_EXPIRED: Command = Command("tv.timer_expired");
     /// `cmRecordHistory` (dialogs.h)
     pub const RECORD_HISTORY: Command = Command("tv.record_history");
 }

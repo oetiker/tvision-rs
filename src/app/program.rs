@@ -17,9 +17,10 @@
 //!
 //! * **D4 — `Event::Broadcast` carries a `source: ViewId`** (the broadcast-subject
 //!   successor to `infoPtr`); `Event::Command` carries only the [`Command`]. The
-//!   *integer*-argument payloads (`cmTimerExpired`'s `TTimerId`, `cmSelectWindowNum`'s
-//!   window number) are **not** served by `source` (they are not `ViewId`s) and have
-//!   their own designs. See the timer-payload and Alt-N breadcrumbs.
+//!   *integer*-argument payloads are **not** served by `source` (they are not
+//!   `ViewId`s) and have their own typed mechanisms: `cmTimerExpired`'s `TTimerId`
+//!   is now carried by [`Event::Timer`], and `cmSelectWindowNum`'s window number
+//!   has its own design (see the Alt-N breadcrumb).
 //!
 //! * **D8 — whole-tree redraw + diff every pass.** No damage tracking, no
 //!   `sfExposed`; `setScreenMode`/`cmScreenChanged` collapse into the resize
@@ -649,16 +650,15 @@ impl Program {
                     });
                     *command_set_changed = false;
                 }
-                // collectExpiredTimers: D4 drops the TimerId payload — broadcast
-                // carries only the command.
-                // TODO(timer payload): when a widget needs to know WHICH timer
-                // fired, revisit the payload story (D4 dropped infoPtr; several
-                // designs are possible — do not invent one now).
-                for _id in timers.collect_expired(now) {
-                    out_events.push_back(Event::Broadcast {
-                        command: Command::TIMER_EXPIRED,
-                        source: None,
-                    });
+                // collectExpiredTimers: each expired timer queues a typed
+                // `Event::Timer(id)` carrying its own [`TimerId`](crate::timer::TimerId) (the successor to
+                // `evBroadcast cmTimerExpired` with `message.infoPtr == TTimerId`).
+                // This is strictly more correct than the old code, which queued N
+                // indistinguishable `cmTimerExpired` broadcasts for N expired ids;
+                // now a widget can tell *which* timer fired. (timer-payload TODO
+                // RESOLVED.)
+                for id in timers.collect_expired(now) {
+                    out_events.push_back(Event::Timer(id));
                 }
                 // TODO(TStatusLine row): statusLine->update() is a no-op until the
                 // status line lands (Phase 4).
@@ -893,7 +893,7 @@ mod tests {
     use crate::desktop::Desktop;
     use crate::event::{Event, Key, KeyEvent, KeyModifiers, MouseButtons, MouseEvent};
     use crate::theme::Theme;
-    use crate::timer::ManualClock;
+    use crate::timer::{ManualClock, TimerId};
     use crate::view::{DrawCtx, Point, Rect, View, ViewState};
     use std::cell::RefCell;
     use std::rc::Rc;
@@ -1281,14 +1281,18 @@ mod tests {
         let log = Rc::new(RefCell::new(Vec::new()));
 
         // Insert a probe into the desktop group that records broadcasts and arms
-        // a timer on its first event.
+        // a timer on its first event. Capture the armed TimerId so the test can
+        // assert the expiry event carries *that* id (the identity, not just kind).
         let arming = Rc::new(RefCell::new(true));
+        let armed_id: Rc<RefCell<Option<TimerId>>> = Rc::new(RefCell::new(None));
         {
             let arming = arming.clone();
+            let armed_id = armed_id.clone();
             let mut probe = Probe::new(Rect::new(0, 0, 4, 2), 'P', log.clone());
             probe.action = Some(Box::new(move |ctx: &mut Context| {
                 if *arming.borrow() {
-                    ctx.set_timer(Duration::from_millis(50), None);
+                    let id = ctx.set_timer(Duration::from_millis(50), None);
+                    *armed_id.borrow_mut() = Some(id);
                     *arming.borrow_mut() = false;
                 }
             }));
@@ -1306,28 +1310,28 @@ mod tests {
         });
         program.pump_once(); // probe arms a 50ms timer at now=0
         assert_eq!(program.timers.len(), 1, "probe armed a timer");
+        let expected_id = armed_id.borrow().expect("probe captured the armed TimerId");
 
         // Advance past expiry; an idle pump (no queued events, none polled)
-        // collects the timer and queues a TIMER_EXPIRED broadcast.
+        // collects the timer and queues a typed Event::Timer(id).
         clock.advance(60);
         log.borrow_mut().clear();
-        program.pump_once(); // idle: collect -> queue TIMER_EXPIRED
+        program.pump_once(); // idle: collect -> queue Event::Timer(id)
         assert!(
-            program.out_events.iter().any(|e| matches!(
-                e,
-                Event::Broadcast { command, .. } if *command == Command::TIMER_EXPIRED
-            )),
-            "expired timer queued a TIMER_EXPIRED broadcast"
+            program
+                .out_events
+                .iter()
+                .any(|e| matches!(e, Event::Timer(id) if *id == expected_id)),
+            "expired timer queued Event::Timer carrying the armed id"
         );
 
-        // Next pump routes the queued broadcast; the probe records it.
+        // Next pump routes the queued timer event; the probe records it.
         program.pump_once();
         assert!(
-            log.borrow().iter().any(|e| matches!(
-                e,
-                Event::Broadcast { command, .. } if *command == Command::TIMER_EXPIRED
-            )),
-            "probe received cmTimerExpired"
+            log.borrow()
+                .iter()
+                .any(|e| matches!(e, Event::Timer(id) if *id == expected_id)),
+            "probe received Event::Timer carrying the armed id"
         );
     }
 

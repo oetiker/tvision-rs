@@ -12,9 +12,12 @@
 //! carries **only** the [`Command`]. [`Event::Broadcast`] additionally carries an
 //! optional **`source: ViewId`** — the broadcast-subject successor to `infoPtr`,
 //! naming *which view this broadcast is about* (e.g. which scrollbar changed) as a
-//! resolvable [`ViewId`] rather than a `void*`. The synchronous return-consuming
-//! `message()` primitive (the `cmCanCloseForm` veto and friends) is deferred to
-//! row 34, where it lives on the tree owner over `find_mut`, not on the event.
+//! resolvable [`ViewId`] rather than a `void*`. The timer-id integer payload (the
+//! third `infoPtr` use-case) gets its own typed variant [`Event::Timer`] rather
+//! than being forced into `Broadcast`'s `source` field, which carries a [`ViewId`],
+//! not an integer. The synchronous return-consuming `message()` primitive (the
+//! `cmCanCloseForm` veto and friends) is deferred to row 34, where it lives on the
+//! tree owner over `find_mut`, not on the event.
 
 mod key;
 
@@ -23,6 +26,7 @@ pub use key::{
 };
 
 use crate::command::Command;
+use crate::timer::TimerId;
 use crate::view::{Point, ViewId};
 
 /// A Turbo Vision event — deviation **D4**. Replaces the `TEvent` tagged union
@@ -54,11 +58,22 @@ pub enum Event {
     /// amendment): it names *which view this broadcast is about* (e.g. which
     /// scrollbar changed), as a resolvable [`ViewId`] rather than a `void*`.
     /// `None` for broadcasts that are about no particular view (pump-internal
-    /// `cmCommandSetChanged`, `cmTimerExpired`).
+    /// `cmCommandSetChanged`).
     Broadcast {
         command: Command,
         source: Option<ViewId>,
     },
+    /// The successor to `evBroadcast cmTimerExpired`: a timer fired, carrying
+    /// *which* [`TimerId`] expired.
+    ///
+    /// In C++ the timer-expiry broadcast was `evBroadcast` with
+    /// `message.command == cmTimerExpired` and `message.infoPtr ==` the
+    /// `TTimerId`. That `infoPtr` is an **integer** payload (the timer id), not a
+    /// view subject, so — per the project's Phase-A precedent — it gets its own
+    /// typed variant rather than reusing [`Event::Broadcast`]'s `source` field
+    /// (which is for the view-subject `infoPtr` case only). Routed
+    /// **broadcast-class** (delivered to all views), faithful to `evBroadcast`.
+    Timer(TimerId),
     /// `evNothing`, or an event that a handler has consumed via
     /// [`Event::clear`].
     Nothing,
