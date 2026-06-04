@@ -1,4 +1,4 @@
-# Session handover — **status line COMPLETE** (rows 47 `TStatusItem`/`TStatusDef` + 53 `TStatusLine` draw/data slice DONE, Phase 4). Next: **wire a real menu bar + status line into `Program`** (the drivable-app payoff)
+# Session handover — **menu bar + status line WIRED INTO `Program` — DRIVABLE APP** (Phase 4). Next: **`cmTile`/`cmCascade` + `Desktop::tile`/`cascade` geometry** (the row-32 breadcrumb) and/or Batch C validators 58–62
 
 > Living handover for the **next** rstv session. Read this, then
 > [CLAUDE.md](file:///home/oetiker/checkouts/rstv/CLAUDE.md) (orientation /
@@ -15,6 +15,7 @@
 
 | commit | what |
 |--------|------|
+| `e02a4bf` | **Menu bar + status line WIRED INTO `Program` — the drivable-app payoff** — `examples/hello.rs` is now a real running TV app (menu bar row 0, desktop, status line bottom row). `Program` captures the menu-bar/status-line `ViewId`s + **seeds initial command-graying** at construction via `update_menu_commands` (the carried startup-regray gap: `cmCommandSetChanged` does not fire at startup). `pump_once` adds the faithful **`getEvent` status-line pre-routing** (`tprogram.cpp:153`): `evKeyDown` always + over-the-line `evMouseDown` (gated by new **`Group::topmost_child_at`** = `firstThat(viewHasMouse)`), run **BEFORE `captures.dispatch`** so accelerators (F10→cmMenu, Alt-X→cmQuit) fire even while a modal is open (the discriminating placement crux + bite). `StatusLine` keyDown **global-accelerator arm** (`tstatusl.cpp:181`): match keycode over ALL items incl. textless, **transform `ev`→`Command` in place, no clear** (propagates; NOT `ctx.post`+clear). **`MenuBar::update_menu_commands` override closed a latent gap** (graying was silently inert on the real bar — the existing broker test used a test-double). `Desktop::insert_view` → `pub` (production window-insert seam). idle→`update()` help-ctx refresh **deferred (inert under a single `All` `StatusDef`)**. Two-stage review (SPEC faithful, QUALITY no prod blockers; 2 vacuous mouse tests reworked into bite-checked discriminating ones). 576→585 tests (FOUNDATION) ← THIS session |
 | `df3b8b9` | **Status line (rows 47 + 53) — `TStatusItem`/`TStatusDef` data + `TStatusLine` draw/data slice** — `src/status/` (`mod.rs` data + builder, `status_line.rs` view). The standalone snapshot-testable view (NOT yet wired into `Program`, mirroring how the menu draw layer landed before the modal/Program wiring). `HelpCtxRange::{All, OneOf(Vec<HelpCtx>)}` replaces C++'s numeric `[min,max]` help-ctx ranges (D1 corollary — string `HelpCtx` has no ordering); `StatusItem.text: Option<String>` (`None` = the hidden global-hotkey item: draws nothing, no width, but the keyDown loop matches it); command-graying via a cached `CommandSet` on the **view** (the `update_menu_commands` broker hook + `cmCommandSetChanged`→`request_update_menu`, NOT a field on `StatusItem` — faithful to C++ computing `commandEnabled` live). 6 `Status*` theme `Role`s. 551→576 tests (FOUNDATION) ← THIS session |
 | `add2947` | **Menu MODAL layer Step-2 stage 3 (52) — `TMenuPopup`** — the LAST modal piece: `put_click_event_on_exit` flag on `MenuSession` (gates the bottom-level exit-click re-post; bar/box `true`, popup `false`), popup level starts `current=None` + clears its menu clone's `default` (`menu->deflt=0`), `popup_menu()` free fn + `auto_place_popup` geometry (faithful `popupMenu`/`autoPlacePopup`); `end_session_with` reworked to a kind-keyed (`is_bar`) teardown (a popup's level 0 IS a box). `TMenuPopup::handleEvent` moot/dropped (Ctrl+letter TODO). 545→551 tests (FOUNDATION) ← THIS session |
 | `93d6d35` | **Menu MODAL layer Step-2 stage 2 (50–52)** — the **mouse** arms of the flattened `execute()`: `track_mouse`/`mouse_in_view`/`mouse_in_owner`/`mouse_in_menus`, `evMouseDown`/`Up`/`Move` step arms + per-level loop-locals (`last_target_item`/`mouse_active`/`first_event`); stage-1 `handle_key` refactored into one shared `run()` loop (kbd+mouse+cmMenu); `evMouseDown` bar activation (`do_a_select`) + `activate_mouse`; cmMenu routed through `run()` (FOUNDATION) |
@@ -26,10 +27,11 @@
 | `3e6645f` | **TApplication (32)** — thin D2 wrapper over `Program` (MECHANICAL) |
 | `47894f0…66ab55f` | **`#[delegate]` proc-macro** — `tvision-macros` crate + workspace, then **adopted** across cluster/Window/Dialog/ParamText/Label/Desktop + the hello example (replaces `cluster_wrapper!`) |
 
-**Build state:** 576 lib (was 551; +25 this session: the row-47/53 status-line
-module — `mod.rs` data/builder tests + `status_line.rs` view tests incl. 4
-snapshots) + 5 integration (3 `render_pipeline` + 2 `delegate_view`) + 2
-doctests green; `cargo clippy --workspace --all-targets -- -D warnings` and `cargo
+**Build state:** 585 lib (was 576; +9 this session: the `program.rs` `wiring`
+submodule — getEvent pre-routing, accelerator-during-modal crux, mouseDown gating,
+initial regray, + 1 full-screen layout snapshot) + 5 integration (3
+`render_pipeline` + 2 `delegate_view`) + 2 doctests green;
+`cargo build --example hello` builds the drivable app; `cargo clippy --workspace --all-targets -- -D warnings` and `cargo
 fmt --all --check` clean (verify clippy with a forced re-lint — a cached run can
 mask a fresh warning). **It is a Cargo workspace**
 (`tvision` + `tvision-macros`) — use `--workspace` for test/clippy/fmt. (Cargo
@@ -42,10 +44,11 @@ layer + Rows 50/51 draw/data + the menu MODAL layer Step-2 stages 1 (keyboard), 
 menu modal layer (rows 46/49/50/51/52) is COMPLETE** — the whole flattened
 `TMenuView::execute()` (bar + box + popup, keyboard + mouse) is ported. **Status
 line rows 47 (`TStatusItem`/`TStatusDef`) + 53 (`TStatusLine` draw/data slice) are
-now also DONE** (THIS session, see below). **Next: wire a real menu bar + status
-line into `Program`** (the drivable-app payoff; first emitter of
-`cmTile`/`cmCascade`/`cmDosShell`). Batch C concrete validators 58–62 are an
-available parallel fan-out.
+DONE** (a prior session). **The menu bar + status line are now WIRED INTO `Program`
+(THIS session, see below) — `examples/hello.rs` is a drivable TV app.** **Next: the
+`cmTile`/`cmCascade` + `Desktop::tile`/`cascade` geometry** (the row-32 breadcrumb;
+`cmDosShell` separately needs a backend suspend seam). Batch C concrete validators
+58–62 are an available parallel fan-out.
 
 > **Worktrees** live under `/scratch/oetiker/claude-worktrees/<project>-<name>`
 > (global CLAUDE.md). A `WorktreeCreate` hook (`~/.claude/settings.json` →
@@ -56,7 +59,64 @@ available parallel fan-out.
 > create the worktree manually at the `/scratch` path + dispatch a non-isolated
 > subagent.
 
-## What landed THIS session — status line (rows 47 + 53) (FOUNDATION)
+## What landed THIS session — menu bar + status line WIRED INTO `Program` (FOUNDATION)
+The **drivable-app payoff**: the standalone menu-bar + status-line views become a
+running app. Brief:
+[`docs/briefs/row47-53-program-wiring.md`](file:///home/oetiker/checkouts/rstv/docs/briefs/row47-53-program-wiring.md)
+(advisor-vetted — the advisor's key call was to **defer the idle→`update()` help-ctx
+refresh**: under the single universal `All` `StatusDef` every real app uses,
+`find_items` is invariant, so `update()` is observably inert — no consumer ⇒ no new
+`View::get_help_ctx`/`TopView` seam this session) → Opus implementer → **full
+two-stage review** (SPEC then QUALITY, fresh C++-adversarial Opus agents — SPEC
+faithful with no blockers, QUALITY no production blockers) → 2 vacuous mouse tests
+reworked into bite-checked discriminating ones → integrate. 576→585 tests.
+
+- **`Program` ids + initial regray.** `Program::new` now captures the menu-bar +
+  status-line `ViewId`s and **seeds command-graying directly** via
+  `update_menu_commands(&command_set)` at construction — closing the carried gap that
+  menus/status are born all-enabled and `cmCommandSetChanged` does **not** fire at
+  startup. (No defer: the deferred queue is not drained on an idle first pump anyway.)
+- **`getEvent` status-line pre-routing** (`tprogram.cpp:153`) in `pump_once`, at the
+  **top of the `Some(ev)` arm, BEFORE `drop_disabled` + `captures.dispatch`** — because
+  C++ `getEvent` pre-routes regardless of modal nesting, so accelerators fire **while a
+  modal dialog is open** (the discriminating `accelerator_fires_during_a_modal` crux,
+  bite-checked). keyDown always; `evMouseDown` only when the line is the topmost view
+  under the cursor (new **`Group::topmost_child_at`** = faithful `firstThat(viewHasMouse)`
+  over direct children). The pre-route does the `makeLocal` (`m.position -= origin`)
+  the group router would normally do, since it bypasses the router.
+- **`StatusLine` keyDown global-accelerator arm** (`tstatusl.cpp:181`, the last deferred
+  arm): match the keycode over **ALL** items (incl. textless global hotkeys), and if
+  `command_enabled`, **transform `ev`→`Event::Command` IN PLACE — no clear, no post** —
+  so the same live event propagates into normal dispatch (porting it as `ctx.post`+clear
+  would double-handle). The mouseDown arm (post+clear) was already there.
+- **`MenuBar::update_menu_commands` override — closed a LATENT FOUNDATION GAP.** The bar
+  never implemented this hook, so the command-graying broker fell through to the trait
+  no-op: graying was **silently inert on the real `MenuBar`** for BOTH the new startup
+  regray AND the pre-existing `cmCommandSetChanged` broadcast path (the row-49 broker
+  test used a `#[cfg(test)] MenuProbe` test-double, so it never caught this). One-line
+  delegate to the shared `menu_view::update_menu_commands`.
+- **`examples/hello.rs` → a drivable app.** Faithful init insets (`initDeskTop`
+  `r.a.y++`/`r.b.y--`, `initMenuBar` `r.b.y=r.a.y+1`, `initStatusLine` `r.a.y=r.b.y-1`);
+  3 demo windows inserted into the desktop (via the now-`pub` `Desktop::insert_view`);
+  a File/Window menu bar + the standard status line; `run()` spins the real
+  `program.run()` loop. **Known limitation (documented):** menu items can only wire
+  commands that already *route* — menu→dialog needs the unbuilt D9 `OpenModal` path
+  (row 63), so **no About/Tile/Cascade items** yet. Alt-shortcuts reach the bar via
+  `ofPreProcess` (the bar sets it + `Group::handle_event` runs the preProcess phase);
+  F10 enters menus via the status-line accelerator → cmMenu.
+- **Deferred + breadcrumbed (NOT stubbed):** idle→`statusLine->update()` help-ctx
+  refresh (inert under a single `All` def — omit-until-consumer; revisit for a context-
+  split `OneOf` line); `cmTile`/`cmCascade` + `Desktop::tile`/`cascade` geometry +
+  `cmDosShell` (see NEXT); the status-line press-and-hold drag-highlight (`TODO(row 31,
+  D9)`).
+- **Verification:** 9 `wiring` tests — F10-enters-menu, Alt-X-quits, the
+  accelerator-during-modal placement crux (bite: move pre-route after capture dispatch →
+  red), two *reworked* discriminating mouse tests (status-line click past a modal gate;
+  desktop click reaches a spy Probe and is NOT eaten by the line's clear — each
+  bite-checked against its own production path), initial-regray (no pump), + a
+  full-screen layout snapshot (bar row 0 / desktop / line row h-1).
+
+## Prior session — status line (rows 47 + 53) (FOUNDATION)
 The **draw/data slice** of the status line — a standalone, snapshot-testable
 `TStatusLine` view (the `TProgram` getEvent/idle wiring is a separate next step,
 mirroring how the menu draw layer landed before its modal/Program wiring). Brief:
@@ -170,35 +230,36 @@ integrate. `src/menu/menu_session.rs` + re-exports + 6 tests.
   1 submenu-popup carry-up exit-click (the SPEC-flagged previously-only-reasoned path),
   2 `auto_place_popup` geometry units (below-right; bottom-edge shift-up). 551 lib green.
 
-### NEXT — **wire a real menu bar + status line into `Program`**
-The menu modal layer AND the status-line draw/data slice are both COMPLETE. The
-remaining Phase-4 work is the integration that makes a drivable app — and it is the
-home for the status line's deferred arms (the keyDown global accelerator + the
-`getEvent` pre-routing + `idle()→update()`/`TopView` help-ctx refresh, all
-breadcrumbed in `status_line.rs`):
+### NEXT — **`cmTile`/`cmCascade` + `Desktop::tile`/`cascade` geometry** (the row-32 breadcrumb)
+The menu bar + status line are now wired in and the app is drivable. The next
+in-sequence FOUNDATION-ish piece is the one the wiring left open: **tile/cascade**.
+Build it as a single unit (geometry + command handler + a menu that emits it + a
+test with real tileable windows):
 
-- **Wire a real menu bar + status line into `Program`** (the drivable-app payoff): lets
-  `examples/hello.rs` grow a working menu bar + status line. **First emitter of
-  `cmTile`/`cmCascade`/`cmDosShell`** → wire the row-32 breadcrumb in
-  `program_handle_event` + build `Desktop::tile`/`cascade` geometry (see the row-32
-  section below). **Close the carried initial-regray gap** (trigger an initial
-  `Deferred::UpdateMenu` on menu-bar insert — `TODO(menu insert: trigger initial
-  UpdateMenu)` in `menu_bar.rs`; menus are born all-enabled and only regray on a
-  `cmCommandSetChanged` broadcast, which does NOT fire at startup). Revisit the
-  `program_handle_event` modal-isolation breadcrumb (suppress program-level
-  interception while a `MenuSession` is active) and the `ModalFrame`/`DragCapture`
-  "(0,0)-desktop absolute-coords" caveats (the bar shifts the desktop down).
-- **Land the status line's deferred arms with this wiring** (all breadcrumbed in
-  `src/status/status_line.rs`): (a) `TProgram::getEvent` pre-routes `evKeyDown`
-  (always) + `evMouseDown` (when the mouse is over the status line) to
-  `statusLine->handleEvent` *before* normal dispatch; (b) the **keyDown
-  global-accelerator arm** — match `event.keyDown == item.key_code &&
-  commandEnabled` over **all** items (incl. textless ones), then transform the
-  event to `evCommand` **in place, propagate** (do NOT `ctx.post`+clear —
-  double-handles); (c) `TProgram::idle → statusLine->update()` reads the modal
-  `TopView`'s `getHelpCtx()` and re-runs the already-ported `find_items`
-  (`set_help_ctx` is the hook); (d) the press-and-hold drag-highlight
-  `drawSelect(Some)` hover loop (D9).
+- **`Desktop::tile`/`cascade` geometry** (`tdesktop.cpp`): `mostEqualDivisors`/`iSqr`/
+  `calcTileRect`/`dividerLoc`/`doCascade`. `Program::get_tile_rect` already exists (row
+  32) as the extent source.
+- **Wire the row-32 breadcrumb** in `program_handle_event` (the `TODO(Phase 4:
+  TApplication command handling)` after `group.handle_event`, beside the QUIT catch):
+  `group.find_mut(desktop) -> desktop.tile/cascade(get_tile_rect())`. cmTile/cmCascade
+  consts already exist + are enabled in `default_command_set`.
+- **Emit them:** add `Window`→`Tile`/`Cascade` items to `examples/hello.rs`'s menu (the
+  demo currently has NO Tile/Cascade items precisely because they did not route yet).
+- **`cmDosShell` separately** needs a backend terminal-suspend seam + SIGTSTP — defer
+  until that exists.
+
+Other open follow-ons (lower priority / parallel):
+- **idle→`statusLine->update()` help-ctx refresh** — still deferred; only worth doing
+  when a **context-split `OneOf` `StatusDef`** lands (under a single `All` def it is
+  inert). Would need a `View::get_help_ctx` method (+ a `tvision-macros/specs.rs`
+  forwarder) + a `TopView` resolver (nearest `sfModal` view = the top capture's view,
+  else the root group).
+- **status-line press-and-hold drag-highlight** (`drawSelect(Some)` hover) —
+  `TODO(row 31, D9)`.
+- **`program_handle_event` modal-isolation** breadcrumb (suppress program-level
+  interception while a `MenuSession`/modal is active) and the `ModalFrame`/`DragCapture`
+  "(0,0)-desktop absolute-coords" caveats (the bar now shifts the desktop down by 1 —
+  re-examine when a dialog must position relative to the desktop, not the screen).
 
 Batch C concrete validators 58–62 (`tvalidat.cpp`) remain an available parallel fan-out.
 
