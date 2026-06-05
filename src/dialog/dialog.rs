@@ -2,10 +2,10 @@
 
 use crate::command::Command;
 use crate::event::{Event, Key};
-use crate::view::{Context, GrowMode, Rect, View};
-// These are used by the test module (via `use super::*`) and by `insert_child`.
+use crate::view::{Context, GrowMode, Rect, View, ViewId};
+// These are used only by the test module (via `use super::*`).
 #[cfg(test)]
-use crate::view::{DrawCtx, StateFlag, ViewId, ViewState};
+use crate::view::{DrawCtx, StateFlag, ViewState};
 use crate::window::{Window, WindowFlags, WindowPalette};
 
 // ---------------------------------------------------------------------------
@@ -56,10 +56,13 @@ impl Dialog {
         Dialog { window }
     }
 
-    /// Insert a child view into the dialog's embedded window/group (test hook —
-    /// mirrors [`Window::insert_child`]; used by the cross-row `exec_view` veto
-    /// test in `app::program` to add a validating control to a modal dialog).
-    #[cfg(test)]
+    /// Insert a child view into the dialog's embedded window/group.
+    ///
+    /// Mirrors [`Window::insert_child`]; used by the row-34 `exec_view` veto
+    /// test and by the row-63 msgbox (first intended production consumer).
+    /// Previously `#[cfg(test)]`; promoted to `pub(crate)` for symmetry with
+    /// `Window::insert_child` and to unblock msgbox 63.
+    #[allow(dead_code)] // production consumer: msgbox 63 (not yet ported)
     pub(crate) fn insert_child(&mut self, view: Box<dyn View>) -> ViewId {
         self.window.insert_child(view)
     }

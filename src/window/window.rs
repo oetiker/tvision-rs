@@ -242,11 +242,31 @@ impl Window {
         self.group.state_mut().grow_mode = grow_mode;
     }
 
-    /// Insert a child view into the embedded group (test hook — used by the
-    /// `Dialog::valid` veto test to add a validating probe child).
-    #[cfg(test)]
+    /// Insert a child view into the embedded group.
+    ///
+    /// First production consumer: `THistoryWindow` (row 56), which inserts the
+    /// `HistoryViewer` after the scroll bars.  Also used by `Dialog` (row 34)
+    /// and the row-63 msgbox. Previously `#[cfg(test)]`; promoted to
+    /// `pub(crate)` when `THistoryWindow` became the first non-test caller.
     pub(crate) fn insert_child(&mut self, view: Box<dyn View>) -> ViewId {
         self.group.insert(view)
+    }
+
+    /// Reach a direct child of the embedded group by id.
+    ///
+    /// Used by `THistoryWindow` to run the viewer's post-insert `setup` and to
+    /// read `getSelection` via `as_any_mut` + downcast. Mirrors
+    /// `Group::child_mut` without exposing the group itself.
+    pub(crate) fn child_mut(&mut self, id: ViewId) -> Option<&mut dyn View> {
+        self.group.child_mut(id)
+    }
+
+    /// Test hook: make `id` the current (focused) child of the embedded group,
+    /// so keyboard events route to it. Used by the row-56 setup-guard bite test.
+    #[cfg(test)]
+    pub(crate) fn select_child_for_test(&mut self, id: ViewId, ctx: &mut Context) {
+        self.group
+            .set_current(Some(id), crate::view::SelectMode::Normal, ctx);
     }
 
     // -- standardScrollBar ---------------------------------------------------

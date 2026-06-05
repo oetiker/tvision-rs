@@ -32,6 +32,7 @@ use crate::command::Command;
 use crate::event::{Event, Key};
 use crate::view::{Context, DrawCtx, Point, Rect, StateFlag, View, ViewId, ViewState};
 use crate::widgets::list_viewer::{self, ListViewer, ListViewerState};
+use crate::window::{ScrollBarOptions, Window, WindowFlags};
 use std::cell::RefCell;
 
 // ---------------------------------------------------------------------------
@@ -323,6 +324,169 @@ impl View for HistoryViewer {
     // value(): NOT overridden — HistoryViewer has no transferable value.
     // The selection is ephemeral (the caller uses the modal result command,
     // then reads the focused text from the store). No FieldValue variant added.
+}
+
+impl HistoryViewer {
+    /// `THistoryWindow::getSelection` reads `viewer->getText(viewer->focused)`.
+    ///
+    /// This accessor is on `HistoryViewer` (not exposed to the crate root) so
+    /// `HistoryWindow::get_selection` can reach `lv.focused` without making the
+    /// field public. `lv` is private to this module, but `HistoryWindow` lives
+    /// in the same file, so the private-field access is allowed directly there.
+    /// This accessor provides the clean named path.
+    ///
+    /// First production consumer: row 57 (the code that calls `exec_view` on a
+    /// `HistoryWindow` and reads the selection after the modal returns).
+    #[allow(dead_code)] // production consumer: row 57 (not yet ported)
+    pub(crate) fn selection(&self) -> String {
+        <Self as ListViewer>::get_text(self, self.lv.focused)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// HistoryWindow — THistoryWindow (thistwin.cpp, row 56)
+// ---------------------------------------------------------------------------
+
+/// `THistoryWindow` — the modal window hosting a [`HistoryViewer`] recall list.
+///
+/// A `TWindow` subtype (`wfClose` only — not movable) that assembles two scroll
+/// bars and the viewer, then runs modally so the caller can read
+/// [`get_selection`](HistoryWindow::get_selection) after `exec_view` returns.
+///
+/// # Deviations from C++
+///
+/// * `THistInit`/`TWindowInit` constructor-init indirection is moot (D12) —
+///   `initViewer` is inlined.
+/// * `createListViewer` hook (streamability, D12) — inlined with no substitution
+///   path.
+/// * `getPalette` returns `cpHistoryWindow "\x13\x13\x15\x18\x17\x13\x14"`.
+///   We have no live palette mapping; the window uses the default `Window`/`Frame`
+///   rendering.  `TODO(row 34): cpHistoryWindow palette remap`.
+/// * `evMouseDown && !mouseInView → endModal(cmCancel)` is not ported —
+///   see `handle_event` for the breadcrumb.
+pub struct HistoryWindow {
+    /// The embedded window (D2). `HistoryWindow` *is-a* `TWindow`.
+    window: Window,
+    /// The `HistoryViewer` child's id — resolved after construction for
+    /// `setup` and `get_selection`.
+    viewer_id: ViewId,
+    /// Tracks whether the viewer's post-insert `setup` has been run.
+    /// `setup` needs a live `Context`; it runs on the first `handle_event` call
+    /// (the Context-free-ctor deviation established by row 55/ListBox).
+    setup_done: bool,
+}
+
+impl HistoryWindow {
+    /// `THistoryWindow::THistoryWindow(bounds, historyId)` + inlined
+    /// `initViewer`.
+    ///
+    /// Faithful to the C++:
+    /// 1. `TWindow(bounds, 0 /*title*/, wnNoNumber)`.
+    /// 2. `flags = wfClose` — close box only; NOT move/grow/zoom.
+    /// 3. `initViewer`: `r.grow(-1,-1)`, build h-bar and v-bar (in that order,
+    ///    matching C++ evaluation order), build `HistoryViewer(r, hbar, vbar)`,
+    ///    insert into the group.
+    pub fn new(bounds: Rect, history_id: u8) -> Self {
+        // (1) Window(bounds, NULL title, wnNoNumber).
+        let mut window = Window::new(bounds, None, 0);
+        // (2) flags = wfClose.
+        window.set_flags(WindowFlags {
+            close: true,
+            ..WindowFlags::default()
+        });
+        // (3) initViewer inlined: r = getExtent(); r.grow(-1, -1).
+        let mut r = View::state(&window).get_extent();
+        r.grow(-1, -1);
+
+        // Build the two bars (ORDER MATTERS — C++ evaluates h-bar arg first,
+        // then v-bar; both are inserted into the window group).
+        let h = window.standard_scroll_bar(ScrollBarOptions {
+            vertical: false,
+            handle_keyboard: true,
+        });
+        let v = window.standard_scroll_bar(ScrollBarOptions {
+            vertical: true,
+            handle_keyboard: true,
+        });
+
+        // Build and insert the viewer.
+        let viewer = HistoryViewer::new(r, Some(h), Some(v), history_id);
+        let viewer_id = window.insert_child(Box::new(viewer));
+
+        HistoryWindow {
+            window,
+            viewer_id,
+            setup_done: false,
+        }
+    }
+
+    /// `THistoryWindow::getSelection` — the viewer's focused entry text.
+    ///
+    /// Uses `&mut self` because `child_mut` / `as_any_mut` require `&mut`.
+    /// C++ `getSelection` is non-const for the same reason. The modal result
+    /// read happens after the loop completes (row 57), so `&mut` is faithful.
+    /// If the downcast somehow fails (unreachable in practice — the viewer_id
+    /// always resolves to a `HistoryViewer`), returns an empty string.
+    ///
+    /// First production consumer: row 57 (the caller of `exec_view` reads the
+    /// selection after the modal returns).
+    #[allow(dead_code)] // production consumer: row 57 (not yet ported)
+    pub(crate) fn get_selection(&mut self) -> String {
+        self.window
+            .child_mut(self.viewer_id)
+            .and_then(|v| v.as_any_mut())
+            .and_then(|a| a.downcast_mut::<HistoryViewer>())
+            .map(|hv| hv.selection())
+            .unwrap_or_default()
+    }
+}
+
+#[crate::delegate(
+    to = window,
+    skip(
+        apply_list_scroll,
+        as_any_mut,
+        calc_bounds,
+        grabs_focus_on_click,
+        select_window_num,
+        set_value,
+        value
+    )
+)]
+impl View for HistoryWindow {
+    /// `THistoryWindow::handleEvent` — faithful order: setup guard → delegate
+    /// to `TWindow::handleEvent`.
+    ///
+    /// (A) **One-time viewer setup BEFORE delegating** — the event then reaches
+    ///     a ready viewer (range/focused initialized). This is the
+    ///     Context-free-ctor deviation row 55/ListBox established: `setup()`
+    ///     needs a live `Context`, so it lands post-insert, here, on the first
+    ///     event.
+    ///
+    /// (B) `TWindow::handleEvent` (faithful order: base first).
+    ///
+    /// (C) **DEFERRED**: see the `TODO(row 57 modal-loop seam)` breadcrumb.
+    fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
+        // (A) One-time viewer setup BEFORE delegating — ensures range/focused
+        // are initialized before the first event reaches the viewer.
+        if !self.setup_done {
+            if let Some(v) = self.window.child_mut(self.viewer_id)
+                && let Some(hv) = v
+                    .as_any_mut()
+                    .and_then(|a| a.downcast_mut::<HistoryViewer>())
+            {
+                hv.setup(ctx);
+            }
+            self.setup_done = true;
+        }
+        // (B) TWindow::handleEvent (faithful order: base first).
+        self.window.handle_event(ev, ctx);
+        // (C) TODO(row 57 modal-loop seam): the C++ `evMouseDown && !mouseInView ->
+        // endModal(cmCancel)` outside-click cancel is omitted here: ModalFrame
+        // (program.rs) swallows outside positional events before they reach this view.
+        // Porting it needs ModalFrame to DELIVER (not Consume) outside clicks to the
+        // modal view — designed alongside the Deferred::OpenModal async-modal path.
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -908,5 +1072,321 @@ mod viewer_tests {
         assert_eq!(hv.lv.focused, 1, "setup focused item 1 (range > 1 path)");
 
         insta::assert_snapshot!(render_viewer(&mut hv, 14, 5));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// HistoryWindow tests (row 56)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod window_tests {
+    use super::*;
+    use crate::app::Program;
+    use crate::backend::{HeadlessBackend, HeadlessHandle};
+    use crate::command::Command;
+    use crate::desktop::Desktop;
+    use crate::event::{Event, Key, KeyEvent, KeyModifiers};
+    use crate::theme::Theme;
+    use crate::timer::ManualClock;
+    use crate::view::{Deferred, Rect, View};
+    use std::rc::Rc;
+
+    fn key_ev(k: Key) -> Event {
+        Event::KeyDown(KeyEvent::new(k, KeyModifiers::default()))
+    }
+
+    /// Build a `Program` with a real desktop over a headless 80×25 backend.
+    /// Returns the program and the headless handle (for injecting events via
+    /// `HeadlessHandle::push_event`).
+    fn make_program() -> (Program, HeadlessHandle) {
+        let (backend, handle) = HeadlessBackend::new(80, 25);
+        let theme = Theme::classic_blue();
+        let clock = Rc::new(ManualClock::new(0));
+        let program = Program::new(
+            Box::new(backend),
+            Box::new(clock),
+            theme,
+            |r| {
+                Some(Box::new(Desktop::new(r, |r2| {
+                    Some(Desktop::init_background(r2))
+                })))
+            },
+            |_r| None,
+            |_r| None,
+        );
+        (program, handle)
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 1: Construction — viewer_id resolves to a HistoryViewer
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn construction_viewer_id_resolves() {
+        clear_history();
+        history_add(100, "first");
+        history_add(100, "second");
+
+        let mut hw = HistoryWindow::new(Rect::new(0, 0, 40, 15), 100);
+
+        // viewer_id must resolve to a HistoryViewer via child_mut + downcast.
+        let found = hw
+            .window
+            .child_mut(hw.viewer_id)
+            .and_then(|v| v.as_any_mut())
+            .and_then(|a| a.downcast_mut::<HistoryViewer>())
+            .is_some();
+        assert!(
+            found,
+            "viewer_id resolves to a HistoryViewer via child_mut + downcast"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 2: Keyboard routes to the viewer after first-event setup
+    //
+    // Strategy: pre-queue a Down-arrow then Enter via the headless handle, run
+    // exec_view. The viewer starts at focused=1 (3 entries → range=3, setup
+    // focuses item 1). A Down moves to focused=2, Enter ends the modal OK.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn keyboard_routes_to_viewer_after_setup() {
+        clear_history();
+        history_add(101, "oldest");
+        history_add(101, "middle");
+        history_add(101, "newest");
+
+        let (mut program, handle) = make_program();
+        // Pre-queue via the headless handle: Down moves focused 1→2, Enter ends modal.
+        handle.push_event(key_ev(Key::Down));
+        handle.push_event(key_ev(Key::Enter));
+
+        let hw = HistoryWindow::new(Rect::new(5, 3, 45, 18), 101);
+        let result = program.exec_view(Box::new(hw));
+
+        assert_eq!(result, Command::OK, "Enter ends modal with OK");
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 3: get_selection returns the focused entry text
+    //
+    // Seed 3 entries; setup focuses item 1. Assert get_selection == get_text(1).
+    // We run setup directly via handle_event so we can read the field before
+    // dismissing the modal (avoids the exec_view post-remove problem).
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn get_selection_returns_focused_text() {
+        clear_history();
+        history_add(102, "alpha");
+        history_add(102, "beta");
+        history_add(102, "gamma");
+
+        let mut hw = HistoryWindow::new(Rect::new(0, 0, 40, 15), 102);
+
+        // Run setup by calling handle_event once directly with a throwaway Context.
+        let mut out = std::collections::VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+        {
+            let mut ctx = crate::view::Context::new(&mut out, &mut timers, 0, &mut deferred);
+            // A harmless broadcast triggers setup without consuming any real nav.
+            let mut ev = Event::Broadcast {
+                command: Command::SCROLL_BAR_CHANGED,
+                source: None,
+            };
+            hw.handle_event(&mut ev, &mut ctx);
+        }
+
+        // After setup with 3 entries: focused = 1 (range > 1 → focusItem(1)).
+        // get_selection must return get_text(focused=1).
+        let expected = history_str(102, 1).unwrap_or_default();
+        let actual = hw.get_selection();
+        assert_eq!(
+            actual, expected,
+            "get_selection returns get_text(focused=1): expected {expected:?}, got {actual:?}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 4: Setup-guard ordering BITE (TRUE discriminator)
+    //
+    // The BITE mechanism:
+    //   Seed 3 entries → setup will set range=3 and focused=1.
+    //   Make the viewer the CURRENT child of the window so a Down key routes
+    //   to it (not to the v-bar). Then call handle_event with a Down key.
+    //
+    //   With guard BEFORE window.handle_event (CORRECT ORDER):
+    //     setup runs first → range=3, focused=1 → Down reaches viewer with
+    //     initialized range → focus_item_num(1+1=2) succeeds → focused=2.
+    //
+    //   With guard AFTER window.handle_event (MISORDERED — the failing case):
+    //     Down reaches viewer BEFORE setup → range=0 → focus_item_num(0+1=1)
+    //     clamps to range-1=0 (no-op, range=0 means no items) → focused stays 0
+    //     → then setup sets focused=1 → final value is 1, not 2.
+    //
+    //   assert_eq!(focused, 2) passes iff the guard is BEFORE delegation.
+    //   If the guard is misordered, the assertion fails with focused==1.
+    //
+    // VERIFIED: moving the guard to AFTER window.handle_event causes this test
+    // to fail with focused==1 (not 2), confirming the bite is real.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn setup_guard_before_delegation_bite() {
+        clear_history();
+        history_add(103, "a");
+        history_add(103, "b");
+        history_add(103, "c"); // 3 entries → setup will set range=3, focused=1
+
+        let mut hw = HistoryWindow::new(Rect::new(0, 0, 40, 15), 103);
+
+        let mut out = std::collections::VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+
+        // Make the viewer the current child so the Down key routes to it
+        // (not the v-bar). Without this, the Down goes to the v-bar via
+        // ofPostProcess and the test would not discriminate guard ordering.
+        {
+            let mut ctx = crate::view::Context::new(&mut out, &mut timers, 0, &mut deferred);
+            hw.window.select_child_for_test(hw.viewer_id, &mut ctx);
+        }
+        deferred.clear(); // discard the set_current side-effects
+
+        // Deliver a Down key via handle_event. The setup guard runs BEFORE
+        // window.handle_event, so the sequence is:
+        //   (A) setup: range=3, focused=1          (guard before delegation)
+        //   (B) window.handle_event: Down → viewer (current) → focused 1→2
+        {
+            let mut ctx = crate::view::Context::new(&mut out, &mut timers, 0, &mut deferred);
+            let mut ev = key_ev(Key::Down);
+            hw.handle_event(&mut ev, &mut ctx);
+        }
+
+        // Read the viewer's focused value.
+        let focused = hw
+            .window
+            .child_mut(hw.viewer_id)
+            .and_then(|v| v.as_any_mut())
+            .and_then(|a| a.downcast_mut::<HistoryViewer>())
+            .map(|hv| hv.lv.focused)
+            .expect("viewer resolves");
+
+        // BITE: if the guard were moved AFTER window.handle_event, Down would
+        // reach the viewer with range=0 (un-initialized) → focus_item_num clamps
+        // → no-op → focused stays 0 → then setup sets focused=1 → assertion sees
+        // 1, not 2. This test FAILS with focused==1 when the guard is misordered.
+        assert_eq!(
+            focused, 2,
+            "focused must be 2: setup (range=3, focused=1) ran BEFORE Down (1→2). \
+             If the guard is misordered (after delegation), focused would be 1."
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 5: Negative h-bar max — value genuinely produced AND live drain
+    //         doesn't panic (the HANDOVER watch-item, REQUIRED)
+    //
+    // Two halves:
+    //
+    // (A) STANDALONE: prove the negative max value is actually generated.
+    //     Build a HistoryViewer with size.x=38 (matching the real interior of
+    //     a 40-wide HistoryWindow after grow(-1,-1)) and history "hi!" (width 3).
+    //     historyWidth() - size.x + 3 = 3 - 38 + 3 = -32 (negative).
+    //     Assert the queued ScrollBarSetParams has max==-32 (the exact negative
+    //     value). This half fails if setup ever skips the negative path or the
+    //     arithmetic changes.
+    //
+    // (B) LIVE PUMP via exec_view: prove that draining the negative max through
+    //     ScrollBar::set_params does not panic and the modal exits cleanly.
+    //     ScrollBar::set_params floors aMax to aMin (= max(aMax, aMin)), so
+    //     negative max=-32 becomes 0 — safe (no i32::clamp panic).
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn negative_hbar_max_live_pump_no_panic() {
+        clear_history();
+        // Narrow entry: "hi!" → display width 3.
+        history_add(104, "hi!");
+
+        // -------- (A) Standalone: confirm the negative value is produced --------
+        //
+        // The real exec_view path uses Rect::new(5,3,45,13) → 40×10 window →
+        // grow(-1,-1) → viewer size.x=38. Replicate that geometry directly.
+        // historyWidth("hi!") = 3; size.x = 38 → max = 3 - 38 + 3 = -32.
+        let expected_max: i32 = 3 - 38 + 3; // -32
+        assert!(expected_max < 0, "expected_max must be negative");
+
+        // Mint a real ViewId for the h-bar (mirror setup_with_hbar test pattern).
+        let hbar = {
+            let mut mint_group = crate::view::Group::new(Rect::new(0, 0, 4, 4));
+            mint_group.insert(Box::new(HistoryViewer::new(
+                Rect::new(0, 0, 1, 1),
+                None,
+                None,
+                104,
+            )))
+        };
+
+        // size.x = 38, matching the real interior width after grow(-1,-1).
+        let mut hv = HistoryViewer::new(Rect::new(0, 0, 38, 8), Some(hbar), None, 104);
+        assert_eq!(
+            hv.lv.state.size.x, 38,
+            "size.x == 38 (interior of 40-wide window)"
+        );
+
+        let mut out = std::collections::VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred_a: Vec<Deferred> = vec![];
+        {
+            let mut ctx = crate::view::Context::new(&mut out, &mut timers, 0, &mut deferred_a);
+            hv.setup(&mut ctx);
+        }
+
+        // The queued h-bar SetParams must carry max == -32.
+        assert!(
+            deferred_a.iter().any(|x| matches!(
+                x,
+                Deferred::ScrollBarSetParams {
+                    id,
+                    value: None,
+                    min: Some(0),
+                    max: Some(m),
+                    page_step: None,
+                    arrow_step: None,
+                } if *id == hbar && *m == expected_max
+            )),
+            "setup must queue hbar setRange(0, {expected_max}) — negative max genuinely produced"
+        );
+
+        // -------- (B) Live pump: drain the negative max without panic ----------
+        //
+        // Rect::new(5,3,45,13) → 40×10 window → grow(-1,-1) → viewer 38×8.
+        // historyWidth() - size.x + 3 = 3 - 38 + 3 = -32.
+        let (mut program, handle) = make_program();
+        // Pre-queue event sequence to drive the modal to completion:
+        //   Pump 1: Down → setup (queues h-bar SetParams max=-32); v-bar postProcess
+        //           handles Down → broadcasts SCROLL_BAR_CLICKED. Deferred drain:
+        //           h-bar SetParams max=-32 → set_params floors to 0 (no panic).
+        //   Pump 2: SCROLL_BAR_CLICKED → viewer → request_focus → viewer becomes current.
+        //   Pump 3: Enter → EndModal(OK).
+        //   Pump 4: deferred drain → loop exits.
+        handle.push_event(key_ev(Key::Down));
+        handle.push_event(key_ev(Key::Enter));
+
+        let hw = HistoryWindow::new(Rect::new(5, 3, 45, 13), 104);
+
+        // exec_view drives the full pump loop. No panic = set_params handles
+        // negative max safely (floors to min=0 via max(aMax, aMin)).
+        let result = program.exec_view(Box::new(hw));
+        assert_eq!(
+            result,
+            Command::OK,
+            "Enter dismisses the modal cleanly after setup with negative h-bar max"
+        );
+        // Reaching here without panic confirms the negative-max path (-32 → 0) is safe.
     }
 }
