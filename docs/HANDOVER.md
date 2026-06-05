@@ -313,16 +313,40 @@ in-sequence work is **row 57** — the FOUNDATION piece of the history cluster:
   (`cmHistoryDropDown`/click), it **`execView`s a `THistoryWindow` from within its
   own `handle_event`** and on `cmOK` writes the picked `getSelection` string into
   the linked input line (+ `recordHistory(s)` = `history_add`). This is the
-  **unbuilt D9 view-triggered async-modal path** the menu sessions reserved — note
-  `exec_view` is currently **top-level-only** (a view holds only `&mut Context`, can't
-  call it inline; doc at `program.rs:466`), so 57 must add `Deferred::OpenModal {
-  view, …, on_close }` (the pump runs `exec_view` at apply-time, then a completion
-  callback reads the modal's `get_selection` + writes it back into the link — the
-  flowback is the design crux; `get_selection` is already built on `HistoryWindow`).
+  **unbuilt D9 view-triggered async-modal path** the menu sessions reserved.
   **msgbox 63 is the co-consumer — build the seam once, wire both.**
   `THistory::draw` = the down-arrow icon (`▼`, `historyIcon`); `getPalette`
   `cpHistory`. The `link`/`historyId` fields; `shutDown` (drop the link ref, moot
   under Rust ownership).
+
+  **Row-57 design notes (orientation gathered, NOT yet built — design with the
+  advisor + main-thread care):**
+  - **`exec_view` is top-level-only** (`program.rs:466`/`520`): a view holds only
+    `&mut Context`, never `&mut Program`, so it cannot call `exec_view` inline from
+    `handle_event`. That is the whole reason 57 needs an async seam.
+  - **THE KEY CONSTRAINT (verified this session):** the pump's **deferred-apply
+    phase** (`program.rs:818-`) runs inside a `let Program { group, captures,
+    command_set, end_state, … } = self;` **destructure** (`program.rs:664-682`), so
+    at apply-time `self` is split-borrowed — a `Deferred::OpenModal` applied there
+    **cannot call `self.exec_view(view)`** (no whole `&mut self`; and it would be a
+    re-entrant `pump_once` inside `pump_once`). So **do NOT plan to run `exec_view`
+    at deferred-apply time.**
+  - **Recommended shape (advisor to confirm):** `Deferred::OpenModal` stashes the
+    boxed modal view + a completion callback into a new `Program::pending_modal:
+    Option<…>` field (apply-time only touches that field — no exec_view). The
+    **OUTER driver loop** (`run` / the `exec_view` loop body) checks `pending_modal`
+    **after `pump_once` returns** — where it holds a whole `&mut self` — and runs
+    `exec_view` on it at top level, then invokes the completion callback with the
+    result `Command` + access to the modal view (for `get_selection`, already built
+    on `HistoryWindow`) + a `Context` to write the result back. Keeps `exec_view`
+    top-level; no re-entrant destructure.
+  - **Result flowback into the link `TInputLine` (row 39):** `THistory` holds only
+    the link's `ViewId` (D3), so writing the picked string back is a deferred/broker
+    write (set the input line's data by id — likely a new `Deferred` variant or the
+    D10 `set_value` path) + `link.select_all` + redraw. Check `src/widgets/`
+    input_line for the existing data setter before inventing one.
+  - **ModalFrame outside-delivery** (the row-56-deferred seam, above) is the *other*
+    modal-loop change 57 owns — design both together; they share the loop.
 - **Batch C concrete validators 58–62** (`tvalidat.cpp`) — the clean worktree
   parallel fan-out (see "Available parallel fan-out" below); **59 `TRangeValidator`
   is FOUNDATION-ish** (resolves the deferred `transfer` hook + the `cur_pos`
