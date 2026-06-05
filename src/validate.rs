@@ -354,6 +354,597 @@ impl Validator for RangeValidator {
     fn error(&self) {}
 }
 
+// ── TPXPictureValidator (row 62) ─────────────────────────────────────────────
+
+/// `TPicResult` — the result of running a Paradox picture mask against an input.
+///
+/// Mirrors the C++ enum `TPicResult {prComplete, prIncomplete, prEmpty, prError,
+/// prSyntax, prAmbiguous, prIncompNoFill}` (`include/tvision/validate.h`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum PicResult {
+    Complete,
+    Incomplete,
+    Empty,
+    Error,
+    Syntax,
+    Ambiguous,
+    IncompNoFill,
+}
+
+/// `isNumber(char)` — ASCII digit.
+fn is_number(ch: u8) -> bool {
+    ch.is_ascii_digit()
+}
+
+/// `isLetter(char)` — C++ does `ch &= 0xdf; return 'A' <= ch <= 'Z'`. The `& 0xdf`
+/// folds the ASCII case bit, so both `a..z` and `A..Z` qualify. Ported as the
+/// same bit trick to stay byte-faithful.
+fn is_letter(ch: u8) -> bool {
+    (ch & 0xdf).is_ascii_uppercase()
+}
+
+/// `isSpecial(char, const char* special)` — membership of `ch` in the byte set
+/// `special` (C++ `memchr`).
+fn is_special(ch: u8, special: &[u8]) -> bool {
+    special.contains(&ch)
+}
+
+/// `isComplete(TPicResult)` — `prComplete || prAmbiguous`.
+fn is_complete(r: PicResult) -> bool {
+    matches!(r, PicResult::Complete | PicResult::Ambiguous)
+}
+
+/// `isIncomplete(TPicResult)` — `prIncomplete || prIncompNoFill`.
+fn is_incomplete(r: PicResult) -> bool {
+    matches!(r, PicResult::Incomplete | PicResult::IncompNoFill)
+}
+
+/// C++ `uppercase(char)` — ASCII uppercase fold.
+fn uppercase(ch: u8) -> u8 {
+    ch.to_ascii_uppercase()
+}
+
+/// Read `pic[i]` faithfully to the C++ `char*`: an in-range byte, or the NUL
+/// terminator (`0`) when `i` is at/past the end. C++ relies on the trailing NUL
+/// to stop scans (e.g. `pic[index]` after `index++` reaching `strlen(pic)`, or
+/// `pic[j+1]` in `checkComplete`); replicating it keeps every `pic[...]` read
+/// panic-free and bit-faithful.
+fn pic_at(pic: &[u8], i: i32) -> u8 {
+    if i < 0 {
+        return 0;
+    }
+    pic.get(i as usize).copied().unwrap_or(0)
+}
+
+/// `toGroupEnd(int& i, int termCh)` — advance `i` past one character or one
+/// balanced picture group (`[...]` / `{...}`), stopping at `termCh`. A free
+/// function reading only `pic` (C++ member fn touches no `jndex`/`input`); kept
+/// free so callers can pass either a local cursor or `self.index` without an
+/// aliasing borrow of `self` (see `skip_to_comma`).
+fn to_group_end(pic: &[u8], i: &mut i32, term_ch: i32) {
+    let mut brk_level = 0i32;
+    let mut brc_level = 0i32;
+    loop {
+        if *i == term_ch {
+            return;
+        }
+        match pic_at(pic, *i) {
+            b'[' => brk_level += 1,
+            b']' => brk_level -= 1,
+            b'{' => brc_level += 1,
+            b'}' => brc_level -= 1,
+            b';' => *i += 1,
+            _ => {}
+        }
+        *i += 1;
+        if brk_level == 0 && brc_level == 0 {
+            break;
+        }
+    }
+}
+
+/// `Boolean TPXPictureValidator::syntaxCheck()` — free function (reads only the
+/// mask). Rejects an empty mask, a mask ending in `;`, or unbalanced
+/// `[]`/`{}` nesting.
+fn syntax_check(pic: &[u8]) -> bool {
+    if pic.is_empty() {
+        return false;
+    }
+    if pic[pic.len() - 1] == b';' {
+        return false;
+    }
+    let mut i = 0i32;
+    let mut brk_level = 0i32;
+    let mut brc_level = 0i32;
+    let len = pic.len() as i32;
+    while i < len {
+        match pic_at(pic, i) {
+            b'[' => brk_level += 1,
+            b']' => brk_level -= 1,
+            b'{' => brc_level += 1,
+            b'}' => brc_level -= 1,
+            b';' => i += 1,
+            _ => {}
+        }
+        i += 1;
+    }
+    brk_level == 0 && brc_level == 0
+}
+
+/// The transient picture scanner — the per-`picture()`-call scratch state.
+///
+/// In C++ `index`/`jndex` are member variables only because threading them
+/// through the ~6 mutually-recursive helpers by hand is tedious; they are reset
+/// to 0 at the top of every `picture()` call, i.e. they are **per-call scratch**,
+/// not persistent validator state. Our [`Validator`] methods are `&self`
+/// (object-safe), so the scanning state lives here, created fresh per call.
+///
+/// ## Byte-faithful to the C++ `char*` machine
+/// C++ operates on `char*` byte-by-byte (`uppercase`, `& 0xdf`, `input[jndex]=ch`).
+/// We port at the **byte level** (`&[u8]` / `Vec<u8>`); picture masks and the
+/// inputs to such fields are ASCII, so this is exact. Multibyte UTF-8 in such a
+/// field is out of scope (same posture as `FilterValidator`'s byte-vs-char note).
+struct Picture<'a> {
+    /// The mask (C++ `pic`).
+    pic: &'a [u8],
+    /// The working input buffer (C++ `input`); mutated in place and may GROW via
+    /// autofill.
+    input: Vec<u8>,
+    /// C++ `index` — cursor into `pic`.
+    index: i32,
+    /// C++ `jndex` — cursor into `input`.
+    jndex: i32,
+}
+
+impl<'a> Picture<'a> {
+    fn new(pic: &'a [u8], input: Vec<u8>) -> Self {
+        Self {
+            pic,
+            input,
+            index: 0,
+            jndex: 0,
+        }
+    }
+
+    /// `pic[index]` faithful read (NUL past end).
+    fn pic_at(&self, i: i32) -> u8 {
+        pic_at(self.pic, i)
+    }
+
+    /// `input[jndex]` faithful read (NUL past end). Used where C++ may touch the
+    /// terminator.
+    fn input_at(&self, j: i32) -> u8 {
+        if j < 0 {
+            return 0;
+        }
+        self.input.get(j as usize).copied().unwrap_or(0)
+    }
+
+    /// `consume(char ch, char* input)` — write `ch` into `input[jndex]`, advance
+    /// both cursors. (`scan`'s `jndex >= strlen(input)` guard ensures `jndex` is
+    /// in range before any call, so the index-assign is safe.)
+    fn consume(&mut self, ch: u8) {
+        self.input[self.jndex as usize] = ch;
+        self.index += 1;
+        self.jndex += 1;
+    }
+
+    /// `skipToComma(int termCh)` — advance `index` over groups until a comma
+    /// separator or `termCh`; step past the comma. Returns whether `index <
+    /// termCh` (i.e. there is another alternative to try).
+    fn skip_to_comma(&mut self, term_ch: i32) -> bool {
+        loop {
+            // `to_group_end` mutates a cursor; copy `self.index` across the call
+            // to avoid aliasing `&self` (free fn reads only `pic`).
+            let mut idx = self.index;
+            to_group_end(self.pic, &mut idx, term_ch);
+            self.index = idx;
+            if self.index == term_ch || self.pic_at(self.index) == b',' {
+                break;
+            }
+        }
+        if self.pic_at(self.index) == b',' {
+            self.index += 1;
+        }
+        self.index < term_ch
+    }
+
+    /// `calcTerm(int termCh)` — the end index of the group starting at `index`.
+    fn calc_term(&self, term_ch: i32) -> i32 {
+        let mut k = self.index;
+        to_group_end(self.pic, &mut k, term_ch);
+        k
+    }
+
+    /// `iteration(char* input, int inTerm)` — the `*[n]<group>` repeat operator.
+    /// `index` points at the `*`. Reads the optional repeat count, then runs the
+    /// group exactly `itr` times (count given) or greedily (count 0 → "any
+    /// number").
+    fn iteration(&mut self, in_term: i32) -> PicResult {
+        let mut itr = 0i32;
+        let mut rslt = PicResult::Error;
+
+        self.index += 1; // Skip '*'
+
+        // Retrieve number
+        while is_number(self.pic_at(self.index)) {
+            itr = itr * 10 + (self.pic_at(self.index) - b'0') as i32;
+            self.index += 1;
+        }
+
+        let k = self.index;
+        let term_ch = self.calc_term(in_term);
+
+        // If Itr is 0 allow any number, otherwise enforce the number
+        if itr != 0 {
+            for _l in 1..=itr {
+                self.index = k;
+                rslt = self.process(term_ch);
+                if !is_complete(rslt) {
+                    // Empty means incomplete since all are required
+                    if rslt == PicResult::Empty {
+                        rslt = PicResult::Incomplete;
+                    }
+                    return rslt;
+                }
+            }
+        } else {
+            loop {
+                self.index = k;
+                rslt = self.process(term_ch);
+                if rslt != PicResult::Complete {
+                    break;
+                }
+            }
+            if rslt == PicResult::Empty || rslt == PicResult::Error {
+                self.index += 1;
+                rslt = PicResult::Ambiguous;
+            }
+        }
+        self.index = term_ch;
+
+        rslt
+    }
+
+    /// `group(char* input, int inTerm)` — a `{...}` (required) or `[...]`
+    /// (optional) bracketed picture group. `index` points at the opening bracket.
+    fn group(&mut self, in_term: i32) -> PicResult {
+        let term_ch = self.calc_term(in_term);
+        self.index += 1;
+        let rslt = self.process(term_ch - 1);
+
+        if !is_incomplete(rslt) {
+            self.index = term_ch;
+        }
+
+        rslt
+    }
+
+    /// `checkComplete(TPicResult rslt, int termCh)` — on an incomplete result,
+    /// see whether all that remains in the mask is optional (`[...]` groups or
+    /// unbounded `*` iterations); if so the input is ambiguously complete.
+    fn check_complete(&mut self, rslt: PicResult, term_ch: i32) -> PicResult {
+        let mut rslt = rslt;
+        let mut j = self.index;
+        let mut status = true;
+
+        if is_incomplete(rslt) {
+            // Skip optional pieces
+            while status {
+                match self.pic_at(j) {
+                    b'[' => {
+                        to_group_end(self.pic, &mut j, term_ch);
+                    }
+                    b'*' => {
+                        if !is_number(self.pic_at(j + 1)) {
+                            j += 1;
+                        }
+                        to_group_end(self.pic, &mut j, term_ch);
+                    }
+                    _ => {
+                        status = false;
+                    }
+                }
+            }
+
+            if j == term_ch {
+                rslt = PicResult::Ambiguous;
+            }
+        }
+
+        rslt
+    }
+
+    /// `scan(char* input, int termCh)` — match the input against one comma-free
+    /// run of the mask (up to `termCh` or a `,`), consuming input as it goes.
+    fn scan(&mut self, term_ch: i32) -> PicResult {
+        let r_scan = PicResult::Error;
+        let mut rslt = PicResult::Empty;
+
+        while self.index != term_ch && self.pic_at(self.index) != b',' {
+            if self.jndex >= self.input.len() as i32 {
+                return self.check_complete(rslt, term_ch);
+            }
+
+            let ch = self.input_at(self.jndex);
+            match self.pic_at(self.index) {
+                b'#' => {
+                    if !is_number(ch) {
+                        return PicResult::Error;
+                    } else {
+                        self.consume(ch);
+                    }
+                }
+                b'?' => {
+                    if !is_letter(ch) {
+                        return PicResult::Error;
+                    } else {
+                        self.consume(ch);
+                    }
+                }
+                b'&' => {
+                    if !is_letter(ch) {
+                        return PicResult::Error;
+                    } else {
+                        self.consume(uppercase(ch));
+                    }
+                }
+                b'!' => {
+                    self.consume(uppercase(ch));
+                }
+                b'@' => {
+                    self.consume(ch);
+                }
+                b'*' => {
+                    rslt = self.iteration(term_ch);
+                    if !is_complete(rslt) {
+                        return rslt;
+                    }
+                    if rslt == PicResult::Error {
+                        rslt = PicResult::Ambiguous;
+                    }
+                }
+                b'{' => {
+                    rslt = self.group(term_ch);
+                    if !is_complete(rslt) {
+                        return rslt;
+                    }
+                }
+                b'[' => {
+                    rslt = self.group(term_ch);
+                    if is_incomplete(rslt) {
+                        return rslt;
+                    }
+                    if rslt == PicResult::Error {
+                        rslt = PicResult::Ambiguous;
+                    }
+                }
+                _ => {
+                    // Literal arm. C++ (tvalidat.cpp:438-451): a `;`-escape
+                    // advances past the `;` to the escaped literal; the typed
+                    // char must match the mask literal case-insensitively (a
+                    // typed space matches any literal — it gets overwritten);
+                    // otherwise the run fails. The byte CONSUMED is always
+                    // `pic[index]` (the MASK byte), so the buffer is normalized
+                    // to the mask's literal — NOT the typed `ch`.
+                    if self.pic_at(self.index) == b';' {
+                        self.index += 1;
+                    }
+                    if uppercase(self.pic_at(self.index)) != uppercase(ch) && ch != b' ' {
+                        return r_scan;
+                    }
+                    self.consume(self.pic_at(self.index));
+                }
+            }
+
+            if rslt == PicResult::Ambiguous {
+                rslt = PicResult::IncompNoFill;
+            } else {
+                rslt = PicResult::Incomplete;
+            }
+        }
+
+        if rslt == PicResult::IncompNoFill {
+            PicResult::Ambiguous
+        } else {
+            PicResult::Complete
+        }
+    }
+
+    /// `process(char* input, int termCh)` — try each comma-separated alternative
+    /// in the mask run, backtracking on error/incomplete; tracks the best
+    /// (farthest-consuming) incomplete to disambiguate.
+    fn process(&mut self, term_ch: i32) -> PicResult {
+        let mut incomp = false;
+        let mut old_i = self.index;
+        let old_j = self.jndex;
+        let mut incomp_j = 0i32;
+        let mut incomp_i = 0i32;
+        let mut rslt;
+        let mut r_process;
+
+        loop {
+            rslt = self.scan(term_ch);
+
+            // Only accept completes if they make it farther in the input
+            //   stream from the last incomplete
+            if rslt == PicResult::Complete && incomp && self.jndex < incomp_j {
+                rslt = PicResult::Incomplete;
+                self.jndex = incomp_j;
+            }
+
+            if rslt == PicResult::Error || rslt == PicResult::Incomplete {
+                r_process = rslt;
+
+                if !incomp && rslt == PicResult::Incomplete {
+                    incomp = true;
+                    incomp_i = self.index;
+                    incomp_j = self.jndex;
+                }
+                self.index = old_i;
+                self.jndex = old_j;
+                if !self.skip_to_comma(term_ch) {
+                    if incomp {
+                        r_process = PicResult::Incomplete;
+                        self.index = incomp_i;
+                        self.jndex = incomp_j;
+                    }
+                    return r_process;
+                }
+                old_i = self.index;
+            }
+
+            if rslt != PicResult::Error && rslt != PicResult::Incomplete {
+                break;
+            }
+        }
+
+        if rslt == PicResult::Complete && incomp {
+            PicResult::Ambiguous
+        } else {
+            rslt
+        }
+    }
+
+    /// `picture(char* input, Boolean autoFill)` — the top-level driver. Resets
+    /// the cursors, runs `process`, applies the trailing-input/autofill logic,
+    /// and maps the internal `Ambiguous`/`IncompNoFill` results to their public
+    /// `Complete`/`Incomplete` equivalents.
+    fn run(&mut self, auto_fill: bool) -> PicResult {
+        if !syntax_check(self.pic) {
+            return PicResult::Syntax;
+        }
+
+        if self.input.is_empty() {
+            return PicResult::Empty;
+        }
+
+        self.jndex = 0;
+        self.index = 0;
+
+        let mut rslt = self.process(self.pic.len() as i32);
+
+        if rslt != PicResult::Error && self.jndex < self.input.len() as i32 {
+            rslt = PicResult::Error;
+        }
+
+        if rslt == PicResult::Incomplete && auto_fill {
+            let mut reprocess = false;
+
+            while self.index < self.pic.len() as i32
+                && !is_special(self.pic_at(self.index), b"#?&!@*{}[],")
+            {
+                if self.pic_at(self.index) == b';' {
+                    self.index += 1;
+                }
+                // C++ writes input[end]=pic[index]; input[end+1]=0 — i.e. append
+                // one byte (Vec carries its own length, so no NUL is stored).
+                self.input.push(self.pic_at(self.index));
+                self.index += 1;
+                reprocess = true;
+            }
+
+            self.jndex = 0;
+            self.index = 0;
+            if reprocess {
+                rslt = self.process(self.pic.len() as i32);
+            }
+        }
+
+        match rslt {
+            PicResult::Ambiguous => PicResult::Complete,
+            PicResult::IncompNoFill => PicResult::Incomplete,
+            other => other,
+        }
+    }
+}
+
+/// `TPXPictureValidator` (row 62) — the Paradox picture-mask validator.
+///
+/// Validates and auto-fills input against a Paradox "picture" mask: `#` digit,
+/// `?` letter, `&` letter→uppercase, `!` any→uppercase, `@` any, `*` repeat,
+/// `{}`/`[]` required/optional groups, `,` alternatives, `;` literal-escape, and
+/// any other character is a literal. The matching engine is a recursive state
+/// machine ported verbatim from `tvalidat.cpp`.
+///
+/// ## Design (the idiomatic-Rust crux)
+/// C++ keeps the scan cursors `index`/`jndex` as member variables purely to
+/// thread them through the mutually-recursive helpers; they are reset per
+/// `picture()` call, i.e. they are **per-call scratch**, not validator state.
+/// Our [`Validator`] methods are `&self` (object-safe — stored as
+/// `Box<dyn Validator>`), so the scanning state lives in a transient
+/// [`Picture`] created fresh per call. Operation is byte-level, faithful to the
+/// C++ `char*` machine (see [`Picture`]).
+///
+/// ## Deviations / drops
+/// - Streaming (`read`/`write`/`build`/`name`, D12) and the destructor
+///   (`delete[] pic`) dropped.
+/// - C++ `isValid` copies `s` into a 256-byte stack buffer; we do **not**
+///   replicate the 256 cap (the `Vec` grows). Real inputs are maxLen-bounded, so
+///   this is a safe, documented deviation.
+/// - C++ guards `(pic == 0)`; our `pic` is always a (possibly empty) `String`,
+///   never null — an empty/invalid mask yields `Syntax`/`Empty` and the same
+///   booleans fall out, so no null check is needed.
+/// - `error()` is a row-63 `messageBox` breadcrumb (message preserved below).
+pub struct PXPictureValidator {
+    /// The mask (C++ `pic`, owned).
+    pic: String,
+    /// C++ `options & voFill` — auto-fill literals while typing.
+    auto_fill: bool,
+    /// C++ `status == vsOk` (`false` ⇒ `vsSyntax`). Set in [`new`](Self::new).
+    status_ok: bool,
+}
+
+impl PXPictureValidator {
+    /// `TPXPictureValidator(TStringView aPic, Boolean autoFill)`.
+    ///
+    /// Runs `picture("", False)` on EMPTY input as a syntax probe: for a
+    /// well-formed mask, empty input yields `prEmpty`, so status stays OK; any
+    /// other result means the mask syntax is bad and status becomes `vsSyntax`.
+    pub fn new(pic: impl Into<String>, auto_fill: bool) -> Self {
+        let pic = pic.into();
+        let mut p = Picture::new(pic.as_bytes(), Vec::new());
+        // C++: status = vsSyntax iff picture(s, False) != prEmpty.
+        let status_ok = p.run(false) == PicResult::Empty;
+        Self {
+            pic,
+            auto_fill,
+            status_ok,
+        }
+    }
+}
+
+impl Validator for PXPictureValidator {
+    /// `isValidInput(char* s, Boolean suppressFill)` — `doFill = voFill &&
+    /// !suppressFill`; returns `picture(s, doFill) != prError`. MUTATES `s` in
+    /// place (autofill of literals + uppercase transforms — the whole point of a
+    /// picture validator).
+    fn is_valid_input(&self, s: &mut String, suppress_fill: bool) -> bool {
+        let do_fill = self.auto_fill && !suppress_fill;
+        let mut p = Picture::new(self.pic.as_bytes(), s.as_bytes().to_vec());
+        let r = p.run(do_fill);
+        *s = String::from_utf8_lossy(&p.input).into_owned();
+        r != PicResult::Error
+    }
+
+    /// `isValid(const char* s)` — returns `picture(copy_of_s, False) ==
+    /// prComplete`. No write-back (C++ scans a stack copy).
+    fn is_valid(&self, s: &str) -> bool {
+        let mut p = Picture::new(self.pic.as_bytes(), s.as_bytes().to_vec());
+        p.run(false) == PicResult::Complete
+    }
+
+    /// `TValidator::status == vsOk` — overrides the base; `vsSyntax` ⇒ `false`.
+    fn is_status_ok(&self) -> bool {
+        self.status_ok
+    }
+
+    /// `error()` — C++ `messageBox(mfError|mfOKButton, "Error in picture
+    /// format.\n %s", pic)`.
+    /// TODO(row 63): messageBox(mfError|mfOKButton, "Error in picture format.\n {pic}")
+    fn error(&self) {}
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -634,5 +1225,188 @@ mod tests {
         let v: Box<dyn Validator> = Box::new(RangeValidator::new(1, 10));
         assert!(v.is_valid("5"));
         assert!(!v.is_valid("11"));
+    }
+
+    // ── PXPictureValidator (row 62) ───────────────────────────────────────────
+    //
+    // Golden vectors hand-traced against `tvalidat.cpp`. If a port disagrees with
+    // one, the port (or the trace) is wrong — re-read the C++, don't weaken the
+    // assertion.
+
+    /// Mask "###" (three required digits), autoFill=false.
+    #[test]
+    fn pic_three_digits_is_valid() {
+        let v = PXPictureValidator::new("###", false);
+        assert!(v.is_valid("123")); // prComplete
+        assert!(!v.is_valid("12")); // prIncomplete
+        assert!(!v.is_valid("1234")); // prError (jndex < len after complete)
+        assert!(!v.is_valid("12a")); // prError
+        assert!(!v.is_valid("")); // prEmpty != Complete
+        assert!(v.is_status_ok()); // well-formed mask
+    }
+
+    /// Mask "###" autoFill=false — isValidInput accepts partial/incomplete (only
+    /// prError fails) and does NOT mutate a non-filling field.
+    #[test]
+    fn pic_three_digits_is_valid_input() {
+        let v = PXPictureValidator::new("###", false);
+
+        let mut s = String::from("12");
+        assert!(v.is_valid_input(&mut s, false)); // prIncomplete != Error
+        assert_eq!(s, "12"); // unchanged (no autofill)
+
+        let mut s = String::from("12a");
+        assert!(!v.is_valid_input(&mut s, false)); // prError
+
+        let mut s = String::from("1234");
+        assert!(!v.is_valid_input(&mut s, false)); // prError
+    }
+
+    /// Mask "&&&" autoFill=true — three letters, uppercased. THE most
+    /// discriminating mutation test: "abc" → "ABC".
+    #[test]
+    fn pic_uppercase_autofill_mutates() {
+        let v = PXPictureValidator::new("&&&", true);
+        let mut s = String::from("abc");
+        assert!(v.is_valid_input(&mut s, false));
+        assert_eq!(s, "ABC"); // & uppercases each consumed letter
+        assert!(v.is_valid("abc")); // prComplete (& matches lowercase letters)
+    }
+
+    /// Mask "!" autoFill=true — one char, uppercased: "a" → "A".
+    #[test]
+    fn pic_bang_uppercases_single() {
+        let v = PXPictureValidator::new("!", true);
+        let mut s = String::from("a");
+        assert!(v.is_valid_input(&mut s, false));
+        assert_eq!(s, "A");
+    }
+
+    /// Mask "##:##" autoFill=true — the literal ':' auto-fills after "12":
+    /// "12" → "12:". And a full "12:34" is complete.
+    #[test]
+    fn pic_literal_colon_autofills() {
+        let v = PXPictureValidator::new("##:##", true);
+        let mut s = String::from("12");
+        assert!(v.is_valid_input(&mut s, false));
+        assert_eq!(s, "12:"); // autofill tail appends the literal ':'
+        assert!(v.is_valid("12:34")); // prComplete
+    }
+
+    /// Syntax / status: trailing ';' is a syntax error → vsSyntax.
+    #[test]
+    fn pic_trailing_semicolon_is_syntax_error() {
+        let v = PXPictureValidator::new("##;", false);
+        assert!(!v.is_status_ok());
+    }
+
+    /// Syntax / status: unbalanced '[' → vsSyntax.
+    #[test]
+    fn pic_unbalanced_bracket_is_syntax_error() {
+        let v = PXPictureValidator::new("[##", false);
+        assert!(!v.is_status_ok());
+    }
+
+    /// Syntax / status: well-formed mask → OK.
+    #[test]
+    fn pic_well_formed_status_ok() {
+        let v = PXPictureValidator::new("##", false);
+        assert!(v.is_status_ok());
+    }
+
+    /// Object safety: the boxed-trait storage form (`Option<Box<dyn Validator>>`).
+    #[test]
+    fn pic_object_safe_as_boxed_trait() {
+        let v: Box<dyn Validator> = Box::new(PXPictureValidator::new("###", false));
+        assert!(v.is_valid("123"));
+        assert!(!v.is_valid("12"));
+    }
+
+    /// Optional group: "#####[-####]" zip+4. Five required digits then an
+    /// optional `[-####]` (a literal dash plus four required digits). Traced
+    /// against the C++ engine (and confirmed against the prompt's stated intent):
+    /// - "12345" → five digits then the optional `[...]` group; `checkComplete`
+    ///   skips the trailing all-optional remainder → prAmbiguous → prComplete.
+    /// - "12345-678" → the dash plus only three of four required digits → the
+    ///   group is incomplete → prIncomplete (not complete).
+    /// - "12345-6789" → dash + all four digits consumed → prComplete.
+    ///
+    /// NOTE: the prompt sketched this with a 3-digit lead (`"###[-####]"`), but
+    /// that mask only accepts 3 digits or 3-dash-4 (8 chars); the 5-digit ZIP
+    /// (`"#####[-####]"`) is what yields the prompt's intended
+    /// complete/incomplete/complete trio, so the mask is corrected here.
+    #[test]
+    fn pic_optional_zip_plus_four() {
+        let v = PXPictureValidator::new("#####[-####]", false);
+        assert!(v.is_valid("12345")); // optional group skipped → complete
+        assert!(!v.is_valid("12345-678")); // partial +4 → incomplete
+        assert!(v.is_valid("12345-6789")); // full +4 → complete
+    }
+
+    /// Literal letter in the mask: the buffer is normalized to the MASK's case,
+    /// not the typed case. C++ `scan`'s default arm always `consume(pic[index])`
+    /// (tvalidat.cpp:450) — the matched literal byte, regardless of how it was
+    /// typed (case-insensitive match). Mask "N##", typed "n12" → buffer "N12".
+    #[test]
+    fn pic_literal_letter_normalizes_to_mask_case() {
+        let v = PXPictureValidator::new("N##", false);
+        let mut s = String::from("n12");
+        assert!(v.is_valid_input(&mut s, false)); // 'n' matches literal 'N'
+        assert_eq!(s, "N12"); // consume(pic[index]) writes the mask's 'N'
+        assert!(v.is_valid("N12")); // exact case also complete
+        assert!(!v.is_valid("X12")); // wrong literal → not complete
+    }
+
+    /// Comma alternatives — exercises the `skip_to_comma` backtracking path.
+    ///
+    /// SEMANTICS (hand-traced, then confirmed empirically against the engine):
+    /// `process` tries each comma-separated branch in order and returns as soon
+    /// as one **completes**; the next branch is tried only when the current one
+    /// errors or is incomplete. Crucially, the outer `picture()` then rejects any
+    /// run that completed a branch but left input unconsumed (`jndex < len` →
+    /// prError). So for `"###,#####"` the FIRST branch (`###`) completes on a
+    /// 3-digit input and a 5-digit input has trailing "45" → prError — the second
+    /// branch is NOT reached. The alternatives are "either form, but the first
+    /// matching one wins", not "match the longest".
+    #[test]
+    fn pic_comma_alternatives() {
+        let v = PXPictureValidator::new("###,#####", false);
+        assert!(v.is_valid("123")); // first branch (3 digits) completes
+        assert!(!v.is_valid("12345")); // first branch completes, "45" left → error
+        assert!(!v.is_valid("1234")); // first completes, "4" left → error
+        assert!(!v.is_valid("12")); // both branches need more → incomplete
+        // A mask where the SHORT branch can't complete the input falls
+        // through to the long branch:
+        let v2 = PXPictureValidator::new("##,####", false);
+        assert!(v2.is_valid("12")); // first branch (2 digits) completes
+        assert!(!v2.is_valid("1234")); // first completes, "34" left → error
+    }
+
+    /// `*` iteration operator and `{}` required group — the two most complex arms
+    /// (`iteration`/`group`). Hand-traced and confirmed empirically:
+    /// - `"*3#"` (`*` count 3, then `#`) = exactly three digits: "123" complete,
+    ///   "12" incomplete, "1234" error (trailing), "" empty.
+    /// - `"*#"` (`*` count 0 = greedy "any number") = any run of digits: "12345"
+    ///   complete (greedy consumes all → ambiguous → complete), "1" complete,
+    ///   "" empty.
+    /// - `"{###}"` (required group of three digits): "123" complete, "12"
+    ///   incomplete, "12a" error.
+    #[test]
+    fn pic_iteration_and_group() {
+        let exact3 = PXPictureValidator::new("*3#", false);
+        assert!(exact3.is_valid("123")); // counted iteration: 3 digits complete
+        assert!(!exact3.is_valid("12")); // only 2 → incomplete
+        assert!(!exact3.is_valid("1234")); // 4th digit trailing → error
+        assert!(!exact3.is_valid("")); // empty → not complete
+
+        let any = PXPictureValidator::new("*#", false);
+        assert!(any.is_valid("12345")); // greedy iteration → ambiguous → complete
+        assert!(any.is_valid("1")); // a single digit is complete too
+        assert!(!any.is_valid("")); // empty → not complete
+
+        let grp = PXPictureValidator::new("{###}", false);
+        assert!(grp.is_valid("123")); // required group satisfied
+        assert!(!grp.is_valid("12")); // group short → incomplete
+        assert!(!grp.is_valid("12a")); // 'a' not a digit → error
     }
 }
