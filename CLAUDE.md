@@ -5,13 +5,19 @@ Vision). The goal is a framework a C++ tvision veteran recognizes on sight, but
 that is native Rust.
 
 ## Read these first
-- **`docs/HANDOVER.md`** — the **living per-session handover**: where things
-  stand (HEAD commit, build state), what landed last session, and what's next.
-  **This is the changelog; CLAUDE.md is not.** Read it after this file.
+- **`docs/HANDOVER.md`** — the **forward-looking handover**: where things stand
+  (HEAD commit, build state), what's next, and the non-obvious gotchas the next
+  session needs. Read it after this file. **It is intentionally slim** — the
+  per-session implementation narrative + git-commit changelog live in
+  `docs/IMPLEMENTATION-LOG.md` (newest first; append, don't rewrite).
+- **`docs/IMPLEMENTATION-LOG.md`** — the **changelog**: what each session built
+  and why, per commit. History, not orientation — consult it for the rationale
+  behind a landed piece; do not read it cover-to-cover to start.
 - **`docs/PORT-ORDER.md`** — dependency-ordered checklist of 92 classes in 6
   phases, with verified C++ file mappings, target Rust modules, and
-  `FOUNDATION`/`MECHANICAL`/`INFRA` tags. **Port in this order** (lowest-numbered
-  incomplete row is the work; "Parallelizable batches" are an efficiency, not a
+  `FOUNDATION`/`MECHANICAL`/`INFRA` tags (**✅ = done & on `main`**). **Port in
+  this order** (lowest-numbered unmarked row is the work; "Parallelizable
+  batches" are an efficiency, not a
   competing direction).
 - **`docs/PORTING-GUIDE.md`** — the deviation reference. We port *faithfully*
   from the C++; this guide documents **only the places we deviate** (D1–D13),
@@ -138,24 +144,15 @@ D-rule / design note, not here.
   Conventions below.
 
 ## Current state
-**Read `docs/HANDOVER.md` for the live HEAD commit, build state, and what landed
-last.** As of this writing: Phase 0 (primitives + INFRA) ✅, Phase 1 (`TView`,
-`TGroup`, `TFrame`, `TProgram`, `TApplication`) ✅, Phase 2 (`TDeskTop`,
-`TWindow`, `TDialog` — the modal payoff) ✅, Batch B Phase-3 leaves ✅, plus
-`TScroller`/`TListViewer`/`TListBox`. The `#[delegate]` proc-macro
-(`tvision-macros`) is landed and adopted codebase-wide.
-
-**Next: Phase 4** — menus (46/49/50/51/52) and status line (47/53), the path to a
-fully drivable app. Menus force the deferred `Context` command-set query and are
-the first emitters of `cmTile`/`cmCascade`/`cmDosShell` (when they land, wire the
-row-32 breadcrumb in `program_handle_event` + build `Desktop::tile`/`cascade`
-geometry). **Batch C concrete validators 58–62** (`tvalidat.cpp`) is an available
-parallel fan-out. Per-row detail and rationale: `docs/HANDOVER.md`.
+**The live HEAD, build state, and what's next are in `docs/HANDOVER.md`;
+completion is tracked per row (✅) in `docs/PORT-ORDER.md`; per-commit rationale
+is in `docs/IMPLEMENTATION-LOG.md`.** This section deliberately does **not**
+restate the phase-by-phase snapshot (it goes stale) — read those three. The
+`#[delegate]` proc-macro (`tvision-macros`) is landed and adopted codebase-wide.
 
 ## Conventions
 - English for all code/comments/identifiers (user-facing strings may be localized).
-- Commit messages end with the project's Co-Authored-By trailer; commit/push only
-  when asked.
+- Commit messages end with the project's Co-Authored-By trailer
 - **Delegation (D2 embed-and-delegate):** a type that embeds an inner view forwards
   the un-overridden `View` methods via `#[delegate(to = <field>)]` (proc-macro in
   `tvision-macros`; re-exported as `tvision::delegate`). Write only the methods that
@@ -166,5 +163,6 @@ parallel fan-out. Per-row detail and rationale: `docs/HANDOVER.md`.
   the macro at an existing site is behaviour-preserving (`skip(...)` = exactly what
   the site leaves defaulted, verified by a `cargo expand` method-set diff). Full
   rationale: `docs/design/delegation-macros.md`.
-- **Keep this file stable.** Per-row progress goes in `docs/HANDOVER.md`, not
-  here. CLAUDE.md is orientation; HANDOVER.md is the changelog.
+- **Keep this file stable.** Per-row progress goes in
+  `docs/IMPLEMENTATION-LOG.md` (the changelog), not here. `HANDOVER.md` is the
+  slim forward-looking state; CLAUDE.md is orientation.

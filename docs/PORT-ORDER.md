@@ -37,6 +37,15 @@ class implementations and are excluded.
 first-time work), `MECHANICAL` (leaf/transcription once foundation exists),
 `INFRA` (net-new, no C++ source — built per the deviations).
 
+**Status:** **✅ in the `#` column = ported & on `main`** (per-row detail in
+[`docs/IMPLEMENTATION-LOG.md`](file:///home/oetiker/checkouts/rstv/docs/IMPLEMENTATION-LOG.md)).
+Unmarked rows are the remaining work — the **lowest-numbered unmarked row is
+next**. As of this writing rows **1–62 are done**; **63 (`messageBox`/`inputBox`)
+is next**. (Rows 65, and 77+ are not in this excerpt's range — keep marking as
+they land.) **Beyond the ladder:** `RegexValidator` (in `validate`) is an
+**rstv-original extension** — a regex-driven validator alongside the faithful
+`TPXPictureValidator` (62) — not a Turbo Vision class, so it has no row here.
+
 **Out of scope** (present in `tv.h` but in no guide module): the **help system**
 (`helpbase.cpp`/`help.cpp` → `THelpViewer`/`THelpWindow`/`THelpFile`) and
 **surface** (`TSurfaceView`/`TDrawSurface`, `tsurface.cpp`). Excluded here;
@@ -54,29 +63,29 @@ the Backend row is "net-new trait wrapping ported code," not write-from-scratch.
 
 | # | Class | Base | C++ files | Rust module | Tag | Notes / owns |
 |---|-------|------|-----------|-------------|-----|--------------|
-| 1 | `TPoint` | — | `objects.h` (inline) | `view` (geometry) | FOUNDATION | x/y; arithmetic ops |
-| 2 | `TRect` | — | `objects.h` (inline) | `view` (geometry) | MECHANICAL | a/b corners; intersect/union/move/grow; owns 2×`TPoint` |
-| 3 | `TColorRGB`/`TColorDesired` → `Color` | — | `colors.h` (inline) | `color` | FOUNDATION | D6 four-variant enum (Default/Bios/Indexed/Rgb) |
-| 4 | `TColorAttr` → `Style` | — | `colors.h` (inline) | `color` | FOUNDATION | D6 fg/bg + `Modifiers` (reverse, no-shadow); owns `Color` |
-| 5 | quantization ladder | — | `platform/colors.cpp`, `colors.h` (inline) | `backend` (`quantize`) | INFRA* | D6 RGB→256→16→BIOS faithful port; lives in Backend. (Not `mapcolor.cpp`/`palette.cpp` — those are D7/row 16.) |
-| 6 | `TScreenCell` → `Cell` | — | `scrncell.h` (inline) | `screen` | FOUNDATION | char(s)+`Style`; vendored ratatui cell shape |
-| 7 | `TDrawBuffer` | — | `drivers.cpp` | `screen` (`DrawBuffer`) | FOUNDATION | moveStr/moveChar/moveBuf/putAttribute; owns `Cell`s |
-| 8 | `TText` | — | `drivers.cpp`, `drivers2.cpp` | `text` | FOUNDATION | D13 width/scroll/cell-writer; `unicode-width`+`-segmentation` |
-| 9 | glyph/string tables | — | `tvtext1.cpp`, `tvtext2.cpp` | `theme` (`Glyphs`) | MECHANICAL | D7 frame/scrollbar/marks/icons → `Glyphs` |
-| 10 | `TKey` + key events | — | `tkey.cpp`, `tkeys.h` | `event` (`Key`) | FOUNDATION | D5 decomposed `enum Key` + `KeyModifiers` bool struct + `KeyEvent`; no modifier-combined variants (Ctrl+C = `Key::Char('c')` + ctrl, Shift+Tab = `Key::Tab` + shift). Mirrors magiblot canonical `TKey` (base key + modifier flags + `controlKeyState`). Not BIOS scancodes |
-| 11 | `TEvent`/`MouseEventType`/`KeyDownEvent`/`MessageEvent` | — | `tevent.cpp`, `system.h` | `event` | FOUNDATION | D4 `enum Event` sum type; `EventMask` bool struct |
-| 12 | `TCommandSet` | — | `tcmdset.cpp` | `command` | FOUNDATION | D1 → `CommandSet` over `HashSet<Command>`; `Command(&'static str)` open newtype (namespaced); no range guard, no `all()`; external views mint via `Command::custom("ns.name")`. Enabled-by-default policy moves to `TView`/`TProgram` (rows 23/31). View-specific commands live with their view module, not centralized. |
-| 13 | `TObject` | — | `tobject.cpp` | (absorbed) | FOUNDATION | D2 no root class; lifetime via Rust ownership/`Drop` |
-| 14 | `TNSCollection`/`TCollection` | `TObject` | `tcollect.cpp`, `tvobjs.h` | (idiom) | MECHANICAL | → `Vec<T>` + iterators; `firstThat`/`forEach` → iterators |
-| 15 | `TNSSortedCollection`/`TSortedCollection` | `TCollection` | `tsortcol.cpp` | (idiom) | MECHANICAL | → `Vec<T: Ord>` |
-| 15a | `TStringCollection` | `TSortedCollection` | `tstrcoll.cpp`, `sstrcoll.cpp` | (idiom) | MECHANICAL | → sorted `Vec<String>`; needed by `TStringLookupValidator` (#61) |
-| 16 | `Theme` | — | (synthesizes D7 palettes) | `theme` | INFRA | Role→Style map + `Glyphs`; default = classic blue (`cpAppColor`) |
-| 17 | `ViewId` minter | — | (replaces `owner`/`current`/`next`) | `view` (`ViewId`) | INFRA | D3 global monotonic `ViewId` identity; up/sideways links by id |
-| 18 | renderer back-buffer + diff | — | (replaces `TVWrite`/`drawUnder*`) | `screen` | INFRA | D8 whole-tree redraw + cell diff; vendored ratatui `Buffer` |
-| 19 | `Backend` trait + `CrosstermBackend` + `HeadlessBackend` | — | `THardwareInfo`/`TScreen`/`TClipboard` (`tscreen.cpp`, `hardwrvr.cpp`, `tclipbrd.cpp`) as design ref | `backend` | INFRA | D11; size/flush/cursor/clipboard; wraps row 5 ladder |
-| 20 | `Clock` + timer queue | — | `TTimerQueue` (`ttimerqu.cpp`) as ref | `timer` | INFRA | D9/D11 injected clock, cancelable handles, poll timeout |
-| 21 | capture stack | — | (replaces nested `execView`/`dragView` loops) | `capture` | INFRA | D9 LIFO handlers; modal/drag/press = handlers |
-| 22 | `Context` / `DrawCtx` | — | (replaces up-pointers + clip) | `view` | INFRA | D3 downward ctx: theme/clip/parent style; targeted query (D4) |
+| 1 ✅ | `TPoint` | — | `objects.h` (inline) | `view` (geometry) | FOUNDATION | x/y; arithmetic ops |
+| 2 ✅ | `TRect` | — | `objects.h` (inline) | `view` (geometry) | MECHANICAL | a/b corners; intersect/union/move/grow; owns 2×`TPoint` |
+| 3 ✅ | `TColorRGB`/`TColorDesired` → `Color` | — | `colors.h` (inline) | `color` | FOUNDATION | D6 four-variant enum (Default/Bios/Indexed/Rgb) |
+| 4 ✅ | `TColorAttr` → `Style` | — | `colors.h` (inline) | `color` | FOUNDATION | D6 fg/bg + `Modifiers` (reverse, no-shadow); owns `Color` |
+| 5 ✅ | quantization ladder | — | `platform/colors.cpp`, `colors.h` (inline) | `backend` (`quantize`) | INFRA* | D6 RGB→256→16→BIOS faithful port; lives in Backend. (Not `mapcolor.cpp`/`palette.cpp` — those are D7/row 16.) |
+| 6 ✅ | `TScreenCell` → `Cell` | — | `scrncell.h` (inline) | `screen` | FOUNDATION | char(s)+`Style`; vendored ratatui cell shape |
+| 7 ✅ | `TDrawBuffer` | — | `drivers.cpp` | `screen` (`DrawBuffer`) | FOUNDATION | moveStr/moveChar/moveBuf/putAttribute; owns `Cell`s |
+| 8 ✅ | `TText` | — | `drivers.cpp`, `drivers2.cpp` | `text` | FOUNDATION | D13 width/scroll/cell-writer; `unicode-width`+`-segmentation` |
+| 9 ✅ | glyph/string tables | — | `tvtext1.cpp`, `tvtext2.cpp` | `theme` (`Glyphs`) | MECHANICAL | D7 frame/scrollbar/marks/icons → `Glyphs` |
+| 10 ✅ | `TKey` + key events | — | `tkey.cpp`, `tkeys.h` | `event` (`Key`) | FOUNDATION | D5 decomposed `enum Key` + `KeyModifiers` bool struct + `KeyEvent`; no modifier-combined variants (Ctrl+C = `Key::Char('c')` + ctrl, Shift+Tab = `Key::Tab` + shift). Mirrors magiblot canonical `TKey` (base key + modifier flags + `controlKeyState`). Not BIOS scancodes |
+| 11 ✅ | `TEvent`/`MouseEventType`/`KeyDownEvent`/`MessageEvent` | — | `tevent.cpp`, `system.h` | `event` | FOUNDATION | D4 `enum Event` sum type; `EventMask` bool struct |
+| 12 ✅ | `TCommandSet` | — | `tcmdset.cpp` | `command` | FOUNDATION | D1 → `CommandSet` over `HashSet<Command>`; `Command(&'static str)` open newtype (namespaced); no range guard, no `all()`; external views mint via `Command::custom("ns.name")`. Enabled-by-default policy moves to `TView`/`TProgram` (rows 23/31). View-specific commands live with their view module, not centralized. |
+| 13 ✅ | `TObject` | — | `tobject.cpp` | (absorbed) | FOUNDATION | D2 no root class; lifetime via Rust ownership/`Drop` |
+| 14 ✅ | `TNSCollection`/`TCollection` | `TObject` | `tcollect.cpp`, `tvobjs.h` | (idiom) | MECHANICAL | → `Vec<T>` + iterators; `firstThat`/`forEach` → iterators |
+| 15 ✅ | `TNSSortedCollection`/`TSortedCollection` | `TCollection` | `tsortcol.cpp` | (idiom) | MECHANICAL | → `Vec<T: Ord>` |
+| 15a ✅ | `TStringCollection` | `TSortedCollection` | `tstrcoll.cpp`, `sstrcoll.cpp` | (idiom) | MECHANICAL | → sorted `Vec<String>`; needed by `TStringLookupValidator` (#61) |
+| 16 ✅ | `Theme` | — | (synthesizes D7 palettes) | `theme` | INFRA | Role→Style map + `Glyphs`; default = classic blue (`cpAppColor`) |
+| 17 ✅ | `ViewId` minter | — | (replaces `owner`/`current`/`next`) | `view` (`ViewId`) | INFRA | D3 global monotonic `ViewId` identity; up/sideways links by id |
+| 18 ✅ | renderer back-buffer + diff | — | (replaces `TVWrite`/`drawUnder*`) | `screen` | INFRA | D8 whole-tree redraw + cell diff; vendored ratatui `Buffer` |
+| 19 ✅ | `Backend` trait + `CrosstermBackend` + `HeadlessBackend` | — | `THardwareInfo`/`TScreen`/`TClipboard` (`tscreen.cpp`, `hardwrvr.cpp`, `tclipbrd.cpp`) as design ref | `backend` | INFRA | D11; size/flush/cursor/clipboard; wraps row 5 ladder |
+| 20 ✅ | `Clock` + timer queue | — | `TTimerQueue` (`ttimerqu.cpp`) as ref | `timer` | INFRA | D9/D11 injected clock, cancelable handles, poll timeout |
+| 21 ✅ | capture stack | — | (replaces nested `execView`/`dragView` loops) | `capture` | INFRA | D9 LIFO handlers; modal/drag/press = handlers |
+| 22 ✅ | `Context` / `DrawCtx` | — | (replaces up-pointers + clip) | `view` | INFRA | D3 downward ctx: theme/clip/parent style; targeted query (D4) |
 
 ---
 
@@ -84,16 +93,16 @@ the Backend row is "net-new trait wrapping ported code," not write-from-scratch.
 
 | # | Class | Base | C++ files | Rust module | Tag | Notes / owns |
 |---|-------|------|-----------|-------------|-----|--------------|
-| 23 | `TView` | `TObject` | `tview.cpp`, `sview.cpp`, `tvexposd.cpp`, `tvcursor.cpp` | `view` | FOUNDATION | D2 `View` trait + `ViewState`; D5 state/options/growMode/dragMode structs; pattern-setting class |
-| 24 | `TFrame` | `TView` | `tframe.cpp`, `sframe.cpp`, `framelin.cpp` | `frame` | FOUNDATION | window border/title/icons; glyphs from Theme (D7) |
-| 25 | `TScrollBar` | `TView` | `tscrlbar.cpp`, `sscrlbar.cpp` | `widgets::scrollbar` | MECHANICAL | value/min/max/step; `cmScrollBarChanged` broadcast |
-| 26 | `TGroup` | `TView` | `tgroup.cpp`, `grp.cpp`, `sgroup.cpp`, `tgrmv.cpp` | `group` | FOUNDATION | D3 owns `Vec<Box<dyn View>>`; D4 three-phase routing; D8 drop buffered/lock; `current` via `ViewId` |
-| 27 | `TScroller` | `TView` | `tscrolle.cpp`, `sscrolle.cpp` | `widgets::scroller` | MECHANICAL | takes 2×`TScrollBar` (→25); `delta`/`limit` |
-| 28 | `TListViewer` | `TView` | `tlstview.cpp`, `slstview.cpp` | `widgets::listviewer` | FOUNDATION | takes 2×`TScrollBar` (→25); list-render matrix roles (D7); base for list widgets |
-| 29 | `TBackground` | `TView` | `tbkgrnd.cpp`, `sbkgrnd.cpp`, `nmbkgrnd.cpp` | `desktop` | MECHANICAL | pattern fill |
-| 30 | `TDeskTop` | `TGroup` + `TDeskInit` | `tdesktop.cpp`, `sdesktop.cpp`, `nmdsktop.cpp` | `desktop` | FOUNDATION | owns `TBackground` (→29) via factory mixin; tile/cascade |
-| 31 | `TProgram` | `TGroup` + `TProgInit` | `tprogram.cpp` | `app` | FOUNDATION | **factory-mixin deferral:** holds `TStatusLine`/`TMenuBar`/`TDeskTop` via injected factories — those classes are Phase 4 yet `TProgram` precedes them. Owns the single event loop (D9), timer queue (→20). |
-| 32 | `TApplication` | `TProgram` + `TAppInit` | `tapplica.cpp` | `app` | MECHANICAL | tile/cascade/dosShell wrappers over `TProgram` |
+| 23 ✅ | `TView` | `TObject` | `tview.cpp`, `sview.cpp`, `tvexposd.cpp`, `tvcursor.cpp` | `view` | FOUNDATION | D2 `View` trait + `ViewState`; D5 state/options/growMode/dragMode structs; pattern-setting class |
+| 24 ✅ | `TFrame` | `TView` | `tframe.cpp`, `sframe.cpp`, `framelin.cpp` | `frame` | FOUNDATION | window border/title/icons; glyphs from Theme (D7) |
+| 25 ✅ | `TScrollBar` | `TView` | `tscrlbar.cpp`, `sscrlbar.cpp` | `widgets::scrollbar` | MECHANICAL | value/min/max/step; `cmScrollBarChanged` broadcast |
+| 26 ✅ | `TGroup` | `TView` | `tgroup.cpp`, `grp.cpp`, `sgroup.cpp`, `tgrmv.cpp` | `group` | FOUNDATION | D3 owns `Vec<Box<dyn View>>`; D4 three-phase routing; D8 drop buffered/lock; `current` via `ViewId` |
+| 27 ✅ | `TScroller` | `TView` | `tscrolle.cpp`, `sscrolle.cpp` | `widgets::scroller` | MECHANICAL | takes 2×`TScrollBar` (→25); `delta`/`limit` |
+| 28 ✅ | `TListViewer` | `TView` | `tlstview.cpp`, `slstview.cpp` | `widgets::listviewer` | FOUNDATION | takes 2×`TScrollBar` (→25); list-render matrix roles (D7); base for list widgets |
+| 29 ✅ | `TBackground` | `TView` | `tbkgrnd.cpp`, `sbkgrnd.cpp`, `nmbkgrnd.cpp` | `desktop` | MECHANICAL | pattern fill |
+| 30 ✅ | `TDeskTop` | `TGroup` + `TDeskInit` | `tdesktop.cpp`, `sdesktop.cpp`, `nmdsktop.cpp` | `desktop` | FOUNDATION | owns `TBackground` (→29) via factory mixin; tile/cascade |
+| 31 ✅ | `TProgram` | `TGroup` + `TProgInit` | `tprogram.cpp` | `app` | FOUNDATION | **factory-mixin deferral:** holds `TStatusLine`/`TMenuBar`/`TDeskTop` via injected factories — those classes are Phase 4 yet `TProgram` precedes them. Owns the single event loop (D9), timer queue (→20). |
+| 32 ✅ | `TApplication` | `TProgram` + `TAppInit` | `tapplica.cpp` | `app` | MECHANICAL | tile/cascade/dosShell wrappers over `TProgram` |
 
 ---
 
@@ -101,8 +110,8 @@ the Backend row is "net-new trait wrapping ported code," not write-from-scratch.
 
 | # | Class | Base | C++ files | Rust module | Tag | Notes / owns |
 |---|-------|------|-----------|-------------|-----|--------------|
-| 33 | `TWindow` | `TGroup` + `TWindowInit` | `twindow.cpp`, `swindow.cpp`, `nmwindow.cpp` | `window` | FOUNDATION | builds `TFrame` (→24) via factory mixin; `standardScrollBar` (→25); zoom/move/close; D2 embed-and-delegate exemplar |
-| 34 | `TDialog` | `TWindow` | `tdialog.cpp`, `sdialog.cpp`, `nmdialog.cpp` | `dialog` | FOUNDATION | modal via capture handler (D9); `cmOK`/`cmCancel`; gather/scatter typed values (D10) |
+| 33 ✅ | `TWindow` | `TGroup` + `TWindowInit` | `twindow.cpp`, `swindow.cpp`, `nmwindow.cpp` | `window` | FOUNDATION | builds `TFrame` (→24) via factory mixin; `standardScrollBar` (→25); zoom/move/close; D2 embed-and-delegate exemplar |
+| 34 ✅ | `TDialog` | `TWindow` | `tdialog.cpp`, `sdialog.cpp`, `nmdialog.cpp` | `dialog` | FOUNDATION | modal via capture handler (D9); `cmOK`/`cmCancel`; gather/scatter typed values (D10) |
 
 ---
 
@@ -113,17 +122,17 @@ concrete validators (Phase 5). Split accordingly.
 
 | # | Class | Base | C++ files | Rust module | Tag | Notes / owns |
 |---|-------|------|-----------|-------------|-----|--------------|
-| 35 | `TValidator` (abstract) | `TObject` | `tvalidat.cpp`, `svalid.cpp` | `validate` | FOUNDATION | D2 `Validator` trait: `is_valid_input`/`is_valid`/`transfer` (D10) |
-| 36 | `TStaticText` | `TView` | `tstatict.cpp`, `sstatict.cpp` | `widgets::static_text` | MECHANICAL | word-wrap text draw (D13) |
-| 37 | `TButton` | `TView` | `tbutton.cpp`, `sbutton.cpp` | `widgets::button` | MECHANICAL | press animation via Clock (→20); shadow glyphs (D7); broadcast/command flags |
-| 38 | `TCluster` | `TView` | `tcluster.cpp`, `scluster.cpp` | `widgets::cluster` | FOUNDATION | owns label strings; base for check/radio; `value`/`enableMask` bits |
-| 39 | `TInputLine` | `TView` | `tinputli.cpp`, `sinputli.cpp` | `widgets::input_line` | FOUNDATION | holds optional `Validator` (→35); typed `value`/`set_value` (D10); selection; arrows glyphs (D7) |
-| 40 | `TParamText` | `TStaticText` | `tparamte.cpp`, `sparamte.cpp` | `widgets::static_text` | MECHANICAL | printf-style formatted static text |
-| 41 | `TLabel` | `TStaticText` | `tlabel.cpp`, `slabel.cpp` | `widgets::label` | MECHANICAL | `link` to a control via `ViewId` (D3); focus-on-shortcut |
-| 42 | `TCheckBoxes` | `TCluster` | `tcheckbo.cpp`, `scheckbo.cpp`, `nmchkbox.cpp` | `widgets::cluster` | MECHANICAL | check marks (D7) |
-| 43 | `TRadioButtons` | `TCluster` | `tradiobu.cpp`, `sradiobu.cpp`, `nmrbtns.cpp` | `widgets::cluster` | MECHANICAL | radio marks (D7) |
-| 44 | `TMultiCheckBoxes` | `TCluster` | `tmulchkb.cpp`, `smulchkb.cpp`, `nmmulchk.cpp` | `widgets::cluster` | MECHANICAL | multi-state marks; `states` array |
-| 45 | `TIndicator` | `TView` | `tindictr.cpp`, `editstat.cpp` | `widgets::indicator` | MECHANICAL | editor row/col + modified flag display |
+| 35 ✅ | `TValidator` (abstract) | `TObject` | `tvalidat.cpp`, `svalid.cpp` | `validate` | FOUNDATION | D2 `Validator` trait: `is_valid_input`/`is_valid`/`transfer` (D10) |
+| 36 ✅ | `TStaticText` | `TView` | `tstatict.cpp`, `sstatict.cpp` | `widgets::static_text` | MECHANICAL | word-wrap text draw (D13) |
+| 37 ✅ | `TButton` | `TView` | `tbutton.cpp`, `sbutton.cpp` | `widgets::button` | MECHANICAL | press animation via Clock (→20); shadow glyphs (D7); broadcast/command flags |
+| 38 ✅ | `TCluster` | `TView` | `tcluster.cpp`, `scluster.cpp` | `widgets::cluster` | FOUNDATION | owns label strings; base for check/radio; `value`/`enableMask` bits |
+| 39 ✅ | `TInputLine` | `TView` | `tinputli.cpp`, `sinputli.cpp` | `widgets::input_line` | FOUNDATION | holds optional `Validator` (→35); typed `value`/`set_value` (D10); selection; arrows glyphs (D7) |
+| 40 ✅ | `TParamText` | `TStaticText` | `tparamte.cpp`, `sparamte.cpp` | `widgets::static_text` | MECHANICAL | printf-style formatted static text |
+| 41 ✅ | `TLabel` | `TStaticText` | `tlabel.cpp`, `slabel.cpp` | `widgets::label` | MECHANICAL | `link` to a control via `ViewId` (D3); focus-on-shortcut |
+| 42 ✅ | `TCheckBoxes` | `TCluster` | `tcheckbo.cpp`, `scheckbo.cpp`, `nmchkbox.cpp` | `widgets::cluster` | MECHANICAL | check marks (D7) |
+| 43 ✅ | `TRadioButtons` | `TCluster` | `tradiobu.cpp`, `sradiobu.cpp`, `nmrbtns.cpp` | `widgets::cluster` | MECHANICAL | radio marks (D7) |
+| 44 ✅ | `TMultiCheckBoxes` | `TCluster` | `tmulchkb.cpp`, `smulchkb.cpp`, `nmmulchk.cpp` | `widgets::cluster` | MECHANICAL | multi-state marks; `states` array |
+| 45 ✅ | `TIndicator` | `TView` | `tindictr.cpp`, `editstat.cpp` | `widgets::indicator` | MECHANICAL | editor row/col + modified flag display |
 
 ---
 
@@ -131,18 +140,18 @@ concrete validators (Phase 5). Split accordingly.
 
 | # | Class | Base | C++ files | Rust module | Tag | Notes / owns |
 |---|-------|------|-----------|-------------|-----|--------------|
-| 46 | `TMenuItem`/`TSubMenu`/`TMenu` | — | `menu.cpp` | `menu` | FOUNDATION | menu data tree (name/command/key/submenu); `operator+` builders → Rust builder API |
-| 47 | `TStatusItem`/`TStatusDef` | — | `menus.h` (inline) | `status` | MECHANICAL | status-item data (text/key/cmd, help-ctx ranges) |
-| 48 | `TListBox` | `TListViewer` | `tlistbox.cpp`, `slistbox.cpp`, `nmlstbox.cpp` | `widgets::list_box` | MECHANICAL | owns a `TCollection` (→14); takes `TScrollBar` (→25); typed value (D10) |
-| 49 | `TMenuView` | `TView` | `tmnuview.cpp`, `smnuview.cpp` | `menu` | FOUNDATION | holds `TMenu` (→46); hotkey/shortcut dispatch; `evBroadcast` mask |
-| 50 | `TMenuBar` | `TMenuView` | `tmenubar.cpp`, `smenubar.cpp` | `menu` | MECHANICAL | horizontal bar layout |
-| 51 | `TMenuBox` | `TMenuView` | `tmenubox.cpp`, `smenubox.cpp` | `menu` | MECHANICAL | vertical popup box; frame glyphs (D7) |
-| 52 | `TMenuPopup` | `TMenuBox` | `tmenupop.cpp`, `smenupop.cpp`, `popupmnu.cpp` | `menu` | MECHANICAL | spawns/execs popup (D9); `popupMenu()` free fn in `popupmnu.cpp` |
-| 53 | `TStatusLine` | `TView` | `tstatusl.cpp`, `sstatusl.cpp` | `status` | FOUNDATION | owns `TStatusDef`/`TStatusItem` (→47); hint(); help-ctx → hint mapping |
-| 54 | history store (`historyAdd`/`Count`/`Str`/`clearHistory`) | — | `histlist.cpp` | `widgets::history` | MECHANICAL | per-id ring buffer backing store |
-| 55 | `THistoryViewer` | `TListViewer` | `thstview.cpp` | `widgets::history` | MECHANICAL | reads history store (→54) |
-| 56 | `THistoryWindow` | `TWindow` + `THistInit` | `thistwin.cpp` | `widgets::history` | MECHANICAL | owns `THistoryViewer` (→55) via factory mixin |
-| 57 | `THistory` | `TView` | `thistory.cpp`, `nmhist.cpp` | `widgets::history` | MECHANICAL | dropdown icon next to `TInputLine` (→39); spawns `THistoryWindow` (→56) |
+| 46 ✅ | `TMenuItem`/`TSubMenu`/`TMenu` | — | `menu.cpp` | `menu` | FOUNDATION | menu data tree (name/command/key/submenu); `operator+` builders → Rust builder API |
+| 47 ✅ | `TStatusItem`/`TStatusDef` | — | `menus.h` (inline) | `status` | MECHANICAL | status-item data (text/key/cmd, help-ctx ranges) |
+| 48 ✅ | `TListBox` | `TListViewer` | `tlistbox.cpp`, `slistbox.cpp`, `nmlstbox.cpp` | `widgets::list_box` | MECHANICAL | owns a `TCollection` (→14); takes `TScrollBar` (→25); typed value (D10) |
+| 49 ✅ | `TMenuView` | `TView` | `tmnuview.cpp`, `smnuview.cpp` | `menu` | FOUNDATION | holds `TMenu` (→46); hotkey/shortcut dispatch; `evBroadcast` mask |
+| 50 ✅ | `TMenuBar` | `TMenuView` | `tmenubar.cpp`, `smenubar.cpp` | `menu` | MECHANICAL | horizontal bar layout |
+| 51 ✅ | `TMenuBox` | `TMenuView` | `tmenubox.cpp`, `smenubox.cpp` | `menu` | MECHANICAL | vertical popup box; frame glyphs (D7) |
+| 52 ✅ | `TMenuPopup` | `TMenuBox` | `tmenupop.cpp`, `smenupop.cpp`, `popupmnu.cpp` | `menu` | MECHANICAL | spawns/execs popup (D9); `popupMenu()` free fn in `popupmnu.cpp` |
+| 53 ✅ | `TStatusLine` | `TView` | `tstatusl.cpp`, `sstatusl.cpp` | `status` | FOUNDATION | owns `TStatusDef`/`TStatusItem` (→47); hint(); help-ctx → hint mapping |
+| 54 ✅ | history store (`historyAdd`/`Count`/`Str`/`clearHistory`) | — | `histlist.cpp` | `widgets::history` | MECHANICAL | per-id ring buffer backing store |
+| 55 ✅ | `THistoryViewer` | `TListViewer` | `thstview.cpp` | `widgets::history` | MECHANICAL | reads history store (→54) |
+| 56 ✅ | `THistoryWindow` | `TWindow` + `THistInit` | `thistwin.cpp` | `widgets::history` | MECHANICAL | owns `THistoryViewer` (→55) via factory mixin |
+| 57 ✅ | `THistory` | `TView` | `thistory.cpp`, `nmhist.cpp` | `widgets::history` | MECHANICAL | dropdown icon next to `TInputLine` (→39); spawns `THistoryWindow` (→56) |
 
 ---
 
@@ -150,11 +159,11 @@ concrete validators (Phase 5). Split accordingly.
 
 | # | Class | Base | C++ files | Rust module | Tag | Notes / owns |
 |---|-------|------|-----------|-------------|-----|--------------|
-| 58 | `TFilterValidator` | `TValidator` | `tvalidat.cpp` | `validate` | MECHANICAL | char allow-list |
-| 59 | `TRangeValidator` | `TFilterValidator` | `tvalidat.cpp` | `validate` | MECHANICAL | numeric min/max; `transfer` (D10) |
-| 60 | `TLookupValidator` | `TValidator` | `tvalidat.cpp` | `validate` | MECHANICAL | abstract lookup |
-| 61 | `TStringLookupValidator` | `TLookupValidator` | `tvalidat.cpp` | `validate` | MECHANICAL | owns string list |
-| 62 | `TPXPictureValidator` | `TValidator` | `tvalidat.cpp` | `validate` | MECHANICAL | Paradox picture-mask state machine |
+| 58 ✅ | `TFilterValidator` | `TValidator` | `tvalidat.cpp` | `validate` | MECHANICAL | char allow-list |
+| 59 ✅ | `TRangeValidator` | `TFilterValidator` | `tvalidat.cpp` | `validate` | MECHANICAL | numeric min/max; `transfer` (D10) |
+| 60 ✅ | `TLookupValidator` | `TValidator` | `tvalidat.cpp` | `validate` | MECHANICAL | abstract lookup |
+| 61 ✅ | `TStringLookupValidator` | `TLookupValidator` | `tvalidat.cpp` | `validate` | MECHANICAL | owns string list |
+| 62 ✅ | `TPXPictureValidator` | `TValidator` | `tvalidat.cpp` | `validate` | MECHANICAL | Paradox picture-mask state machine |
 | 63 | `messageBox`/`messageBoxRect`/`inputBox`/`inputBoxRect` | — | `msgbox.cpp` | `dialog` (msgbox) | MECHANICAL | builds `TDialog`+`TStaticText`+`TButton`(s)/`TInputLine`; result via posted `Command` (D9) |
 | 64 | `TStringList`/`TStrListMaker`/`TStrIndexRec` | `TObject` | `tstrlist.cpp`, `sstrlst.cpp` | `text` (resource) | MECHANICAL | string-resource lists; mostly D12-adjacent — minimal port |
 | 66 | `TEditor` | `TView` | `teditor1.cpp`, `teditor2.cpp`, `edits.cpp` | `widgets::editor` | FOUNDATION | gap-buffer text editor; takes 2×`TScrollBar`+`TIndicator`; clipboard (D11); search/replace |
