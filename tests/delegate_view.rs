@@ -2,7 +2,7 @@
 //! currently-known `View` method.
 //!
 //! The empty `impl View for D {}` compiling at all proves every one of the
-//! 22 generated signatures matches the trait exactly. The behavioral assertions
+//! 25 generated signatures matches the trait exactly. The behavioral assertions
 //! prove completeness: no forwarder silently missing.
 
 use std::cell::RefCell;
@@ -106,11 +106,20 @@ impl View for Spy {
         self.mark("select_window_num");
         false
     }
+    fn tile(&mut self, _r: Rect) {
+        self.mark("tile");
+    }
+    fn cascade(&mut self, _r: Rect) {
+        self.mark("cascade");
+    }
     fn apply_list_scroll(&mut self, _h: Option<i32>, _v: Option<i32>, _ctx: &mut Context) {
         self.mark("apply_list_scroll");
     }
     fn update_menu_commands(&mut self, _cs: &CommandSet) {
         self.mark("update_menu_commands");
+    }
+    fn set_menu_current(&mut self, _current: Option<usize>) {
+        self.mark("set_menu_current");
     }
     fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
         self.mark("as_any_mut");
@@ -119,7 +128,7 @@ impl View for Spy {
 }
 
 // ---------------------------------------------------------------------------
-// D — pure delegator: empty impl, macro injects ALL 22 forwarders.
+// D — pure delegator: empty impl, macro injects ALL 25 forwarders.
 // ---------------------------------------------------------------------------
 
 struct D {
@@ -226,6 +235,10 @@ fn delegate_forwards_every_known_view_method() {
         let _ = d.select_window_num(1, &mut ctx);
     }
 
+    // -- tile / cascade -----------------------------------------------------
+    d.tile(Rect::new(0, 0, 80, 24));
+    d.cascade(Rect::new(0, 0, 80, 24));
+
     // -- apply_list_scroll --------------------------------------------------
     {
         let mut out = VecDeque::new();
@@ -237,6 +250,9 @@ fn delegate_forwards_every_known_view_method() {
 
     // -- update_menu_commands -----------------------------------------------
     d.update_menu_commands(&CommandSet::new());
+
+    // -- set_menu_current ---------------------------------------------------
+    d.set_menu_current(Some(0));
 
     // -- as_any_mut ---------------------------------------------------------
     let _ = d.as_any_mut();
@@ -278,8 +294,11 @@ fn delegate_forwards_every_known_view_method() {
         "number",
         "grabs_focus_on_click",
         "select_window_num",
+        "tile",
+        "cascade",
         "apply_list_scroll",
         "update_menu_commands",
+        "set_menu_current",
         "as_any_mut",
     ];
     for m in expected {

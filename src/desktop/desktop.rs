@@ -23,18 +23,91 @@
 //!   direct walk.
 //! * **D12** streamable `read`/`write`/`build`/`name` dropped.
 //!
+//! ## Tiling geometry (row 30)
+//! * `tile`/`cascade` (the `mostEqualDivisors`/`calcTileRect`/`doCascade` layout)
+//!   are ported as [`View`] overrides on [`Desktop`], driven by the program's
+//!   `cmTile`/`cmCascade` handler. `tileError()` is an empty C++ no-op: when its
+//!   guard trips (a cell would be zero-sized, or a window's minimum exceeds the
+//!   cascade rect) we simply leave bounds unchanged. `tile_columns_first`
+//!   (C++ `tileColumnsFirst = False`) selects the `favorY` orientation.
+//!
 //! ## Deferred (no dead stubs)
-//! * `tile`/`cascade`/`tileError` (the `mostEqualDivisors`/`calcTileRect`/
-//!   `doCascade` tiling geometry) — needs `ofTileable` + a `locate` path; lands
-//!   when windows exist (row 33+).
 //! * `shutDown` (`background = 0; TGroup::shutDown()`) — no shutDown path yet.
-//! * `tileColumnsFirst` field — only `tile` reads it, so it is not added.
 
 use crate::command::Command;
 use crate::event::Event;
-use crate::view::{Context, Group, Rect, View, ViewId};
+use crate::view::{Context, Group, Rect, View, ViewId, locate};
 
 use super::Background;
+
+// -- tiling geometry helpers (verbatim ports of the tdesktop.cpp file statics --
+// turned into pure functions; no globals — the C++ `numCols`/`numRows`/`leftOver`
+// statics are threaded as parameters).
+
+/// `iSqr(i)` (`tdesktop.cpp`) — integer square-root-ish helper used by
+/// `mostEqualDivisors`. Faithful `i32` port of the `abs((int)(res1-res2)) > 1`
+/// Newton-style loop.
+fn i_sqr(i: i32) -> i32 {
+    let mut res1 = 2;
+    let mut res2 = i / res1;
+    while (res1 - res2).abs() > 1 {
+        res1 = (res1 + res2) / 2;
+        res2 = i / res1;
+    }
+    if res1 < res2 { res1 } else { res2 }
+}
+
+/// `mostEqualDivisors(n, x, y, favorY)` (`tdesktop.cpp`) — factor `n` into the
+/// most-equal pair. Returns `(x, y)`. `favor_y` puts the larger factor on `y`
+/// (C++ `favorY = !tileColumnsFirst`).
+fn most_equal_divisors(n: i32, favor_y: bool) -> (i32, i32) {
+    let mut i = i_sqr(n);
+    if n % i != 0 && n % (i + 1) == 0 {
+        i += 1;
+    }
+    if i < n / i {
+        i = n / i;
+    }
+    if favor_y {
+        (n / i, i) // x = n/i, y = i
+    } else {
+        (i, n / i) // x = i,   y = n/i
+    }
+}
+
+/// `dividerLoc(lo, hi, num, pos)` (`tdesktop.cpp`) — the `pos`-th of `num` evenly
+/// spaced divider coordinates between `lo` and `hi`. C++ does the multiply in
+/// `long`; coords are `i32`, so the product is computed in `i64` to avoid
+/// overflow, faithful to `int(long(hi-lo)*pos/long(num)+lo)`.
+fn divider_loc(lo: i32, hi: i32, num: i32, pos: i32) -> i32 {
+    ((hi - lo) as i64 * pos as i64 / num as i64) as i32 + lo
+}
+
+/// `calcTileRect(pos, r)` (`tdesktop.cpp`) — the cell rect for tile slot `pos`
+/// in the `num_cols × num_rows` grid (with `left_over` columns carrying an extra
+/// row). The C++ file statics `numCols`/`numRows`/`leftOver` are passed in.
+fn calc_tile_rect(pos: i32, r: Rect, num_cols: i32, num_rows: i32, left_over: i32) -> Rect {
+    let d = (num_cols - left_over) * num_rows;
+    let (x, y) = if pos < d {
+        (pos / num_rows, pos % num_rows)
+    } else {
+        (
+            (pos - d) / (num_rows + 1) + (num_cols - left_over),
+            (pos - d) % (num_rows + 1),
+        )
+    };
+    let mut n_rect = Rect::new(0, 0, 0, 0);
+    n_rect.a.x = divider_loc(r.a.x, r.b.x, num_cols, x);
+    n_rect.b.x = divider_loc(r.a.x, r.b.x, num_cols, x + 1);
+    if pos >= d {
+        n_rect.a.y = divider_loc(r.a.y, r.b.y, num_rows + 1, y);
+        n_rect.b.y = divider_loc(r.a.y, r.b.y, num_rows + 1, y + 1);
+    } else {
+        n_rect.a.y = divider_loc(r.a.y, r.b.y, num_rows, y);
+        n_rect.b.y = divider_loc(r.a.y, r.b.y, num_rows, y + 1);
+    }
+    n_rect
+}
 
 /// The default desktop background fill — `TDeskTop::defaultBkgrnd` (`tvtext2.cpp`).
 ///
@@ -61,6 +134,9 @@ pub struct Desktop {
     /// (send the current window to the back). Also exposed via
     /// [`background`](Self::background).
     background: Option<ViewId>,
+    /// `TDeskTop::tileColumnsFirst` — orientation flag read by [`tile`](Self::tile)
+    /// (`favorY = !tile_columns_first`). C++ ctor sets it `False`.
+    tile_columns_first: bool,
 }
 
 impl Desktop {
@@ -69,7 +145,7 @@ impl Desktop {
     /// Ports the C++ ctor faithfully:
     /// 1. `TGroup(bounds)`.
     /// 2. `growMode = gfGrowHiX | gfGrowHiY`.
-    /// 3. `tileColumnsFirst = False` (dropped — only `tile` reads it, deferred).
+    /// 3. `tileColumnsFirst = False` (read by [`tile`](Self::tile)).
     /// 4. `if( createBackground && (background = createBackground(getExtent())) )
     ///    insert(background)`.
     ///
@@ -88,6 +164,8 @@ impl Desktop {
         let mut desktop = Desktop {
             group,
             background: None,
+            // C++ ctor: tileColumnsFirst = False
+            tile_columns_first: false,
         };
         // C++: if( createBackground && (background = createBackground(getExtent())) )
         //          insert(background)
@@ -178,6 +256,94 @@ impl View for Desktop {
     /// stays decoupled from the concrete `Desktop` type.
     fn select_window_num(&mut self, num: i16, ctx: &mut Context) -> bool {
         self.group.focus_by_number(num, ctx)
+    }
+
+    /// `TDeskTop::tile(r)` — lay the tileable windows into a most-equal grid of
+    /// cells over `r`. Faithful port of `tdesktop.cpp`:
+    /// ```cpp
+    /// numTileable = 0; forEach( doCountTileable, 0 );
+    /// if( numTileable > 0 ) {
+    ///     mostEqualDivisors( numTileable, numCols, numRows, !tileColumnsFirst );
+    ///     if( (r.b.x-r.a.x)/numCols == 0 || (r.b.y-r.a.y)/numRows == 0 ) tileError();
+    ///     else { leftOver = numTileable % numCols; tileNum = numTileable - 1;
+    ///            forEach( doTile, &r ); }
+    /// }
+    /// ```
+    /// `doTile` calls `p->locate(calcTileRect(tileNum--))` per tileable child in
+    /// `forEach` order, so the *first-visited* (topmost) child takes `tileNum =
+    /// numTileable - 1`. `tileError()` is an empty no-op → on the guard we leave
+    /// bounds unchanged. `lock()`/`unlock()` are dropped (D8). `owner_size` is the
+    /// desktop size, fed to each child's `size_limits` inside [`locate`].
+    fn tile(&mut self, r: Rect) {
+        let ids = self.group.tileable_ids(); // forEach order
+        let n = ids.len() as i32; // numTileable
+        if n == 0 {
+            return;
+        }
+        let favor_y = !self.tile_columns_first;
+        let (num_cols, num_rows) = most_equal_divisors(n, favor_y);
+        // tileError guard: a cell would be zero-width or zero-height.
+        if (r.b.x - r.a.x) / num_cols == 0 || (r.b.y - r.a.y) / num_rows == 0 {
+            return;
+        }
+        let left_over = n % num_cols;
+        let owner_size = self.group.state().size;
+        let mut tile_num = n - 1; // FIRST visited gets numTileable - 1
+        for id in ids {
+            let rect = calc_tile_rect(tile_num, r, num_cols, num_rows, left_over);
+            if let Some(v) = self.group.child_mut(id) {
+                locate(v, rect, owner_size);
+            }
+            tile_num -= 1;
+        }
+    }
+
+    /// `TDeskTop::cascade(r)` — stack the tileable windows offset by one cell each.
+    /// Faithful port of `tdesktop.cpp`:
+    /// ```cpp
+    /// cascadeNum = 0; forEach( doCount, 0 );   // cascadeNum = count, lastView = last
+    /// if( cascadeNum > 0 ) {
+    ///     lastView->sizeLimits( min, max );
+    ///     if( min.x > r.b.x-r.a.x-cascadeNum || min.y > r.b.y-r.a.y-cascadeNum )
+    ///         tileError();
+    ///     else { cascadeNum--; forEach( doCascade, &r ); }
+    /// }
+    /// ```
+    /// `doCount` leaves `cascadeNum == n` and `lastView` = the *last*-visited
+    /// tileable child; the error check subtracts the **full** count `n`. Then
+    /// `cascadeNum--` (→ `n-1`) and `doCascade` offsets each child's `a` by the
+    /// running `cascadeNum`, so the first-visited (topmost) gets `+ (n-1)` and the
+    /// last gets `+ 0`. `tileError()` no-op → leave bounds unchanged on the guard.
+    fn cascade(&mut self, r: Rect) {
+        let ids = self.group.tileable_ids(); // forEach order
+        let n = ids.len() as i32; // doCount's cascadeNum
+        if n == 0 {
+            return;
+        }
+        let owner_size = self.group.state().size;
+        // lastView = last tileable in forEach order; error check uses the full n.
+        if let Some(&last_id) = ids.last() {
+            let (min, _max) = self
+                .group
+                .child_mut(last_id)
+                .expect("tileable id resolves")
+                .size_limits(owner_size);
+            if min.x > r.b.x - r.a.x - n || min.y > r.b.y - r.a.y - n {
+                return; // tileError
+            }
+        }
+        let mut cascade_num = n - 1; // C++ decrements once before doCascade
+        for id in ids {
+            if cascade_num >= 0 {
+                let mut nr = r;
+                nr.a.x += cascade_num;
+                nr.a.y += cascade_num;
+                if let Some(v) = self.group.child_mut(id) {
+                    locate(v, nr, owner_size);
+                }
+                cascade_num -= 1;
+            }
+        }
     }
 }
 
@@ -391,6 +557,182 @@ mod tests {
         assert!(
             desktop.find_mut(window_id).is_some(),
             "the window that owned the probe is still present"
+        );
+    }
+
+    // -- tiling geometry (row 30) -------------------------------------------
+
+    /// A visible, tileable window with number `n` at `bounds`.
+    fn tileable_window(bounds: Rect, n: i16) -> Box<dyn View> {
+        let mut w = Window::new(bounds, Some("W".into()), n);
+        w.state_mut().options.tileable = true;
+        Box::new(w)
+    }
+
+    /// Read a child's current bounds by id (same-module access to the group).
+    fn child_bounds(desktop: &mut Desktop, id: ViewId) -> Rect {
+        desktop.group.child_mut(id).unwrap().state().get_bounds()
+    }
+
+    /// `most_equal_divisors` swaps `(x, y)` on the `favor_y` flag. For a
+    /// non-square `n` the two orientations differ, so this pins the otherwise
+    /// uncovered `favor_y == false` branch (the `tile_columns_first == true` path).
+    ///
+    /// Hand-traced for `n = 6` (C++ `mostEqualDivisors`):
+    /// `iSqr(6)` → res1=2, res2=3, `|2-3| == 1` (loop skipped), returns 2 → `i = 2`;
+    /// `6 % 2 == 0` (no `+1`); `2 < 6/2 == 3` → `i = 3`. Then
+    /// `favorY` → `x = n/i = 2, y = i = 3`; `!favorY` → `x = i = 3, y = n/i = 2`.
+    #[test]
+    fn most_equal_divisors_swaps_on_favor_y() {
+        // favor_y == true (tile_columns_first == false): larger factor on y.
+        assert_eq!(most_equal_divisors(6, true), (2, 3));
+        // favor_y == false (tile_columns_first == true): larger factor on x — swapped.
+        assert_eq!(most_equal_divisors(6, false), (3, 2));
+    }
+
+    /// Test 1 — tile lays N windows into `calc_tile_rect` cells, in forEach order.
+    /// Bite: the topmost (last-inserted) window must take `tile_num = n-1`; an
+    /// off-by-one or reversed order lands a window in the wrong cell.
+    #[test]
+    fn tile_lays_windows_into_calc_tile_cells() {
+        let mut desktop = Desktop::new(Rect::new(0, 0, 80, 24), |_| None);
+        // Insert first→last; ids[0] in forEach order == the LAST inserted (topmost).
+        let w0 = desktop.insert_view(tileable_window(Rect::new(1, 1, 20, 8), 1));
+        let w1 = desktop.insert_view(tileable_window(Rect::new(2, 2, 21, 9), 2));
+        let w2 = desktop.insert_view(tileable_window(Rect::new(3, 3, 22, 10), 3));
+
+        desktop.tile(Rect::new(0, 0, 80, 24));
+
+        // n=3, favor_y=true → num_cols=1, num_rows=3 → 3 stacked cells.
+        // forEach order = [w2, w1, w0]; tile_num = 2,1,0.
+        assert_eq!(
+            child_bounds(&mut desktop, w2),
+            Rect::new(0, 16, 80, 24),
+            "topmost (last-inserted) window gets tile_num n-1 = 2 → bottom cell"
+        );
+        assert_eq!(
+            child_bounds(&mut desktop, w1),
+            Rect::new(0, 8, 80, 16),
+            "middle window gets tile_num 1 → middle cell"
+        );
+        assert_eq!(
+            child_bounds(&mut desktop, w0),
+            Rect::new(0, 0, 80, 8),
+            "first-inserted window gets tile_num 0 → top cell"
+        );
+    }
+
+    /// Test 2 — non-tileable and invisible children are skipped; tileable still
+    /// lay out. Bite: if the filter were dropped, the non-tileable/invisible window
+    /// would move and/or n would be wrong, shifting the tileable cells.
+    #[test]
+    fn tile_skips_non_tileable_and_invisible() {
+        let mut desktop = Desktop::new(Rect::new(0, 0, 80, 24), |_| None);
+        // A plain (non-tileable) window.
+        let plain_bounds = Rect::new(1, 1, 30, 12);
+        let plain = desktop.insert_view(Box::new(Window::new(plain_bounds, Some("P".into()), 1)));
+        // An invisible-but-tileable window.
+        let mut inv = Window::new(Rect::new(2, 2, 31, 13), Some("I".into()), 2);
+        inv.state_mut().options.tileable = true;
+        inv.state_mut().state.visible = false;
+        let inv_bounds = inv.state().get_bounds();
+        let inv_id = desktop.insert_view(Box::new(inv));
+        // Two genuine tileable windows.
+        let a = desktop.insert_view(tileable_window(Rect::new(3, 3, 20, 9), 3));
+        let b = desktop.insert_view(tileable_window(Rect::new(4, 4, 21, 10), 4));
+
+        desktop.tile(Rect::new(0, 0, 80, 24));
+
+        // The non-tileable + invisible windows must NOT move.
+        assert_eq!(
+            child_bounds(&mut desktop, plain),
+            plain_bounds,
+            "non-tileable window untouched"
+        );
+        assert_eq!(
+            child_bounds(&mut desktop, inv_id),
+            inv_bounds,
+            "invisible window untouched"
+        );
+        // n=2 → num_cols=1, num_rows=2 → 2 stacked cells. forEach [b, a]; tile_num 1,0.
+        assert_eq!(
+            child_bounds(&mut desktop, b),
+            Rect::new(0, 12, 80, 24),
+            "topmost tileable → tile_num 1 → bottom half"
+        );
+        assert_eq!(
+            child_bounds(&mut desktop, a),
+            Rect::new(0, 0, 80, 12),
+            "other tileable → tile_num 0 → top half"
+        );
+    }
+
+    /// Test 3 — tileError guard (a cell would be zero-width/height) leaves bounds
+    /// unchanged. Bite: without the guard, `divider_loc`/`locate` would still run
+    /// and (after the 16×6 clamp) move the windows.
+    #[test]
+    fn tile_error_guard_leaves_bounds_unchanged() {
+        // Desktop 0,0,2,24: with n=3 → num_cols=1, num_rows=3, (2-0)/1=2 ok but
+        // make it too narrow: width 0 is impossible; use a rect whose width/cols == 0.
+        // n=2 → num_cols=1,num_rows=2; rect width 0 → (0)/1 == 0 → guard trips.
+        let mut desktop = Desktop::new(Rect::new(0, 0, 80, 24), |_| None);
+        let a_bounds = Rect::new(1, 1, 20, 9);
+        let b_bounds = Rect::new(2, 2, 21, 10);
+        let a = desktop.insert_view(tileable_window(a_bounds, 1));
+        let b = desktop.insert_view(tileable_window(b_bounds, 2));
+
+        // Zero-width layout rect → (r.b.x - r.a.x)/num_cols == 0 → tileError no-op.
+        desktop.tile(Rect::new(5, 0, 5, 24));
+
+        assert_eq!(child_bounds(&mut desktop, a), a_bounds, "a unchanged");
+        assert_eq!(child_bounds(&mut desktop, b), b_bounds, "b unchanged");
+    }
+
+    /// Test 4 — cascade offsets run `n-1 … 0`: topmost (last-inserted, `ids[0]`)
+    /// gets `a == r.a + (n-1)`; the bottom (first-inserted) gets `a == r.a + 0`.
+    /// Bite: this assertion flips if forEach order or the `n-1` start is wrong.
+    #[test]
+    fn cascade_offsets_run_n_minus_1_down_to_0() {
+        let mut desktop = Desktop::new(Rect::new(0, 0, 80, 24), |_| None);
+        let bottom = desktop.insert_view(tileable_window(Rect::new(1, 1, 40, 12), 1));
+        let _mid = desktop.insert_view(tileable_window(Rect::new(2, 2, 41, 13), 2));
+        let top = desktop.insert_view(tileable_window(Rect::new(3, 3, 42, 14), 3));
+
+        let r = Rect::new(0, 0, 80, 24);
+        desktop.cascade(r);
+
+        // n=3 → offsets 2,1,0 in forEach order [top, mid, bottom].
+        let top_b = child_bounds(&mut desktop, top);
+        assert_eq!(top_b.a, Point::new(2, 2), "topmost gets r.a + (n-1) = +2");
+        let bottom_b = child_bounds(&mut desktop, bottom);
+        assert_eq!(bottom_b.a, Point::new(0, 0), "bottom gets r.a + 0");
+    }
+
+    /// Test 5 — cascade sub-minimum guard subtracts the FULL count `n` (not `n-1`).
+    /// Bite: desktop width = min.x + n - 1 trips the correct `min.x > w - n` check
+    /// (16 > 17-2) but would NOT trip a buggy `min.x > w - (n-1)` (16 > 17-1 false);
+    /// windows must not move.
+    #[test]
+    fn cascade_sub_minimum_guard_uses_full_count() {
+        // Window min is 16×6. n=2, desktop width = 16 + 2 - 1 = 17.
+        let mut desktop = Desktop::new(Rect::new(0, 0, 17, 24), |_| None);
+        let a_bounds = Rect::new(0, 0, 16, 6);
+        let b_bounds = Rect::new(1, 1, 17, 7);
+        let a = desktop.insert_view(tileable_window(a_bounds, 1));
+        let b = desktop.insert_view(tileable_window(b_bounds, 2));
+
+        // r width 17: min.x(16) > 17 - n(2) == 15 → guard trips → no-op.
+        desktop.cascade(Rect::new(0, 0, 17, 24));
+
+        assert_eq!(
+            child_bounds(&mut desktop, a),
+            a_bounds,
+            "a unchanged (guard)"
+        );
+        assert_eq!(
+            child_bounds(&mut desktop, b),
+            b_bounds,
+            "b unchanged (guard)"
         );
     }
 

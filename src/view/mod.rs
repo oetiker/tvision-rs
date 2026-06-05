@@ -20,4 +20,6 @@ pub use context::{Context, Deferred, DrawCtx};
 pub use geometry::{Point, Rect};
 pub use group::{Group, SelectMode};
 pub use id::ViewId;
+/// `TView::locate` free function — backs `Desktop::tile`/`cascade` (see its doc).
+pub(crate) use view::locate;
 pub use view::{DragMode, GrowMode, Options, State, StateFlag, View, ViewState};

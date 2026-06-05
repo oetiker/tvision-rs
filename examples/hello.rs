@@ -88,11 +88,14 @@ impl HelloApp {
         for num in 1..=3i16 {
             let x = 4 + (num as i32) * 4;
             let y = 1 + (num as i32) * 2;
-            let win = Window::new(
+            let mut win = Window::new(
                 Rect::new(x, y, x + 28, y + 8),
                 Some(format!("Window {num}")),
                 num,
             );
+            // TWindow does NOT set ofTileable; the app opts its windows in so
+            // Window → Tile / Cascade lay them out.
+            win.state_mut().options.tileable = true;
             desktop.insert_view(Box::new(win));
         }
         Some(Box::new(desktop))
@@ -118,8 +121,9 @@ impl HelloApp {
     }
 
     /// `TApplication::initMenuBar` — `r.b.y = r.a.y + 1` (pin to the top row),
-    /// then a File / Window menu. **No Tile/Cascade** (their geometry helpers are a
-    /// later row); every item wires a command that already routes.
+    /// then a File / Window menu. The Window menu now includes **Tile** and
+    /// **Cascade** (cmTile/cmCascade route through `program_handle_event` to
+    /// `Desktop::tile`/`cascade`); every item wires a command that routes.
     fn init_menu_bar(r: Rect) -> Option<Box<dyn View>> {
         let mut r = r;
         r.b.y = r.a.y + 1;
@@ -131,6 +135,8 @@ impl HelloApp {
                 m.command_key("~N~ext", Command::NEXT, KeyEvent::from(Key::F(6)), "F6")
                     .command_key("~Z~oom", Command::ZOOM, KeyEvent::from(Key::F(5)), "F5")
                     .command_key("~C~lose", Command::CLOSE, alt_f3(), "Alt-F3")
+                    .command("~T~ile", Command::TILE)
+                    .command("C~a~scade", Command::CASCADE)
             })
             .build();
         Some(Box::new(MenuBar::new(r, menu)))

@@ -162,6 +162,23 @@ impl Group {
         })
     }
 
+    /// Ids of tileable + visible direct children in C++ `forEach` order
+    /// (`first()`→`last` == `children` reversed; see the module doc). Backs
+    /// [`Desktop::tile`/`cascade`](crate::desktop::Desktop): `tileNum`/`cascadeNum`
+    /// decrement across this visit, so the *first-visited* (topmost) child gets
+    /// the highest position/offset (ports `Tileable(p)` filtered `forEach`).
+    pub(crate) fn tileable_ids(&self) -> Vec<ViewId> {
+        self.children
+            .iter()
+            .rev()
+            .filter(|c| {
+                let s = c.view.state();
+                s.options.tileable && s.state.visible
+            })
+            .map(|c| c.id)
+            .collect()
+    }
+
     /// Mutably borrow child `id`'s view (for an owner→child push that needs the
     /// concrete type via [`View::as_any_mut`], e.g. `TWindow::zoom` reaching its
     /// `TFrame`). `None` for a stale/foreign id.

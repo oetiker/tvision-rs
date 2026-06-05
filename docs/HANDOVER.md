@@ -1,4 +1,4 @@
-# Session handover — **menu bar + status line WIRED INTO `Program` — DRIVABLE APP** (Phase 4). Next: **`cmTile`/`cmCascade` + `Desktop::tile`/`cascade` geometry** (the row-32 breadcrumb) and/or Batch C validators 58–62
+# Session handover — **`Desktop::tile`/`cascade` + `cmTile`/`cmCascade` WIRED — the row-32 breadcrumb is CLOSED** (Phase 4). Next: **history subsystem (54–57)** and/or **Batch C validators 58–62** / **msgbox 63**
 
 > Living handover for the **next** rstv session. Read this, then
 > [CLAUDE.md](file:///home/oetiker/checkouts/rstv/CLAUDE.md) (orientation /
@@ -15,6 +15,7 @@
 
 | commit | what |
 |--------|------|
+| `0fc6a9e` | **`Desktop::tile`/`cascade` geometry + `cmTile`/`cmCascade` WIRED — the row-32 `TApplication` breadcrumb is CLOSED** — faithful port of `TDeskTop::tile`/`cascade` (`tdesktop.cpp`): `i_sqr`/`most_equal_divisors`/`divider_loc`/`calc_tile_rect` ported as pure fns (the C++ file statics threaded as params, no globals; `divider_loc` multiply in `i64`), re-added the `tile_columns_first` field (`favorY = !tile_columns_first`; tile now consumes it). **New seam `view::locate` is a FREE FN, NOT a `View` trait method** — a trait method would be forwarded by `#[delegate]` to a wrapper's inner group, whose `size_limits` is 0×0, bypassing e.g. `Window`'s 16×6 min (the advisor-caught trap; the existing inherent `Window::locate` for zoom is left untouched). `tile`/`cascade` are defaulted no-op `View` trait methods **overridden by `Desktop`** (mirrors `select_window_num`; the program drives the desktop by id through `&mut dyn View`, no downcast) + `Group::tileable_ids` (forEach order = `children.iter().rev()` filtered `tileable && visible`) + `child_mut` per child. **Off-by-one pinned** (`tile_num`/`cascade_num` start `n-1`; cascade error check subtracts the full `n`; `lastView` = `ids.last()`). Wired in `program_handle_event` after `group.handle_event`, beside the QUIT catch (`getTileRect()` = desktop child extent, `ev.clear()` after). `examples/hello.rs` opts its 3 demo windows into `ofTileable` + adds Window→Tile/Cascade items (cmTile/cmCascade are default-enabled, so they route + draw enabled). **Full two-stage review (SPEC + QUALITY, fresh C++-adversarial Opus): no blockers, no should-fix** — SPEC verified line-by-line incl. the end-to-end menu-enable path; QUALITY traced the integer geometry panic-free (`i_sqr(1)=1`, no div-by-zero) + tests discriminating. +3 NIT cleanups (closed a latent **`delegate_view` spy gap**: it never exercised `set_menu_current`, count 24→**25**; + column-first `most_equal_divisors` branch test; + cmCascade pump test). 585→593 tests (FOUNDATION) ← THIS session |
 | `e02a4bf` | **Menu bar + status line WIRED INTO `Program` — the drivable-app payoff** — `examples/hello.rs` is now a real running TV app (menu bar row 0, desktop, status line bottom row). `Program` captures the menu-bar/status-line `ViewId`s + **seeds initial command-graying** at construction via `update_menu_commands` (the carried startup-regray gap: `cmCommandSetChanged` does not fire at startup). `pump_once` adds the faithful **`getEvent` status-line pre-routing** (`tprogram.cpp:153`): `evKeyDown` always + over-the-line `evMouseDown` (gated by new **`Group::topmost_child_at`** = `firstThat(viewHasMouse)`), run **BEFORE `captures.dispatch`** so accelerators (F10→cmMenu, Alt-X→cmQuit) fire even while a modal is open (the discriminating placement crux + bite). `StatusLine` keyDown **global-accelerator arm** (`tstatusl.cpp:181`): match keycode over ALL items incl. textless, **transform `ev`→`Command` in place, no clear** (propagates; NOT `ctx.post`+clear). **`MenuBar::update_menu_commands` override closed a latent gap** (graying was silently inert on the real bar — the existing broker test used a test-double). `Desktop::insert_view` → `pub` (production window-insert seam). idle→`update()` help-ctx refresh **deferred (inert under a single `All` `StatusDef`)**. Two-stage review (SPEC faithful, QUALITY no prod blockers; 2 vacuous mouse tests reworked into bite-checked discriminating ones). 576→585 tests (FOUNDATION) ← THIS session |
 | `df3b8b9` | **Status line (rows 47 + 53) — `TStatusItem`/`TStatusDef` data + `TStatusLine` draw/data slice** — `src/status/` (`mod.rs` data + builder, `status_line.rs` view). The standalone snapshot-testable view (NOT yet wired into `Program`, mirroring how the menu draw layer landed before the modal/Program wiring). `HelpCtxRange::{All, OneOf(Vec<HelpCtx>)}` replaces C++'s numeric `[min,max]` help-ctx ranges (D1 corollary — string `HelpCtx` has no ordering); `StatusItem.text: Option<String>` (`None` = the hidden global-hotkey item: draws nothing, no width, but the keyDown loop matches it); command-graying via a cached `CommandSet` on the **view** (the `update_menu_commands` broker hook + `cmCommandSetChanged`→`request_update_menu`, NOT a field on `StatusItem` — faithful to C++ computing `commandEnabled` live). 6 `Status*` theme `Role`s. 551→576 tests (FOUNDATION) ← THIS session |
 | `add2947` | **Menu MODAL layer Step-2 stage 3 (52) — `TMenuPopup`** — the LAST modal piece: `put_click_event_on_exit` flag on `MenuSession` (gates the bottom-level exit-click re-post; bar/box `true`, popup `false`), popup level starts `current=None` + clears its menu clone's `default` (`menu->deflt=0`), `popup_menu()` free fn + `auto_place_popup` geometry (faithful `popupMenu`/`autoPlacePopup`); `end_session_with` reworked to a kind-keyed (`is_bar`) teardown (a popup's level 0 IS a box). `TMenuPopup::handleEvent` moot/dropped (Ctrl+letter TODO). 545→551 tests (FOUNDATION) ← THIS session |
@@ -27,10 +28,11 @@
 | `3e6645f` | **TApplication (32)** — thin D2 wrapper over `Program` (MECHANICAL) |
 | `47894f0…66ab55f` | **`#[delegate]` proc-macro** — `tvision-macros` crate + workspace, then **adopted** across cluster/Window/Dialog/ParamText/Label/Desktop + the hello example (replaces `cluster_wrapper!`) |
 
-**Build state:** 585 lib (was 576; +9 this session: the `program.rs` `wiring`
-submodule — getEvent pre-routing, accelerator-during-modal crux, mouseDown gating,
-initial regray, + 1 full-screen layout snapshot) + 5 integration (3
-`render_pipeline` + 2 `delegate_view`) + 2 doctests green;
+**Build state:** 593 lib (was 585; +8 this session: 5 `Desktop` tile/cascade
+geometry tests + 1 `program.rs` cmTile pump test + 1 cmCascade pump test + 1
+column-first `most_equal_divisors` branch test) + 5 integration (3
+`render_pipeline` + 2 `delegate_view`, the latter now exercising **25** macro
+forwarders incl. the newly-covered `set_menu_current`) + 2 doctests green;
 `cargo build --example hello` builds the drivable app; `cargo clippy --workspace --all-targets -- -D warnings` and `cargo
 fmt --all --check` clean (verify clippy with a forced re-lint — a cached run can
 mask a fresh warning). **It is a Cargo workspace**
@@ -230,23 +232,26 @@ integrate. `src/menu/menu_session.rs` + re-exports + 6 tests.
   1 submenu-popup carry-up exit-click (the SPEC-flagged previously-only-reasoned path),
   2 `auto_place_popup` geometry units (below-right; bottom-edge shift-up). 551 lib green.
 
-### NEXT — **`cmTile`/`cmCascade` + `Desktop::tile`/`cascade` geometry** (the row-32 breadcrumb)
-The menu bar + status line are now wired in and the app is drivable. The next
-in-sequence FOUNDATION-ish piece is the one the wiring left open: **tile/cascade**.
-Build it as a single unit (geometry + command handler + a menu that emits it + a
-test with real tileable windows):
+### NEXT — **history subsystem (54–57)** and/or **Batch C validators 58–62** / **msgbox 63**
+**`cmTile`/`cmCascade` + `Desktop::tile`/`cascade` geometry is DONE this session**
+(see the top table row + the brief
+[`docs/briefs/row30-tile-cascade.md`](file:///home/oetiker/checkouts/rstv/docs/briefs/row30-tile-cascade.md)).
+The row-32 `TApplication` breadcrumb is closed. The lowest-numbered remaining
+in-sequence work:
 
-- **`Desktop::tile`/`cascade` geometry** (`tdesktop.cpp`): `mostEqualDivisors`/`iSqr`/
-  `calcTileRect`/`dividerLoc`/`doCascade`. `Program::get_tile_rect` already exists (row
-  32) as the extent source.
-- **Wire the row-32 breadcrumb** in `program_handle_event` (the `TODO(Phase 4:
-  TApplication command handling)` after `group.handle_event`, beside the QUIT catch):
-  `group.find_mut(desktop) -> desktop.tile/cascade(get_tile_rect())`. cmTile/cmCascade
-  consts already exist + are enabled in `default_command_set`.
-- **Emit them:** add `Window`→`Tile`/`Cascade` items to `examples/hello.rs`'s menu (the
-  demo currently has NO Tile/Cascade items precisely because they did not route yet).
-- **`cmDosShell` separately** needs a backend terminal-suspend seam + SIGTSTP — defer
-  until that exists.
+- **History subsystem (54–57, MECHANICAL, Phase 4):** `historyAdd`/`historyCount`/
+  `historyStr`/`clearHistory` store (54, `histlist.cpp`) → `THistoryViewer` (55,
+  `TListViewer` subclass — the row-28 trait seam is ready) → `THistoryWindow` (56,
+  `TWindow` + factory mixin) → `THistory` (57, the dropdown icon next to `TInputLine`,
+  row 39 done). Fan-out-able once the store (54) lands as the shared dependency.
+- **Batch C concrete validators 58–62** (`tvalidat.cpp`) — the clean worktree parallel
+  fan-out (see "Available parallel fan-out" below); **59 `TRangeValidator` is
+  FOUNDATION-ish** (resolves the deferred `transfer` hook + the `cur_pos` re-clamp hazard;
+  `FieldValue::Int` ready).
+- **msgbox 63** — first consumer of the D9 view-triggered async-modal path
+  (`Deferred::OpenModal` + posted completion `Command`); buildable now (TButton/
+  TStaticText/TInputLine exist). Build when a menu/msgbox needs it.
+- **`cmDosShell`** is still deferred — needs a backend terminal-suspend seam + SIGTSTP.
 
 Other open follow-ons (lower priority / parallel):
 - **idle→`statusLine->update()` help-ctx refresh** — still deferred; only worth doing

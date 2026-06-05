@@ -518,6 +518,24 @@ fn range(val: i32, min: i32, max: i32) -> i32 {
     val.clamp(min, max)
 }
 
+/// `TView::locate` (tview.cpp) — clamp `bounds` to the view's size limits and
+/// apply them if they changed. A **free function** over `&mut dyn View` (NOT a
+/// `View` trait method): a trait method would be forwarded by the `#[delegate]`
+/// macro to the *inner group* for wrappers like [`Window`](crate::widgets::window::Window),
+/// whose group has a 0×0 `size_limits`, bypassing the window's 16×6 minimum
+/// (the hazard at `window.rs`). As a free fn, `size_limits` dispatches virtually
+/// to the wrapper's override and `change_bounds` forwards to the group (faithful
+/// `TGroup::changeBounds`). The C++ `drawView`/shadow tail is moot under D8
+/// (whole-tree redraw). Backs [`TDeskTop::tile`/`cascade`](crate::desktop::Desktop).
+pub(crate) fn locate(view: &mut dyn View, mut bounds: Rect, owner_size: Point) {
+    let (min, max) = view.size_limits(owner_size);
+    bounds.b.x = bounds.a.x + range(bounds.b.x - bounds.a.x, min.x, max.x);
+    bounds.b.y = bounds.a.y + range(bounds.b.y - bounds.a.y, min.y, max.y);
+    if bounds != view.state().get_bounds() {
+        view.change_bounds(bounds);
+    }
+}
+
 /// `balancedRange` (tview.cpp) — fit `val` into `[min, max]` while accumulating
 /// the remainder in `balance`, so a later resize can give the size back.
 fn balanced_range(val: i32, min: i32, mut max: i32, balance: &mut i32) -> i32 {
@@ -761,6 +779,18 @@ pub trait View {
         let _ = (num, ctx);
         false
     }
+
+    /// Tree-op: lay this subtree's tileable windows out in a grid (`cmTile` →
+    /// `TApplication::handleEvent` → `deskTop->tile(getTileRect())`). Base: no-op
+    /// (only [`Desktop`](crate::desktop::Desktop) lays out windows). `r` is the
+    /// desktop-local layout rect. Mirrors [`select_window_num`](View::select_window_num):
+    /// the live loop drives the desktop by id through `&mut dyn View`.
+    fn tile(&mut self, _r: Rect) {}
+
+    /// Tree-op: lay this subtree's tileable windows out cascaded (`cmCascade` →
+    /// `deskTop->cascade(getTileRect())`). Base: no-op; [`Desktop`](crate::desktop::Desktop)
+    /// overrides.
+    fn cascade(&mut self, _r: Rect) {}
 
     /// The `TListViewer` read-sync broker hook (row 28). Defaulted no-op;
     /// concrete list widgets override to delegate to

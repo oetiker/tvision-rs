@@ -1146,14 +1146,29 @@ fn program_handle_event(
         ev.clear();
     }
 
-    // TODO(Phase 4: TApplication command handling): cmTile/cmCascade/cmDosShell are
-    // program-level commands (TApplication::handleEvent, tapplica.cpp). C++ calls
-    // TProgram::handleEvent FIRST, then handles cmTile/cmCascade/cmDosShell — so the
-    // faithful future slot is here, after group dispatch, beside the QUIT catch.
-    // (group.find_mut(desktop) -> desktop.tile/cascade(get_tile_rect()); dosShell ->
-    // backend suspend). Deferred: tile/cascade need Desktop::tile/cascade geometry +
-    // a menu to emit the commands; dosShell needs a backend suspend seam. No source
-    // emits these commands yet (no menus).
+    // cmTile/cmCascade — program-level commands (TApplication::handleEvent,
+    // tapplica.cpp). C++ calls TProgram::handleEvent FIRST, then handles these — so
+    // this slot is after group dispatch, beside the QUIT catch. Faithful:
+    //   case cmTile:    deskTop->tile(    getTileRect() ); clearEvent(); break;
+    //   case cmCascade: deskTop->cascade( getTileRect() ); clearEvent(); break;
+    // getTileRect() == the desktop child's local extent; computed inline via two
+    // find_mut calls (the first borrow ends when `r` becomes an owned Rect), mirroring
+    // the Alt-N block's borrow style. cmDosShell is still deferred (needs a backend
+    // suspend seam).
+    if let Event::Command(cmd) = *ev
+        && (cmd == Command::TILE || cmd == Command::CASCADE)
+        && let Some(id) = desktop
+    {
+        let r = group.find_mut(id).map(|v| v.state().get_extent());
+        if let (Some(r), Some(dt)) = (r, group.find_mut(id)) {
+            if cmd == Command::TILE {
+                dt.tile(r);
+            } else {
+                dt.cascade(r);
+            }
+        }
+        ev.clear(); // clearEvent after handling.
+    }
 }
 
 #[cfg(test)]
@@ -1378,6 +1393,139 @@ mod tests {
                 ..Default::default()
             },
         ))
+    }
+
+    /// Read window `id`'s current bounds (for the tile/cascade pump test).
+    fn win_bounds(program: &mut Program, id: crate::view::ViewId) -> Rect {
+        program
+            .group_mut()
+            .find_mut(id)
+            .map(|v| v.state().get_bounds())
+            .expect("window resolves")
+    }
+
+    /// Build a program whose desktop holds `n` **tileable** numbered windows; the
+    /// command set keeps its `cmTile`/`cmCascade` defaults. Returns the program and
+    /// the window ids (index 0 == window #1). No window is pre-selected (cmTile is a
+    /// program-level command that does not require a focused window).
+    fn program_with_tileable_windows(n: i16) -> (Program, Vec<crate::view::ViewId>) {
+        let (backend, _handle) = HeadlessBackend::new(80, 25);
+        let theme = Theme::classic_blue();
+        let clock = Rc::new(ManualClock::new(0));
+        let ids: Rc<RefCell<Vec<crate::view::ViewId>>> = Rc::new(RefCell::new(Vec::new()));
+        let ids_cap = ids.clone();
+        let mut program = Program::new(
+            Box::new(backend),
+            Box::new(clock),
+            theme,
+            move |r| {
+                let mut desktop = Desktop::new(r, |r2| Some(Desktop::init_background(r2)));
+                for num in 1..=n {
+                    let x = 2 + (num as i32) * 2;
+                    let mut win = Window::new(
+                        Rect::new(x, num as i32, x + 20, num as i32 + 8),
+                        Some(format!("W{num}")),
+                        num,
+                    );
+                    win.state_mut().options.tileable = true;
+                    ids_cap
+                        .borrow_mut()
+                        .push(desktop.insert_view(Box::new(win)));
+                }
+                Some(Box::new(desktop))
+            },
+            |_r| None,
+            |_r| None,
+        );
+        program.out_events.clear();
+        let id_vec = ids.borrow().clone();
+        (program, id_vec)
+    }
+
+    // -- row 30: cmTile routes through the pump to Desktop::tile --------------
+
+    /// End-to-end breadcrumb: posting `cmTile` (as a menu item would) makes
+    /// `pump_once` lay the desktop's tileable windows into a grid AND clear the
+    /// command event. Bite: windows must move to their `calc_tile_rect` cells (a
+    /// missing/wrong wiring leaves them at their staggered ctor bounds), and no
+    /// `Command(cmTile)` may survive in the queue.
+    #[test]
+    fn cm_tile_relocates_windows_through_pump() {
+        let (mut program, ids) = program_with_tileable_windows(2);
+        let (w1, w2) = (ids[0], ids[1]);
+        let before1 = win_bounds(&mut program, w1);
+        let before2 = win_bounds(&mut program, w2);
+
+        program.out_events.push_back(Event::Command(Command::TILE));
+        program.pump_once();
+
+        let after1 = win_bounds(&mut program, w1);
+        let after2 = win_bounds(&mut program, w2);
+        assert_ne!(after1, before1, "window 1 relocated by cmTile");
+        assert_ne!(after2, before2, "window 2 relocated by cmTile");
+        // n=2 over the full 80×25 desktop extent → num_cols=1, num_rows=2 → two
+        // stacked half-height cells. forEach order = [w2, w1]; tile_num = 1, 0.
+        // (getTileRect is the desktop child's local extent, 0,0,80,25.)
+        assert_eq!(
+            after2,
+            Rect::new(0, 12, 80, 25),
+            "topmost (w2) gets tile_num 1 → bottom cell"
+        );
+        assert_eq!(
+            after1,
+            Rect::new(0, 0, 80, 12),
+            "w1 gets tile_num 0 → top cell"
+        );
+        // clearEvent after handling: no live cmTile command survives.
+        assert!(
+            !program
+                .out_events
+                .iter()
+                .any(|e| matches!(e, Event::Command(c) if *c == Command::TILE)),
+            "cmTile was consumed (clearEvent)"
+        );
+    }
+
+    // -- row 30: cmCascade routes through the pump to Desktop::cascade --------
+
+    /// End-to-end breadcrumb mirror of the cmTile test: posting `cmCascade` makes
+    /// `pump_once` cascade the desktop's tileable windows AND clear the command.
+    /// Bite: the first-visited (topmost, last-inserted) window must take offset
+    /// `+ (n-1)` and the last `+ 0` (a reversed order or wrong start fails the exact
+    /// bounds), and no `Command(cmCascade)` may survive the queue.
+    #[test]
+    fn cm_cascade_relocates_windows_through_pump() {
+        let (mut program, ids) = program_with_tileable_windows(2);
+        let (w1, w2) = (ids[0], ids[1]);
+        let before1 = win_bounds(&mut program, w1);
+        let before2 = win_bounds(&mut program, w2);
+
+        program
+            .out_events
+            .push_back(Event::Command(Command::CASCADE));
+        program.pump_once();
+
+        let after1 = win_bounds(&mut program, w1);
+        let after2 = win_bounds(&mut program, w2);
+        assert_ne!(after1, before1, "window 1 relocated by cmCascade");
+        assert_ne!(after2, before2, "window 2 relocated by cmCascade");
+        // getTileRect = desktop child extent (0,0,80,25). n=2 → offsets 1, 0 in
+        // forEach order [w2, w1]. locate clamps to size_limits (window min 16×6,
+        // no max), so the offset rects pass through unchanged.
+        assert_eq!(
+            after2,
+            Rect::new(1, 1, 80, 25),
+            "topmost (w2) gets r.a + (n-1) = +1"
+        );
+        assert_eq!(after1, Rect::new(0, 0, 80, 25), "w1 gets r.a + 0");
+        // clearEvent after handling: no live cmCascade command survives.
+        assert!(
+            !program
+                .out_events
+                .iter()
+                .any(|e| matches!(e, Event::Command(c) if *c == Command::CASCADE)),
+            "cmCascade was consumed (clearEvent)"
+        );
     }
 
     // -- 33d-2: Alt-N selects a numbered window ------------------------------
