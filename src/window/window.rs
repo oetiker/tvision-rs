@@ -261,10 +261,14 @@ impl Window {
         self.group.child_mut(id)
     }
 
-    /// Test hook: make `id` the current (focused) child of the embedded group,
-    /// so keyboard events route to it. Used by the row-56 setup-guard bite test.
-    #[cfg(test)]
-    pub(crate) fn select_child_for_test(&mut self, id: ViewId, ctx: &mut Context) {
+    /// Make `id` the current (focused) child of the embedded group, so focused
+    /// (keyboard) events route to it. Promoted from a `#[cfg(test)]` hook to a
+    /// production seam by row 57: `HistoryWindow` calls it on first-event setup to
+    /// establish the popup's internal currency (see the faithfulness note there) —
+    /// the localized stand-in for the missing `insertView→show→resetCurrent`
+    /// initial-currency seam (the foundational follow-on breadcrumbed at
+    /// `Program::exec_view`).
+    pub(crate) fn select_child(&mut self, id: ViewId, ctx: &mut Context) {
         self.group
             .set_current(Some(id), crate::view::SelectMode::Normal, ctx);
     }

@@ -337,7 +337,6 @@ impl HistoryViewer {
     ///
     /// First production consumer: row 57 (the code that calls `exec_view` on a
     /// `HistoryWindow` and reads the selection after the modal returns).
-    #[allow(dead_code)] // production consumer: row 57 (not yet ported)
     pub(crate) fn selection(&self) -> String {
         <Self as ListViewer>::get_text(self, self.lv.focused)
     }
@@ -430,7 +429,6 @@ impl HistoryWindow {
     ///
     /// First production consumer: row 57 (the caller of `exec_view` reads the
     /// selection after the modal returns).
-    #[allow(dead_code)] // production consumer: row 57 (not yet ported)
     pub(crate) fn get_selection(&mut self) -> String {
         self.window
             .child_mut(self.viewer_id)
@@ -445,7 +443,6 @@ impl HistoryWindow {
     to = window,
     skip(
         apply_list_scroll,
-        as_any_mut,
         calc_bounds,
         grabs_focus_on_click,
         select_window_num,
@@ -454,6 +451,15 @@ impl HistoryWindow {
     )
 )]
 impl View for HistoryWindow {
+    /// Downcast hook so the row-57 modal completion can downcast the modal
+    /// `dyn View` back to `HistoryWindow` and read [`get_selection`](Self::get_selection).
+    /// Must be a real `Some(self)` — delegating to `window.as_any_mut()` would
+    /// downcast to a `Window`, returning `None` for the `HistoryWindow` downcast
+    /// (a silent pick-nothing). NOT in the `skip(...)` list for that reason.
+    fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
+        Some(self)
+    }
+
     /// `THistoryWindow::handleEvent` — faithful order: setup guard → delegate
     /// to `TWindow::handleEvent`.
     ///
@@ -477,6 +483,22 @@ impl View for HistoryWindow {
             {
                 hv.setup(ctx);
             }
+            // Establish the popup's internal currency so the FIRST focused event
+            // (even an immediate Esc/Enter, with no prior nav) routes to the viewer
+            // → its endModal fires.
+            //
+            // Baseline → Deviation → Integration: C++ establishes a view's currency
+            // at OPEN, via `insertView → show → resetCurrent` (the inserted view's
+            // group selects its first selectable child). rstv's `Group::insert` takes
+            // no `Context` and so cannot run `reset_current` at open (the foundational
+            // initial-currency gap breadcrumbed at `Program::exec_view`). DEVIATION:
+            // we establish currency at FIRST-EVENT instead of open — the SAME
+            // already-accepted deviation class as the viewer's `setup()` running on
+            // first event (row 55/ListBox Context-free-ctor constraint). INTEGRATION:
+            // because this guard runs BEFORE delegating to `TWindow::handleEvent`, the
+            // window's `current` is set in time for this very event; `route_event`'s
+            // focused phase delivers to `current` by index with no focused-flag gate.
+            self.window.select_child(self.viewer_id, ctx);
             self.setup_done = true;
         }
         // (B) TWindow::handleEvent (faithful order: base first).
@@ -486,6 +508,357 @@ impl View for HistoryWindow {
         // (program.rs) swallows outside positional events before they reach this view.
         // Porting it needs ModalFrame to DELIVER (not Consume) outside clicks to the
         // modal view — designed alongside the Deferred::OpenModal async-modal path.
+    }
+}
+
+// ---------------------------------------------------------------------------
+// THistory — the dropdown-arrow icon next to a TInputLine (thistory.cpp, row 57)
+// ---------------------------------------------------------------------------
+
+/// `THistory` — the dropdown-arrow icon placed next to a [`InputLine`](crate::widgets::InputLine).
+///
+/// On its trigger (a click, or Ctrl/↓ while the linked input is focused) it opens
+/// a modal [`HistoryWindow`] over the channel's history, and on **OK** writes the
+/// picked string back into the linked input line. This is the first consumer of
+/// the **view-triggered async-modal seam** ([`Deferred::OpenHistory`](crate::view::Deferred::OpenHistory)):
+/// a `THistory` leaf holds only the link's [`ViewId`] (D3) and cannot call
+/// `exec_view` (top-level only), so it **requests** the open and the pump builds +
+/// drives the modal.
+///
+/// # Deviations from C++
+///
+/// * **focus-abort OUT.** C++ `THistory::handleEvent` aborts the open if
+///   `link->focus()` fails (`if (!link->focus()) { clearEvent; return; }`). Our
+///   focus is deferred ([`focus_descendant`](crate::view::View::focus_descendant))
+///   with no inline success bool, so we request focus and proceed — the open path
+///   (in the pump's `OpenHistory` arm) documents this (same class as the row-39/41
+///   deferred-focus TODOs).
+/// * **`shutDown` (`link = 0`)** is moot — the link is a [`ViewId`], not an owning
+///   pointer, so there is nothing to null out (D3).
+/// * **palette** — C++ `getPalette` returns `cpHistory "\x16\x17"`, a
+///   dialog-context recolor; rstv dropped palettes, so the icon reuses the
+///   provisional `Role::Input*` colors (it sits next to an input line).
+///   `TODO(row 34): cpHistory palette remap` — same pattern as rows 55/56.
+pub struct THistory {
+    state: ViewState,
+    /// The linked input line's id (`link`).
+    link: ViewId,
+    /// The history channel id (`historyId`).
+    history_id: u8,
+}
+
+impl THistory {
+    /// `THistory(bounds, aLink, aHistoryId)` — `options |= ofPostProcess`.
+    ///
+    /// `selectable` stays `false` (the [`ViewState`] default), so a click delivers
+    /// to the icon without grabbing focus — faithful: `THistory` is never
+    /// `current`. `eventMask |= evBroadcast` is **moot** ([`Group`](crate::view::Group)
+    /// fans broadcasts to all children regardless — handover row 49).
+    pub fn new(bounds: Rect, link: ViewId, history_id: u8) -> Self {
+        let mut state = ViewState::new(bounds);
+        // ofPostProcess — the icon gets keyDowns via the postProcess phase, AFTER
+        // the focused input line (which leaves the ↓ arrow live + uncleared).
+        state.options.post_process = true;
+        THistory {
+            state,
+            link,
+            history_id,
+        }
+    }
+}
+
+impl View for THistory {
+    fn state(&self) -> &ViewState {
+        &self.state
+    }
+
+    fn state_mut(&mut self) -> &mut ViewState {
+        &mut self.state
+    }
+
+    /// `THistory::draw` — `b.moveCStr(0, icon, getColor(0x0102))`.
+    ///
+    /// The C++ icon is `"\xDE~\x19~\xDD"`: `▐` (U+2590) + a highlighted `↓`
+    /// (U+2193, `\x19`) + `▌` (U+258C), where the `~…~` marks the hi region (the
+    /// arrow). `getColor(0x0102)` → lo = palette[1], hi = palette[2]. We render the
+    /// cstr `"▐~↓~▌"` with lo = `Role::InputNormal`, hi = `Role::InputArrow`.
+    fn draw(&mut self, ctx: &mut DrawCtx) {
+        let lo = ctx.style(crate::theme::Role::InputNormal);
+        let hi = ctx.style(crate::theme::Role::InputArrow);
+        ctx.put_cstr(0, 0, "\u{2590}~\u{2193}~\u{258C}", lo, hi);
+    }
+
+    /// `THistory::handleEvent` — open the modal on a trigger, or record history on
+    /// the broadcast arm. Faithful to the C++ (base `TView::handleEvent` is a no-op
+    /// here under D3, so we match the trigger directly):
+    ///
+    /// * **mouse-down**: open (mouse trigger never gates on focus).
+    /// * **keyDown where `ctrlToArrow(keyCode) == kbDown`**: open, gated on the link
+    ///   being focused (`(link->state & sfFocused)`). `ctrl_to_arrow` returns the
+    ///   event UNCHANGED when not Ctrl, so `.key == Key::Down` matches BOTH the
+    ///   literal ↓ AND Ctrl+X; modifiers are cleared on a mapped result, so we
+    ///   compare `.key` only.
+    /// * **broadcast `cmReleasedFocus`(source == link) / `cmRecordHistory`**:
+    ///   `recordHistory(link->data)`; C++ does NOT clearEvent here — left live.
+    fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
+        match ev {
+            Event::MouseDown(_) => {
+                ctx.request_open_history(self.link, self.history_id, false);
+                ev.clear();
+            }
+            Event::KeyDown(k) if crate::event::ctrl_to_arrow(*k).key == crate::event::Key::Down => {
+                ctx.request_open_history(self.link, self.history_id, true);
+                // Baseline → Deviation: C++ keeps the ↓ live when the link is NOT
+                // focused — its `clearEvent` sits INSIDE the `(link->state &
+                // sfFocused)` guard. DEVIATION: we clear unconditionally. This is
+                // D3-forced — the leaf cannot read the link's focus inline (it only
+                // holds the link's id), so the focus gate is applied later in the
+                // pump's `OpenHistory` arm; clear-always is the correct horn
+                // (clear-never would let a focused-link ↓ be double-handled).
+                ev.clear();
+            }
+            Event::Broadcast { command, source }
+                if (*command == Command::RELEASED_FOCUS && *source == Some(self.link))
+                    || *command == Command::RECORD_HISTORY =>
+            {
+                ctx.request_record_history(self.link, self.history_id);
+                // C++ does not clearEvent in the broadcast arm — leave it live.
+            }
+            _ => {}
+        }
+    }
+    // value/set_value: trait default (THistory has no transferable value).
+}
+
+// ---------------------------------------------------------------------------
+// THistory tests (row 57)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod thistory_tests {
+    use super::*;
+    use crate::backend::{HeadlessBackend, Renderer};
+    use crate::event::{KeyEvent, KeyModifiers, MouseButtons, MouseEvent};
+    use crate::screen::Buffer;
+    use crate::theme::Theme;
+    use crate::view::{Deferred, Group};
+    use std::collections::VecDeque;
+
+    fn make_ctx<'a>(
+        out: &'a mut VecDeque<Event>,
+        timers: &'a mut crate::timer::TimerQueue,
+        deferred: &'a mut Vec<Deferred>,
+    ) -> Context<'a> {
+        Context::new(out, timers, 0, deferred)
+    }
+
+    fn key_ev(k: Key) -> Event {
+        Event::KeyDown(KeyEvent::new(k, KeyModifiers::default()))
+    }
+
+    fn mouse_down() -> Event {
+        Event::MouseDown(MouseEvent {
+            position: Point::new(0, 0),
+            buttons: MouseButtons {
+                left: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+    }
+
+    /// Mint a real link id (so the THistory has a resolvable link).
+    fn mint_link() -> ViewId {
+        let mut g = Group::new(Rect::new(0, 0, 4, 4));
+        g.insert(Box::new(HistoryViewer::new(
+            Rect::new(0, 0, 1, 1),
+            None,
+            None,
+            0,
+        )))
+    }
+
+    // -- mouse trigger queues OpenHistory(require_focus = false) -------------
+    #[test]
+    fn mouse_down_queues_open_history_no_focus_gate() {
+        let link = mint_link();
+        let mut h = THistory::new(Rect::new(0, 0, 3, 1), link, 5);
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+        let mut ev = mouse_down();
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            h.handle_event(&mut ev, &mut ctx);
+        }
+        assert!(ev.is_nothing(), "mouse-down consumed");
+        assert!(
+            deferred.iter().any(|x| matches!(
+                x,
+                Deferred::OpenHistory { link: l, history_id: 5, require_focus: false } if *l == link
+            )),
+            "mouse-down queues OpenHistory(require_focus=false)"
+        );
+    }
+
+    // -- ▼ queues OpenHistory(require_focus = true) --------------------------
+    //
+    // ctrl_to_arrow returns the literal Down unchanged, so `.key == Down` matches.
+    #[test]
+    fn down_arrow_queues_open_history_with_focus_gate() {
+        let link = mint_link();
+        let mut h = THistory::new(Rect::new(0, 0, 3, 1), link, 6);
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+        let mut ev = key_ev(Key::Down);
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            h.handle_event(&mut ev, &mut ctx);
+        }
+        assert!(ev.is_nothing(), "▼ consumed");
+        assert!(
+            deferred.iter().any(|x| matches!(
+                x,
+                Deferred::OpenHistory { link: l, history_id: 6, require_focus: true } if *l == link
+            )),
+            "▼ queues OpenHistory(require_focus=true)"
+        );
+    }
+
+    // -- Ctrl+X maps to Down → also triggers (ctrl_to_arrow) -----------------
+    #[test]
+    fn ctrl_x_maps_to_down_and_triggers() {
+        let link = mint_link();
+        let mut h = THistory::new(Rect::new(0, 0, 3, 1), link, 6);
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+        let mut ev = Event::KeyDown(KeyEvent::new(
+            Key::Char('x'),
+            KeyModifiers {
+                ctrl: true,
+                ..Default::default()
+            },
+        ));
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            h.handle_event(&mut ev, &mut ctx);
+        }
+        assert!(
+            deferred.iter().any(|x| matches!(
+                x,
+                Deferred::OpenHistory {
+                    require_focus: true,
+                    ..
+                }
+            )),
+            "Ctrl+X (→ Down via ctrl_to_arrow) triggers the open"
+        );
+    }
+
+    // -- a non-trigger key is ignored (left live, no deferred) ---------------
+    #[test]
+    fn unrelated_key_ignored() {
+        let link = mint_link();
+        let mut h = THistory::new(Rect::new(0, 0, 3, 1), link, 6);
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+        let mut ev = key_ev(Key::Up);
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            h.handle_event(&mut ev, &mut ctx);
+        }
+        assert!(
+            !ev.is_nothing(),
+            "a non-trigger key is left live (not consumed)"
+        );
+        assert!(
+            deferred.is_empty(),
+            "no deferred request for a non-trigger key"
+        );
+    }
+
+    // -- broadcast arm: cmReleasedFocus(source==link) / cmRecordHistory ------
+    #[test]
+    fn broadcast_record_history_arm() {
+        let link = mint_link();
+        let other = mint_link();
+        let mut h = THistory::new(Rect::new(0, 0, 3, 1), link, 9);
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+
+        // cmReleasedFocus on the link → record.
+        let mut ev = Event::Broadcast {
+            command: Command::RELEASED_FOCUS,
+            source: Some(link),
+        };
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            h.handle_event(&mut ev, &mut ctx);
+        }
+        assert!(
+            deferred.iter().any(|x| matches!(
+                x,
+                Deferred::RecordHistory { link: l, history_id: 9 } if *l == link
+            )),
+            "cmReleasedFocus(source==link) queues RecordHistory"
+        );
+        // C++ does not clearEvent in the broadcast arm — left live.
+        assert!(!ev.is_nothing(), "broadcast arm does not clear the event");
+
+        // cmReleasedFocus on ANOTHER view → no record (source filter).
+        deferred.clear();
+        let mut ev2 = Event::Broadcast {
+            command: Command::RELEASED_FOCUS,
+            source: Some(other),
+        };
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            h.handle_event(&mut ev2, &mut ctx);
+        }
+        assert!(
+            deferred.is_empty(),
+            "cmReleasedFocus on another view is filtered out (source mismatch)"
+        );
+
+        // cmRecordHistory (source ignored) → record.
+        let mut ev3 = Event::Broadcast {
+            command: Command::RECORD_HISTORY,
+            source: None,
+        };
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            h.handle_event(&mut ev3, &mut ctx);
+        }
+        assert!(
+            deferred
+                .iter()
+                .any(|x| matches!(x, Deferred::RecordHistory { history_id: 9, .. })),
+            "cmRecordHistory queues RecordHistory regardless of source"
+        );
+    }
+
+    // -- draw snapshot: the ▐↓▌ icon -----------------------------------------
+    fn render_history(h: &mut THistory, w: u16, ht: u16) -> String {
+        let theme = Theme::classic_blue();
+        let (backend, screen) = HeadlessBackend::new(w, ht);
+        let mut r = Renderer::new(Box::new(backend));
+        r.render(|buf: &mut Buffer| {
+            let bounds = h.state().get_bounds();
+            let mut dc = DrawCtx::new(buf, &theme, bounds, bounds.a);
+            h.draw(&mut dc);
+        });
+        screen.snapshot()
+    }
+
+    #[test]
+    fn snapshot_history_icon() {
+        let link = mint_link();
+        let mut h = THistory::new(Rect::new(0, 0, 3, 1), link, 1);
+        insta::assert_snapshot!(render_history(&mut h, 3, 1));
     }
 }
 
@@ -1252,7 +1625,7 @@ mod window_tests {
         // ofPostProcess and the test would not discriminate guard ordering.
         {
             let mut ctx = crate::view::Context::new(&mut out, &mut timers, 0, &mut deferred);
-            hw.window.select_child_for_test(hw.viewer_id, &mut ctx);
+            hw.window.select_child(hw.viewer_id, &mut ctx);
         }
         deferred.clear(); // discard the set_current side-effects
 

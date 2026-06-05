@@ -249,6 +249,25 @@ pub struct Program {
     /// `TProgram::commandSetChanged` — set on an enable/disable change, broadcast
     /// once on the next idle, then cleared.
     command_set_changed: bool,
+    /// A view-requested modal awaiting top-level execution (row 57). Set by the
+    /// `OpenHistory` apply arm in the `pump_once` deferred drain (a view cannot
+    /// call `exec_view` — top-level only); drained by the outer driver
+    /// [`pump_and_drive`](Self::pump_and_drive) after `pump_once` returns, where a
+    /// whole `&mut self` is held. The boxed view is the modal; the
+    /// [`ModalCompletion`] runs after the modal loop ends but before the view is
+    /// removed/dropped (so it can read the modal's final state).
+    pending_modal: Option<(Box<dyn View>, ModalCompletion)>,
+}
+
+/// What to do with a view-triggered modal's result, run AFTER the modal loop ends
+/// but BEFORE the modal view is removed/dropped (so it can read the modal's final
+/// state, e.g. `get_selection`). An enum, not a boxed `FnOnce`: a view-made closure
+/// cannot hold `&mut Program`, and the codebase's pattern is "ADD A VARIANT"
+/// (msgbox 63 adds its own variant here).
+enum ModalCompletion {
+    /// `THistory`: on `cmOK`, read the `HistoryWindow`'s selection and `set_value`
+    /// it into the linked input line (data + `select_all`). On cancel, nothing.
+    HistoryPick { link: ViewId },
 }
 
 impl Program {
@@ -350,6 +369,7 @@ impl Program {
             status_line,
             end_state: None,
             command_set_changed: false,
+            pending_modal: None,
         }
     }
 
@@ -448,12 +468,38 @@ impl Program {
         loop {
             self.end_state = None;
             while self.end_state.is_none() {
-                self.pump_once();
+                self.pump_and_drive();
             }
             let es = self.end_state.unwrap();
             if self.valid_end(es) {
                 return es;
             }
+        }
+    }
+
+    /// One pump iteration, then drive any modal a view requested during it (row
+    /// 57). The bare [`pump_once`](Self::pump_once) cannot open a modal — a view's
+    /// `OpenHistory` apply arm only stashes the built `THistoryWindow` into
+    /// [`pending_modal`](Self::pending_modal), because the apply phase runs inside
+    /// the `pump_once` destructure (a split borrow) and a view cannot call
+    /// `exec_view` (top-level only). This outer driver, holding a whole `&mut self`,
+    /// runs the re-entrant `exec_view` at top level. The `end_state` save/restore in
+    /// [`exec_view_with_completion`](Self::exec_view_with_completion) keeps the inner
+    /// modal transparent to the enclosing loop.
+    ///
+    /// Used in place of the bare `pump_once` in **both** [`run`](Self::run)'s inner
+    /// `while` AND `exec_view`'s inner `while` (a `THistory` lives in a `Dialog`
+    /// usually opened via `exec_view` → this is a modal-from-modal).
+    ///
+    /// **cmQuit-from-popup note:** the inner `exec_view`'s `retval` is discarded
+    /// here and `end_state` restored, so a `cmQuit` ending the *inner* history modal
+    /// is swallowed (no app quit from inside the popup). Defensible — the brief
+    /// scopes the `cmQuit`-ends-modal deviation to top-level `exec_view`; the popup
+    /// is dismiss-only.
+    fn pump_and_drive(&mut self) {
+        self.pump_once();
+        if let Some((view, completion)) = self.pending_modal.take() {
+            self.exec_view_with_completion(view, Some(completion));
         }
     }
 
@@ -518,9 +564,36 @@ impl Program {
     /// 8. Pop the frame, `remove` the view, `setCurrent(saveCurrent, leaveSelect)`.
     /// 9. Restore the command set (`setCommands`).
     pub fn exec_view(&mut self, view: Box<dyn View>) -> Command {
+        self.exec_view_with_completion(view, None)
+    }
+
+    /// The unified `exec_view` body (row 57). Identical to the sync `exec_view`
+    /// except for two additions the view-triggered async-modal seam needs:
+    ///
+    /// * **`end_state` save/restore** for re-entrancy. A `THistory` lives in a
+    ///   `Dialog` usually opened via `exec_view`, so this is a modal-from-modal.
+    ///   Without save/restore, when the inner `exec_view` returns,
+    ///   `self.end_state` still holds the inner end command and the **outer**
+    ///   `while self.end_state.is_none()` would spuriously exit. The modal still
+    ///   **returns** its end command as `retval` (e.g. `cmQuit` is unchanged — the
+    ///   cmQuit deviation still holds); only the leftover `self.end_state` is
+    ///   restored to the enclosing loop's value.
+    /// * **the completion**, run after the loop breaks but BEFORE remove/drop,
+    ///   while the modal is still in the tree by `id` (so it can read
+    ///   `get_selection`). It is a DIRECT `group` mutation, NOT a deferred queue
+    ///   entry — the deferred drain in `pump_once` is gated on `!ev.is_nothing()`
+    ///   and would never fire from here in a headless test.
+    fn exec_view_with_completion(
+        &mut self,
+        view: Box<dyn View>,
+        completion: Option<ModalCompletion>,
+    ) -> Command {
         // 1. getCommands / save the outgoing current.
         let save_current = self.group.current();
         let save_commands = self.command_set.clone();
+        // end_state save/restore (REQUIRED for re-entrancy — see the doc above).
+        // Take it at ENTRY, before the retval loop's `self.end_state = None`.
+        let saved_end_state = self.end_state.take();
 
         // 2. Insert FIRST (always own it: saveOwner == 0). Insert before
         //    set_current so the group can resolve the id (set_current resolves via
@@ -561,6 +634,19 @@ impl Program {
         // 5. setCurrent(p, enterSelect). enterSelect does not deselect the old
         //    current (the desktop stays selected beneath). Build a throwaway
         //    Context over the disjoint fields (the pump's discipline).
+        //
+        // FOUNDATIONAL FOLLOW-ON (initial-currency seam): this selects the modal
+        // VIEW within the root group, but does NOT establish the modal's OWN
+        // internal currency (its first selectable child). C++ gets that for free via
+        // `insertView → show → resetCurrent`; rstv's `Group::insert` takes no
+        // `Context`, so it cannot run `reset_current` at open. Consequence: a modal
+        // opened here (e.g. a general `Dialog`) has `current == None` until a nav
+        // event focuses a child — so an immediate Esc/Enter is dead and the inner
+        // loop would spin. Row 57's history popup works around this LOCALLY
+        // (`HistoryWindow` calls `Window::select_child` on first-event setup); a
+        // general fix needs an initial-currency seam (an insert-with-ctx →
+        // reset_current path, or a post-insert reset hook). Build it when the first
+        // general dialog needs first-event keying.
         {
             let now = self.clock.now_ms();
             let mut ctx = Context::new(
@@ -590,7 +676,11 @@ impl Program {
                 // dispatches to the dialog's handleEvent, NOT TProgram::handleEvent
                 // (where cmQuit->endModal + Alt-N live, tprogram.cpp:205) — so program
                 // handling is out of the modal dispatch path there. We keep ours.
-                self.pump_once();
+                //
+                // pump_and_drive (row 57): a THistory inside this modal dialog can
+                // itself request a modal (the history popup), driven re-entrantly at
+                // top level here after each pump.
+                self.pump_and_drive();
             }
             let es = self.end_state.unwrap();
             // TGroup::execView calls `p->execute()` (tgroup.cpp:205), whose outer
@@ -607,6 +697,14 @@ impl Program {
                 break es;
             }
         };
+
+        // Run the completion BEFORE remove/drop, while the modal is still in the
+        // tree by `id` (so it can read e.g. get_selection). Direct group mutation —
+        // NOT the deferred queue (that drain is gated on !ev.is_nothing() inside
+        // pump_once and would never fire here in a headless test).
+        if let Some(c) = completion {
+            apply_modal_completion(c, retval, &mut self.group, id);
+        }
 
         // 8. Pop the frame (it is on top — drags self-pop on MouseUp, so nothing
         //    unbalanced remains when end_state is set), then remove the view.
@@ -648,6 +746,11 @@ impl Program {
         //    (no observer of the command set exists yet); align when one does.
         self.command_set = save_commands;
 
+        // Restore the enclosing loop's end_state (re-entrancy — see the doc above).
+        // The modal's own end command lives in `retval` (the source of truth); the
+        // leftover `self.end_state` must NOT leak out to end an outer modal/run loop.
+        self.end_state = saved_end_state;
+
         // TheTopView dropped (D8: no occlusion/exposed); no consumer.
 
         retval
@@ -679,6 +782,7 @@ impl Program {
             status_line,
             end_state,
             command_set_changed,
+            pending_modal,
         } = self;
 
         // 1. Resize check — the D9 realization of setScreenMode/cmScreenChanged.
@@ -1001,6 +1105,59 @@ impl Program {
                                         v.set_menu_current(current);
                                     }
                                 }
+                                // -- row 57: the THistory view-triggered async-modal seam --
+                                //
+                                // recordHistory(link->data) for the broadcast arm:
+                                // read the link's current text and history_add it.
+                                Deferred::RecordHistory { link, history_id } => {
+                                    record_history_for(group, link, history_id);
+                                }
+                                // OpenHistory: the THistory leaf holds only the link's
+                                // id (D3) and cannot call exec_view (top-level only), so
+                                // it requested the open and the pump does everything
+                                // reachable here (group + ctx + pending_modal, none
+                                // aliased — ctx borrows out_events/timers/deferred, not
+                                // group/pending_modal). It does NOT exec_view here: it
+                                // stashes the built window into pending_modal for the
+                                // outer pump_and_drive to run at top level.
+                                Deferred::OpenHistory {
+                                    link,
+                                    history_id,
+                                    require_focus,
+                                } => {
+                                    let focused = group
+                                        .find_mut(link)
+                                        .map(|v| v.state().state.focused)
+                                        .unwrap_or(false);
+                                    // Keyboard-trigger gate (faithful to
+                                    // `(link->state & sfFocused)`): the keyboard arm
+                                    // only opens when the link is already focused; the
+                                    // mouse arm (require_focus == false) always opens.
+                                    if require_focus && !focused {
+                                        // not focused — drop the request (no open).
+                                    } else if let Some(bounds) = build_history_bounds(group, link) {
+                                        // link->focus() — DEVIATION: our focus is
+                                        // deferred (focus_descendant) with no inline
+                                        // success bool, so the C++ focus-abort
+                                        // (`if (!link->focus()) return`) is OUT (§0);
+                                        // request focus + proceed (same class as the
+                                        // row-39/41 deferred-focus TODOs).
+                                        group.focus_descendant(link, &mut ctx);
+                                        // recordHistory(link->data): the link's CURRENT
+                                        // text at OPEN, never the picked value (faithful
+                                        // pin — the completion never re-records).
+                                        record_history_for(group, link, history_id);
+                                        // initHistoryWindow + stash for the outer drive.
+                                        // helpCtx propagation is OMITTED — no help-ctx-
+                                        // on-view plumbing yet (TODO(help-ctx propagation)).
+                                        let hw =
+                                            crate::widgets::HistoryWindow::new(bounds, history_id);
+                                        *pending_modal = Some((
+                                            Box::new(hw),
+                                            ModalCompletion::HistoryPick { link },
+                                        ));
+                                    }
+                                }
                             }
                         }
                     }
@@ -1065,6 +1222,88 @@ fn field_int(v: crate::data::FieldValue) -> Option<i32> {
     match v {
         crate::data::FieldValue::Int(n) => Some(n),
         _ => None,
+    }
+}
+
+/// Extract the [`String`] out of a [`FieldValue::Text`](crate::data::FieldValue::Text),
+/// or `None` for any other variant. The text sibling of [`field_int`], used by the
+/// row-57 `THistory` brokers to read the linked input line's text through
+/// [`View::value`].
+fn field_text(v: crate::data::FieldValue) -> Option<String> {
+    match v {
+        crate::data::FieldValue::Text(s) => Some(s),
+        _ => None,
+    }
+}
+
+/// `THistory::recordHistory(link->data)` (row 57): resolve `link`, read its text via
+/// [`View::value`], and `history_add` it to the channel. A free fn so it composes
+/// with the pump's destructured `group` borrow (no `&mut self`).
+fn record_history_for(group: &mut Group, link: ViewId, history_id: u8) {
+    if let Some(t) = group
+        .find_mut(link)
+        .and_then(|v| v.value())
+        .and_then(field_text)
+    {
+        crate::widgets::history_add(history_id, &t);
+    }
+}
+
+/// Build the history popup bounds (row 57), ported from `THistory::handleEvent`'s
+/// geometry block. The C++ formula runs in the link's **owner (dialog)** frame and
+/// intersects the dialog's extent; our `exec_view` root-inserts the modal and
+/// `ModalFrame` hit-tests in **root/absolute** coords (the ROOT-INSERT + (0,0)
+/// caveat documented on `exec_view`), so we work in absolute coords throughout.
+///
+/// **Two geometry deviations (documented, same family as the ModalFrame caveat):**
+/// 1. Absolute via [`View::descendant_global_bounds`] instead of `link->getBounds()`
+///    (owner-local) — faithful for any nesting depth.
+/// 2. Clamp to the **screen** extent instead of `owner->getExtent()` (the dialog
+///    extent). We root-insert, so the screen is the outer frame; the difference
+///    only matters when the dialog is inset from the screen.
+fn build_history_bounds(group: &mut Group, link: ViewId) -> Option<Rect> {
+    let mut r = group.descendant_global_bounds(link, Point::new(0, 0))?;
+    // C++ grow: r.a.x--; r.b.x++; r.a.y--; r.b.y += 7 (1 left, 1 right, 1 up, 7 down).
+    r.a.x -= 1;
+    r.b.x += 1;
+    r.a.y -= 1;
+    r.b.y += 7;
+    // Clamp to the SCREEN extent (deviation 2).
+    let screen = Rect::new(0, 0, group.state().size.x, group.state().size.y);
+    r.intersect(&screen);
+    r.b.y -= 1; // shrink bottom by 1 (C++ r.b.y--).
+    Some(r)
+}
+
+/// Run a [`ModalCompletion`] (row 57) as a DIRECT `group` mutation, while the modal
+/// is still in the tree by `modal_id`. NOT a deferred queue entry (that drain is
+/// gated on `!ev.is_nothing()` inside `pump_once` and would never fire from
+/// `exec_view`). Two sequential `find_mut` borrows — never simultaneous.
+fn apply_modal_completion(
+    c: ModalCompletion,
+    result: Command,
+    group: &mut Group,
+    modal_id: ViewId,
+) {
+    match c {
+        ModalCompletion::HistoryPick { link } => {
+            if result == Command::OK {
+                // getSelection is read while the modal still exists (faithful pin):
+                // downcast the modal dyn View to HistoryWindow and read its selection.
+                let s = group
+                    .find_mut(modal_id)
+                    .and_then(|v| v.as_any_mut())
+                    .and_then(|a| a.downcast_mut::<crate::widgets::HistoryWindow>())
+                    .map(|hw| hw.get_selection());
+                if let Some(s) = s {
+                    // strnzcpy + selectAll(True): InputLine::set_value already does
+                    // `data = s; select_all(true, true)` (D10 flowback).
+                    if let Some(lv) = group.find_mut(link) {
+                        lv.set_value(crate::data::FieldValue::Text(s));
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -4926,6 +5165,384 @@ mod tests {
             assert!(
                 line.cmd_set().is_none(),
                 "an unseeded line has no cache (the startup gap Program::new closes by seeding)"
+            );
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Row 57 — THistory: the view-triggered async-modal seam
+    // -----------------------------------------------------------------------
+    mod history57 {
+        use super::*;
+        use crate::data::FieldValue;
+        use crate::dialog::Dialog;
+        use crate::view::SelectMode;
+        use crate::widgets::{
+            InputLine, LimitMode, THistory, clear_history, history_add, history_count, history_str,
+        };
+
+        /// An empty (no-validator) input line of `limit` bytes.
+        fn input_line(bounds: Rect) -> InputLine {
+            InputLine::new(bounds, 256, None, LimitMode::MaxBytes)
+        }
+
+        /// Read a view's text value through the generic `value()` protocol.
+        fn link_text(program: &mut Program, id: ViewId) -> String {
+            program
+                .group_mut()
+                .find_mut(id)
+                .and_then(|v| v.value())
+                .and_then(field_text)
+                .unwrap_or_default()
+        }
+
+        /// Pump until `end_state` is set or `max` iterations elapse (headless never
+        /// blocks, so a bounded loop is required). Uses the outer driver so a
+        /// view-requested modal is actually executed.
+        fn drive_until_idle(program: &mut Program, max: usize) {
+            for _ in 0..max {
+                program.pump_and_drive();
+                if program.end_state.is_some() {
+                    break;
+                }
+            }
+        }
+
+        // 6.1 — headline: pick → flowback into the linked input line.
+        //
+        // link + THistory as DIRECT ROOT CHILDREN (so the link survives the inner
+        // modal's remove/drop — only the HistoryWindow is removed). Mouse trigger
+        // (require_focus=false) sidesteps focus plumbing. Channel = [a, b]; setup
+        // focuses item 1 ("b"), and the first-event currency fix routes the Enter
+        // straight to the viewer → it picks "b" with no prior nav. Link kept EMPTY
+        // so recordHistory-at-open ignores it (channel stays [a, b]).
+        //
+        // Bite: a no-op set_value → link stays empty → assert fails.
+        #[test]
+        fn pick_flows_back_into_link() {
+            clear_history();
+            history_add(7, "a");
+            history_add(7, "b");
+
+            let (mut program, handle, _clock) = program_with_desktop(80, 25);
+            let link = program
+                .group_mut()
+                .insert(Box::new(input_line(Rect::new(5, 5, 25, 6))));
+            let _hist = program.group_mut().insert(Box::new(THistory::new(
+                Rect::new(25, 5, 28, 6),
+                link,
+                7,
+            )));
+
+            // Mouse-trigger the icon (root == absolute), then Enter picks the
+            // setup-focused entry (item 1 == "b") with NO prior nav — the
+            // first-event currency fix routes Enter straight to the viewer.
+            handle.push_event(mouse_down_at(26, 5));
+            handle.push_event(key(Key::Enter));
+
+            drive_until_idle(&mut program, 30);
+
+            let expected = history_str(7, 1).unwrap(); // "b" (setup focuses item 1)
+            assert_eq!(
+                link_text(&mut program, link),
+                expected,
+                "OK pick flows back into the link (expected the focused entry {expected:?})"
+            );
+        }
+
+        // 6.2 — cancel writes nothing.
+        #[test]
+        fn cancel_leaves_link_unchanged() {
+            clear_history();
+            history_add(8, "a");
+            history_add(8, "b");
+
+            let (mut program, handle, _clock) = program_with_desktop(80, 25);
+            let link = program
+                .group_mut()
+                .insert(Box::new(input_line(Rect::new(5, 5, 25, 6))));
+            let _hist = program.group_mut().insert(Box::new(THistory::new(
+                Rect::new(25, 5, 28, 6),
+                link,
+                8,
+            )));
+
+            // Esc with NO prior nav — the first-event currency fix routes it
+            // straight to the viewer → endModal(cmCancel).
+            handle.push_event(mouse_down_at(26, 5));
+            handle.push_event(key(Key::Esc));
+
+            drive_until_idle(&mut program, 30);
+
+            assert_eq!(
+                link_text(&mut program, link),
+                "",
+                "cancel must write nothing back (link stays empty)"
+            );
+        }
+
+        // BITE for the first-event currency fix (HistoryWindow setup guard calls
+        // window.select_child). A freshly-opened HistoryWindow must dismiss on the
+        // FIRST focused event with NO prior nav: bare exec_view + [Esc] → CANCEL,
+        // + [Enter] → OK. Before the fix the window's internal `current` is None on
+        // open (Group::insert has no ctx → no reset_current), so Esc/Enter reach no
+        // child, never set end_state, and the inner exec_view spins forever (headless
+        // never blocks). VERIFIED: reverting the select_child call makes this hang.
+        #[test]
+        fn no_nav_first_event_dismisses_popup_bite() {
+            clear_history();
+            history_add(13, "a");
+            history_add(13, "b");
+
+            // [Esc] with no prior nav → CANCEL.
+            let (mut program, handle, _clock) = program_with_desktop(80, 25);
+            handle.push_event(key(Key::Esc));
+            let hw = crate::widgets::HistoryWindow::new(Rect::new(5, 3, 45, 18), 13);
+            assert_eq!(
+                program.exec_view(Box::new(hw)),
+                Command::CANCEL,
+                "Esc as the first event dismisses the popup (cmCancel)"
+            );
+
+            // [Enter] with no prior nav → OK.
+            let (mut program, handle, _clock) = program_with_desktop(80, 25);
+            handle.push_event(key(Key::Enter));
+            let hw = crate::widgets::HistoryWindow::new(Rect::new(5, 3, 45, 18), 13);
+            assert_eq!(
+                program.exec_view(Box::new(hw)),
+                Command::OK,
+                "Enter as the first event confirms the popup (cmOK)"
+            );
+        }
+
+        // 6.3 — recordHistory records the link's CURRENT text at OPEN, and the
+        // PICKED value is NOT re-recorded — driven through the OK path (the cancel
+        // path never writes back, so it could not bite the "no double-record" half).
+        //
+        // Setup: channel = ["old"]; link text = "typed". The OpenHistory apply
+        // records the link's CURRENT text → channel = ["old", "typed"] (oldest→
+        // newest) BEFORE the popup's setup runs, so setup focuses item 1 ("typed").
+        // We then Up to item 0 ("old") and Enter → OK picks "old" (flows back into
+        // the link). The pick must NOT append a second "old".
+        #[test]
+        fn record_history_at_open_not_pick() {
+            clear_history();
+            history_add(9, "old"); // one existing entry
+
+            let (mut program, handle, _clock) = program_with_desktop(80, 25);
+            let mut il = input_line(Rect::new(5, 5, 25, 6));
+            il.set_value(FieldValue::Text("typed".into())); // link's CURRENT text
+            let link = program.group_mut().insert(Box::new(il));
+            let _hist = program.group_mut().insert(Box::new(THistory::new(
+                Rect::new(25, 5, 28, 6),
+                link,
+                9,
+            )));
+
+            // Open (records "typed" at OPEN), Up to item 0 ("old"), Enter → OK picks
+            // it. First-event currency routes Up/Enter straight to the viewer.
+            handle.push_event(mouse_down_at(26, 5));
+            handle.push_event(key(Key::Up));
+            handle.push_event(key(Key::Enter));
+            drive_until_idle(&mut program, 30);
+
+            // The OK pick flowed "old" back into the link (proves we drove OK, so the
+            // no-double-record assertion below is non-vacuous).
+            assert_eq!(
+                link_text(&mut program, link),
+                "old",
+                "OK pick ('old', item 0) flows back into the link"
+            );
+
+            let entries: Vec<String> = (0..history_count(9))
+                .filter_map(|i| history_str(9, i))
+                .collect();
+            // "typed" (the link's CURRENT text at OPEN) was recorded.
+            assert!(
+                entries.iter().any(|e| e == "typed"),
+                "the link's CURRENT text at OPEN is recorded: {entries:?}"
+            );
+            // The PICKED value ("old") is NOT re-recorded by the OK flowback: still
+            // exactly one "old". (recordHistory ran once, at OPEN, on the link's text;
+            // the completion only set_values the link — it never history_adds.)
+            assert_eq!(
+                entries.iter().filter(|e| *e == "old").count(),
+                1,
+                "the picked value is never re-recorded on OK"
+            );
+        }
+
+        // 6.4 — keyboard gate: ▼ with the link NOT focused → no modal; focused →
+        // modal; mouse trigger opens regardless of focus.
+        //
+        // Uses pump_once (NOT pump_and_drive) so pending_modal is observable —
+        // pump_and_drive would take + run it, always leaving None.
+        #[test]
+        fn keyboard_gate_requires_focus() {
+            clear_history();
+            history_add(11, "a");
+            history_add(11, "b");
+
+            let (mut program, handle, _clock) = program_with_desktop(80, 25);
+            let link = program
+                .group_mut()
+                .insert(Box::new(input_line(Rect::new(5, 5, 25, 6))));
+            let _hist = program.group_mut().insert(Box::new(THistory::new(
+                Rect::new(25, 5, 28, 6),
+                link,
+                11,
+            )));
+
+            // (a) NOT focused: the keyDown still reaches THistory via postProcess,
+            // but the require_focus gate drops the open.
+            handle.push_event(key(Key::Down));
+            program.pump_once();
+            assert!(
+                program.pending_modal.is_none(),
+                "▼ with the link unfocused must NOT open a modal (the gate)"
+            );
+
+            // Focus the link, verify the bit is set (premise check), then ▼ opens.
+            program.with_ctx(|g, ctx| g.set_current(Some(link), SelectMode::Normal, ctx));
+            assert!(
+                program
+                    .group_mut()
+                    .find_mut(link)
+                    .map(|v| v.state().state.focused)
+                    .unwrap_or(false),
+                "premise: set_current(Normal) focuses the link"
+            );
+            // Discard the set_current side-effects (a queued RECEIVED/RELEASED_FOCUS
+            // broadcast in out_events + command enables in deferred) so the next
+            // pump_once pops OUR Down, not the leftover focus broadcast.
+            program.out_events.clear();
+            program.deferred.clear();
+            handle.push_event(key(Key::Down));
+            program.pump_once();
+            assert!(
+                program.pending_modal.is_some(),
+                "▼ with the link focused opens the modal"
+            );
+            program.pending_modal = None; // discard (don't drive it)
+
+            // (c) mouse trigger opens regardless of focus — clear focus first.
+            program.with_ctx(|g, ctx| g.set_current(None, SelectMode::Normal, ctx));
+            program.out_events.clear();
+            program.deferred.clear();
+            handle.push_event(mouse_down_at(26, 5));
+            program.pump_once();
+            assert!(
+                program.pending_modal.is_some(),
+                "mouse trigger opens regardless of the link's focus"
+            );
+        }
+
+        // 6.5 — re-entrancy / end_state: the inner modal's end command does NOT
+        // leak out to end the OUTER dialog modal. THistory lives INSIDE a Dialog
+        // run via exec_view; mouse-trigger the icon at absolute coords, pick OK,
+        // then cmCancel the dialog. exec_view must return CANCEL (not OK).
+        //
+        // Bite: removing the end_state save/restore → the inner OK leaks into the
+        // dialog's `while end_state.is_none()` → exec_view returns OK before
+        // cmCancel is processed.
+        #[test]
+        fn inner_modal_end_does_not_leak_to_outer() {
+            clear_history();
+            history_add(12, "a");
+            history_add(12, "b");
+
+            let (mut program, handle, _clock) = program_with_desktop(80, 25);
+
+            // Dialog at a non-zero origin; THistory is a child of the dialog's
+            // window-group (children share the window-group origin == dialog.a).
+            let dlg_a = Point::new(10, 4);
+            let mut dialog = Dialog::new(
+                Rect::new(dlg_a.x, dlg_a.y, dlg_a.x + 30, dlg_a.y + 12),
+                None,
+            );
+            let link = dialog.insert_child(Box::new(input_line(Rect::new(3, 3, 20, 4))));
+            // THistory at window-group-local (20, 3) → absolute (30, 7).
+            let hist_local = Point::new(20, 3);
+            let _hist = dialog.insert_child(Box::new(THistory::new(
+                Rect::new(
+                    hist_local.x,
+                    hist_local.y,
+                    hist_local.x + 3,
+                    hist_local.y + 1,
+                ),
+                link,
+                12,
+            )));
+
+            // Mouse-trigger the icon at its absolute position, pick OK (Enter with
+            // no prior nav — first-event currency fix), then cancel the dialog.
+            let abs = Point::new(dlg_a.x + hist_local.x, dlg_a.y + hist_local.y);
+            handle.push_event(mouse_down_at(abs.x, abs.y));
+            handle.push_event(key(Key::Enter)); // inner HistoryWindow → endModal(OK)
+            handle.push_event(Event::Command(Command::CANCEL)); // dialog → endModal(CANCEL)
+
+            let result = program.exec_view(Box::new(dialog));
+            assert_eq!(
+                result,
+                Command::CANCEL,
+                "the inner modal's OK must NOT end the outer dialog; it ends on its own cmCancel"
+            );
+        }
+
+        // 6.6 — descendant_global_bounds: nested root → dialog → link returns the
+        // link's ABSOLUTE bounds (dialog origin + link-local). Non-zero dialog
+        // origin so an identity-conversion bug would fail. Uses a real Dialog so
+        // the Dialog→Window→inner-Group forward chain is exercised.
+        #[test]
+        fn descendant_global_bounds_through_dialog() {
+            clear_history();
+
+            let (mut program, _handle, _clock) = program_with_desktop(80, 25);
+
+            let dlg_a = Point::new(10, 4);
+            let mut dialog = Dialog::new(
+                Rect::new(dlg_a.x, dlg_a.y, dlg_a.x + 30, dlg_a.y + 12),
+                None,
+            );
+            // Link at window-group-local (3, 3)..(20, 4).
+            let link_local = Rect::new(3, 3, 20, 4);
+            let link = dialog.insert_child(Box::new(input_line(link_local)));
+            let dlg_id = program.group_mut().insert(Box::new(dialog));
+
+            // Absolute = dialog origin + link-local.
+            let got = program
+                .group_mut()
+                .descendant_global_bounds(link, Point::new(0, 0));
+            let expected = Rect::new(
+                dlg_a.x + link_local.a.x,
+                dlg_a.y + link_local.a.y,
+                dlg_a.x + link_local.b.x,
+                dlg_a.y + link_local.b.y,
+            );
+            assert_eq!(
+                got,
+                Some(expected),
+                "absolute bounds = dialog-origin + link-local (non-identity conversion)"
+            );
+
+            // The dialog itself (a direct root child) resolves to its own absolute
+            // bounds (acc == (0,0), so absolute == its root-local bounds).
+            assert_eq!(
+                program
+                    .group_mut()
+                    .descendant_global_bounds(dlg_id, Point::new(0, 0)),
+                Some(Rect::new(dlg_a.x, dlg_a.y, dlg_a.x + 30, dlg_a.y + 12)),
+                "the dialog itself (a direct root child) resolves to its own absolute bounds"
+            );
+
+            // A foreign id (minted but never inserted anywhere) resolves to None.
+            let foreign = crate::view::ViewId::next();
+            assert_eq!(
+                program
+                    .group_mut()
+                    .descendant_global_bounds(foreign, Point::new(0, 0)),
+                None,
+                "an id absent from the tree resolves to None"
             );
         }
     }

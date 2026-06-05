@@ -219,6 +219,34 @@ pub enum Deferred {
     /// Touches the **view-tree** family, so the insertion-order drain stays
     /// order-equivalent.
     SetMenuCurrent(ViewId, Option<usize>),
+
+    // -- row 57: the THistory view-triggered async-modal seam (D3/D9) ----------
+    /// **View-triggered modal open** (`THistory`; msgbox 63 will add sibling
+    /// completions). Built at apply time because the trigger view holds only the
+    /// link's id (D3): the pump reads the link, records history, builds the
+    /// `THistoryWindow`, and stashes it into `Program::pending_modal` — it does
+    /// **not** call `exec_view` here (the apply phase is inside the `pump_once`
+    /// destructure; a view cannot call `exec_view`, which is top-level only). The
+    /// OUTER driver loop runs `exec_view` at top level after `pump_once` returns.
+    ///
+    /// Touches the **view-tree** family + **loop state** (`pending_modal`), like
+    /// the other tree ops + `EndModal`, so the insertion-order drain stays
+    /// order-equivalent (no dispatch co-queues a conflicting op on the same state).
+    OpenHistory {
+        /// The linked `TInputLine` whose text/bounds/focus drive the open + flowback.
+        link: ViewId,
+        /// The history channel id.
+        history_id: u8,
+        /// True for the keyboard trigger (gate on the link being focused, faithful
+        /// to `(link->state & sfFocused)`); false for the mouse trigger.
+        require_focus: bool,
+    },
+    /// **recordHistory(link->data)** for the broadcast arm (`cmReleasedFocus` on
+    /// the link / `cmRecordHistory`): resolve the link, read its text,
+    /// `history_add(id, text)`. Touches no loop-owned state beyond the read of the
+    /// view tree (a pure side effect on the process-global history store), so it is
+    /// order-equivalent with every other family.
+    RecordHistory { link: ViewId, history_id: u8 },
 }
 
 // ---------------------------------------------------------------------------
@@ -690,6 +718,29 @@ impl<'a> Context<'a> {
     /// `draw`.
     pub fn request_set_menu_current(&mut self, id: ViewId, current: Option<usize>) {
         self.deferred.push(Deferred::SetMenuCurrent(id, current));
+    }
+
+    /// Request a view-triggered history modal be opened over the link `link` —
+    /// **deferred** ([`Deferred::OpenHistory`]). The `THistory` icon (a leaf, D3)
+    /// holds only the link's id and cannot call `exec_view` (top-level only), so it
+    /// requests the open; the pump reads the link, records history, builds the
+    /// `THistoryWindow`, and stashes it into `Program::pending_modal` for the outer
+    /// driver to `exec_view` at top level. `require_focus` gates the keyboard
+    /// trigger on the link being focused (faithful to `(link->state & sfFocused)`).
+    pub fn request_open_history(&mut self, link: ViewId, history_id: u8, require_focus: bool) {
+        self.deferred.push(Deferred::OpenHistory {
+            link,
+            history_id,
+            require_focus,
+        });
+    }
+
+    /// Request `recordHistory(link->data)` for the `THistory` broadcast arm —
+    /// **deferred** ([`Deferred::RecordHistory`]). The pump resolves the link, reads
+    /// its current text, and `history_add`s it to the channel.
+    pub fn request_record_history(&mut self, link: ViewId, history_id: u8) {
+        self.deferred
+            .push(Deferred::RecordHistory { link, history_id });
     }
 
     /// Re-queue a **raw event** into the loop's event queue — the raw-event

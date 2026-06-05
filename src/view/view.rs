@@ -849,6 +849,20 @@ pub trait View {
     fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
         None
     }
+
+    /// Resolve descendant `id` to its **absolute** bounds, given `acc` = this
+    /// view's own absolute origin. Base returns `None` (a leaf owns no
+    /// descendants); a [`Group`](crate::view::Group) overrides to walk its children
+    /// accumulating origins, and a `Group`-embedding view delegates to its inner
+    /// group. The successor to C++ reading `link->getBounds()` in the owner's frame
+    /// and then mapping up the owner chain — here the row-57 `THistory` open path
+    /// needs the link's bounds in the **root/absolute** frame, because `exec_view`
+    /// root-inserts the modal and `ModalFrame` hit-tests in absolute coords (the
+    /// documented ROOT-INSERT + (0,0) caveat). Mirrors
+    /// [`find_mut`](View::find_mut)'s recursion but returns geometry, not a borrow.
+    fn descendant_global_bounds(&self, _id: ViewId, _acc: Point) -> Option<Rect> {
+        None
+    }
 }
 
 #[cfg(test)]

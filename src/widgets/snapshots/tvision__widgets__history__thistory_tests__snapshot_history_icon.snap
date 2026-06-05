@@ -1,0 +1,14 @@
+---
+source: src/widgets/history.rs
+expression: "render_history(&mut h, 3, 1)"
+---
+size: 3x1
+cursor: hidden
+text:
+|▐↓▌|
+attr:
+|aba|
+legend:
+  . default
+  a fg=BIOS(0) bg=BIOS(3)
+  b fg=BIOS(14) bg=BIOS(3)

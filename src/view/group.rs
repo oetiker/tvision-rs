@@ -754,6 +754,35 @@ impl View for Group {
         None
     }
 
+    /// `Group`'s [`View::descendant_global_bounds`] override — resolve `id` to its
+    /// absolute bounds. `acc` is THIS group's absolute origin; a child's
+    /// owner-local bounds come from `child.view.state().get_bounds()` (the `Child`
+    /// struct carries no bounds field). Mirrors [`find_mut`](Self::find_mut)'s
+    /// recursion but accumulates origins: the child's absolute origin is `acc +
+    /// child.origin`, and the returned rect is the child's size placed at that
+    /// origin. Recurses into each child with the child's accumulated origin, so it
+    /// is faithful for any nesting depth (root → dialog → link).
+    fn descendant_global_bounds(&self, id: ViewId, acc: Point) -> Option<Rect> {
+        for child in &self.children {
+            let b = child.view.state().get_bounds(); // owner-local
+            let child_origin = Point::new(acc.x + b.a.x, acc.y + b.a.y);
+            if child.id == id {
+                let w = b.b.x - b.a.x;
+                let h = b.b.y - b.a.y;
+                return Some(Rect::new(
+                    child_origin.x,
+                    child_origin.y,
+                    child_origin.x + w,
+                    child_origin.y + h,
+                ));
+            }
+            if let Some(r) = child.view.descendant_global_bounds(id, child_origin) {
+                return Some(r);
+            }
+        }
+        None
+    }
+
     /// `Group`'s [`View::remove_descendant`] override — route to the owning
     /// group's [`remove`](Self::remove) (faithful removal + `reset_current`). If
     /// `id` is a direct child, remove it here; otherwise recurse so the group that

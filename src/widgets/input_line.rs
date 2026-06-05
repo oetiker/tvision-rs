@@ -720,6 +720,9 @@ impl View for InputLine {
         // future non-Text arm) is kept so growth lands here cleanly.
         #[allow(irrefutable_let_patterns)]
         if let FieldValue::Text(s) = v {
+            // TODO(max_len clamp on set_value): C++ flowback is `strnzcpy(data, s,
+            // maxLen+1)` — truncates to maxLen. We assign unclamped (pre-existing
+            // row-39 gap; row 57's THistory flowback is the first heavy consumer).
             self.data = s;
             self.select_all(true, true);
         }

@@ -118,7 +118,7 @@ pub use view::{
     StateFlag, View, ViewId, ViewState,
 };
 pub use widgets::{
-    HistoryViewer, HistoryWindow, clear_history, history_add, history_count, history_str,
+    HistoryViewer, HistoryWindow, THistory, clear_history, history_add, history_count, history_str,
 };
 pub use widgets::{InputLine, ListBox, ListViewer, ListViewerState, ScrollBar, Scroller};
 pub use window::{ScrollBarOptions, Window, WindowFlags, WindowPalette};

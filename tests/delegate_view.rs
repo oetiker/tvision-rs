@@ -2,7 +2,7 @@
 //! currently-known `View` method.
 //!
 //! The empty `impl View for D {}` compiling at all proves every one of the
-//! 25 generated signatures matches the trait exactly. The behavioral assertions
+//! 26 generated signatures matches the trait exactly. The behavioral assertions
 //! prove completeness: no forwarder silently missing.
 
 use std::cell::RefCell;
@@ -125,10 +125,14 @@ impl View for Spy {
         self.mark("as_any_mut");
         None
     }
+    fn descendant_global_bounds(&self, _id: ViewId, _acc: Point) -> Option<Rect> {
+        self.mark("descendant_global_bounds");
+        None
+    }
 }
 
 // ---------------------------------------------------------------------------
-// D — pure delegator: empty impl, macro injects ALL 25 forwarders.
+// D — pure delegator: empty impl, macro injects ALL 26 forwarders.
 // ---------------------------------------------------------------------------
 
 struct D {
@@ -257,6 +261,9 @@ fn delegate_forwards_every_known_view_method() {
     // -- as_any_mut ---------------------------------------------------------
     let _ = d.as_any_mut();
 
+    // -- descendant_global_bounds -------------------------------------------
+    let _ = d.descendant_global_bounds(id, Point::new(0, 0));
+
     // -- draw (needs a DrawCtx; use the HeadlessBackend pattern) -----------
     {
         let theme = Theme::classic_blue();
@@ -300,6 +307,7 @@ fn delegate_forwards_every_known_view_method() {
         "update_menu_commands",
         "set_menu_current",
         "as_any_mut",
+        "descendant_global_bounds",
     ];
     for m in expected {
         assert!(

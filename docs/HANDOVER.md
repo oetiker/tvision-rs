@@ -1,4 +1,4 @@
-# Session handover — **`THistoryWindow` (56) DONE** (Phase 4). Next: **`THistory` (57)** — the FOUNDATION view-triggered async-modal path (`Deferred::OpenModal` + result flowback, shared with msgbox 63), which ALSO must build the **ModalFrame deliver-outside-to-modal** seam row 56 deferred. Then **Batch C validators 58–62** / **msgbox 63**
+# Session handover — **`THistory` (57) DONE** (Phase 4) — the FOUNDATION view-triggered async-modal seam (`Deferred::OpenHistory` + `pending_modal` outer-loop drive + `ModalCompletion` flowback) is LANDED. Next: **the `ModalFrame` deliver-outside-to-modal seam** (row 56/57 deferred — a `program_handle_event` delivery-path change) + **the general initial-modal-currency seam** (dialogs lack initial focus), then **msgbox 63** (co-consumer of the async-modal seam) / **Batch C validators 58–62**
 
 > Living handover for the **next** rstv session. Read this, then
 > [CLAUDE.md](file:///home/oetiker/checkouts/rstv/CLAUDE.md) (orientation /
@@ -15,6 +15,7 @@
 
 | commit | what |
 |--------|------|
+| _(this session)_ | **`THistory` (57) — the view-triggered async-modal seam** — faithful `thistory.cpp`. The dropdown-arrow icon next to a `TInputLine` that opens a modal `HistoryWindow` and writes the pick back. **THE FOUNDATION SEAM (the menu sessions reserved it):** a leaf view holds only the link's `ViewId` (D3) and **cannot call `exec_view`** (top-level only) — so it **requests** the open and the pump drives the modal. New `Deferred::OpenHistory{link, history_id, require_focus}` + `RecordHistory{link, history_id}` (+ `Context::request_*`); the `OpenHistory` apply arm (inside the `pump_once` destructure — split borrow, so it does NOT call exec_view) reads the link's text/bounds/focus via `group`, `history_add`s the **current** text (recordHistory at OPEN, never the pick), builds the `HistoryWindow`, and stashes it into a new **`Program::pending_modal: Option<(Box<dyn View>, ModalCompletion)>`**. The **OUTER driver `pump_and_drive`** (used in **both** `run`'s AND `exec_view`'s inner `while`, since a `THistory` lives in a `Dialog` opened via exec_view → modal-from-modal) takes `pending_modal` after `pump_once` returns — where it holds a whole `&mut self` — and runs the re-entrant `exec_view` at top level. **`exec_view` refactored to `exec_view_with_completion`** with two additions: (1) **`end_state` save/restore** at entry/exit (re-entrancy — else the inner modal's end command leaks to the outer loop; bite-tested; the cmQuit-as-retval deviation still holds); (2) the **`ModalCompletion` runs BEFORE remove/drop** (while the modal is still in the tree by id) as a DIRECT `group` mutation — NOT via the deferred queue (that drain is gated on `!ev.is_nothing()` and would never fire from here). `ModalCompletion::HistoryPick{link}`: on `cmOK`, downcast the modal → `HistoryWindow::get_selection` → `link.set_value(Text)` (= the C++ `strnzcpy`+`selectAll`; `InputLine::set_value` already does `data=s; select_all`). New `View::descendant_global_bounds(&self, id, acc)` trait method (+ Group override + delegate forwarder, spy 25→**26**) for the link-local→absolute geometry the root-insert path needs (clamp-to-screen deviation vs C++'s owner-extent intersect — both documented). `HistoryWindow::as_any_mut` promoted to real `Some(self)` (was skipped→default `None`; the completion downcast needs it). **SPEC review (fresh C++-adversarial Opus) caught a REAL foundational gap:** `Group::insert` has no `ctx` → never `reset_current`, so unlike C++ (`insertView→show→resetCurrent`) an opened modal's internal `current` stays `None` until a nav event — **popup Esc/Enter were dead on open** (the brief's "already work" claim was false). **Fixed locally + faithfully:** `Window::select_child_for_test`→production `pub(crate) select_child`, called in `HistoryWindow`'s first-event setup guard to make the viewer current (deviation: currency at FIRST-EVENT not at open — same class as the viewer `setup()`); new `no_nav_first_event_dismisses_popup_bite` ([mouseDown,Esc]→CANCEL / [mouseDown,Enter]→OK, no prior nav — hangs before the fix). The **general** dialog initial-currency gap is breadcrumbed at `exec_view`'s `set_current` site (foundational follow-on). **QUALITY review (fresh Opus): borrow-soundness clean, both core bites verified by mutation; 3 test-rigor/doc fixes** (the anti-double-record test reworked OK-path → non-vacuous; a `None`-path assert added to `descendant_global_bounds`; 2 stale comments). Deferred (breadcrumbed): the `ModalFrame` outside-click cancel (a `program_handle_event` delivery-path change, NOT a `ModalFrame` tweak — confirmed); `max_len` clamp on `set_value` (row-39 gap); helpCtx propagation. 618→**631** lib tests. FOUNDATION ← THIS session |
 | `ad41f05` | **`THistoryWindow` (56) — modal recall window hosting the viewer** — faithful `thistwin.cpp`. `HistoryWindow` is a `TWindow` subtype (D2 embed + `#[delegate(to = window)]`, like `Dialog`) assembling a frame + two `standard_scroll_bar`s (h `sbHorizontal\|sbHandleKeyboard`, v `sbVertical\|…`) + a `HistoryViewer` (55) over an extent grown `(-1,-1)`, with `get_selection` = the viewer's focused `get_text` (by id + `as_any_mut` downcast). `flags = wfClose` only (not movable). **Seam promoted (shared foundation touch, also unblocks msgbox 63 + Batch E):** `Window::insert_child`/`Dialog::insert_child` go `#[cfg(test)]`→real `pub(crate)`, + new `pub(crate) Window::child_mut`. **Viewer `setup()` (the Context-needing ctor tail, row 55/ListBox constraint) runs ONCE at the TOP of `handle_event`, BEFORE delegating to `TWindow::handleEvent`** — so the first event reaches an initialized viewer (the bite: misorder → first Down hits a range=0 viewer → focused wrong; verified empirically to fail with focused==1). **DEFERRED (breadcrumbed, NOT a silent drop):** the C++ `evMouseDown && !mouseInView → endModal(cmCancel)` outside-click cancel — our `ModalFrame` (program.rs) **Consumes outside positional events before they reach the modal view**, so the arm is unreachable; delivering outside clicks to the modal view is a **modal-loop change reserved for row 57 / msgbox 63** (`Deferred::OpenModal`). Esc/Enter/double-click confirm/cancel still work (the viewer, row 55). `cpHistoryWindow` palette → provisional Window/Frame + TODO(row 34). **Two-stage review (fresh SPEC + QUALITY Opus, both PASS on production code, no blockers):** the two converged test-quality SHOULD-FIX items fixed — the setup-guard test rewritten into a TRUE bite (new `#[cfg(test)] Window::select_child_for_test` makes the viewer current; deliver Down; assert focused 1→2; empirically confirmed to fail when misordered) + the negative h-bar-max test made non-vacuous (asserts the exact `-32` queued max AND that it drains through `ScrollBar::set_params` in a live `exec_view` pump without panic — the HANDOVER watch-item, now pinned end-to-end). 613→618 tests. MECHANICAL ← THIS session |
 | `6ada1fd` | **`THistoryViewer` (55) — modal recall list over the store** — faithful `thstview.cpp`. A single-column `TListViewer` subclass (mirrors the `TListBox` template: `impl ListViewer` lv/lv_mut + override only `get_text`; `impl View` delegating draw/event/nav to the `list_viewer::` free fns) that reads the row-54 store **live by id**. `get_text(item)` → `history_str(id, item)`; `handle_event`: Enter/double-click → `ctx.end_modal(Command::OK)`, Esc/`cmCancel` → `end_modal(Command::CANCEL)`, **unconditional (no `sfModal` gate** — the viewer only ever lives in a modal `THistoryWindow`, faithful to the C++), else fall through to `list_viewer::handle_event`. `history_width()` = max `text::width` over the channel. The Context-needing ctor tail (`set_range(history_count)`/`focus_item(1)` when range>1/h-bar `setRange(0, historyWidth()-size.x+3)`) moved to a post-insert **`setup(&mut self, ctx)`** (same Context-free-ctor constraint as `ListBox::new`; **does NOT** publish step sizes — the C++ ctor doesn't either). `history_id: u8` throughout (C++ `ushort` truncates to the `uchar` store; explicit `u8` avoids silent aliasing). Palette reuses provisional `Role::List*` + `TODO(row 34): cpHistoryViewer remap` (no new Role variants). **Two-stage review (SPEC + QUALITY, fresh Opus): SPEC PASS no findings; QUALITY PASS + 1 SHOULD-FIX** (added a bite-checked test for the previously-untested h-bar `setRange` branch — exact `max=-12` from `historyWidth-size.x+3`) + 1 cost NIT comment. 601→613 tests (+12 incl. a snapshot proving item-1 focus). MECHANICAL ← THIS session |
 | `121ec67` | **history store (54) — `historyAdd`/`Count`/`Str`/`clearHistory`** — faithful `histlist.cpp` as an idiomatic `Vec`: a single **global 1024-byte budget** with **global FIFO eviction** (NOT per-id), `thread_local! { RefCell<Vec<HistRec>> }` (single-threaded like the C++; per-test isolation falls out of libtest's per-test threads). Four free fns in `src/widgets/history.rs`. Cost/entry = `str.len()+3` (UTF-8 bytes, faithful `TStringView::size`). Index order **oldest→newest per id** (row 55's `get_text` reads it directly — no inversion anywhere, faithful to C++). `history_add`: dedup `(id,str)` FIRST → evict front → push back. **Documented deliberate deviation:** the C++ front-sentinel + always-skip-front bookkeeping is NOT replicated, so every non-evicted entry is readable (C++ hides one globally-oldest entry after the first overflow); C++'s in-band sentinel makes its budget 3 bytes tighter (a byte-boundary nuance, not a new divergence). `initHistory`/`doneHistory` moot (thread-local Vec) — omitted, not stubbed. **Two-stage review (SPEC + QUALITY, fresh Opus): both PASS, no blockers; +3 NITs** (`#[must_use]` getters, single `cost_of()`, doc precision note). 593→601 tests. The shared dependency for rows 55–57. MECHANICAL ← THIS session |
@@ -31,11 +32,14 @@
 | `3e6645f` | **TApplication (32)** — thin D2 wrapper over `Program` (MECHANICAL) |
 | `47894f0…66ab55f` | **`#[delegate]` proc-macro** — `tvision-macros` crate + workspace, then **adopted** across cluster/Window/Dialog/ParamText/Label/Desktop + the hello example (replaces `cluster_wrapper!`) |
 
-**Build state:** 618 lib (was 613; +5 this session: row-56 `HistoryWindow` tests
-— construction, keyboard-routes-after-setup via `exec_view`, `get_selection`, the
-setup-guard TRUE bite, the negative-h-bar-max live-pump end-to-end) + 5 integration
-(3 `render_pipeline` + 2 `delegate_view`, the latter exercising **25** macro
-forwarders) + 2 doctests green;
+**Build state:** 631 lib (was 618; +13 this session: row-57 — 7 program-level
+seam tests incl. the no-nav `[mouseDown,Esc/Enter]` currency bite, end-to-end
+pick→flowback, cancel-no-write, recordHistory-at-open-OK-path, keyboard-focus
+gate, inner-modal-end-no-leak re-entrancy, `descendant_global_bounds` through a
+non-zero-origin dialog + its `None` path; + 6 `THistory` widget tests incl. the
+`▐↓▌` icon snapshot) + 5 integration (3 `render_pipeline` + 2 `delegate_view`,
+the latter exercising **26** macro forwarders — `descendant_global_bounds` added)
++ 2 doctests green;
 `cargo build --example hello` builds the drivable app; `cargo clippy --workspace --all-targets -- -D warnings` and `cargo
 fmt --all --check` clean (verify clippy with a forced re-lint — a cached run can
 mask a fresh warning). **It is a Cargo workspace**
@@ -52,14 +56,27 @@ line rows 47 (`TStatusItem`/`TStatusDef`) + 53 (`TStatusLine` draw/data slice) a
 DONE** (a prior session). **The menu bar + status line are WIRED INTO `Program`**
 (`examples/hello.rs` is a drivable TV app), and **`Desktop::tile`/`cascade` +
 `cmTile`/`cmCascade` are WIRED** (the row-32 breadcrumb CLOSED) — all prior sessions.
-The history store (54) + `THistoryViewer` (55) landed a prior session; **THIS
-session: `THistoryWindow` (56) is DONE** (top git-table row), including the
-promoted production `Window::insert_child`/`child_mut` seam. **Next: `THistory`
-(57)** — the FOUNDATION view-triggered async-modal path (`Deferred::OpenModal` +
-result flowback), which must ALSO build the **ModalFrame deliver-outside-to-modal**
-seam row 56 deferred (the outside-click cancel). msgbox 63 is the co-consumer of
-the async-modal seam. Batch C validators 58–62 remain an available parallel
-fan-out; `cmDosShell` still needs a backend suspend seam.
+The history store (54) + `THistoryViewer` (55) + `THistoryWindow` (56) landed
+prior sessions. **THIS session: `THistory` (57) is DONE** (top git-table row) —
+**the FOUNDATION view-triggered async-modal seam is built** (`Deferred::OpenHistory`
++ `Program::pending_modal` + the `pump_and_drive` outer-loop drive + `exec_view`
+end_state save/restore + `ModalCompletion` flowback). **The whole history cluster
+(54–57) is now COMPLETE.** **Next (lowest-numbered remaining work):**
+1. **The `ModalFrame` deliver-outside-to-modal seam** (row 56/57 deferred) — a
+   **`program_handle_event` delivery-path change** (NOT a `ModalFrame` return-value
+   tweak: `ModalFrame` has no `group`, and `program_handle_event` routes outside
+   clicks positionally to the desktop), to un-defer the `HistoryWindow` outside-click
+   `endModal(cmCancel)`.
+2. **The general initial-modal-currency seam** — `exec_view` should establish a
+   freshly-opened modal's internal `current` (first selectable child), so EVERY
+   dialog gets keyboard focus on open (C++ `insertView→show→resetCurrent`). Row 57
+   worked around it **locally** for the history popup (first-event `select_child`);
+   the general fix is blocked on `Group::insert` having no `ctx` (breadcrumbed at
+   `exec_view`'s `set_current` site).
+3. **msgbox 63** — the co-consumer of the async-modal seam (ADDS a `ModalCompletion`
+   variant; uses the row-56 `Window::insert_child` for its children).
+Batch C validators 58–62 remain an available parallel fan-out; `cmDosShell` still
+needs a backend suspend seam.
 
 > **Worktrees** live under `/scratch/oetiker/claude-worktrees/<project>-<name>`
 > (global CLAUDE.md). A `WorktreeCreate` hook (`~/.claude/settings.json` →
@@ -287,74 +304,46 @@ integrate. `src/menu/menu_session.rs` + re-exports + 6 tests.
   1 submenu-popup carry-up exit-click (the SPEC-flagged previously-only-reasoned path),
   2 `auto_place_popup` geometry units (below-right; bottom-edge shift-up). 551 lib green.
 
-### NEXT — **`THistory` (57)** — the FOUNDATION async-modal seam (also build the **ModalFrame outside-delivery** seam row 56 deferred); then **Batch C validators 58–62** / **msgbox 63**
-**Rows 54 (store) + 55 (`THistoryViewer`) + 56 (`THistoryWindow`) are DONE** (54/55
-a prior session, **56 THIS session** — top git-table row). The production
-`Window::insert_child`/`child_mut` seam is now built. The lowest-numbered remaining
-in-sequence work is **row 57** — the FOUNDATION piece of the history cluster:
+### NEXT — two modal-loop foundation seams (surfaced by row 57) + **msgbox 63** / **Batch C validators 58–62**
+**The history cluster 54–57 is COMPLETE** (54/55/56 prior sessions; **57 THIS
+session** — top git-table row). The view-triggered async-modal seam
+(`Deferred::OpenHistory` + `Program::pending_modal` + `pump_and_drive` +
+`exec_view` end_state save/restore + `ModalCompletion` flowback) is built and
+reviewed. Two modal-loop foundation seams were surfaced/deferred and are the
+natural next FOUNDATION work; msgbox 63 + Batch C are also available:
 
-- **Row 56 discovery to carry into 57 — the `ModalFrame` outside-delivery seam.**
-  Row 56 **deferred** the C++ `THistoryWindow` `evMouseDown && !mouseInView →
-  endModal(cmCancel)` outside-click cancel because our `ModalFrame`
-  (`src/app/program.rs`, `ModalFrame::handle`) **Consumes positional events outside
-  the modal view's bounds** (a row-34 dialog simplification: delivered-and-ignored
-  == swallowed, *for a dialog*). But `THistoryWindow` needs to **see** the outside
-  click to cancel. Faithfully, the modal view is the top group and receives **every**
-  event (C++ `TGroup::execute` `getEvent`→`handleEvent`); the modal view (a group)
-  routes its *own* children positionally. So the fix is a modal-loop change:
-  **ModalFrame should DELIVER outside positional events to the modal view (by id),
-  not Consume them** — i.e. while a `ModalFrame` is active, route ALL events to the
-  modal view rather than positionally through the root group. Design this with the
-  advisor **alongside** the row-57 async-modal path (both are modal-loop work); once
-  built, un-defer the `HistoryWindow::handle_event` outside-cancel arm (the breadcrumb
-  is in place there).
-- **Row 57 `THistory` (FOUNDATION — design with the advisor):** the dropdown-icon
-  `TView` placed next to a `TInputLine` (row 39 done). On its trigger
-  (`cmHistoryDropDown`/click), it **`execView`s a `THistoryWindow` from within its
-  own `handle_event`** and on `cmOK` writes the picked `getSelection` string into
-  the linked input line (+ `recordHistory(s)` = `history_add`). This is the
-  **unbuilt D9 view-triggered async-modal path** the menu sessions reserved.
-  **msgbox 63 is the co-consumer — build the seam once, wire both.**
-  `THistory::draw` = the down-arrow icon (`▼`, `historyIcon`); `getPalette`
-  `cpHistory`. The `link`/`historyId` fields; `shutDown` (drop the link ref, moot
-  under Rust ownership).
-
-  **Row-57 design notes (orientation gathered, NOT yet built — design with the
-  advisor + main-thread care):**
-  - **`exec_view` is top-level-only** (`program.rs:466`/`520`): a view holds only
-    `&mut Context`, never `&mut Program`, so it cannot call `exec_view` inline from
-    `handle_event`. That is the whole reason 57 needs an async seam.
-  - **THE KEY CONSTRAINT (verified this session):** the pump's **deferred-apply
-    phase** (`program.rs:818-`) runs inside a `let Program { group, captures,
-    command_set, end_state, … } = self;` **destructure** (`program.rs:664-682`), so
-    at apply-time `self` is split-borrowed — a `Deferred::OpenModal` applied there
-    **cannot call `self.exec_view(view)`** (no whole `&mut self`; and it would be a
-    re-entrant `pump_once` inside `pump_once`). So **do NOT plan to run `exec_view`
-    at deferred-apply time.**
-  - **Recommended shape (advisor to confirm):** `Deferred::OpenModal` stashes the
-    boxed modal view + a completion callback into a new `Program::pending_modal:
-    Option<…>` field (apply-time only touches that field — no exec_view). The
-    **OUTER driver loop** (`run` / the `exec_view` loop body) checks `pending_modal`
-    **after `pump_once` returns** — where it holds a whole `&mut self` — and runs
-    `exec_view` on it at top level, then invokes the completion callback with the
-    result `Command` + access to the modal view (for `get_selection`, already built
-    on `HistoryWindow`) + a `Context` to write the result back. Keeps `exec_view`
-    top-level; no re-entrant destructure.
-  - **Result flowback into the link `TInputLine` (row 39):** `THistory` holds only
-    the link's `ViewId` (D3), so writing the picked string back is a deferred/broker
-    write (set the input line's data by id — likely a new `Deferred` variant or the
-    D10 `set_value` path) + `link.select_all` + redraw. Check `src/widgets/`
-    input_line for the existing data setter before inventing one.
-  - **ModalFrame outside-delivery** (the row-56-deferred seam, above) is the *other*
-    modal-loop change 57 owns — design both together; they share the loop.
+- **(1) The `ModalFrame` deliver-outside-to-modal seam** (row 56/57 deferred —
+  un-defers the `HistoryWindow` outside-click `endModal(cmCancel)`). **NOT a
+  `ModalFrame` return-value tweak** (confirmed this session): `ModalFrame::handle`
+  has no `group` so it cannot deliver to the modal by id, and
+  `program_handle_event` routes outside positional events **positionally to the
+  desktop** (not by `current`). So the fix is a **delivery-path change in
+  `program_handle_event`**: while a `ModalFrame` is the top capture, deliver
+  positional events to the modal view by id (makeLocal to its bounds) so the
+  modal's own routing + the `HistoryWindow` `mouseInView`-cancel override decide;
+  verify a plain `Dialog` still IGNORES an outside click under that delivery (C++
+  does — no child catches it). The `HistoryWindow::handle_event` outside-cancel
+  breadcrumb (`TODO(row 57 modal-loop seam)`) is in place to un-defer.
+- **(2) The general initial-modal-currency seam.** SPEC review found that
+  `exec_view` opens a modal but never establishes its **internal** `current`
+  (first selectable child), so EVERY dialog is keyboard-dead on open until a nav
+  event — C++ gets this via `insertView→show→resetCurrent` as children land in a
+  visible group. Row 57 worked around it **locally** for the history popup (a
+  first-event `Window::select_child` in `HistoryWindow::handle_event`). The general
+  fix is blocked on `Group::insert` taking no `ctx` (so it cannot `reset_current`
+  at insert); breadcrumbed at `exec_view`'s `set_current(Some(id), Enter)` site.
+  Needs its own SPEC pass (does C++ establish currency at construction or at
+  execView?) + likely a new `View`-trait hook or a ctx-bearing insert path.
+- **msgbox 63** — the co-consumer of the async-modal seam: it **ADDS a
+  `ModalCompletion` variant** (`messageBox` → return/post the button command;
+  `inputBox` → flow the input line's text back) and uses the row-56 production
+  `Window::insert_child` for its `TStaticText`/`TButton`/`TInputLine` children. The
+  seam is built — wiring msgbox is now mostly mechanical + its own completion arm.
 - **Batch C concrete validators 58–62** (`tvalidat.cpp`) — the clean worktree
   parallel fan-out (see "Available parallel fan-out" below); **59 `TRangeValidator`
   is FOUNDATION-ish** (resolves the deferred `transfer` hook + the `cur_pos`
-  re-clamp hazard; `FieldValue::Int` ready). **Available NOW** (independent of the
-  history seams) if you'd rather fan out than design the async-modal path.
-- **msgbox 63** — co-consumer of the row-57 async-modal seam (`Deferred::OpenModal`
-  + posted completion `Command`); uses the now-built production `Window::insert_child`
-  (row 56's seam) to add its `TStaticText`/`TButton`/`TInputLine` children.
+  re-clamp hazard; `FieldValue::Int` ready). **Available NOW**, independent of the
+  modal-loop seams above.
 - **`cmDosShell`** is still deferred — needs a backend terminal-suspend seam + SIGTSTP.
 
 Other open follow-ons (lower priority / parallel):
