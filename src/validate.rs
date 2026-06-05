@@ -26,6 +26,8 @@
 //! so it is **deliberately omitted**; it lands with its first overrider/consumer
 //! (row 59). The slot-in point is breadcrumbed in `InputLine::value`/`set_value`.
 
+use crate::data::FieldValue;
+
 /// An input validator — `TValidator` (D2: abstract base → trait).
 ///
 /// A [`TInputLine`](crate::widgets::InputLine) holds an
@@ -73,6 +75,31 @@ pub trait Validator {
     /// overrides to report a syntax error (`vsSyntax`).
     fn is_status_ok(&self) -> bool {
         true
+    }
+
+    /// `TValidator::transfer(…, vtGetData)` under **D10**. `Some(typed value)`
+    /// only when the validator has transfer enabled (C++ `options & voTransfer`);
+    /// `None` means "I don't transfer — the input line keeps its text value".
+    /// Base: `None`. (`vtDataSize` is moot under D10 — the typed value carries its
+    /// own size.)
+    ///
+    /// NOTE: this is a [`Validator`]-trait method, **not** a `View`-trait method —
+    /// there is deliberately no `tvision-macros/src/specs.rs` forwarder and no
+    /// `delegate_view` spy entry for it.
+    fn transfer_get(&self, _s: &str) -> Option<FieldValue> {
+        None
+    }
+
+    /// `TValidator::transfer(…, vtSetData)` under **D10** — format a typed value
+    /// back to the field's text. `Some(text)` only when transfer-enabled AND `v`
+    /// is the type this validator handles; `None` → the input line falls back to
+    /// its Text path. Base: `None`.
+    ///
+    /// NOTE: like [`transfer_get`](Validator::transfer_get), this is a
+    /// [`Validator`]-trait method, **not** a `View`-trait method — no `specs.rs`
+    /// forwarder / `delegate_view` spy entry exists for it.
+    fn transfer_set(&self, _v: &FieldValue) -> Option<String> {
+        None
     }
 }
 
@@ -198,6 +225,132 @@ impl Validator for StringLookupValidator {
 
     /// `TStringLookupValidator::error` — C++ calls `messageBox(mfError|mfOKButton, …)`.
     /// TODO(row 63): messageBox(mfError|mfOKButton, "Input is not in list of valid strings")
+    fn error(&self) {}
+}
+
+/// `TRangeValidator` (row 59) — `TRangeValidator : public TFilterValidator`.
+///
+/// A numeric validator: gates input through a digit charset filter (embedded
+/// [`FilterValidator`], D2 "Range IS-A Filter"), then on the final check parses
+/// the text and requires it to fall within `[min, max]`.
+///
+/// ## C++ origin
+/// `TRangeValidator(aMin, aMax)` selects its charset by sign of `aMin`:
+/// `validUnsignedChars = "+0123456789"` when `aMin >= 0`, else
+/// `validSignedChars = "+-0123456789"`. `isValid` overrides `TFilterValidator`'s
+/// (charset gate, then `sscanf("%ld")`, then range); `isValidInput` is **not**
+/// overridden — it is inherited from `TFilterValidator` (charset-only while
+/// typing, **no** range check). `transfer` does typed get/set of a `long` when
+/// `options & voTransfer` is set.
+///
+/// ## Deviations
+/// - Inheritance → embed-and-delegate (**D2**): a `FilterValidator` field, built
+///   from the sign-selected charset; `is_valid_input` forwards to it.
+/// - The `options & voTransfer` bit → a single `transfer_enabled: bool` (C++
+///   `options` defaults to 0, so transfer is **OFF** by default). No general
+///   `options` bitfield / `voFill` / `voReserved` is built — Range uses only this.
+/// - `transfer` (`TVTransfer`) → the typed **D10** [`transfer_get`] /
+///   [`transfer_set`] pair over [`FieldValue::Int`]. `vtDataSize` is moot (D10).
+/// - `min`/`max` are `i32` (C++ `int32_t`); C++'s `value` is `long` but `isValid`
+///   bounds it into `[min, max] ⊆ i32`, so [`FieldValue::Int`] is faithful.
+/// - Streaming (`read`/`write`/`name`) dropped project-wide (D12); destructor moot.
+/// - `error()` is a TODO breadcrumb (row-63 `messageBox` not yet built).
+///
+/// [`transfer_get`]: Validator::transfer_get
+/// [`transfer_set`]: Validator::transfer_set
+pub struct RangeValidator {
+    /// Embedded filter (D2: Range IS-A Filter) — the sign-selected digit charset.
+    filter: FilterValidator,
+    min: i32,
+    max: i32,
+    /// C++ `options & voTransfer`; default OFF (C++ `options` defaults to 0).
+    transfer_enabled: bool,
+}
+
+/// Parse the leading numeric value of a range-validator field — the **D10**
+/// successor to C++ `sscanf(s, "%ld")`.
+///
+/// ## Deliberate deviation (sscanf vs `str::parse`)
+/// C++ `sscanf("%ld")` parses a *leading* optional-sign+digits run and **ignores
+/// trailing junk** (`"12+3"` → `12`). Rust `str::parse::<i32>()` is **stricter**:
+/// it rejects trailing junk and a lone `"+"`/`"-"`. Because the charset filter
+/// already restricts the field to `[+-0-9]`, clean numeric input behaves
+/// identically; the only divergence is pathological mid-string sign/junk (e.g.
+/// `"12+3"`), which `sscanf` truncate-accepts and we reject — an acceptable,
+/// stricter simplification. We `.trim()` first (whitespace is not in the charset,
+/// so this only matters for direct callers) and never panic.
+fn parse_long(s: &str) -> Option<i32> {
+    s.trim().parse::<i32>().ok()
+}
+
+impl RangeValidator {
+    /// `TRangeValidator(aMin, aMax)`. `min >= 0` → `"+0123456789"` (unsigned),
+    /// else `"+-0123456789"` (signed). Transfer is OFF by default.
+    pub fn new(min: i32, max: i32) -> Self {
+        let chars = if min >= 0 {
+            "+0123456789"
+        } else {
+            "+-0123456789"
+        };
+        Self {
+            filter: FilterValidator::new(chars),
+            min,
+            max,
+            transfer_enabled: false,
+        }
+    }
+
+    /// Enable/disable the typed `transfer` (C++ `options |= voTransfer`). Default
+    /// OFF — until enabled, [`transfer_get`](Validator::transfer_get) /
+    /// [`transfer_set`](Validator::transfer_set) return `None` and the input line
+    /// keeps its text value.
+    pub fn set_transfer(&mut self, enabled: bool) {
+        self.transfer_enabled = enabled;
+    }
+}
+
+impl Validator for RangeValidator {
+    /// `TRangeValidator::isValid` — charset gate (`TFilterValidator::isValid`)
+    /// first, then parse, then the `[min, max]` range check.
+    fn is_valid(&self, s: &str) -> bool {
+        self.filter.is_valid(s) && parse_long(s).is_some_and(|v| v >= self.min && v <= self.max)
+    }
+
+    /// **Inherited** `TFilterValidator::isValidInput` — charset-only while typing,
+    /// **no** range check (Range does not override `isValidInput`). So a partial,
+    /// out-of-range number is accepted as input; the range is enforced only at
+    /// [`is_valid`](RangeValidator::is_valid) (final check).
+    fn is_valid_input(&self, s: &mut String, suppress_fill: bool) -> bool {
+        self.filter.is_valid_input(s, suppress_fill)
+    }
+
+    /// `TRangeValidator::transfer(…, vtGetData)` (D10) — when transfer is enabled,
+    /// the field text as [`FieldValue::Int`]. A failed parse falls back to
+    /// `Int(0)`: C++ leaves `value` uninitialized on a failed `sscanf`, but
+    /// transfer only runs on already-valid data, so this is unreachable-but-safe.
+    fn transfer_get(&self, s: &str) -> Option<FieldValue> {
+        self.transfer_enabled
+            .then(|| FieldValue::Int(parse_long(s).unwrap_or(0)))
+    }
+
+    /// `TRangeValidator::transfer(…, vtSetData)` (D10) — format an [`Int`] back to
+    /// text (`sprintf("%ld")`). `None` when transfer is disabled or `v` is not an
+    /// `Int` (the input line then takes its Text path).
+    ///
+    /// [`Int`]: FieldValue::Int
+    fn transfer_set(&self, v: &FieldValue) -> Option<String> {
+        if !self.transfer_enabled {
+            return None;
+        }
+        match v {
+            FieldValue::Int(n) => Some(n.to_string()),
+            _ => None,
+        }
+    }
+
+    /// `TRangeValidator::error` — C++ pops
+    /// `messageBox(mfError|mfOKButton, "Value not in the range %ld to %ld", min, max)`.
+    /// TODO(row 63): messageBox(mfError|mfOKButton, "Value not in the range {min} to {max}")
     fn error(&self) {}
 }
 
@@ -375,5 +528,111 @@ mod tests {
         let v: Box<dyn Validator> = Box::new(StringLookupValidator::new(vec!["x".into()]));
         assert!(v.is_valid("x"));
         assert!(!v.is_valid("y"));
+    }
+
+    // ── RangeValidator (row 59) ───────────────────────────────────────────────
+
+    #[test]
+    fn range_is_valid_in_range_accepts() {
+        let v = RangeValidator::new(1, 100);
+        assert!(v.is_valid("1"));
+        assert!(v.is_valid("50"));
+        assert!(v.is_valid("100"));
+    }
+
+    #[test]
+    fn range_is_valid_below_min_rejects() {
+        let v = RangeValidator::new(10, 100);
+        assert!(!v.is_valid("9"));
+        assert!(!v.is_valid("0"));
+    }
+
+    #[test]
+    fn range_is_valid_above_max_rejects() {
+        let v = RangeValidator::new(1, 10);
+        assert!(!v.is_valid("11"));
+        assert!(!v.is_valid("999"));
+    }
+
+    #[test]
+    fn range_is_valid_rejects_non_charset_at_filter_gate() {
+        // 'a' is not in "+0123456789" — the filter gate fires before any parse.
+        let v = RangeValidator::new(0, 100);
+        assert!(!v.is_valid("1a2"));
+        assert!(!v.is_valid("abc"));
+    }
+
+    #[test]
+    fn range_is_valid_rejects_sign_only_string() {
+        // "+" passes the charset gate but `parse_long` fails → reject.
+        let v = RangeValidator::new(0, 100);
+        assert!(!v.is_valid("+"));
+        let signed = RangeValidator::new(-5, 5);
+        assert!(!signed.is_valid("-"));
+    }
+
+    #[test]
+    fn range_charset_selected_by_sign_of_min() {
+        // DISCRIMINATING: the signed validator's charset accepts '-', the unsigned
+        // one rejects it at the FILTER gate (before any parse).
+        let signed = RangeValidator::new(-10, 10);
+        assert!(signed.is_valid("-5"));
+        let unsigned = RangeValidator::new(0, 10);
+        assert!(!unsigned.is_valid("-5")); // '-' not in unsigned charset
+    }
+
+    #[test]
+    fn range_is_valid_input_is_charset_only_not_range_checked() {
+        // DISCRIMINATING: isValidInput is INHERITED from TFilterValidator — it
+        // checks charset only, NOT the range. "999" is accepted as input even
+        // though is_valid("999") is false for range 1..=10. Would fail if someone
+        // "helpfully" range-checked during typing.
+        let v = RangeValidator::new(1, 10);
+        let mut s = String::from("999");
+        assert!(v.is_valid_input(&mut s, false));
+        assert!(!v.is_valid("999"));
+        assert_eq!(
+            s, "999",
+            "is_valid_input must not mutate (Filter never fills)"
+        );
+    }
+
+    #[test]
+    fn range_transfer_disabled_by_default_returns_none() {
+        let v = RangeValidator::new(0, 100);
+        assert_eq!(v.transfer_get("42"), None);
+        assert_eq!(v.transfer_set(&FieldValue::Int(42)), None);
+    }
+
+    #[test]
+    fn range_transfer_enabled_round_trips_int() {
+        let mut v = RangeValidator::new(0, 100);
+        v.set_transfer(true);
+        assert_eq!(v.transfer_get("42"), Some(FieldValue::Int(42)));
+        assert_eq!(v.transfer_set(&FieldValue::Int(42)), Some("42".to_string()));
+    }
+
+    #[test]
+    fn range_transfer_set_wrong_type_returns_none() {
+        let mut v = RangeValidator::new(0, 100);
+        v.set_transfer(true);
+        // Text is not the type RangeValidator transfers → None (Text fallback path).
+        assert_eq!(v.transfer_set(&FieldValue::Text("42".into())), None);
+    }
+
+    #[test]
+    fn range_transfer_get_unparseable_falls_back_to_zero() {
+        // Unreachable-but-safe: transfer only runs on already-valid data; a bad
+        // parse falls back to Int(0) rather than panicking.
+        let mut v = RangeValidator::new(0, 100);
+        v.set_transfer(true);
+        assert_eq!(v.transfer_get("+"), Some(FieldValue::Int(0)));
+    }
+
+    #[test]
+    fn range_object_safe_as_boxed_trait() {
+        let v: Box<dyn Validator> = Box::new(RangeValidator::new(1, 10));
+        assert!(v.is_valid("5"));
+        assert!(!v.is_valid("11"));
     }
 }

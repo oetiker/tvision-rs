@@ -112,7 +112,9 @@ pub use status::{HelpCtxRange, StatusColors, StatusDef, StatusItem, StatusLine};
 pub use theme::{Role, Theme};
 pub use timer::{Clock, ManualClock, SystemClock, TimerId, TimerQueue};
 pub use tvision_macros::delegate;
-pub use validate::{FilterValidator, LookupValidator, StringLookupValidator, Validator};
+pub use validate::{
+    FilterValidator, LookupValidator, RangeValidator, StringLookupValidator, Validator,
+};
 pub use view::{
     Context, DragMode, DrawCtx, Group, GrowMode, Options, Point, Rect, SelectMode, State,
     StateFlag, View, ViewId, ViewState,

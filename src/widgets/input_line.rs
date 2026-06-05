@@ -707,17 +707,35 @@ impl View for InputLine {
 
     /// `TInputLine::getData` — the field's text as a [`FieldValue`] (D10).
     fn value(&self) -> Option<FieldValue> {
-        // TODO(row 59): a validator transfer hook would produce a typed non-Text
-        // value here (TRangeValidator → Int); the abstract validator has none.
+        // C++ `getData`: `if (!validator || transfer(data, rec, vtGetData)==0)
+        // memcpy(rec, data, …)`. A transfer-enabled validator (TRangeValidator
+        // with voTransfer) produces a typed value; otherwise the field's text.
+        if let Some(v) = self
+            .validator
+            .as_ref()
+            .and_then(|val| val.transfer_get(&self.data))
+        {
+            return Some(v);
+        }
         Some(FieldValue::Text(self.data.clone()))
     }
 
     /// `TInputLine::setData` — load text into the field and select-all (D10).
     fn set_value(&mut self, v: FieldValue) {
-        // TODO(row 59): a validator transfer hook would consume a typed non-Text
-        // value here; the abstract validator has none, so only Text is handled.
-        // `FieldValue` currently has a single variant; the `match` (with the
-        // future non-Text arm) is kept so growth lands here cleanly.
+        // C++ `setData`: `if (!validator || transfer(data, rec, vtSetData)==0) {
+        // copy text } ; selectAll(True)`. A transfer-enabled validator formats the
+        // typed value into the field text; otherwise the Text path. `selectAll`
+        // runs either way.
+        if let Some(text) = self.validator.as_ref().and_then(|val| val.transfer_set(&v)) {
+            self.data = text;
+            self.select_all(true, true);
+            return;
+        }
+        // D10 divergence: when transfer is disabled and `v` is `Int` (not `Text`),
+        // the body below is skipped entirely — no data change, no `select_all` —
+        // unlike C++ `setData`, which always `memcpy`s + `selectAll(True)`. An
+        // `Int` into a non-transfer field is a type mismatch the typed model
+        // rightly drops; this is intentional under D10, not an oversight.
         #[allow(irrefutable_let_patterns)]
         if let FieldValue::Text(s) = v {
             // TODO(max_len clamp on set_value): C++ flowback is `strnzcpy(data, s,
@@ -1123,6 +1141,70 @@ mod tests {
         assert_eq!(il.sel_start, 0);
         assert_eq!(il.sel_end, 5);
         assert_eq!(il.cur_pos, 5);
+    }
+
+    // -- value / set_value with a transfer-enabled validator (row 59) -------
+
+    /// REGRESSION GUARD: with NO validator, `value()` still yields `Text`
+    /// (the transfer hooks default to `None`, so the Text path is unchanged).
+    #[test]
+    fn value_no_validator_is_text() {
+        let mut il = field(12, "");
+        il.data = "42".to_string();
+        assert_eq!(il.value(), Some(FieldValue::Text("42".to_string())));
+    }
+
+    /// REGRESSION GUARD: a validator is PRESENT but transfer is OFF — `value()`
+    /// must still yield `Text`. Pins the `and_then(...) → None` fall-through (the
+    /// exact path that breaks if the transfer gate is later inverted or
+    /// `transfer_get` made unconditional); no other test bites it.
+    #[test]
+    fn value_with_non_transfer_validator_is_text() {
+        use crate::validate::RangeValidator;
+        // RangeValidator with transfer NOT enabled → transfer_get returns None.
+        let rv = RangeValidator::new(0, 100);
+        let mut il = InputLine::new(
+            Rect::new(0, 0, 12, 1),
+            256,
+            Some(Box::new(rv)),
+            LimitMode::MaxBytes,
+        );
+        il.data = "42".to_string();
+        assert_eq!(il.value(), Some(FieldValue::Text("42".to_string())));
+    }
+
+    #[test]
+    fn value_with_transfer_validator_is_int() {
+        use crate::validate::RangeValidator;
+        let mut rv = RangeValidator::new(0, 100);
+        rv.set_transfer(true);
+        let mut il = InputLine::new(
+            Rect::new(0, 0, 12, 1),
+            256,
+            Some(Box::new(rv)),
+            LimitMode::MaxBytes,
+        );
+        il.data = "42".to_string();
+        assert_eq!(il.value(), Some(FieldValue::Int(42)));
+    }
+
+    #[test]
+    fn set_value_with_transfer_validator_formats_int() {
+        use crate::validate::RangeValidator;
+        let mut rv = RangeValidator::new(0, 100);
+        rv.set_transfer(true);
+        let mut il = InputLine::new(
+            Rect::new(0, 0, 12, 1),
+            256,
+            Some(Box::new(rv)),
+            LimitMode::MaxBytes,
+        );
+        il.set_value(FieldValue::Int(42));
+        assert_eq!(il.data, "42", "Int formatted into the field text");
+        // selectAll runs on the transfer path too.
+        assert_eq!(il.sel_start, 0);
+        assert_eq!(il.sel_end, 2);
+        assert_eq!(il.cur_pos, 2);
     }
 
     // -- cursor / firstPos scroll-follow ------------------------------------
