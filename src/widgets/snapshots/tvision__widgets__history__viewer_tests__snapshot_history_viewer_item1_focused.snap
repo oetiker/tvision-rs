@@ -1,0 +1,22 @@
+---
+source: src/widgets/history.rs
+expression: "render_viewer(&mut hv, 14, 5)"
+---
+size: 14x5
+cursor: hidden
+text:
+| oldest       |
+| middle       |
+| newest       |
+|              |
+|              |
+attr:
+|aaaaaaaaaaaaaa|
+|bbbbbbbbbbbbbb|
+|aaaaaaaaaaaaaa|
+|aaaaaaaaaaaaaa|
+|aaaaaaaaaaaaaa|
+legend:
+  . default
+  a fg=BIOS(7) bg=BIOS(1)
+  b fg=BIOS(15) bg=BIOS(1)

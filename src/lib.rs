@@ -117,6 +117,6 @@ pub use view::{
     Context, DragMode, DrawCtx, Group, GrowMode, Options, Point, Rect, SelectMode, State,
     StateFlag, View, ViewId, ViewState,
 };
+pub use widgets::{HistoryViewer, clear_history, history_add, history_count, history_str};
 pub use widgets::{InputLine, ListBox, ListViewer, ListViewerState, ScrollBar, Scroller};
-pub use widgets::{clear_history, history_add, history_count, history_str};
 pub use window::{ScrollBarOptions, Window, WindowFlags, WindowPalette};
