@@ -5,6 +5,51 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## Session — `inputBox` (row 63, PART 2) — the single-input scatter/gather seam
+
+Completes row 63: the `inputBox`/`inputBoxRect` half of msgbox. 698→704 lib tests.
+Subagent-driven (Opus implementer → fresh-context two-stage review → fixes →
+integrate → commit). **Row 63 is now fully ✅.**
+
+- **Design decision — single-input shortcut, NOT the general D10 group-walk.**
+  C++ `inputBoxRect` does `dialog->setData(s)` / `getData(s)`, which in C++ is the
+  `TGroup` ordered child-walk. But `inputBox` has exactly **one** transferable field
+  (the lone `TInputLine`), so the walk degenerates to "the input line's value". We
+  port that degenerate case directly (scatter = `set_value` on the input line,
+  gather = `value()` on it) and keep the **general** `Dialog::value`/`set_value`
+  group-walk DEFERRED to its first genuine multi-field consumer (Batch E), where the
+  typed-record shape (insertion order, which children participate, Int-vs-Text
+  mapping) can be pinned against a real dialog rather than guessed. CLAUDE.md /
+  `data.rs` already named inputBox as "the first consumer" — it just turned out to
+  be a single-field one.
+- **The seam (`exec_view_with_completion`).** Added a 4th param `gather:
+  Option<ViewId>` and changed the return to `(Command, Option<FieldValue>)`. The
+  gather read sits **after** the existing `completion` block and **before**
+  `captures.pop()` / `group.remove(id)` — i.e. while the modal is still in the tree
+  by id — and is gated on `retval != Command::CANCEL` (faithful to C++ `if (c !=
+  cmCancel) getData(s)`). The 3 existing callers (`exec_view`, `message_box_rect`,
+  `drive_pending_modal`) pass `None` and take `.0`; semantics unchanged. This is the
+  "give exec_view a way to hand back data before the modal is dropped" path the
+  handover called for — the dialog is consumed inside exec, so the only hook is
+  pre-drop.
+- **`build_input_box` + `Program::input_box`/`input_box_rect`.** Pure builder in
+  `src/dialog/msgbox.rs` (InputLine first for tab order → first selectable →
+  `selectNext(False)` focus target = the input line, NOT a button; Label linked to
+  it; OK `bfDefault` cmOK; Cancel `bfNormal` cmCancel; rects ported verbatim,
+  `label_size` = C++ `aLabel.size()` byte length). `input_box_rect` scatters
+  `initial` then execs with `initial_focus == gather == input_id`; returns
+  `(Command, String)` — the gathered text on non-cancel, the unchanged `initial` on
+  cancel. `input_box` centers a `(0,0,60,8)` rect on the desktop. A new private
+  `Program::desktop_size()` helper de-duplicates the desktop-size lookup shared with
+  `message_box`.
+- **Verification.** Snapshot of the 60×8 input dialog; behavioral tests for
+  Esc→`(CANCEL, initial-unchanged)` and OK→gathered-text. The OK test
+  (`input_box_rect_ok_returns_typed_edit`) drives a printable key into the focused
+  input line (replacing the select-all'd scattered text) so the gathered value
+  **differs** from `initial` — review caught that a "scatter X, assert X back" test
+  is tautological (X is also the gather-fails fallback), so this test was added and
+  **confirmed to fail when the gather is stubbed to `None`** ("hello" vs "X").
+
 ## Session — initial-modal-currency seam + `messageBox` (row 63, PART 1)
 
 Two interlocking pieces: a FOUNDATION currency seam (handover item 2) and the
