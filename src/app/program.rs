@@ -499,7 +499,7 @@ impl Program {
     fn pump_and_drive(&mut self) {
         self.pump_once();
         if let Some((view, completion)) = self.pending_modal.take() {
-            self.exec_view_with_completion(view, Some(completion));
+            self.exec_view_with_completion(view, Some(completion), None);
         }
     }
 
@@ -564,7 +564,77 @@ impl Program {
     /// 8. Pop the frame, `remove` the view, `setCurrent(saveCurrent, leaveSelect)`.
     /// 9. Restore the command set (`setCommands`).
     pub fn exec_view(&mut self, view: Box<dyn View>) -> Command {
-        self.exec_view_with_completion(view, None)
+        self.exec_view_with_completion(view, None, None)
+    }
+
+    // -- message box (row 63, PART 1) ----------------------------------------
+
+    /// `messageBoxRect` — build and exec a message-box dialog at an explicit
+    /// `Rect`. Faithful to `msgbox.cpp::messageBoxRect` except that construction
+    /// and execution are split: `build_message_box` builds the dialog (pure,
+    /// testable), and `exec_view` runs it.
+    ///
+    /// `kind` picks the title (Warning / Error / Information / Confirm).
+    /// `buttons` selects which of [Yes, No, OK, Cancel] to show.
+    ///
+    /// Returns the [`Command`] the user chose (`Command::OK`, `Command::CANCEL`,
+    /// `Command::YES`, `Command::NO`).
+    pub fn message_box_rect(
+        &mut self,
+        r: Rect,
+        msg: &str,
+        kind: crate::dialog::MessageBoxKind,
+        buttons: crate::dialog::MessageBoxButtons,
+    ) -> Command {
+        let (d, first_btn) = crate::dialog::build_message_box(r, msg, kind, buttons);
+        self.exec_view_with_completion(Box::new(d), None, first_btn)
+    }
+
+    /// `messageBox` — build and exec a message-box dialog auto-centered on the
+    /// desktop. Faithful port of `msgbox.cpp::messageBox` + `makeRect`.
+    ///
+    /// `makeRect` logic:
+    /// * Base rect `(0, 0, 40, 9)`.
+    /// * If `msg.chars().count() > (40-7) * (9-6)`, expand the height:
+    ///   `h = char_count / (40-7) + 6 + 1`.
+    /// * Center within the desktop's size (or the root group's size if no
+    ///   desktop was created).
+    ///
+    /// **Coordinate note:** `exec_view` root-inserts the modal, so the rect is
+    /// in absolute/root coords. The desktop may be inset by a menu/status bar in
+    /// Phase 4; centering here uses the desktop's SIZE (faithful to C++'s
+    /// `deskTop->size.x/y`), so the result may be off by the menu-bar offset in
+    /// that phase. Documented as a minor deviation pending Phase 4.
+    pub fn message_box(
+        &mut self,
+        msg: &str,
+        kind: crate::dialog::MessageBoxKind,
+        buttons: crate::dialog::MessageBoxButtons,
+    ) -> Command {
+        // makeRect — faithful port of msgbox.cpp's static makeRect(text).
+        let base_w = 40_i32;
+        let base_h = 9_i32;
+        let char_count = msg.chars().count() as i32;
+        let text_area = (base_w - 7) * (base_h - 6); // (40-7)*(9-6) = 33*3 = 99
+        let h = if char_count > text_area {
+            char_count / (base_w - 7) + 6 + 1
+        } else {
+            base_h
+        };
+        let mut r = Rect::new(0, 0, base_w, h);
+
+        // Center within the desktop's size; fall back to the root group size.
+        // C++: r.move((TProgram::deskTop->size.x - r.b.x) / 2, …)
+        let desk_size = if let Some(id) = self.desktop {
+            self.group
+                .find_mut(id)
+                .map(|v| v.state().size)
+                .unwrap_or_else(|| self.group.state().size)
+        } else {
+            self.group.state().size
+        };
+        r.r#move((desk_size.x - base_w) / 2, (desk_size.y - h) / 2);
+        self.message_box_rect(r, msg, kind, buttons)
     }
 
     /// The unified `exec_view` body (row 57). Identical to the sync `exec_view`
@@ -587,6 +657,7 @@ impl Program {
         &mut self,
         view: Box<dyn View>,
         completion: Option<ModalCompletion>,
+        initial_focus: Option<ViewId>,
     ) -> Command {
         // 1. getCommands / save the outgoing current.
         let save_current = self.group.current();
@@ -673,6 +744,24 @@ impl Program {
         // 6. Push the ModalFrame DIRECTLY (we hold &mut self; we are not inside a
         //    dispatch, so this is not deferred).
         self.captures.push(Box::new(ModalFrame::new(id, bounds)));
+
+        // selectNext(False) faithfulness (msgbox): the caller asked for a SPECIFIC
+        // child to be focused on open (e.g. messageBox's first button), overriding
+        // the generic reset_current(firstMatch). The modal is already inserted +
+        // focused, so focus_descendant moves internal focus to focus_id within the
+        // dialog's group.
+        if let Some(focus_id) = initial_focus {
+            let now = self.clock.now_ms();
+            let mut ctx = Context::new(
+                &mut self.out_events,
+                &mut self.timers,
+                now,
+                &mut self.deferred,
+            );
+            if let Some(v) = self.group.find_mut(id) {
+                v.focus_descendant(focus_id, &mut ctx);
+            }
+        }
 
         // 7. TGroup::execute — drive the single pump in a bounded top-level loop.
         //    The inner while spins on a headless backend until the modal sets
@@ -5598,6 +5687,213 @@ mod tests {
                 None,
                 "an id absent from the tree resolves to None"
             );
+        }
+    }
+
+    // -- message box (row 63) ------------------------------------------------
+
+    mod msgbox {
+        use super::*;
+        use crate::dialog::{MessageBoxButtons, MessageBoxKind};
+
+        /// Esc → cmCancel: the simplest smoke test. Shows the dialog is keyboard-live
+        /// on the first event (the reset_current seam established by exec_view).
+        #[test]
+        fn message_box_rect_esc_returns_cancel() {
+            let (mut program, _handle, _clock) = program_with_desktop(80, 25);
+            // Pre-queue Esc: the dialog converts it → cmCancel → endModal.
+            program.out_events.push_back(key(Key::Esc));
+            let r = crate::view::Rect::new(10, 5, 50, 14);
+            let result = program.message_box_rect(
+                r,
+                "Something failed.",
+                MessageBoxKind::Error,
+                MessageBoxButtons::ok_cancel(),
+            );
+            assert_eq!(
+                result,
+                Command::CANCEL,
+                "Esc → cmCancel ends the message box"
+            );
+            assert_eq!(program.capture_len(), 0, "ModalFrame popped");
+        }
+
+        /// `message_box` auto-centers on the desktop and returns OK via a direct
+        /// `Event::Command(Command::OK)`.
+        #[test]
+        fn message_box_direct_ok_returns_ok() {
+            let (mut program, _handle, _clock) = program_with_desktop(80, 25);
+            program.out_events.push_back(Event::Command(Command::OK));
+            let result = program.message_box(
+                "Press OK to continue.",
+                MessageBoxKind::Information,
+                MessageBoxButtons::ok(),
+            );
+            assert_eq!(
+                result,
+                Command::OK,
+                "direct cmOK ends the message box with OK"
+            );
+        }
+
+        /// Keyboard end-to-end: proves the currency seam (reset_current at open)
+        /// AND the initial-focus seam (focus_descendant on the first button) work
+        /// together, so focused-Space fires the FIRST button specifically.
+        ///
+        /// Strategy:
+        /// 1. Build the dialog and insert it using `exec_view` internals, manually
+        ///    stepping pump_once so we can interleave clock advancement.
+        /// 2. Apply the focus_descendant step (mirrors exec_view's initial_focus).
+        /// 3. Drain all startup/focus broadcasts so out_events is clean.
+        /// 4. Pump Space → timer armed on the focused button (fail here if no focus).
+        /// 5. Advance clock 200ms → pump → timer fires → command posted.
+        /// 6. Pump to route the command → Dialog endModal.
+        /// 7. Assert end_state == YES (the first button in yes_no_cancel order).
+        ///
+        /// This FAILS under the old Cancel-focus behavior (end_state would be CANCEL),
+        /// pinning the selectNext(False) faithfulness fix.
+        #[test]
+        fn focused_space_fires_focused_button_discriminating() {
+            use crate::dialog::build_message_box;
+            use crate::view::{Rect, SelectMode};
+
+            let (mut program, _handle, clock) = program_with_desktop(80, 25);
+
+            // Build a Yes/No/Cancel message box. first_btn is the Yes button id
+            // (the first enabled in [Yes, No, OK, Cancel] order).
+            let bounds = Rect::new(10, 5, 50, 14);
+            let (d, first_btn) = build_message_box(
+                bounds,
+                "Delete everything?",
+                MessageBoxKind::Confirmation,
+                MessageBoxButtons::yes_no_cancel(),
+            );
+
+            // -- Replicate exec_view setup (sans the outer loop) --
+            let id = program.group_mut().insert(Box::new(d));
+
+            // Set sfModal, clear ofSelectable (exec_view steps 3+4).
+            if let Some(v) = program.group.find_mut(id) {
+                v.state_mut().options.selectable = false;
+                v.state_mut().state.modal = true;
+            }
+
+            // reset_current (the currency seam — exec_view step 5a).
+            // This establishes the dialog's internal current (first selectable child
+            // per firstMatch order) and then focuses the dialog in the root group,
+            // cascading Focused down to that child.
+            program.with_ctx(|g, ctx| {
+                if let Some(v) = g.find_mut(id) {
+                    v.reset_current(ctx);
+                }
+                g.set_current(Some(id), SelectMode::Enter, ctx);
+            });
+
+            // Push the ModalFrame (exec_view step 6).
+            let bounds_for_frame = program
+                .group
+                .find_mut(id)
+                .map(|v| v.state().get_bounds())
+                .unwrap_or_default();
+            program
+                .captures
+                .push(Box::new(crate::app::ModalFrame::new(id, bounds_for_frame)));
+
+            // focus_descendant: mirrors exec_view's initial_focus step.
+            // C++ selectNext(False) focuses the FIRST button (Yes for yes_no_cancel),
+            // overriding the generic reset_current(firstMatch) which would focus Cancel.
+            if let Some(focus_id) = first_btn {
+                program.with_ctx(|g, ctx| {
+                    if let Some(v) = g.find_mut(id) {
+                        v.focus_descendant(focus_id, ctx);
+                    }
+                });
+            }
+
+            // Drain all queued focus broadcasts (RECEIVED_FOCUS, cmGrabDefault, etc.)
+            // before injecting the Space key, so the first pump after push processes
+            // Space (not a stale broadcast). The focus STATE was set synchronously
+            // inside with_ctx; the broadcasts are cosmetic here.
+            program.out_events.clear();
+
+            // -- Pump Space: arms the animation timer on the focused button. --
+            // The focused button is now Yes (first in insertion order, per the
+            // initial_focus / focus_descendant step above).
+            // Without the seam, no button is focused → Space is not consumed → timer not armed.
+            program.out_events.push_back(key(Key::Char(' ')));
+            program.pump_once();
+
+            // The button should have armed a ~100ms animation timer.
+            assert!(
+                !program.timers.is_empty(),
+                "Space on the focused button armed the animation timer — \
+                 if no timer was armed, the button was NOT focused (currency seam absent)"
+            );
+
+            // -- Advance clock past timer expiry and pump until endModal. --
+            //
+            // The focused button is now Yes (first inserted for yes_no_cancel).
+            // C++ selectNext(False) faithfulness: focus_descendant moved focus
+            // from Cancel (firstMatch default) to Yes (first button).
+            //
+            // 6 pumps needed (not 4) because the deferred EnableCommand(NEXT/PREV/CLOSE)
+            // effects from Window::set_state(Selected, true) are drained in pump 1
+            // (Space), which sets command_set_changed=true. Pump A then generates BOTH
+            // Broadcast(COMMAND_SET_CHANGED) AND Event::Timer(tid) into out_events:
+            //
+            //   pump A: idle → COMMAND_SET_CHANGED + collect_expired → Timer(tid)
+            //   pump B: Broadcast(COMMAND_SET_CHANGED) → fan-out, no endModal
+            //   pump C: Event::Timer(tid) → Yes fires → RECORD_HISTORY + YES
+            //   pump D: Broadcast(RECORD_HISTORY) → fan-out, no endModal
+            //   pump E: Command(YES) → Dialog → Deferred::EndModal(YES) → end_state=YES
+            //   pump F: extra (cleanup)
+            clock.advance(200);
+            for _ in 0..6 {
+                program.pump_once();
+            }
+
+            // The focused Yes button fired — assert we got YES (not Cancel).
+            // This assertion FAILS under the old Cancel-focus behavior, pinning the fix.
+            assert_eq!(
+                program.end_state,
+                Some(Command::YES),
+                "focused Yes button fired YES; would be CANCEL under old Cancel-focus behavior"
+            );
+
+            // Cleanup: pop the capture frame and remove the dialog.
+            program.captures.pop();
+            program.with_ctx(|g, ctx| {
+                g.remove(id, ctx);
+            });
+        }
+
+        /// Two consecutive round-trips prove there is no leaked state between calls.
+        #[test]
+        fn message_box_rect_two_round_trips() {
+            let (mut program, _handle, _clock) = program_with_desktop(80, 25);
+            let r = crate::view::Rect::new(5, 3, 45, 12);
+
+            // First: Esc → Cancel
+            program.out_events.push_back(key(Key::Esc));
+            let r1 = program.message_box_rect(
+                r,
+                "First dialog.",
+                MessageBoxKind::Warning,
+                MessageBoxButtons::ok_cancel(),
+            );
+            assert_eq!(r1, Command::CANCEL);
+            assert_eq!(program.capture_len(), 0, "frame popped after first dialog");
+
+            // Second: direct OK → OK
+            program.out_events.push_back(Event::Command(Command::OK));
+            let r2 = program.message_box_rect(
+                r,
+                "Second dialog.",
+                MessageBoxKind::Information,
+                MessageBoxButtons::ok(),
+            );
+            assert_eq!(r2, Command::OK);
+            assert_eq!(program.capture_len(), 0, "frame popped after second dialog");
         }
     }
 }

@@ -38,5 +38,8 @@
 
 #[allow(clippy::module_inception)]
 mod dialog;
+mod msgbox;
 
 pub use dialog::Dialog;
+pub(crate) use msgbox::build_message_box;
+pub use msgbox::{MessageBoxButtons, MessageBoxKind};

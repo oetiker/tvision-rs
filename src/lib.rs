@@ -97,7 +97,7 @@ pub use color::{Color, Modifiers, Style};
 pub use command::{Command, CommandSet};
 pub use data::FieldValue;
 pub use desktop::{Background, Desktop};
-pub use dialog::Dialog;
+pub use dialog::{Dialog, MessageBoxButtons, MessageBoxKind};
 pub use event::{
     Event, EventMask, Key, KeyEvent, KeyModifiers, MouseButtons, MouseEvent, MouseEventFlags,
     MouseWheel, ctrl_to_arrow, hot_key, is_alt_hotkey, is_plain_hotkey,
