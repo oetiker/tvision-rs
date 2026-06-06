@@ -164,7 +164,7 @@ concrete validators (Phase 5). Split accordingly.
 | 60 ✅ | `TLookupValidator` | `TValidator` | `tvalidat.cpp` | `validate` | MECHANICAL | abstract lookup |
 | 61 ✅ | `TStringLookupValidator` | `TLookupValidator` | `tvalidat.cpp` | `validate` | MECHANICAL | owns string list |
 | 62 ✅ | `TPXPictureValidator` | `TValidator` | `tvalidat.cpp` | `validate` | MECHANICAL | Paradox picture-mask state machine |
-| 63 | `messageBox`/`messageBoxRect`/`inputBox`/`inputBoxRect` | — | `msgbox.cpp` | `dialog` (msgbox) | MECHANICAL | builds `TDialog`+`TStaticText`+`TButton`(s)/`TInputLine`; result via posted `Command` (D9) |
+| 63 ◑ | `messageBox`/`messageBoxRect`/`inputBox`/`inputBoxRect` | — | `msgbox.cpp` | `dialog` (msgbox) | MECHANICAL | **messageBox/messageBoxRect ✅** (`Program::message_box`/`message_box_rect`); **inputBox/inputBoxRect deferred** — needs the D10 dialog gather/scatter (`Dialog::value`/`set_value`, net-new FOUNDATION, not mechanical) |
 | 64 | `TStringList`/`TStrListMaker`/`TStrIndexRec` | `TObject` | `tstrlist.cpp`, `sstrlst.cpp` | `text` (resource) | MECHANICAL | string-resource lists; mostly D12-adjacent — minimal port |
 | 66 | `TEditor` | `TView` | `teditor1.cpp`, `teditor2.cpp`, `edits.cpp` | `widgets::editor` | FOUNDATION | gap-buffer text editor; takes 2×`TScrollBar`+`TIndicator`; clipboard (D11); search/replace |
 | 67 | `TMemo` | `TEditor` | `tmemo.cpp` | `widgets::editor` | MECHANICAL | single-field editor; typed value (D10) |

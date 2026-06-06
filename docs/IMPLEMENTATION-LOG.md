@@ -5,6 +5,53 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## Session — initial-modal-currency seam + `messageBox` (row 63, PART 1)
+
+Two interlocking pieces: a FOUNDATION currency seam (handover item 2) and the
+first half of msgbox (row 63). 688→698 lib tests. Subagent-driven throughout
+(advisor-vetted brief → implementer → fresh-context review → integrate → commit);
+two implementer runs died from context bloat at ~100+ tool-calls but had finished
+all edits first — the orchestrator verified + committed the integrated tree.
+
+- **`View::reset_current` — general initial-modal-currency seam (`957c67e`).**
+  Closes handover item 2: a modal opened via `exec_view` was keyboard-dead until a
+  nav event because rstv's deliberately ctx-less `Group::insert` (D3) skips the C++
+  insert-time cascade `TGroup::insertBefore → p->show() → setState(sfVisible) →
+  owner->resetCurrent()` (tview.cpp:723) that establishes a group's `current` =
+  first selectable child. The original gap-analysis said this was blocked on
+  `Group::insert` taking no `Context`; the fix exploits that **`exec_view` DOES have
+  a `Context`** right after insert. New `View::reset_current` trait hook (default
+  no-op; `Group` overrides via UFCS to the inherent `Group::reset_current`;
+  `Window`/`Dialog` forward via `#[delegate]` + a `specs.rs` forwarder).
+  `exec_view` calls it on the freshly-inserted modal BEFORE `set_current(Enter)`,
+  so focusing the modal cascades into its now-set current child. The row-57
+  `HistoryWindow::select_child` local workaround stays (belt-and-suspenders).
+  Discriminating guard: a Group-level trait-dispatch test (`current` None → first
+  selectable); the plain-Dialog Esc→CANCEL smoke test is honestly labelled
+  non-discriminating (TDialog converts Esc regardless of currency).
+- **`messageBox`/`messageBoxRect` (row 63 PART 1, `352c949`).** Faithful port of the
+  two synchronous msgbox functions. `src/dialog/msgbox.rs`: D5-typed option API
+  (`MessageBoxKind` + `MessageBoxButtons` struct-of-bools replacing the C++ `ushort`
+  flag word) + a pure `build_message_box(...) -> (Dialog, Option<ViewId>)` builder
+  (faithful centering math, `[Yes,No,OK,Cancel]` order, `bfNormal`, `MsgBoxText`
+  titles). `Program::message_box_rect`/`message_box` (the latter ports `makeRect`
+  auto-centering on desktop size) own the `exec_view`/destroy tail.
+  - **`selectNext(False)` faithfulness fix.** C++ `messageBoxRect` ends on the
+    **first** button (Yes), not the firstMatch default (Cancel/last) — traced
+    through the C++ ring + `findNext(prev)`. Replicated via a new **additive**
+    `initial_focus: Option<ViewId>` on `exec_view_with_completion`: after the modal
+    opens, `focus_descendant` moves internal focus to the first button (id returned
+    by `build_message_box`). The two pre-existing callers pass `None`, so the
+    `reset_current` seam is untouched. The discriminating test drives focused-Space
+    on the focused Yes button through the animation timer and asserts
+    `end_state == YES` (fails under the old Cancel-focus behavior).
+  - **`inputBox`/`inputBoxRect` DEFERRED.** `dialog->setData/getData` is the D10
+    dialog-level group-walk gather/scatter, which **does not exist** (`Dialog` has no
+    `value`/`set_value`) — net-new FOUNDATION, not the "mechanical" the old handover
+    claimed. The five validators' `error()` → `messageBox` wiring is also still a
+    TODO: `Validator::error(&self)` has no `Context`, so it cannot reach a deferred
+    channel — its own trait-signature seam, a separate follow-up.
+
 ## Session — Batch C validators 58–62 + `RegexValidator` (Phase 5)
 
 The whole `tvalidat.cpp` validator family ported in PORT-ORDER sequence
