@@ -15,7 +15,7 @@
 
 ## Current state
 
-- **HEAD `1281840`+ (row 64 lands this session).** Build: **712 lib tests** green; `cargo clippy --workspace
+- **HEAD `9d601a7`+ (row 66 core lands this session).** Build: **752 lib tests** green; `cargo clippy --workspace
   --all-targets -- -D warnings` and `cargo fmt --all --check` clean (verify clippy
   with a forced re-lint — a cached run can mask a fresh warning).
 - **Cargo workspace** (`tvision` + `tvision-macros`) — use `--workspace` for
@@ -33,19 +33,20 @@
   (`messageBox`/`messageBoxRect`/`inputBox`/`inputBoxRect`)** — the latter via the
   **single-input scatter/gather seam** (`exec_view_with_completion`'s `gather`
   param), and **row 64 (`StringList`)** — a D12 minimal port (`BTreeMap<u16,String>`
-  wrapper in `src/text.rs`; the `TStreamable` resource-stream machinery dropped).
+  wrapper in `src/text.rs`; the `TStreamable` resource-stream machinery dropped),
+  and **row 66 (`TEditor`) core** — gap-buffer editor, nav, edit, undo, selection,
+  draw, search, keyboard+clipboard; (find/replace dialogs + mouse-drag + context
+  menu + clipboard-editor deferred — see row-66 deferrals below).
   The `#[delegate]` proc-macro is landed and adopted codebase-wide.
 
 ## Next — lowest-numbered remaining work
 
-**Rows 63 and 64 are ✅ this session.** Row 65 is not a porting row, so the next
-porting row is **66 `TEditor`** (FOUNDATION — gap-buffer text editor; takes
-2×`TScrollBar`+`TIndicator`; clipboard D11; search/replace) — design-heavy,
-Opus/main-thread work. Two non-gating seams remain available as smaller wins
-before tackling the editor: the **validator-`error()` → `messageBox` wiring**
-(item 2 below — partly unblocked: the sync `Program::message_box` exists; what's
-missing is the async-from-a-view face), and the `ModalFrame` outside-to-modal
-seam (item 1; tackle when a modal needs outside-click cancel).
+**Row 66 `TEditor` core is ◑ this session.** The next porting row is **67
+`TMemo`** (MECHANICAL — single-field editor embedding `Editor`, typed value D10).
+Rows 67/68/69 build on the editor core; they do **not** structurally require the
+deferred row-66 sub-features (the clipboard-editor branch and find/replace dialogs
+wire in at row 69 and when std dialogs land). Two non-gating seams remain
+available before or alongside the `TMemo`/editor family:
 
 1. **The `ModalFrame` deliver-outside-to-modal seam** (row 56/57 deferred — STILL
    OPEN). Un-defers the `HistoryWindow` outside-click `endModal(cmCancel)`. **NOT a
@@ -67,10 +68,21 @@ seam (item 1; tackle when a modal needs outside-click cancel).
    variant + the row-57 `pending_modal` async path (the `OpenHistory` precedent).
    The sync `Program::message_box` exists now; this is the *async-from-a-view* face.
 
-Then Phase 5 continues in PORT-ORDER: **64** (`TStringList`/`TStrListMaker`,
-minimal D12-adjacent port), **66** `TEditor` (FOUNDATION — gap-buffer editor),
-then the std-dialog / file / color / outline families. `cmDosShell` is still
-deferred — needs a backend terminal-suspend seam + SIGTSTP.
+**Row 66 deferred sub-features** (breadcrumbed TODOs in `editor.rs`; pick up when
+relevant prerequisites land):
+1. **Find/Replace dialogs** (`editorDialog`, `find()`/`replace()`/`efPromptOnReplace`)
+   — `search()` is live; `cmFind`/`cmReplace` are no-ops until the std dialog views exist.
+2. **Mouse drag-select/edge-scroll/wheel/middle-button pan** — single-click
+   positioning is live; the `while(mouseEvent)` drag loops need a `DragCapture`
+   handler (precedent: `window.rs DragCapture`; also deferred for scrollbar, `TODO(row 31)`).
+3. **Right-click context menu** (`initContextMenu` + `popupMenu`).
+4. **Internal-clipboard `TEditor` branch** (`insertFrom` from a sibling editor) —
+   deferred to row 69 (`TEditWindow` wires the clipboard editor).
+5. `TStreamable` write/read/build (D12).
+
+Phase 5 then continues in PORT-ORDER with **68** (`TFileEditor`) and **69**
+(`TEditWindow`), then the std-dialog / file / color / outline families.
+`cmDosShell` is still deferred — needs a backend terminal-suspend seam + SIGTSTP.
 
 ## What this session left available / changed
 
@@ -85,6 +97,23 @@ deferred — needs a backend terminal-suspend seam + SIGTSTP.
 - **`PXPictureValidator::error` deviation watch:** `is_valid` does not replicate
   the C++ 256-byte stack buffer (Vec grows); documented, not a divergence in
   practice (inputs are maxLen-bounded).
+- **Non-Scroller D3 broker pattern established** (`SyncEditorDelta` +
+  `Editor::apply_scroll_delta`): a non-`Scroller` view that needs scrollbar
+  siblings adds a new `Deferred` variant with a concrete downcast in the
+  pump's deferred-apply loop. Future views follow the same pattern.
+- **`Deferred::IndicatorSetValue { indicator, location, modified }`** is live
+  — any editor-like view drives its `TIndicator` sibling through the pump via
+  this variant (downcast to `Indicator`, `set_value`).
+- **Clipboard broker** (`Deferred::SetClipboard(String)` + `Deferred::EditorPaste(ViewId)`)
+  is live — the deferred-apply scope in `program.rs` reaches
+  `renderer.backend_mut()` for clipboard I/O; paste re-queues scrollbar-param
+  ops that settle on the next pump (one-pass drain is expected).
+- **`Role::ScrollerSelected`** is now filled (the `theme.rs` breadcrumb is
+  cleared); editor normal text reuses `Role::ScrollerNormal`.
+- **Editor ctx-threading split** is a reusable pattern for ctor-state-heavy
+  widgets: keep core mutation methods `Context`-free (accumulate into flag fields);
+  let `&mut Context` thread only into the handful of entry points that actually need
+  it. Makes the whole widget unit-testable without a running pump.
 
 ## Non-obvious gotchas (read before starting)
 

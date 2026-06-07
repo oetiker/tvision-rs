@@ -132,8 +132,11 @@ pub enum Role {
     /// `TScroller` content fill, normal — `cpScroller "\x06\x07"` idx 1 (`0x06`),
     /// the app-direct color `cpAppColor[6] = 0x28` (fg 8 on bg 2). **Provisional**;
     /// a scroller inside a window remaps via the palette chain.
-    /// `cpScroller` idx 2 (`ScrollerSelected`) is deferred to `TEditor` row 66.
     ScrollerNormal,
+    /// `TEditor` selected-text fill — `cpScroller "\x06\x07"` idx 2 (`0x07`),
+    /// the app-direct color `cpAppColor[7] = 0x24` (fg 4 on bg 2). Used by
+    /// `TEditor::formatLine` for text inside the selection (`getColorAt`).
+    ScrollerSelected,
     /// `TMenuView` normal item text (`cpMenuView "\x02\x03\x04\x05\x06\x07"`):
     /// `getColor(0x0301)` lo → palette idx 1. Also the menu-bar background fill.
     MenuNormal,
@@ -174,7 +177,7 @@ pub enum Role {
 }
 
 /// Number of [`Role`] variants — the fixed length of [`Theme`]'s style array.
-const ROLE_COUNT: usize = 56;
+const ROLE_COUNT: usize = 57;
 
 impl Role {
     /// Total mapping of each variant to its index into the style array.
@@ -227,6 +230,7 @@ impl Role {
             Role::InputSelected => 41,
             Role::InputArrow => 42,
             Role::ScrollerNormal => 43,
+            Role::ScrollerSelected => 56,
             Role::MenuNormal => 44,
             Role::MenuNormalShortcut => 45,
             Role::MenuSelected => 46,
@@ -562,6 +566,7 @@ impl Theme {
         // (`TODO(row 34 gray theming / window-scheme remap)`).
         // `ScrollerSelected` (idx 2 = `0x24`) is deferred to `TEditor` row 66.
         set(&mut styles, Role::ScrollerNormal, 0x8, 0x2); // darkgray on green (0x28)
+        set(&mut styles, Role::ScrollerSelected, 0x4, 0x2); // red on green (0x24)
 
         // Menu family (rows 50/51). Provisional values modelled on the classic
         // menu look: a lightgray-on-black bar (`cpMenuView` resolves through
@@ -664,6 +669,7 @@ mod tests {
         Role::InputSelected,
         Role::InputArrow,
         Role::ScrollerNormal,
+        Role::ScrollerSelected,
         Role::MenuNormal,
         Role::MenuNormalShortcut,
         Role::MenuSelected,

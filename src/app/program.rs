@@ -1357,6 +1357,71 @@ impl Program {
                                         ));
                                     }
                                 }
+                                // -- row 66: the TEditor cross-view brokers ----
+                                //
+                                // Read direction (TEditor::checkScrollBar):
+                                // resolve each bar, read its `value`, then
+                                // downcast the editor and call apply_scroll_delta
+                                // (its checkScrollBar body). Like SyncScrollerDelta
+                                // but the editor is NOT a Scroller, so it is its own
+                                // concrete downcast target.
+                                Deferred::SyncEditorDelta { editor, h, v } => {
+                                    use crate::widgets::Editor;
+                                    let dx = h
+                                        .and_then(|id| group.find_mut(id))
+                                        .and_then(|view| view.value())
+                                        .and_then(field_int);
+                                    let dy = v
+                                        .and_then(|id| group.find_mut(id))
+                                        .and_then(|view| view.value())
+                                        .and_then(field_int);
+                                    if let Some(ed) = group
+                                        .find_mut(editor)
+                                        .and_then(|view| view.as_any_mut())
+                                        .and_then(|a| a.downcast_mut::<Editor>())
+                                    {
+                                        ed.apply_scroll_delta(dx, dy, &mut ctx);
+                                    }
+                                }
+                                // Indicator write (TEditor::doUpdate →
+                                // indicator->setValue): resolve the indicator,
+                                // downcast, set_value.
+                                Deferred::IndicatorSetValue {
+                                    indicator,
+                                    location,
+                                    modified,
+                                } => {
+                                    use crate::widgets::Indicator;
+                                    if let Some(ind) = group
+                                        .find_mut(indicator)
+                                        .and_then(|view| view.as_any_mut())
+                                        .and_then(|a| a.downcast_mut::<Indicator>())
+                                    {
+                                        ind.set_value(location, modified);
+                                    }
+                                }
+                                // Clipboard copy (TEditor::clipCopy → setText):
+                                // the backend is reachable here via renderer.
+                                Deferred::SetClipboard(s) => {
+                                    renderer.backend_mut().set_clipboard(&s);
+                                }
+                                // Clipboard paste (TEditor::clipPaste →
+                                // requestText): read the backend clipboard, then
+                                // downcast the editor and insert. The insert pushes
+                                // further deferred scrollbar-param ops that settle
+                                // next pump (ONE-pass drain — expected).
+                                Deferred::EditorPaste(id) => {
+                                    use crate::widgets::Editor;
+                                    let txt = renderer.backend_mut().get_clipboard();
+                                    if let Some(t) = txt
+                                        && let Some(ed) = group
+                                            .find_mut(id)
+                                            .and_then(|view| view.as_any_mut())
+                                            .and_then(|a| a.downcast_mut::<Editor>())
+                                    {
+                                        ed.insert_text(t.as_bytes(), false, &mut ctx);
+                                    }
+                                }
                             }
                         }
                     }

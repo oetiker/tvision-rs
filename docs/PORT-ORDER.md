@@ -41,7 +41,8 @@ first-time work), `MECHANICAL` (leaf/transcription once foundation exists),
 [`docs/IMPLEMENTATION-LOG.md`](file:///home/oetiker/checkouts/rstv/docs/IMPLEMENTATION-LOG.md)).
 Unmarked rows are the remaining work — the **lowest-numbered unmarked row is
 next**. As of this writing rows **1–64 are done** (63 = msgbox/inputBox, 64 =
-`StringList`); **66 (`TEditor`, FOUNDATION) is next** (65 is not a porting row).
+`StringList`); **66 (`TEditor`) core is ◑** (65 is not a porting row; 66
+sub-features deferred — see row); **67 (`TMemo`) is next**.
 (Rows 77+ are not in this excerpt's range — keep marking as they land.) **Beyond the ladder:** `RegexValidator` (in `validate`) is an
 **rstv-original extension** — a regex-driven validator alongside the faithful
 `TPXPictureValidator` (62) — not a Turbo Vision class, so it has no row here.
@@ -166,7 +167,7 @@ concrete validators (Phase 5). Split accordingly.
 | 62 ✅ | `TPXPictureValidator` | `TValidator` | `tvalidat.cpp` | `validate` | MECHANICAL | Paradox picture-mask state machine |
 | 63 ✅ | `messageBox`/`messageBoxRect`/`inputBox`/`inputBoxRect` | — | `msgbox.cpp` | `dialog` (msgbox) | MECHANICAL | **all four ✅.** `Program::message_box`/`message_box_rect` (PART 1); `Program::input_box`/`input_box_rect` (PART 2) via the **single-input scatter/gather seam** (`exec_view_with_completion` gained a `gather: ViewId` + `(Command, Option<FieldValue>)` return; scatter = `set_value` pre-exec, gather = `value()` pre-drop gated on `!= CANCEL`). The general D10 dialog group-walk (`Dialog::value`/`set_value`) stays DEFERRED to its first multi-field consumer (Batch E). |
 | 64 ✅ | `TStringList`/`TStrListMaker`/`TStrIndexRec` | `TObject` | `tstrlist.cpp`, `sstrlst.cpp` | `text` (resource) | MECHANICAL | **✅ minimal port.** Pure D12 case (all three classes are streaming-only, zero in-framework consumers) → ported only the observable contract: `StringList` in `src/text.rs`, a `BTreeMap<u16,String>` wrapper (`insert`/`get→Option`/`len`/`FromIterator`). Storage format + `TStreamable` machinery dropped. Renders nothing → unit tests only. |
-| 66 | `TEditor` | `TView` | `teditor1.cpp`, `teditor2.cpp`, `edits.cpp` | `widgets::editor` | FOUNDATION | gap-buffer text editor; takes 2×`TScrollBar`+`TIndicator`; clipboard (D11); search/replace |
+| 66 ◑ | `TEditor` | `TView` | `teditor1.cpp`, `teditor2.cpp`, `edits.cpp` | `widgets::editor` | FOUNDATION | **◑ core complete.** Gap buffer + nav + edit + undo + selection + draw + keyboard handleEvent + search + D3 brokers (new `SyncEditorDelta`/`IndicatorSetValue` + clipboard `SetClipboard`/`EditorPaste`; `Role::ScrollerSelected` added) + system-clipboard cut/copy/paste. **Deferred (breadcrumbed):** find/replace dialogs (`search()` itself is live), mouse drag-select/edge-scroll/wheel, right-click context menu, internal-clipboard-editor branch (→69), TStreamable. |
 | 67 | `TMemo` | `TEditor` | `tmemo.cpp` | `widgets::editor` | MECHANICAL | single-field editor; typed value (D10) |
 | 68 | `TFileEditor` | `TEditor` | `tfiledtr.cpp` | `widgets::editor` | MECHANICAL | load/save file backing |
 | 69 | `TEditWindow` | `TWindow` | `teditwnd.cpp` | `widgets::editor` | MECHANICAL | owns `TFileEditor` (→68) + scrollbars + `TIndicator` |

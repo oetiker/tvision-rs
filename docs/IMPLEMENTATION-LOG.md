@@ -5,6 +5,80 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## Session — `TEditor` core (row 66) — gap-buffer text editor faithful port
+
+Row 66 (`TEditor`, `teditor1.cpp` + `teditor2.cpp` + `edits.cpp`). 712→752 lib
+tests (40 new in the editor module). **Row 66 core is ◑** — see deferrals.
+
+- **Scope.** Full gap-buffer core: `bufChar`/`bufPtr`/`getText`, `setBufLen`/
+  `setBufSize`, `insertBuffer` (the load-bearing method: line-ending conversion,
+  undo `delCount`/`insCount` accounting, gap arithmetic via signed deltas to avoid
+  usize underflow on net deletion, the gap memmove), `insertText`/`deleteSelect`/
+  `deleteRange`. All navigation: `nextChar`/`prevChar`/`nextWord`/`prevWord`/
+  `lineStart`/`lineEnd`/`nextLine`/`prevLine`/`lineMove`/`indentedLineStart`/
+  `charPos`/`charPtr`/`getMousePtr`/`nextCharAndPos`. `setCurPtr`/`setSelect` (gap
+  memmove on cursor move), `newLine`+auto-indent, single-level `undo`.
+  `draw`/`drawLines`/`formatLine` (selection highlighting), `doUpdate`/`update`/
+  `lock`/`unlock`, `updateCommands`/`setCmdState`, `setState`, `changeBounds`,
+  `scrollTo`/`trackCursor`/`cursorVisible`, `toggleInsMode`/`toggleEncoding`,
+  `startSelect`/`hideSelect`/`hasSelection`, `detectLineEndingType` + conversion.
+  `search`/`scan`/`iScan`/`countLines` fully ported + unit-tested. Keyboard
+  `handleEvent` + `convertEvent` (the Ctrl-K/Ctrl-Q two-key prefix machine, mapped
+  to the decomposed `Key`+`KeyModifiers` model). Single-click mouse cursor
+  positioning. **System-clipboard cut/copy/paste** via the D11 backend
+  (`clipboard==0` branch).
+- **New seams (reusable substrate).**
+  - **D3 broker for a non-Scroller view.** `TEditor` is not a `TScroller`, so
+    reading scrollbar deltas needed a new variant: `Deferred::SyncEditorDelta {
+    editor, h, v }` + `Editor::apply_scroll_delta` (mirrors
+    `SyncScrollerDelta`/`SyncListViewer` but downcasts to the concrete `Editor`
+    type). Writes scrollbar params via the existing scrollbar-params helper. This
+    establishes the pattern for future non-Scroller views that need scrollbar
+    siblings.
+  - **`Deferred::IndicatorSetValue { indicator, location, modified }`** — the
+    editor drives its `TIndicator` sibling (row/col + modified flag) through the
+    pump (downcast to `Indicator`, `set_value`). A new deferred variant, not a
+    `Context` param.
+  - **Clipboard broker: `Deferred::SetClipboard(String)` and
+    `Deferred::EditorPaste(ViewId)`** — applied in `program.rs` via
+    `renderer.backend_mut().set_clipboard()/get_clipboard()`. The backend IS
+    reachable in the deferred-apply scope; paste's re-queued scrollbar-param ops
+    settle on the next pump (the one-pass drain is expected).
+  - **`Role::ScrollerSelected`** filled (idx 2 of `cpScroller`≡`cpEditor`
+    `"\x06\x07"`, app color `0x24`) — clears the `theme.rs` breadcrumb that
+    explicitly deferred it "to TEditor row 66". Editor normal text reuses
+    `Role::ScrollerNormal`.
+  - **31 new `Command` consts** in `command.rs`: `FIND`/`REPLACE`/`SEARCH_AGAIN` +
+    the `CHAR_LEFT`…`ENCODING` movement/edit family. The `ef*`/`sm*`/`uf*` flag
+    families are module-private in `editor.rs` (`EF_*` is `pub(crate)`).
+  - **Ctx-threading split.** Core editing methods are `Context`-free (they OR into
+    `update_flags`); `&mut Context` threads only into `do_update`/`unlock`/
+    `handle_event`/`set_state` and the public ctx-taking entries. This makes the
+    whole gap buffer unit-testable in isolation and dodges the ctor's missing-
+    `Context` problem. `change_bounds` is geometry-only (mirrors the `TScroller`
+    seam). No new `View` trait method was added (so no `specs.rs` forwarder needed).
+- **Deferrals (breadcrumbed with TODOs in `editor.rs`).**
+  1. **Find/Replace dialogs** (`editorDialog`, the dialog-driven `find()`/`replace()`
+     /`efPromptOnReplace` prompt) — `search()` itself is fully live; `cmFind`/
+     `cmReplace` are no-ops; `cmSearchAgain` runs with an empty `find_str`.
+  2. **Mouse drag-select/edge-scroll/wheel/middle-button pan** — single-click
+     positioning kept; the inner `while(mouseEvent)` loops become a future
+     `DragCapture` handler (precedent: `window.rs DragCapture`).
+  3. **Right-click context menu** (`initContextMenu` + `popupMenu`).
+  4. **Internal-clipboard `TEditor` branch** (`insertFrom` from a sibling editor) —
+     deferred to row 69 (`TEditWindow` wires the clipboard editor).
+  5. `TStreamable` write/read/build (D12).
+- **Review outcome.** Two-stage review (spec-compliance + code-quality, fresh
+  subagents). Spec reviewer traced the high-risk arithmetic (insertBuffer net-
+  deletion, setSelect gap-memmove both directions, undo, lineStart gap-boundary,
+  search whole-word, formatLine coloring, the keymap prefix machine, the D3
+  brokers). **Two bugs found and fixed:** (1) **CRITICAL keymap bug** — Ctrl-Del
+  had mapped to the dead `cmClear` duplicate instead of `cmDelWord` (`scanKeyMap`
+  is first-match); (2) **MEDIUM correctness defect** — invalid-UTF-8 over-advance
+  in nav helpers via `insert_text(&[u8])` (`from_utf8_lossy`-then-advance replaced
+  with raw-byte grapheme helpers that advance an invalid byte by exactly 1). Also:
+  dead-code removal, `EF_*`→`pub(crate)`, 6 added regression/coverage tests.
+
 ## Session — `StringList` (row 64) — D12 keyed-string-table minimal port
 
 Row 64 (`TStringList`/`TStrListMaker`/`TStrIndexRec`, `tstrlist.cpp`). 704→712 lib

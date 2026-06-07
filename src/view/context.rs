@@ -247,6 +247,47 @@ pub enum Deferred {
     /// view tree (a pure side effect on the process-global history store), so it is
     /// order-equivalent with every other family.
     RecordHistory { link: ViewId, history_id: u8 },
+
+    // -- row 66: the TEditor cross-view brokers (D3) --------------------------
+    /// **Read direction for `TEditor`** (the `cmScrollBarChanged` handler →
+    /// `checkScrollBar`). Resolve the `h`/`v` scrollbars, read each `value`
+    /// (via [`View::value`](crate::view::View::value)), downcast `editor` to
+    /// [`Editor`](crate::widgets::Editor) and call `apply_scroll_delta(dx, dy)` —
+    /// the body of C++ `checkScrollBar` (`if value != delta { delta = value;
+    /// update(ufView) }`). The editor is **not** a `Scroller`, so it cannot reuse
+    /// [`SyncScrollerDelta`](Self::SyncScrollerDelta). Touches the **view-tree**
+    /// family, so the insertion-order drain stays order-equivalent.
+    SyncEditorDelta {
+        /// The editor whose `delta` to update.
+        editor: ViewId,
+        /// The horizontal scrollbar to read `value` from (`None` = no h bar).
+        h: Option<ViewId>,
+        /// The vertical scrollbar to read `value` from (`None` = no v bar).
+        v: Option<ViewId>,
+    },
+    /// **Indicator write** (`TEditor::doUpdate` → `indicator->setValue`). Resolve
+    /// `indicator`, downcast to [`Indicator`](crate::widgets::Indicator), and call
+    /// `set_value(location, modified)`. The editor (a leaf, D3) cannot mutate its
+    /// sibling indicator inline. Touches the **view-tree** family.
+    IndicatorSetValue {
+        /// The indicator to update.
+        indicator: ViewId,
+        /// The cursor position to display (`curPos`).
+        location: Point,
+        /// Whether the buffer has unsaved changes.
+        modified: bool,
+    },
+    /// **Copy text to the system clipboard** (`TEditor::clipCopy`, the
+    /// `clipboard == 0` branch → `TClipboard::setText`). The pump calls
+    /// `renderer.backend_mut().set_clipboard(&s)`. Touches the backend only, so it
+    /// is order-equivalent with every family.
+    SetClipboard(String),
+    /// **Paste from the system clipboard** (`TEditor::clipPaste`, the
+    /// `clipboard == 0` branch → `TClipboard::requestText`). The pump reads
+    /// `renderer.backend_mut().get_clipboard()`, downcasts `editor` to
+    /// [`Editor`](crate::widgets::Editor), and inserts the text. Touches the
+    /// **view-tree** family + the backend.
+    EditorPaste(ViewId),
 }
 
 // ---------------------------------------------------------------------------
@@ -741,6 +782,45 @@ impl<'a> Context<'a> {
     pub fn request_record_history(&mut self, link: ViewId, history_id: u8) {
         self.deferred
             .push(Deferred::RecordHistory { link, history_id });
+    }
+
+    /// Request the `TEditor` `editor` re-read its scrollbars' values and update its
+    /// `delta` — **deferred** ([`Deferred::SyncEditorDelta`]). The editor (a leaf,
+    /// D3) cannot read its window-frame sibling bars itself; the pump brokers the
+    /// read (`checkScrollBar`). `h`/`v` are the bar [`ViewId`]s (`None` = no bar).
+    pub fn request_sync_editor_delta(
+        &mut self,
+        editor: ViewId,
+        h: Option<ViewId>,
+        v: Option<ViewId>,
+    ) {
+        self.deferred
+            .push(Deferred::SyncEditorDelta { editor, h, v });
+    }
+
+    /// Request the editor's `indicator` display `location`/`modified` —
+    /// **deferred** ([`Deferred::IndicatorSetValue`]). `TEditor::doUpdate` →
+    /// `indicator->setValue`; the editor (a leaf, D3) cannot mutate its sibling
+    /// indicator inline.
+    pub fn set_indicator_value(&mut self, indicator: ViewId, location: Point, modified: bool) {
+        self.deferred.push(Deferred::IndicatorSetValue {
+            indicator,
+            location,
+            modified,
+        });
+    }
+
+    /// Request `text` be copied to the system clipboard — **deferred**
+    /// ([`Deferred::SetClipboard`]). `TEditor::clipCopy` → `TClipboard::setText`.
+    pub fn set_clipboard(&mut self, text: String) {
+        self.deferred.push(Deferred::SetClipboard(text));
+    }
+
+    /// Request the editor `id` paste the system-clipboard text — **deferred**
+    /// ([`Deferred::EditorPaste`]). `TEditor::clipPaste` →
+    /// `TClipboard::requestText`; the pump reads the clipboard and inserts.
+    pub fn editor_paste(&mut self, id: ViewId) {
+        self.deferred.push(Deferred::EditorPaste(id));
     }
 
     /// Re-queue a **raw event** into the loop's event queue — the raw-event

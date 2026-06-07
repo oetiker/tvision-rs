@@ -152,6 +152,70 @@ impl Command {
     pub const SCREEN_CHANGED: Command = Command("tv.screen_changed");
     /// `cmRecordHistory` (dialogs.h)
     pub const RECORD_HISTORY: Command = Command("tv.record_history");
+
+    // --- Editor search/replace commands (editors.h) ---
+    /// `cmFind`
+    pub const FIND: Command = Command("tv.find");
+    /// `cmReplace`
+    pub const REPLACE: Command = Command("tv.replace");
+    /// `cmSearchAgain`
+    pub const SEARCH_AGAIN: Command = Command("tv.search_again");
+
+    // --- Editor movement / edit commands (editors.h `cm*` 500..526) ---
+    /// `cmCharLeft`
+    pub const CHAR_LEFT: Command = Command("tv.char_left");
+    /// `cmCharRight`
+    pub const CHAR_RIGHT: Command = Command("tv.char_right");
+    /// `cmWordLeft`
+    pub const WORD_LEFT: Command = Command("tv.word_left");
+    /// `cmWordRight`
+    pub const WORD_RIGHT: Command = Command("tv.word_right");
+    /// `cmLineStart`
+    pub const LINE_START: Command = Command("tv.line_start");
+    /// `cmLineEnd`
+    pub const LINE_END: Command = Command("tv.line_end");
+    /// `cmLineUp`
+    pub const LINE_UP: Command = Command("tv.line_up");
+    /// `cmLineDown`
+    pub const LINE_DOWN: Command = Command("tv.line_down");
+    /// `cmPageUp`
+    pub const PAGE_UP: Command = Command("tv.page_up");
+    /// `cmPageDown`
+    pub const PAGE_DOWN: Command = Command("tv.page_down");
+    /// `cmTextStart`
+    pub const TEXT_START: Command = Command("tv.text_start");
+    /// `cmTextEnd`
+    pub const TEXT_END: Command = Command("tv.text_end");
+    /// `cmNewLine`
+    pub const NEW_LINE: Command = Command("tv.new_line");
+    /// `cmBackSpace`
+    pub const BACK_SPACE: Command = Command("tv.back_space");
+    /// `cmDelChar`
+    pub const DEL_CHAR: Command = Command("tv.del_char");
+    /// `cmDelWord`
+    pub const DEL_WORD: Command = Command("tv.del_word");
+    /// `cmDelStart`
+    pub const DEL_START: Command = Command("tv.del_start");
+    /// `cmDelEnd`
+    pub const DEL_END: Command = Command("tv.del_end");
+    /// `cmDelLine`
+    pub const DEL_LINE: Command = Command("tv.del_line");
+    /// `cmInsMode`
+    pub const INS_MODE: Command = Command("tv.ins_mode");
+    /// `cmStartSelect`
+    pub const START_SELECT: Command = Command("tv.start_select");
+    /// `cmHideSelect`
+    pub const HIDE_SELECT: Command = Command("tv.hide_select");
+    /// `cmIndentMode`
+    pub const INDENT_MODE: Command = Command("tv.indent_mode");
+    /// `cmUpdateTitle`
+    pub const UPDATE_TITLE: Command = Command("tv.update_title");
+    /// `cmSelectAll`
+    pub const SELECT_ALL: Command = Command("tv.select_all");
+    /// `cmDelWordLeft`
+    pub const DEL_WORD_LEFT: Command = Command("tv.del_word_left");
+    /// `cmEncoding`
+    pub const ENCODING: Command = Command("tv.encoding");
 }
 
 /// A set of enabled commands. Faithful to `TCommandSet` (`views.h`,

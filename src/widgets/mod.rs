@@ -10,6 +10,7 @@
 
 mod button;
 mod cluster;
+mod editor;
 mod history;
 mod indicator;
 mod input_line;
@@ -21,6 +22,7 @@ mod static_text;
 
 pub use button::{Button, ButtonFlags};
 pub use cluster::{CheckBoxes, Cluster, ClusterKind, MultiCheckBoxes, RadioButtons};
+pub use editor::{Editor, Encoding, LineEnding};
 pub use history::{
     HistoryViewer, HistoryWindow, THistory, clear_history, history_add, history_count, history_str,
 };
