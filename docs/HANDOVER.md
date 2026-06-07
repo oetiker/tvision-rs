@@ -15,7 +15,7 @@
 
 ## Current state
 
-- **HEAD `5ba56be`+ (rows 67–74 land this session: `TMemo`/`TFileEditor`/`TEditWindow`/`TSortedListBox` + the file-dialog data classes 71–74).** Build: **795 lib tests** green; `cargo clippy --workspace
+- **HEAD `1b46130` (rows 67–74 all committed this session: `TMemo`/`TFileEditor`/`TEditWindow`/`TSortedListBox` + the file-dialog data classes 71–74).** Build: **795 lib tests** green; `cargo clippy --workspace
   --all-targets -- -D warnings` and `cargo fmt --all --check` clean (verify clippy
   with a forced re-lint — a cached run can mask a fresh warning).
 - **Cargo workspace** (`tvision` + `tvision-macros`) — use `--workspace` for
@@ -64,66 +64,92 @@
   verbatim `search_rec_compare` + sorted insert) in `src/dialog/filedlg.rs` (pure
   data; collections→Vec; batched). The `#[delegate]` proc-macro is landed and adopted codebase-wide.
 
-## Next — lowest-numbered remaining work
+## Next — DECIDED DETOUR: the async-modal-from-a-view seam (do this BEFORE row 75)
 
-**Rows 67–74 are ✅ this session.** The next porting row is **75 `TDirListBox`**
-(`tdirlist.cpp`) — and it is **NOT mechanical despite its tag; treat it as an
-Opus/main-thread design cycle.** It builds the directory-tree pane and surfaces
-three real design problems (all confirmed against the C++):
+**The user has chosen to pause the PORT-ORDER sequence and build the
+async-modal-from-a-view seam next** (deliberate detour — so do NOT default to
+"lowest-numbered row 75" this session; that resumes *after* the seam, see below).
+Rationale: it is the single shared unblocker for **three** already-landed-but-inert
+consumers, so building it once retires three breadcrumb clusters at the same time.
 
-1. **Owner-coupled to the unported `TChDirDialog`.** `setState` does
-   `((TChDirDialog*)owner)->chDirButton->makeDefault(...)` (a downcast to a type
-   that doesn't exist) and `selectItem` does `message(owner, cmChangeDir,
-   list()->at(item))` — **a command carrying a `DirEntry` payload**, which rstv's
-   payload-less `Event::Broadcast { command, source }` cannot carry. This is a
-   design problem (a typed-payload command seam), not a translation. Decide:
-   port 75 standalone with these owner-interactions breadcrumbed, or do it
-   **jointly with `TChDirDialog`** so it has a real consumer.
+### What to build
+A way for a **downward-borrowed `&mut View`** (which owns no up-pointer and can't
+run a nested modal inline) to **request a modal `messageBox` from the pump** and
+later observe the user's choice. The sync face already exists
+(`Program::message_box`); this is the *async-from-a-view* face.
+
+**Shape (the row-57 `OpenHistory` precedent is the template — study it first):**
+1. **A new `Deferred` variant**, e.g. `Deferred::OpenMessageBox { text, kind,
+   buttons, .. }` (mirror the existing `Deferred::OpenHistory` async-modal request;
+   grep `pending_modal` in `src/app/program.rs` for how row 57 defers opening a
+   modal from inside event handling and resumes it on the next pump).
+2. **The pump's `pending_modal` async path** runs the messageBox via the existing
+   `exec_view`/`message_box` machinery when the deferred op is drained, then routes
+   the result back to the requester (decide the return-channel: a follow-up
+   deferred/command, or a stored result the requester reads — match how
+   `OpenHistory` returns its pick).
+3. **Thread a deferred handle / `&mut Context` to the requesters** so they can emit
+   the new variant. Two distinct caller sites:
+   - **`Validator::error(&self)`** has **no `Context`** today — this needs a
+     trait-signature change (thread `&mut Context` or a deferred handle through
+     `error()` **and** its `InputLine::valid` caller). All five validators'
+     `error()` bodies are `TODO(row 63)` no-op breadcrumbs that already preserve the
+     **exact C++ strings** — wire them to emit `OpenMessageBox`.
+   - **`FileEditor` (row 68)**: `valid()`'s modified-save prompt
+     (`edSaveModify`/`edSaveUntitled`) and `load_file`/`save_file`'s error popups
+     (`edReadError`/`edWriteError`/`edCreateError`) — all breadcrumbed
+     `TODO(row 68 …)`. `valid()` currently returns `true` (allow-close); the prompt
+     path needs the async modal to actually ask Yes/No/Cancel.
+
+### The three consumers this retires (grep these TODOs to verify coverage)
+- **Validators 58–62** `error()` → `messageBox` (the exact-string breadcrumbs).
+- **`FileEditor::valid()`** modified-save prompt (row 68).
+- **`FileEditor` load/save error dialogs** (row 68).
+
+### Watch-outs
+- This is **FOUNDATION/INFRA** (a new cross-cutting seam + a trait-signature
+  change) → Opus/main-thread design, two-stage review, careful with the
+  `Validator` trait change (it ripples to all five validators + `InputLine::valid`;
+  remember **validator-trait methods are NOT `View` methods** — no `specs.rs`
+  forwarder, per the process reminder below).
+- Decide the **result-return channel** up front (how the user's button choice gets
+  back to the view that asked) — that's the non-obvious part; the `OpenHistory`
+  round-trip is the worked precedent.
+
+### After the seam: resume PORT-ORDER at row 75 `TDirListBox`
+**Row 75 (`tdirlist.cpp`) is NOT mechanical despite its tag — an Opus/main-thread
+design cycle.** Three real problems (confirmed against the C++):
+1. **Owner-coupled to the unported `TChDirDialog`.** `setState` downcasts the owner
+   to poke `chDirButton->makeDefault(...)`; `selectItem` does `message(owner,
+   cmChangeDir, list()->at(item))` — **a command carrying a `DirEntry` payload**,
+   which rstv's payload-less `Event::Broadcast { command, source }` cannot carry.
+   A typed-payload-command design problem, not a translation. Decide: port 75
+   standalone with owner-interactions breadcrumbed, or jointly with `TChDirDialog`.
 2. **DOS-drive-specific.** `showDrives` walks A:–Z: via `getdisk`/`driveValid`
-   (C++ already `#if !defined(_TV_UNIX)`-guards the "Drives" entry). On Linux
-   there are no drive letters — the root ("/") behavior must be **designed**, not
-   ported.
-3. **It holds `Vec<DirEntry>` (not `Vec<String>`) and overrides `get_text`** —
-   exactly the row-70 breadcrumb coming due: `SortedListBox`/`ListBox`'s
-   `get_text`/`get_key` are currently fixed to the inner `Vec<String>`. `TDirListBox`
-   subclasses **`TListBox`** (not `TSortedListBox`), so it needs an overridable
-   `get_text` over its own `Vec<DirEntry>` — likely a small refactor of the
-   list-viewer item-source seam.
+   (C++ `#if !defined(_TV_UNIX)`-guards the "Drives" entry). On Linux there are no
+   drive letters — the root ("/") behavior must be **designed**, not ported.
+3. **Holds `Vec<DirEntry>` (not `Vec<String>`) and overrides `get_text`** — the
+   row-70 breadcrumb coming due: `ListBox`/`SortedListBox` `get_text`/`get_key`
+   are fixed to the inner `Vec<String>`; `TDirListBox` subclasses **`TListBox`** and
+   needs an overridable `get_text` over its own `Vec<DirEntry>` (a small
+   list-viewer item-source seam refactor).
 
-After 75: `TFileList`/`TFileDialog`/`TChDirDialog` (consuming 71–74's
-`FileCollection`/`SearchRec` + 75's `TDirListBox`) + the filesystem-read layer
-that populates `SearchRec`. Once `TFileDialog` lands it **un-blocks**
-`FileEditor::saveAs` and `EditWindow`'s dynamic-title (`cmUpdateTitle`) path.
+Then `TFileList`/`TFileDialog`/`TChDirDialog` (consuming 71–74's
+`FileCollection`/`SearchRec` + 75's `TDirListBox`) + the filesystem-read layer that
+populates `SearchRec`. Once `TFileDialog` lands it **un-blocks** `FileEditor::saveAs`
+and `EditWindow`'s dynamic-title (`cmUpdateTitle`) path.
 
-> **Highest-leverage seam to pick up (noted, not a redirect): the
-> async-modal-from-a-view seam.** It is the shared unblocker for *three* pending
-> consumers — row 68's `valid()` modified-save prompt + its error/confirm dialogs,
-> **and** the five validators' `error()` → `messageBox`. Shape: a
-> `Deferred::OpenMessageBox`-style variant + the row-57 `pending_modal` async path
-> (the `OpenHistory` precedent), plus threading a deferred handle into the
-> `Validator::error`/`InputLine::valid` callers. Doing it once clears all three.
-
-Two non-gating seams also remain available before or alongside the editor family:
-
-1. **The `ModalFrame` deliver-outside-to-modal seam** (row 56/57 deferred — STILL
-   OPEN). Un-defers the `HistoryWindow` outside-click `endModal(cmCancel)`. **NOT a
-   `ModalFrame` return-value tweak:** `ModalFrame::handle` has no `group`, and
-   `program_handle_event` routes outside positional events **positionally to the
-   desktop**. The fix is a **delivery-path change in `program_handle_event`**:
-   while a `ModalFrame` is the top capture, deliver positional events to the modal
-   view by id (makeLocal to its bounds) so the modal's own routing + the
-   `HistoryWindow` `mouseInView`-cancel override decide. Verify a plain `Dialog`
-   still IGNORES an outside click under that delivery (C++ does). Breadcrumb in
-   place: `HistoryWindow::handle_event` `TODO(row 57 modal-loop seam)`.
-
-2. **Validator `error()` → `messageBox` wiring (its own seam).** All five
-   validators' `error()` are `TODO(row 63)` no-op breadcrumbs preserving the exact
-   C++ strings. Wiring them is **blocked on `Validator::error(&self)` having no
-   `Context`** — it cannot reach a deferred channel to request a modal. Needs a
-   trait-signature change (thread a `&mut Context` / a deferred handle through
-   `error()` and its `InputLine::valid` caller), then a `Deferred::OpenMessageBox`
-   variant + the row-57 `pending_modal` async path (the `OpenHistory` precedent).
-   The sync `Program::message_box` exists now; this is the *async-from-a-view* face.
+### Other non-gating seam still open (independent of the above)
+- **The `ModalFrame` deliver-outside-to-modal seam** (row 56/57 deferred — STILL
+  OPEN). Un-defers the `HistoryWindow` outside-click `endModal(cmCancel)`. **NOT a
+  `ModalFrame` return-value tweak:** `ModalFrame::handle` has no `group`, and
+  `program_handle_event` routes outside positional events **positionally to the
+  desktop**. The fix is a **delivery-path change in `program_handle_event`**:
+  while a `ModalFrame` is the top capture, deliver positional events to the modal
+  view by id (makeLocal to its bounds) so the modal's own routing + the
+  `HistoryWindow` `mouseInView`-cancel override decide. Verify a plain `Dialog`
+  still IGNORES an outside click under that delivery (C++ does). Breadcrumb in
+  place: `HistoryWindow::handle_event` `TODO(row 57 modal-loop seam)`.
 
 **Row 66 deferred sub-features** (breadcrumbed TODOs in `editor.rs`; pick up when
 relevant prerequisites land):
