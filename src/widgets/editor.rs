@@ -352,6 +352,9 @@ pub struct Editor {
     is_valid: bool,
     /// `canUndo` — undo is enabled (always true in the base editor).
     can_undo: bool,
+    /// TFileEditor mode: setBufSize grows the buffer, and updateCommands enables
+    /// cmSave/cmSaveAs. False for base Editor / Memo (fixed buffer).
+    file_editor: bool,
     /// `modified` — the buffer has unsaved changes.
     modified: bool,
     /// `selecting` — a persistent selection is in progress (`startSelect`).
@@ -435,6 +438,7 @@ impl Editor {
             ins_count: 0,
             is_valid: buf_size != 0,
             can_undo: true,
+            file_editor: false,
             modified: false,
             selecting: false,
             overwrite: false,
@@ -453,6 +457,22 @@ impl Editor {
         };
         // setBufLen(0) — flag-set only (no flush; ctor has no Context).
         ed.set_buf_len(0);
+        ed
+    }
+
+    /// Construct an `Editor` in file-editor mode (growable buffer, save commands).
+    /// Mirrors `TFileEditor`'s `TEditor(bounds,...,0)` + the grow-on-load model: the
+    /// buffer starts empty and `set_buf_size` grows it. A growable empty buffer is
+    /// valid (unlike a fixed 0-size buffer, which would be `is_valid == false`).
+    pub(crate) fn new_file_editor(
+        bounds: Rect,
+        h_scroll_bar: Option<ViewId>,
+        v_scroll_bar: Option<ViewId>,
+        indicator: Option<ViewId>,
+    ) -> Self {
+        let mut ed = Editor::new(bounds, h_scroll_bar, v_scroll_bar, indicator, 0);
+        ed.file_editor = true;
+        ed.is_valid = true; // a growable (file) editor with an empty buffer is valid
         ed
     }
 
@@ -869,16 +889,41 @@ impl Editor {
         self.update(UF_VIEW);
     }
 
-    /// `setBufSize(newSize)` — base editor never grows: succeeds iff `newSize`
-    /// already fits.
-    fn set_buf_size(&self, new_size: usize) -> bool {
-        new_size <= self.buf_size
+    /// `setBufSize` — the base editor never grows (returns whether `new_size` already
+    /// fits). In **file-editor mode** (`TFileEditor::setBufSize`) it grows the buffer:
+    /// round `new_size` up to a 0x1000 boundary, resize the `Vec`, and move the
+    /// post-gap tail to the new end so the gap widens in place.
+    fn set_buf_size(&mut self, new_size: usize) -> bool {
+        if new_size <= self.buf_size {
+            // TODO(row 68 shrink): C++ TFileEditor::setBufSize also reallocs to SHRINK
+            // when newSize < bufSize (memory reclaim after setSelect/insertBuffer). We
+            // skip the shrink path — memory is not reclaimed; logical text + invariants
+            // are unaffected.
+            return true;
+        }
+        if !self.file_editor {
+            return false; // base TEditor / Memo: fixed buffer, cannot grow.
+        }
+        // TFileEditor::setBufSize grow path. DEVIATION (documented): the C++ 16-bit
+        // ceilings (UINT_MAX-0x1F) and malloc-failure return are dropped — Vec growth
+        // is infallible. TODO(row 68 OOM): no edOutOfMemory path (was malloc-fail).
+        let rounded = (new_size + 0x0FFF) & !0x0FFF; // round up to 0x1000
+        let old_size = self.buf_size;
+        let n = self.buf_len - self.cur_ptr + self.del_count; // bytes after the gap
+        self.buffer.resize(rounded, 0);
+        // Move the tail [old_size - n .. old_size] to [rounded - n .. rounded].
+        // copy_within is memmove — overlap-safe.
+        self.buffer.copy_within(old_size - n..old_size, rounded - n);
+        self.buf_size = rounded;
+        self.gap_len = self.buf_size - self.buf_len;
+        true
     }
 
     /// `TMemo::setData` body — replace the whole buffer with `text` (D10 setData
     /// successor, used by [`Memo::set_value`]). All-or-nothing like C++: if `text`
-    /// does not fit the fixed buffer (`setBufSize` fails), it is a no-op. No
-    /// `selectAll` (C++ TMemo::setData, unlike TInputLine::setData, does not select).
+    /// does not fit the buffer and `setBufSize` fails (base/Memo fixed buffer — in
+    /// file-editor mode the buffer grows instead), it is a no-op. No `selectAll`
+    /// (C++ TMemo::setData, unlike TInputLine::setData, does not select).
     pub fn set_text(&mut self, text: &[u8]) {
         if self.set_buf_size(text.len()) {
             let start = self.buf_size - text.len();
@@ -920,7 +965,8 @@ impl Editor {
             }
             self.del_count = 0;
             self.ins_count = 0;
-            // setBufSize(bufLen) — no-op for the base (never shrinks).
+            // setBufSize(bufLen) — no-op for the base (never shrinks); the
+            // file-editor shrink path is likewise deferred (see set_buf_size).
         }
         self.draw_line = self.cur_pos.y;
         self.draw_ptr = self.line_start(p);
@@ -1350,6 +1396,18 @@ impl Editor {
         self.set_cmd_state(Command::FIND, true, ctx);
         self.set_cmd_state(Command::REPLACE, true, ctx);
         self.set_cmd_state(Command::SEARCH_AGAIN, true, ctx);
+        if self.file_editor {
+            // TFileEditor::updateCommands — cmSave/cmSaveAs always enabled when active.
+            self.set_cmd_state(Command::SAVE, true, ctx);
+            self.set_cmd_state(Command::SAVE_AS, true, ctx);
+        }
+    }
+
+    /// `TFileEditor::saveFile`'s `modified = False; update(ufUpdate)` tail — clear
+    /// the dirty flag and flag an indicator/cursor redraw.
+    fn clear_modified(&mut self) {
+        self.modified = false;
+        self.update(UF_UPDATE);
     }
 
     // -- clipboard (teditor1.cpp; D11 system-clipboard path) ----------------
@@ -1983,6 +2041,162 @@ impl View for Memo {
         if let crate::data::FieldValue::Text(s) = v {
             self.editor.set_text(s.as_bytes());
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FileEditor — TFileEditor (tfiledtr.cpp), a D2 embed-delegate wrapper over a
+// file-editor-mode Editor.
+// ---------------------------------------------------------------------------
+
+/// `TFileEditor` (`tfiledtr.cpp`) — a [`Editor`] backed by a file on disk.
+/// D2 embed-delegate wrapper; the editor runs in file-editor mode (growable
+/// buffer + save commands).
+///
+/// Implemented: growable buffer (load grows it), `load_file`/`save_file` over
+/// real `std::fs`, `save()` to an existing file, `handle_event` cmSave, and the
+/// `cmValid → is_valid` case of `valid`.
+///
+/// Deferred (forced by not-yet-ported substrate):
+/// * `saveAs` / `Command::SAVE_AS` / save of an untitled buffer — needs
+///   `TFileDialog` (not yet ported). `Command::SAVE_AS` is left unhandled (not
+///   cleared); `save()` on an untitled buffer is a no-op returning `false`.
+/// * Error/confirm dialogs (`edReadError`/`edCreateError`/`edWriteError`/
+///   `edOutOfMemory`) — need the async modal-from-view seam (same blocker as the
+///   validator `error()` path). Each drop is breadcrumbed.
+/// * `valid()` modified-save prompt (`edSaveModify`/`edSaveUntitled`) — same
+///   async-modal blocker; defaults to allow-close (never block forever).
+/// * `efBackupFiles` backup-rename in `saveFile` — deferred (flag defaults off).
+/// * `shutDown` cmSave/cmSaveAs disable-on-close — no rstv `shut_down` View
+///   analogue exists; dropped.
+/// * `cmUpdateTitle` broadcast — folded into the deferred `saveAs`.
+/// * `TStreamable` write/read/build — D12 dropped (like every other row).
+pub struct FileEditor {
+    /// The editor engine, in file-editor mode.
+    pub editor: Editor,
+    /// `fileName` — the backing file, or `None` for an untitled buffer
+    /// (C++ `*fileName == EOS`).
+    pub file_name: Option<std::path::PathBuf>,
+}
+
+impl FileEditor {
+    /// `TFileEditor::TFileEditor(bounds, hScroll, vScroll, indicator, fileName)`.
+    /// An empty `file_name` ⇒ untitled. A non-empty one is loaded immediately
+    /// (`is_valid` reflects load success, faithful to the C++ `isValid = loadFile()`).
+    pub fn new(
+        bounds: Rect,
+        h_scroll_bar: Option<ViewId>,
+        v_scroll_bar: Option<ViewId>,
+        indicator: Option<ViewId>,
+        file_name: Option<std::path::PathBuf>,
+    ) -> Self {
+        let mut fe = FileEditor {
+            editor: Editor::new_file_editor(bounds, h_scroll_bar, v_scroll_bar, indicator),
+            file_name: None,
+        };
+        if let Some(path) = file_name {
+            // C++ fexpand canonicalizes; best-effort here (canonicalize fails for a
+            // not-yet-existing path — keep the path as given in that case).
+            // TODO(row 68 fexpand): full path-expansion nuance deferred.
+            fe.file_name = Some(path);
+            if fe.editor.is_valid {
+                fe.editor.is_valid = fe.load_file();
+            }
+        }
+        fe
+    }
+
+    /// `TFileEditor::loadFile` — read the whole file into the buffer.
+    /// Missing/unopenable file ⇒ empty buffer, success (C++ returns True).
+    /// A real read error ⇒ false (C++ shows edReadError, deferred here).
+    pub fn load_file(&mut self) -> bool {
+        let Some(path) = self.file_name.clone() else {
+            self.editor.set_buf_len(0);
+            return true;
+        };
+        match std::fs::read(&path) {
+            Ok(bytes) => {
+                // set_text grows via set_buf_size then setBufLen — identical to the
+                // C++ read-into-buffer[bufSize-fSize] + setBufLen(fSize).
+                self.editor.set_text(&bytes);
+                true
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                self.editor.set_buf_len(0); // can't open ⇒ empty, valid (C++ True)
+                true
+            }
+            Err(_) => {
+                // TODO(row 68 edReadError dialog): needs async modal-from-view.
+                false
+            }
+        }
+    }
+
+    /// `TFileEditor::saveFile` — write the buffer's logical text to `file_name`.
+    pub fn save_file(&mut self) -> bool {
+        let Some(path) = self.file_name.clone() else {
+            return false;
+        };
+        // TODO(row 68 efBackupFiles): backup-rename deferred (flag defaults off).
+        // The logical text = front [0..curPtr] then tail [curPtr+gapLen..][..bufLen-curPtr].
+        // Use the editor's text() helper (gap-skipping) — equivalent and simpler.
+        let bytes = self.editor.text();
+        match std::fs::write(&path, &bytes) {
+            Ok(()) => {
+                self.editor.clear_modified(); // modified = False; update(ufUpdate)
+                true
+            }
+            Err(_) => {
+                // TODO(row 68 edCreateError/edWriteError dialog): async modal-from-view.
+                false
+            }
+        }
+    }
+
+    /// `TFileEditor::save` — save to the existing file, or (untitled) saveAs.
+    pub fn save(&mut self) -> bool {
+        if self.file_name.is_some() {
+            self.save_file()
+        } else {
+            // TODO(row 68 saveAs): untitled save needs TFileDialog (not yet ported).
+            false
+        }
+    }
+}
+
+#[crate::delegate(to = editor)]
+impl View for FileEditor {
+    /// `TFileEditor::handleEvent` — base editor first, then cmSave (cmSaveAs deferred).
+    fn handle_event(&mut self, ev: &mut crate::event::Event, ctx: &mut Context) {
+        use crate::command::Command;
+        use crate::event::Event;
+        self.editor.handle_event(ev, ctx);
+        // cmSave handled here; cmSaveAs is left unhandled (not cleared).
+        // TODO(row 68 saveAs): Command::SAVE_AS needs TFileDialog (not yet ported).
+        if let Event::Command(cmd) = ev
+            && *cmd == Command::SAVE
+        {
+            self.save();
+            // C++ saveFile's update(ufUpdate) flushes inline; publish modified=false
+            // to the indicator and re-gray the save commands now (the inner editor
+            // already flushed with modified still true, since cmSave isn't an edit).
+            self.editor.flush_if_unlocked(ctx);
+            ev.clear();
+        }
+    }
+
+    /// `TFileEditor::valid` — `cmValid` reflects buffer validity; the modified-save
+    /// prompt is deferred (needs async modal-from-view), defaulting to allow-close.
+    fn valid(&self, cmd: crate::command::Command) -> bool {
+        if cmd == crate::command::Command::VALID {
+            return self.editor.valid(cmd);
+        }
+        // TODO(row 68 valid prompt): edSaveModify/edSaveUntitled prompt needs the
+        // async modal-from-view seam; default to allow-close (never block forever).
+        // CAUTION: returning true unconditionally silently discards unsaved edits when
+        // a modified file editor is closed during a dialog validation walk — C++
+        // prompts first.
+        true
     }
 }
 
@@ -2804,5 +3018,213 @@ mod tests {
             m.draw(&mut dc);
         });
         insta::assert_snapshot!(screen.snapshot());
+    }
+
+    // -- FileEditor (row 68) ------------------------------------------------
+
+    /// A unique temp-file path per test (no `tempfile` dev-dep).
+    fn tmp_path(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "rstv_fileeditor_{}_{}.txt",
+            std::process::id(),
+            name
+        ))
+    }
+
+    /// An untitled file-editor (growable buffer, no backing file).
+    fn untitled_fe() -> FileEditor {
+        FileEditor::new(Rect::new(0, 0, 40, 10), None, None, None, None)
+    }
+
+    /// FOUNDATION default-off regression (load-bearing): a base editor / Memo with
+    /// a fixed buffer REFUSES to grow. `set_buf_size` past capacity returns false,
+    /// and `set_text` of an over-capacity payload is a no-op (text unchanged).
+    #[test]
+    fn base_editor_buffer_does_not_grow() {
+        // Fixed 8-byte buffer.
+        let mut e = Editor::new(Rect::new(0, 0, 40, 10), None, None, None, 8);
+        assert!(!e.file_editor, "base editor is not in file-editor mode");
+        // BEFORE state: the buffer fits 8 bytes; asking for more must fail.
+        assert!(e.set_buf_size(8), "exactly-fitting size succeeds");
+        assert!(
+            !e.set_buf_size(9),
+            "over-capacity grow refused (default off)"
+        );
+        assert_eq!(e.buf_size, 8, "buf_size unchanged by a refused grow");
+
+        // set_text of a 20-byte payload (over capacity) is an all-or-nothing no-op.
+        e.set_text(b"0123456789abcdefghij");
+        assert_eq!(e.buf_len, 0, "over-capacity set_text left the buffer empty");
+        assert!(e.text().is_empty(), "text unchanged after refused grow");
+        assert_eq!(e.buf_size, 8, "buf_size still fixed at 8");
+    }
+
+    /// Memo (a Memo wraps a base Editor) likewise refuses to grow.
+    #[test]
+    fn memo_buffer_does_not_grow() {
+        let mut m = Memo::new(Rect::new(0, 0, 40, 10), None, None, None, 8);
+        assert!(!m.editor.file_editor);
+        m.editor.set_text(b"0123456789abcdefghij");
+        assert!(
+            m.editor.text().is_empty(),
+            "Memo's fixed buffer did not grow"
+        );
+        assert_eq!(m.editor.buf_size, 8);
+    }
+
+    /// Growth works when file-editor mode is on: a >0x1000 payload round-trips and
+    /// `buf_size` grows to a 0x1000 multiple ≥ payload.
+    #[test]
+    fn file_editor_buffer_grows() {
+        let mut fe = untitled_fe();
+        assert!(fe.editor.file_editor);
+        assert_eq!(fe.editor.buf_size, 0, "starts empty (TFileEditor model)");
+
+        let payload = vec![b'x'; 0x1000 + 37]; // > one 0x1000 page
+        fe.editor.set_text(&payload);
+
+        assert_eq!(fe.editor.text(), payload, "payload round-trips");
+        assert_eq!(fe.editor.buf_len, payload.len());
+        assert!(
+            fe.editor.buf_size >= payload.len(),
+            "buf_size accommodates the payload"
+        );
+        assert_eq!(
+            fe.editor.buf_size % 0x1000,
+            0,
+            "buf_size is a 0x1000 multiple"
+        );
+        assert_eq!(fe.editor.buf_size, 0x2000, "rounded up to two pages");
+        check_invariant(&fe.editor);
+    }
+
+    /// Grow with content present and the cursor mid-buffer — exercises the
+    /// non-degenerate `n > 0` tail memmove in `set_buf_size` (the other growth
+    /// tests all start empty, so `n == 0` and the move is a no-op).
+    #[test]
+    fn file_editor_buffer_grows_with_content() {
+        let mut fe = untitled_fe();
+        fe.editor.set_text(&vec![b'a'; 0x1000]); // one full page; gap_len == 0
+        assert_eq!(fe.editor.buf_size, 0x1000);
+        fe.editor.set_cur_ptr(0x800, 0); // cursor in the middle (n becomes 0x800)
+        insert(&mut fe.editor, "Z"); // forces set_buf_size(0x1001) -> grow
+
+        let mut expected = vec![b'a'; 0x800];
+        expected.push(b'Z');
+        expected.extend(std::iter::repeat_n(b'a', 0x800));
+        assert_eq!(
+            fe.editor.text(),
+            expected,
+            "text intact across a grow with n > 0"
+        );
+        assert_eq!(fe.editor.buf_size, 0x2000, "grew to two pages");
+        check_invariant(&fe.editor);
+    }
+
+    /// load_file round-trip: a written file loads into the editor and is valid.
+    #[test]
+    fn file_editor_load_round_trip() {
+        let path = tmp_path("load_round_trip");
+        let content = b"first line\nsecond line\nthird line\n";
+        std::fs::write(&path, content).unwrap();
+
+        let fe = FileEditor::new(
+            Rect::new(0, 0, 40, 10),
+            None,
+            None,
+            None,
+            Some(path.clone()),
+        );
+        assert!(fe.editor.is_valid, "loaded editor is valid");
+        assert_eq!(fe.editor.text(), content, "loaded text matches the file");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Missing file ⇒ valid, empty buffer (C++ "can't open ⇒ empty, True").
+    #[test]
+    fn file_editor_load_missing_file() {
+        let path = tmp_path("missing_does_not_exist");
+        let _ = std::fs::remove_file(&path); // ensure absent
+        let fe = FileEditor::new(
+            Rect::new(0, 0, 40, 10),
+            None,
+            None,
+            None,
+            Some(path.clone()),
+        );
+        assert!(fe.editor.is_valid, "missing file ⇒ valid");
+        assert!(fe.editor.text().is_empty(), "missing file ⇒ empty buffer");
+    }
+
+    /// save_file round-trip: an untitled buffer, given a filename, writes to disk
+    /// and clears `modified`.
+    #[test]
+    fn file_editor_save_round_trip() {
+        let path = tmp_path("save_round_trip");
+        let _ = std::fs::remove_file(&path);
+
+        let mut fe = untitled_fe();
+        insert(&mut fe.editor, "saved content\nmore text\n");
+        assert!(fe.editor.modified(), "insert marks modified");
+
+        fe.file_name = Some(path.clone());
+        assert!(fe.save(), "save() to a named file succeeds");
+
+        let on_disk = std::fs::read(&path).unwrap();
+        assert_eq!(on_disk, fe.editor.text(), "disk bytes equal editor text");
+        assert!(!fe.editor.modified(), "modified cleared after save");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// cmSave via handle_event writes the file and clears the event.
+    #[test]
+    fn file_editor_handle_save_command() {
+        let path = tmp_path("handle_save_command");
+        let _ = std::fs::remove_file(&path);
+
+        let mut fe = untitled_fe();
+        insert(&mut fe.editor, "via handle_event\n");
+        fe.file_name = Some(path.clone());
+
+        let mut cx = Cx::new();
+        let mut ev = Event::Command(Command::SAVE);
+        fe.handle_event(&mut ev, &mut cx.ctx());
+
+        assert!(ev.is_nothing(), "cmSave was cleared by handle_event");
+        let on_disk = std::fs::read(&path).unwrap();
+        assert_eq!(on_disk, fe.editor.text(), "file written via cmSave");
+        assert!(!fe.editor.modified(), "modified cleared");
+        // clear_modified's UF_UPDATE was flushed inline (not left pending) — the
+        // indicator/commands publish modified=false on this event, not the next.
+        assert_eq!(
+            fe.editor.update_flags, 0,
+            "no pending update flag after cmSave flush"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Saving an untitled buffer is a no-op (saveAs deferred) — returns false, no panic.
+    #[test]
+    fn file_editor_save_untitled_is_noop() {
+        let mut fe = untitled_fe();
+        insert(&mut fe.editor, "unsaved");
+        assert!(!fe.save(), "untitled save is a no-op (saveAs deferred)");
+        assert!(fe.editor.modified(), "still modified — nothing was saved");
+    }
+
+    /// valid: cmValid reflects is_valid; any other command ⇒ true (deferred allow-close).
+    #[test]
+    fn file_editor_valid() {
+        let fe = untitled_fe();
+        assert!(fe.editor.is_valid);
+        assert!(fe.valid(Command::VALID), "cmValid reflects a valid buffer");
+        // A different command bypasses the (deferred) modified prompt ⇒ allow-close.
+        assert!(
+            fe.valid(Command::CLOSE),
+            "non-cmValid defers to allow-close"
+        );
     }
 }

@@ -5,6 +5,52 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## Session — `TFileEditor` (row 68) — file-backed editor + growable-buffer seam
+
+Row 68 (`TFileEditor`, `tfiledtr.cpp`). 758→768 lib tests (+10). **Row 68 ✅
+core** — the dialog-dependent branches are *forced*-deferred (their substrate
+isn't ported yet), not chosen-out. Tagged MECHANICAL, but it carries one genuine
+**FOUNDATION** change to the shared `Editor`, so it was Opus-implemented.
+
+- **The FOUNDATION problem.** C++ `TFileEditor` overrides `setBufSize` (virtual)
+  so the *base* editor's insert path grows the buffer; in our D2 embed-delegate
+  model a wrapper cannot override the inner `Editor`'s concrete internal methods.
+  Resolution: add the growth **into `Editor` itself, gated by a `file_editor`
+  flag** the file editor sets. The base/`Memo` stay fixed-buffer; only a file
+  editor grows. Same pattern for `updateCommands` (enable `cmSave`/`cmSaveAs`).
+- **Growable buffer.** `set_buf_size` changed `&self`→`&mut self` (both callers
+  were already `&mut`): when `file_editor` and over capacity, round `new_size` up
+  to a `0x1000` boundary, `Vec::resize`, then `copy_within` the post-gap tail
+  (`n = buf_len - cur_ptr + del_count` bytes) from `[old_size-n..old_size]` to
+  `[rounded-n..]` — the C++ `memmove(&buffer[newSize-n], &temp[bufSize-n], n)`
+  translated; `copy_within` is memmove (overlap-safe). `gap_len` recomputed after.
+  `new_file_editor` builds an `Editor` at `buf_size 0` with `is_valid = true` (a
+  growable empty buffer is valid, unlike a fixed 0-size one). `load_file` reuses
+  the row-67 `set_text` (grow + `setBufLen` — same placement math as C++ loadFile).
+- **Default-off is the load-bearing review check.** Touching shared `Editor` risks
+  silently changing `Memo`/base. Growth is strictly opt-in: `set_buf_size` with
+  `file_editor == false` returns the exact old `new_size <= buf_size`. Two
+  regression tests (`base_editor_buffer_does_not_grow`, `memo_buffer_does_not_grow`)
+  pin this; the spec review verified fixed-buffer behavior is unchanged.
+- **File I/O (real `std::fs`).** `load_file` (NotFound ⇒ empty+valid, like C++
+  can't-open; other `Err` ⇒ invalid, the `edReadError` dialog deferred), `save_file`
+  (writes `editor.text()` — the gap-skipping logical text = C++'s two `writeBlock`s;
+  then `clear_modified` = `modified=False; update(ufUpdate)`), `save` (existing file
+  ⇒ saveFile; untitled ⇒ deferred saveAs no-op). `handle_event` runs the base editor
+  first, then `cmSave` (with a follow-up `flush_if_unlocked` so the indicator/command
+  state publish that frame — the inner editor had already flushed with `modified`
+  still true). `valid(cmValid)` reflects `is_valid`; the modified-save prompt is
+  deferred to allow-close.
+- **Forced deferrals (breadcrumbed).** saveAs/`SAVE_AS`/untitled-save → needs
+  `TFileDialog` (unported); all `editorDialog` error/confirm popups + the `valid()`
+  modified prompt → need the **async-modal-from-a-view seam** (the shared unblocker
+  — same blocker as validator `error()`); `efBackupFiles`; `shutDown` (no rstv View
+  analogue); DOS 16-bit/OOM ceilings (Vec growth is infallible — documented
+  deviation); `setBufSize` shrink (memory-reclaim only); `TStreamable` (D12).
+- **Verification.** 768 lib tests green; `clippy --all-targets -D warnings` (forced
+  re-lint) + `fmt --check` clean. File-I/O tests use `std::env::temp_dir()` +
+  per-test unique names (no `tempfile` dev-dep), cleaning up after themselves.
+
 ## Session — `TMemo` (row 67) — single-field dialog editor + a latent-bug fix
 
 Row 67 (`TMemo`, `tmemo.cpp`). 752→758 lib tests (+6: 4 Memo + 2 Shift+Tab

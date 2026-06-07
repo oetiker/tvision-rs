@@ -15,7 +15,7 @@
 
 ## Current state
 
-- **HEAD `3a3661b`+ (row 67 `TMemo` lands this session).** Build: **758 lib tests** green; `cargo clippy --workspace
+- **HEAD `b1c608c`+ (rows 67 `TMemo` + 68 `TFileEditor` land this session).** Build: **768 lib tests** green; `cargo clippy --workspace
   --all-targets -- -D warnings` and `cargo fmt --all --check` clean (verify clippy
   with a forced re-lint — a cached run can mask a fresh warning).
 - **Cargo workspace** (`tvision` + `tvision-macros`) — use `--workspace` for
@@ -42,18 +42,32 @@
   pump brokers reach through a `Memo`); overrides Tab-swallow + D10
   `value`/`set_value` (new inherent `Editor::set_text`); `dataSize`/`getPalette`
   dropped (D10/D7). Fixed a latent row-66 editor bug along the way (Shift+Tab was
-  wrongly insertable — `kbShiftTab` charCode 0 must not insert).
+  wrongly insertable — `kbShiftTab` charCode 0 must not insert),
+  and **row 68 (`TFileEditor`) core** — a D2 embed-delegate `FileEditor`; the inner
+  `Editor` gained a **flag-gated growable buffer** (`file_editor` flag,
+  `set_buf_size(&mut)` grow branch, `new_file_editor` ctor) — base/`Memo`
+  fixed-buffer behavior provably unchanged; `load_file`/`save_file`/`save` over real
+  `std::fs`, `handle_event` cmSave, `valid` cmValid (saveAs + error/confirm dialogs +
+  the modified-prompt forced-deferred on `TFileDialog`/async-modal-from-view).
   The `#[delegate]` proc-macro is landed and adopted codebase-wide.
 
 ## Next — lowest-numbered remaining work
 
-**Row 67 `TMemo` is ✅ this session.** The next porting row is **68
-`TFileEditor`** (MECHANICAL — `TEditor` subclass with load/save file backing,
-`tfiledtr.cpp`), then **69 `TEditWindow`** (`TWindow` owning a `TFileEditor` +
-scrollbars + `TIndicator`, where the deferred row-66 clipboard-editor branch and
-find/replace dialogs wire in). They do **not** structurally require the other
-deferred row-66 sub-features. Two non-gating seams remain available before or
-alongside the editor family:
+**Rows 67 `TMemo` + 68 `TFileEditor` are ✅ this session.** The next porting row is
+**69 `TEditWindow`** (`teditwnd.cpp` — a `TWindow` owning a `FileEditor` (row 68) +
+two scrollbars + a `TIndicator`, wiring the editor's deferred row-66
+clipboard-editor branch and the find/replace dialogs). It builds on the editor
+family now in place; the standard window/scrollbar/indicator pieces all exist.
+
+> **Highest-leverage seam to pick up (noted, not a redirect): the
+> async-modal-from-a-view seam.** It is the shared unblocker for *three* pending
+> consumers — row 68's `valid()` modified-save prompt + its error/confirm dialogs,
+> **and** the five validators' `error()` → `messageBox`. Shape: a
+> `Deferred::OpenMessageBox`-style variant + the row-57 `pending_modal` async path
+> (the `OpenHistory` precedent), plus threading a deferred handle into the
+> `Validator::error`/`InputLine::valid` callers. Doing it once clears all three.
+
+Two non-gating seams also remain available before or alongside the editor family:
 
 1. **The `ModalFrame` deliver-outside-to-modal seam** (row 56/57 deferred — STILL
    OPEN). Un-defers the `HistoryWindow` outside-click `endModal(cmCancel)`. **NOT a
@@ -87,9 +101,9 @@ relevant prerequisites land):
    deferred to row 69 (`TEditWindow` wires the clipboard editor).
 5. `TStreamable` write/read/build (D12).
 
-Phase 5 then continues in PORT-ORDER with **68** (`TFileEditor`) and **69**
-(`TEditWindow`), then the std-dialog / file / color / outline families.
-`cmDosShell` is still deferred — needs a backend terminal-suspend seam + SIGTSTP.
+Phase 5 then continues in PORT-ORDER with **69** (`TEditWindow`), then the
+std-dialog / file / color / outline families. `cmDosShell` is still deferred —
+needs a backend terminal-suspend seam + SIGTSTP.
 
 ## What this session left available / changed
 
