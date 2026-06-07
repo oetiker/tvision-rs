@@ -1,0 +1,19 @@
+---
+source: src/widgets/editor.rs
+expression: screen.snapshot()
+---
+size: 20x4
+cursor: hidden
+text:
+|line one            |
+|line two            |
+|                    |
+|                    |
+attr:
+|aaaaaaaaaaaaaaaaaaaa|
+|aaaaaaaaaaaaaaaaaaaa|
+|aaaaaaaaaaaaaaaaaaaa|
+|aaaaaaaaaaaaaaaaaaaa|
+legend:
+  . default
+  a fg=BIOS(8) bg=BIOS(2)

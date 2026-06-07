@@ -5,6 +5,50 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## Session — `TMemo` (row 67) — single-field dialog editor + a latent-bug fix
+
+Row 67 (`TMemo`, `tmemo.cpp`). 752→758 lib tests (+6: 4 Memo + 2 Shift+Tab
+regression). **Row 67 ✅.** A genuinely thin row — TMemo adds almost nothing over
+TEditor — so the interest is in how the deviations collapse the C++ surface.
+
+- **Scope.** `Memo { pub editor: Editor }`, a **D2 embed-delegate** wrapper:
+  `#[crate::delegate(to = editor)]` with **no `skip(...)` list**, so every
+  un-overridden `View` method forwards to the inner `Editor`. Three overrides:
+  - `handle_event` — C++ `TMemo::handleEvent` swallows only a *plain* `kbTab`
+    KeyDown (so Tab bubbles to the dialog's focus navigation) and forwards
+    everything else to the editor. In the rstv decomposed `Key` model that is
+    `Key::Tab` with `!shift && !ctrl && !alt`; the swallow `return`s **without
+    `ev.clear()`** so the event survives to the dialog.
+  - `value` / `set_value` — the **D10** successors to `getData`/`setData`:
+    `FieldValue::Text` of the whole logical buffer. `set_value` drives a new
+    inherent `Editor::set_text(&[u8])` that mirrors C++ `setData`
+    (`setBufSize`-gated, all-or-nothing, places bytes at `buffer[bufSize-len..]`,
+    `setBufLen`; **no** `selectAll`, unlike `TInputLine::setData`).
+- **Deviations that erased C++ surface.** `dataSize()` is **dropped** (D10 — no
+  untyped byte-size in the typed-value model); `getPalette`/`cpMemo "\x1A\x1B"` is
+  **dropped** (D7 — the Role model abstracts the palette-index chain; Memo reuses
+  the editor's `draw`, i.e. `Role::ScrollerNormal`/`ScrollerSelected`). A distinct
+  dialog-context palette (`MemoNormal`/`MemoSelected` roles) is a noted, deferred
+  theme refinement — not worth expanding `theme.rs` for this row.
+- **`as_any_mut` must delegate (the load-bearing non-obvious bit).** The pump's
+  `SyncEditorDelta`/`EditorPaste`/`IndicatorSetValue` brokers resolve a view by id
+  and do `find_mut(id).as_any_mut().downcast_mut::<Editor>()`. With a `Memo`
+  inserted at that id, `find_mut` returns the `Memo`; the no-skip delegation makes
+  `Memo::as_any_mut` forward to the inner editor, so the downcast still reaches the
+  `Editor`. Skipping it (the cluster-wrapper instinct) would silently kill
+  scrollbar/indicator sync — and no snapshot test would catch it.
+- **Latent row-66 `Editor` bug, found by the spec review + fixed (TDD).** The
+  editor's insertable-char gate treated `Key::Tab` as insertable on `!ctrl &&
+  !alt` only — so **Shift+Tab** inserted a stray `\t`. Faithful to C++ this is
+  wrong: `kbTab` (charCode 9) inserts, but `kbShiftTab` (charCode 0) does not — it
+  falls through and bubbles to the dialog for *backward* focus navigation. Added a
+  `!shift` guard to the Tab arm (the `Char` arm keeps inserting Shift+Char =
+  uppercase). Two regression tests (bare `Editor` + `Memo`) assert both no-insert
+  **and** event-survives-uncleared; they were written failing-first.
+- **Verification.** 758 lib tests green; `clippy --workspace --all-targets -D
+  warnings` (forced re-lint) + `fmt --check` clean. One snapshot
+  (`memo_snapshot`) covers the `set_value`→`draw` path.
+
 ## Session — `TEditor` core (row 66) — gap-buffer text editor faithful port
 
 Row 66 (`TEditor`, `teditor1.cpp` + `teditor2.cpp` + `edits.cpp`). 712→752 lib

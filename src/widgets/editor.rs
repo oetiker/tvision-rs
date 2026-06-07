@@ -875,6 +875,18 @@ impl Editor {
         new_size <= self.buf_size
     }
 
+    /// `TMemo::setData` body — replace the whole buffer with `text` (D10 setData
+    /// successor, used by [`Memo::set_value`]). All-or-nothing like C++: if `text`
+    /// does not fit the fixed buffer (`setBufSize` fails), it is a no-op. No
+    /// `selectAll` (C++ TMemo::setData, unlike TInputLine::setData, does not select).
+    pub fn set_text(&mut self, text: &[u8]) {
+        if self.set_buf_size(text.len()) {
+            let start = self.buf_size - text.len();
+            self.buffer[start..].copy_from_slice(text);
+            self.set_buf_len(text.len());
+        }
+    }
+
     /// `setSelect(newStart, newEnd, curStart)` — move the gap to the chosen
     /// endpoint and set the selection. The gap memmove is the load-bearing op.
     fn set_select(&mut self, new_start: usize, new_end: usize, cur_start: bool) {
@@ -1543,7 +1555,13 @@ impl View for Editor {
                 // charCode 9 / [32,255) gate, decomposed to our Key model.
                 let insertable = match k.key {
                     crate::event::Key::Char(_) if !k.modifiers.ctrl && !k.modifiers.alt => true,
-                    crate::event::Key::Tab if !k.modifiers.ctrl && !k.modifiers.alt => true,
+                    // Shift+Tab (kbShiftTab, charCode 0) is NOT insertable — it bubbles
+                    // to dialog back-tab nav; only plain Tab (kbTab, charCode 9) inserts.
+                    crate::event::Key::Tab
+                        if !k.modifiers.shift && !k.modifiers.ctrl && !k.modifiers.alt =>
+                    {
+                        true
+                    }
                     _ => false,
                 };
                 if insertable {
@@ -1892,6 +1910,80 @@ enum KeyMapResult {
     Prefix(i32),
     /// No mapping — the event is left unchanged (an insertable char or unhandled).
     None,
+}
+
+// ---------------------------------------------------------------------------
+// Memo — TMemo (tmemo.cpp), a thin D2 embed-delegate wrapper over Editor.
+// ---------------------------------------------------------------------------
+
+/// `TMemo` (`tmemo.cpp`) — a single-field multi-line editor for use inside a
+/// dialog. A D2 embed-delegate wrapper over [`Editor`]; the only behavioural
+/// differences from the base editor are: it swallows a plain `Tab` keypress (so
+/// Tab navigates the dialog rather than inserting), and it exposes its text as a
+/// typed [`FieldValue`] for dialog gather/scatter (D10).
+///
+/// Dropped vs C++: `dataSize` (no untyped size in the D10 typed model);
+/// `getPalette`/`cpMemo` (D7 — Memo reuses the editor's `draw`, i.e.
+/// `Role::ScrollerNormal`/`ScrollerSelected`). A distinct dialog-context palette
+/// (`MemoNormal`/`MemoSelected` roles) is a deferred theme refinement.
+pub struct Memo {
+    /// The shared editor engine (buffer, nav, edit, undo, draw, brokers).
+    pub editor: Editor,
+}
+
+impl Memo {
+    /// `TMemo::TMemo(bounds, hScrollBar, vScrollBar, indicator, bufSize)` — forwards
+    /// straight to the [`Editor`] ctor.
+    pub fn new(
+        bounds: Rect,
+        h_scroll_bar: Option<ViewId>,
+        v_scroll_bar: Option<ViewId>,
+        indicator: Option<ViewId>,
+        buf_size: usize,
+    ) -> Self {
+        Memo {
+            editor: Editor::new(bounds, h_scroll_bar, v_scroll_bar, indicator, buf_size),
+        }
+    }
+}
+
+#[crate::delegate(to = editor)]
+impl View for Memo {
+    /// `TMemo::handleEvent` — swallow a plain `Tab` KeyDown (so it bubbles to the
+    /// dialog's focus navigation) and forward everything else to the editor.
+    fn handle_event(&mut self, ev: &mut crate::event::Event, ctx: &mut Context) {
+        use crate::event::{Event, Key};
+        // C++: `if (what != evKeyDown || keyCode != kbTab) TEditor::handleEvent`.
+        // kbTab is the plain Tab keycode; kbShiftTab/kbCtrlTab/kbAltTab ARE forwarded.
+        // In the rstv Key model these are Key::Tab + a modifier (shift/ctrl/alt), not
+        // distinct variants; only the unmodified Key::Tab is swallowed — the rest
+        // forward to the editor.
+        if let Event::KeyDown(k) = ev
+            && k.key == Key::Tab
+            && !k.modifiers.shift
+            && !k.modifiers.ctrl
+            && !k.modifiers.alt
+        {
+            // Swallow WITHOUT clearing — let it propagate to dialog focus-nav.
+            return;
+        }
+        self.editor.handle_event(ev, ctx);
+    }
+
+    /// `TMemo::getData` — the memo's text as a typed [`FieldValue`] (D10).
+    fn value(&self) -> Option<crate::data::FieldValue> {
+        Some(crate::data::FieldValue::Text(
+            String::from_utf8_lossy(&self.editor.text()).into_owned(),
+        ))
+    }
+
+    /// `TMemo::setData` — load text into the buffer (D10). Ignores a non-`Text`
+    /// variant (type mismatch the typed model drops, like `InputLine::set_value`).
+    fn set_value(&mut self, v: crate::data::FieldValue) {
+        if let crate::data::FieldValue::Text(s) = v {
+            self.editor.set_text(s.as_bytes());
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2382,6 +2474,33 @@ mod tests {
         assert!(ev.is_nothing(), "consumed");
     }
 
+    /// Regression: Shift+Tab (`kbShiftTab`, charCode 0) is NOT insertable — it
+    /// must not write a `\t`. C++ inserts only `kbTab` (charCode 9); `kbShiftTab`
+    /// falls through and bubbles to the dialog for backward focus navigation.
+    #[test]
+    fn shift_tab_does_not_insert_tab() {
+        let mut e = ed();
+        let mut cx = Cx::new();
+        let shift_tab = crate::event::KeyEvent::new(
+            crate::event::Key::Tab,
+            crate::event::KeyModifiers {
+                shift: true,
+                ..Default::default()
+            },
+        );
+        let mut ev = Event::KeyDown(shift_tab);
+        {
+            let mut ctx = cx.ctx();
+            e.handle_event(&mut ev, &mut ctx);
+        }
+        assert_eq!(text(&e), "", "Shift+Tab must NOT insert a tab");
+        assert_eq!(
+            ev,
+            Event::KeyDown(shift_tab),
+            "Shift+Tab must survive uncleared — it bubbles to dialog back-tab nav"
+        );
+    }
+
     #[test]
     fn handle_event_char_left_command() {
         let mut e = ed();
@@ -2577,6 +2696,112 @@ mod tests {
             let bounds = e.state.get_bounds();
             let mut dc = DrawCtx::new(buf, &theme, bounds, bounds.a);
             e.draw(&mut dc);
+        });
+        insta::assert_snapshot!(screen.snapshot());
+    }
+
+    // -- Memo ----------------------------------------------------------------
+
+    fn memo() -> Memo {
+        Memo::new(Rect::new(0, 0, 40, 10), None, None, None, 1024)
+    }
+
+    #[test]
+    fn memo_value_set_value_round_trip() {
+        let mut m = memo();
+        m.set_value(crate::data::FieldValue::Text("hello\nworld".into()));
+        assert_eq!(
+            m.value(),
+            Some(crate::data::FieldValue::Text("hello\nworld".into()))
+        );
+    }
+
+    #[test]
+    fn memo_set_value_non_text_is_noop() {
+        let mut m = memo();
+        m.set_value(crate::data::FieldValue::Text("initial".into()));
+        m.set_value(crate::data::FieldValue::Int(7));
+        assert_eq!(
+            m.value(),
+            Some(crate::data::FieldValue::Text("initial".into()))
+        );
+    }
+
+    #[test]
+    fn memo_tab_swallowed_not_cleared() {
+        let mut m = memo();
+        let mut cx = Cx::new();
+        // Plain Tab: Memo swallows it (returns without clearing) — dialog can use it.
+        let mut ev = Event::KeyDown(crate::event::KeyEvent::from(crate::event::Key::Tab));
+        {
+            let mut ctx = cx.ctx();
+            m.handle_event(&mut ev, &mut ctx);
+        }
+        // The event must still be a Tab KeyDown (not consumed / not cleared).
+        assert_eq!(
+            ev,
+            Event::KeyDown(crate::event::KeyEvent::from(crate::event::Key::Tab)),
+            "plain Tab must NOT be consumed by Memo"
+        );
+        // The buffer must still be empty (Tab was not inserted).
+        assert_eq!(text(&m.editor), "", "Tab must not insert text");
+
+        // A plain printable char IS forwarded and inserts text.
+        let mut ev2 = Event::KeyDown(key(crate::event::Key::Char('x')));
+        {
+            let mut ctx = cx.ctx();
+            m.handle_event(&mut ev2, &mut ctx);
+        }
+        assert!(
+            ev2.is_nothing(),
+            "printable char must be consumed by editor"
+        );
+        assert_eq!(text(&m.editor), "x", "char 'x' must be inserted");
+    }
+
+    /// Memo only swallows *plain* Tab; Shift+Tab is forwarded to the editor,
+    /// which (post-fix) treats it as non-insertable — so no `\t` is written and
+    /// it bubbles to the dialog for backward focus navigation.
+    #[test]
+    fn memo_shift_tab_does_not_insert() {
+        let mut m = memo();
+        let mut cx = Cx::new();
+        let shift_tab = crate::event::KeyEvent::new(
+            crate::event::Key::Tab,
+            crate::event::KeyModifiers {
+                shift: true,
+                ..Default::default()
+            },
+        );
+        let mut ev = Event::KeyDown(shift_tab);
+        {
+            let mut ctx = cx.ctx();
+            m.handle_event(&mut ev, &mut ctx);
+        }
+        assert_eq!(text(&m.editor), "", "Shift+Tab must NOT insert text");
+        assert_eq!(
+            ev,
+            Event::KeyDown(shift_tab),
+            "Shift+Tab must survive uncleared — it bubbles to dialog back-tab nav"
+        );
+    }
+
+    #[test]
+    fn memo_snapshot() {
+        use crate::backend::{HeadlessBackend, Renderer};
+        use crate::screen::Buffer;
+        use crate::theme::Theme;
+
+        let theme = Theme::classic_blue();
+        let mut m = Memo::new(Rect::new(0, 0, 20, 4), None, None, None, 1024);
+        m.set_value(crate::data::FieldValue::Text("line one\nline two".into()));
+
+        let (backend, screen) = HeadlessBackend::new(20, 4);
+        let mut r = Renderer::new(Box::new(backend));
+        r.render(|buf: &mut Buffer| {
+            let bounds = m.editor.state.get_bounds();
+            let mut dc = DrawCtx::new(buf, &theme, bounds, bounds.a);
+            m.draw(&mut dc);
         });
         insta::assert_snapshot!(screen.snapshot());
     }

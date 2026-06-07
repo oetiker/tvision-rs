@@ -15,7 +15,7 @@
 
 ## Current state
 
-- **HEAD `9d601a7`+ (row 66 core lands this session).** Build: **752 lib tests** green; `cargo clippy --workspace
+- **HEAD `3a3661b`+ (row 67 `TMemo` lands this session).** Build: **758 lib tests** green; `cargo clippy --workspace
   --all-targets -- -D warnings` and `cargo fmt --all --check` clean (verify clippy
   with a forced re-lint — a cached run can mask a fresh warning).
 - **Cargo workspace** (`tvision` + `tvision-macros`) — use `--workspace` for
@@ -36,17 +36,24 @@
   wrapper in `src/text.rs`; the `TStreamable` resource-stream machinery dropped),
   and **row 66 (`TEditor`) core** — gap-buffer editor, nav, edit, undo, selection,
   draw, search, keyboard+clipboard; (find/replace dialogs + mouse-drag + context
-  menu + clipboard-editor deferred — see row-66 deferrals below).
+  menu + clipboard-editor deferred — see row-66 deferrals below),
+  and **row 67 (`TMemo`)** — a D2 embed-delegate wrapper over `Editor`
+  (`#[delegate(to = editor)]`, no skip — `as_any_mut` delegates so the editor's
+  pump brokers reach through a `Memo`); overrides Tab-swallow + D10
+  `value`/`set_value` (new inherent `Editor::set_text`); `dataSize`/`getPalette`
+  dropped (D10/D7). Fixed a latent row-66 editor bug along the way (Shift+Tab was
+  wrongly insertable — `kbShiftTab` charCode 0 must not insert).
   The `#[delegate]` proc-macro is landed and adopted codebase-wide.
 
 ## Next — lowest-numbered remaining work
 
-**Row 66 `TEditor` core is ◑ this session.** The next porting row is **67
-`TMemo`** (MECHANICAL — single-field editor embedding `Editor`, typed value D10).
-Rows 67/68/69 build on the editor core; they do **not** structurally require the
-deferred row-66 sub-features (the clipboard-editor branch and find/replace dialogs
-wire in at row 69 and when std dialogs land). Two non-gating seams remain
-available before or alongside the `TMemo`/editor family:
+**Row 67 `TMemo` is ✅ this session.** The next porting row is **68
+`TFileEditor`** (MECHANICAL — `TEditor` subclass with load/save file backing,
+`tfiledtr.cpp`), then **69 `TEditWindow`** (`TWindow` owning a `TFileEditor` +
+scrollbars + `TIndicator`, where the deferred row-66 clipboard-editor branch and
+find/replace dialogs wire in). They do **not** structurally require the other
+deferred row-66 sub-features. Two non-gating seams remain available before or
+alongside the editor family:
 
 1. **The `ModalFrame` deliver-outside-to-modal seam** (row 56/57 deferred — STILL
    OPEN). Un-defers the `HistoryWindow` outside-click `endModal(cmCancel)`. **NOT a
