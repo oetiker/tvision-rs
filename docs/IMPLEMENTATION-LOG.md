@@ -5,6 +5,43 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## Session — file-dialog data classes (rows 71–74) — batched, collections→Vec
+
+Rows 71–74 (`TDirEntry`/`TDirCollection`/`TSearchRec`/`TFileCollection`,
+`stddlg.h`/`tfilecol.cpp`). 781→795 lib tests (+14). **Rows 71–74 ✅.** The four
+`TFileDialog` data-support classes — pure data (no draw/events), so **batched into
+one cycle** (`src/dialog/filedlg.rs`) with a single combined review.
+
+- **They collapse hard under the "collections → `Vec`" deviation** (rstv has no
+  `TCollection`). The batch is really *two structs + one comparator + one sorted
+  insert*:
+  - `DirEntry { display_text, directory }` (71) + `text()`/`dir()` accessors.
+  - `SearchRec { attr:u8, time:i32, size:i32, name:String }` (73) — the DOS
+    metadata record; `attr`/`time`/`size` are populated by the (deferred)
+    filesystem-reading layer in `TFileList`/`TFileDialog` (breadcrumbed).
+  - `DirCollection = Vec<DirEntry>` (72) — a bare **type alias**; the C++
+    type-safe `TCollection` wrapper API is dropped (row 75 needs only
+    push/index/len).
+  - `FileCollection` (74) — a `Vec<SearchRec>` newtype holding the one piece of
+    real logic: a **verbatim** `search_rec_compare` (`".."` last, directories
+    after files, else case-SENSITIVE `strcmp`/byte order) + a sorted `insert`
+    (`partition_point` by the comparator). The unused `TSortedCollection` API
+    (indexOf/remove/atPut/firstThat/…) is dropped — no consumer.
+- **The comparator is the only non-obvious bit** (the `".."` and dir-vs-file
+  tiebreaks). Tests assert the **sign of each branch in isolation** (not a
+  reconstructed display order), plus the sorted-insert invariant and
+  case-sensitivity (`'Z'` < `'a'`). A doctest demonstrates `".."` sorting last.
+- **Row 75 (`TDirListBox`) deliberately NOT batched** — it is a design cycle, not
+  mechanical: owner-coupled to the unported `TChDirDialog` (`setState` downcasts
+  the owner to poke its `chDirButton`; `selectItem` messages the owner `cmChangeDir`
+  **carrying a `DirEntry` payload** — which rstv's payload-less `Broadcast` can't
+  carry directly), DOS-drive-specific (`showDrives` walks A:–Z:; Linux has no drive
+  letters → the root behavior must be *designed*), and it holds `Vec<DirEntry>` (not
+  `Vec<String>`) overriding `get_text` — exactly the row-70 "make `get_key`/`get_text`
+  overridable" breadcrumb coming due.
+- **Verification.** 795 lib tests green (+ the doctest); `clippy --all-targets -D
+  warnings` (forced) + `fmt --check` clean. Unit tests only (pure data, nothing draws).
+
 ## Session — `TSortedListBox` (row 70) — type-to-search list, no collection
 
 Row 70 (`TSortedListBox`, `stddlg.cpp`). 773→781 lib tests (+8). **Row 70 ✅.**

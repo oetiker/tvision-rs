@@ -15,7 +15,7 @@
 
 ## Current state
 
-- **HEAD `c382205`+ (rows 67–70 land this session: `TMemo`/`TFileEditor`/`TEditWindow`/`TSortedListBox`).** Build: **781 lib tests** green; `cargo clippy --workspace
+- **HEAD `5ba56be`+ (rows 67–74 land this session: `TMemo`/`TFileEditor`/`TEditWindow`/`TSortedListBox` + the file-dialog data classes 71–74).** Build: **795 lib tests** green; `cargo clippy --workspace
   --all-targets -- -D warnings` and `cargo fmt --all --check` clean (verify clippy
   with a forced re-lint — a cached run can mask a fresh warning).
 - **Cargo workspace** (`tvision` + `tvision-macros`) — use `--workspace` for
@@ -58,23 +58,42 @@
   and **row 70 (`TSortedListBox`)** — a D2 embed-delegate `SortedListBox` over
   `ListBox` with type-to-search incremental search over a case-insensitively-sorted
   `Vec<String>` (no generic `TSortedCollection`; the `curString`-re-seed model +
-  delegate→reset→gate sequence ported faithfully). Begins the std/file-dialog family.
-  The `#[delegate]` proc-macro is landed and adopted codebase-wide.
+  delegate→reset→gate sequence ported faithfully),
+  and **rows 71–74 (file-dialog data classes)** — `DirEntry`/`SearchRec` structs,
+  `DirCollection = Vec<DirEntry>` alias, and `FileCollection` (`Vec<SearchRec>` +
+  verbatim `search_rec_compare` + sorted insert) in `src/dialog/filedlg.rs` (pure
+  data; collections→Vec; batched). The `#[delegate]` proc-macro is landed and adopted codebase-wide.
 
 ## Next — lowest-numbered remaining work
 
-**Rows 67–70 are ✅ this session** (the `TEditor` family 66–69 is complete; row 70
-`TSortedListBox` begins the std/file-dialog family). The next porting row is **71
-`TDirEntry`** (`stddlg.h` inline — a tiny dir-display/path pair), then **72
-`TDirCollection`** (owns `TDirEntry`s), **73 `TSearchRec`** (file-metadata record),
-**74 `TFileCollection`** (owns `TSearchRec`s), **75 `TDirListBox`** (a
-`TSortedListBox` subclass over `TDirCollection`, with tree glyphs). These are the
-`TFileDialog` support classes. Row 75 is where `SortedListBox`'s `get_key`/`get_text`
-override hooks get exercised (it currently has identity `get_key` + the inner
-`ListBox`'s string `get_text` — a subclass needing a different sort-key vs display
-will need those made overridable; **breadcrumb to revisit at row 75**). Once
-`TFileDialog` itself lands, it **un-blocks** `FileEditor::saveAs` and thereby
-`EditWindow`'s dynamic-title (`cmUpdateTitle`) path.
+**Rows 67–74 are ✅ this session.** The next porting row is **75 `TDirListBox`**
+(`tdirlist.cpp`) — and it is **NOT mechanical despite its tag; treat it as an
+Opus/main-thread design cycle.** It builds the directory-tree pane and surfaces
+three real design problems (all confirmed against the C++):
+
+1. **Owner-coupled to the unported `TChDirDialog`.** `setState` does
+   `((TChDirDialog*)owner)->chDirButton->makeDefault(...)` (a downcast to a type
+   that doesn't exist) and `selectItem` does `message(owner, cmChangeDir,
+   list()->at(item))` — **a command carrying a `DirEntry` payload**, which rstv's
+   payload-less `Event::Broadcast { command, source }` cannot carry. This is a
+   design problem (a typed-payload command seam), not a translation. Decide:
+   port 75 standalone with these owner-interactions breadcrumbed, or do it
+   **jointly with `TChDirDialog`** so it has a real consumer.
+2. **DOS-drive-specific.** `showDrives` walks A:–Z: via `getdisk`/`driveValid`
+   (C++ already `#if !defined(_TV_UNIX)`-guards the "Drives" entry). On Linux
+   there are no drive letters — the root ("/") behavior must be **designed**, not
+   ported.
+3. **It holds `Vec<DirEntry>` (not `Vec<String>`) and overrides `get_text`** —
+   exactly the row-70 breadcrumb coming due: `SortedListBox`/`ListBox`'s
+   `get_text`/`get_key` are currently fixed to the inner `Vec<String>`. `TDirListBox`
+   subclasses **`TListBox`** (not `TSortedListBox`), so it needs an overridable
+   `get_text` over its own `Vec<DirEntry>` — likely a small refactor of the
+   list-viewer item-source seam.
+
+After 75: `TFileList`/`TFileDialog`/`TChDirDialog` (consuming 71–74's
+`FileCollection`/`SearchRec` + 75's `TDirListBox`) + the filesystem-read layer
+that populates `SearchRec`. Once `TFileDialog` lands it **un-blocks**
+`FileEditor::saveAs` and `EditWindow`'s dynamic-title (`cmUpdateTitle`) path.
 
 > **Highest-leverage seam to pick up (noted, not a redirect): the
 > async-modal-from-a-view seam.** It is the shared unblocker for *three* pending
@@ -120,8 +139,8 @@ relevant prerequisites land):
    `EditWindow::close`'s `isClipboard→hide` branch is breadcrumbed for it.
 5. `TStreamable` write/read/build (D12).
 
-Phase 5 then continues in PORT-ORDER with **71–75** (the `TFileDialog` support
-classes), then `TFileDialog`/`TChDirDialog` and the color / outline families.
+Phase 5 then continues in PORT-ORDER with **75** (`TDirListBox`), then
+`TFileList`/`TFileDialog`/`TChDirDialog` and the color / outline families.
 `cmDosShell` is still deferred — needs a backend terminal-suspend seam + SIGTSTP.
 
 ## What this session left available / changed
