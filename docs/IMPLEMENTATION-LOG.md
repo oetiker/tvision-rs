@@ -9,8 +9,10 @@
 
 Landed **row 80 `TChDirDialog`** (`ChDirDialog`) — the change-directory dialog —
 completing the file-dialog family. One fresh-implementer (Opus) → two-stage
-review (spec ✅ then quality ✅) → fix → integrate → commit cycle. 868 → **881 lib
-tests** (+13). The orchestrator owned the shared-file foundation edits directly
+review (spec ✅ then quality ✅) → fix → integrate → commit cycle. 868 → **882 lib
+tests** (+14, incl. a pump-level integration test exercising the real
+`MakeButtonDefault` broker arm end-to-end). The orchestrator owned the shared-file
+foundation edits directly
 (per CLAUDE.md), the implementer owned `filedlg.rs`.
 
 ### The new FOUNDATION seam: the makeDefault broker (D3)

@@ -17,7 +17,7 @@
 
 - **HEAD = row 80 `TChDirDialog` (`ChDirDialog`) — COMPLETE, landed this session
   on top of the 77/78/79 filedlg cluster. The file-dialog family (75–80) is now
-  finished.** See the IMPLEMENTATION-LOG top section. Build: **881 lib tests**
+  finished.** See the IMPLEMENTATION-LOG top section. Build: **882 lib tests**
   green; `cargo clippy --workspace --all-targets -- -D warnings` and
   `cargo fmt --all --check` clean (verify clippy with a forced re-lint — a cached
   run can mask a fresh warning).
