@@ -1,0 +1,29 @@
+---
+source: src/dialog/filedlg.rs
+expression: "render_dlb(&mut dlb, 30, 8)"
+---
+size: 30x8
+cursor: hidden
+text:
+| └─┬/                         |
+|   └─┬home                    |
+|     └─┬oetiker               |
+|       └┬─projects            |
+|        ├─scratch             |
+|        └─tmp                 |
+|                              |
+|                              |
+attr:
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb|
+|cccccccccccccccccccccccccccccc|
+|bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb|
+|bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb|
+|bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb|
+|bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb|
+|bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb|
+legend:
+  . default
+  a fg=BIOS(15) bg=BIOS(1)
+  b fg=BIOS(7) bg=BIOS(1)
+  c fg=BIOS(0) bg=BIOS(3)

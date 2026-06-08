@@ -43,7 +43,7 @@ mod msgbox;
 
 pub use dialog::Dialog;
 pub use filedlg::{
-    DirCollection, DirEntry, FA_DIREC, FileCollection, SearchRec, search_rec_compare,
+    DirCollection, DirEntry, DirListBox, FA_DIREC, FileCollection, SearchRec, search_rec_compare,
 };
 pub use msgbox::{MessageBoxButtons, MessageBoxKind};
 pub(crate) use msgbox::{build_input_box, build_message_box};

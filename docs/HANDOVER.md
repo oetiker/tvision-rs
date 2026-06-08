@@ -15,11 +15,11 @@
 
 ## Current state
 
-- **HEAD = the async-modal-from-a-view seam (a FOUNDATION detour, landed this
-  session — see the IMPLEMENTATION-LOG top section).** Build: **802 lib tests**
-  green; `cargo clippy --workspace --all-targets -- -D warnings` and `cargo fmt
-  --all --check` clean (verify clippy with a forced re-lint — a cached run can mask
-  a fresh warning).
+- **HEAD = row 75 `TDirListBox` (`DirListBox`) + deviation D14 (native Linux `/`
+  paths), landed this session — see the IMPLEMENTATION-LOG top section.** Build:
+  **810 lib tests** green; `cargo clippy --workspace --all-targets -- -D warnings`
+  and `cargo fmt --all --check` clean (verify clippy with a forced re-lint — a
+  cached run can mask a fresh warning).
 - **Cargo workspace** (`tvision` + `tvision-macros`) — use `--workspace` for
   test/clippy/fmt. Artifacts land in
   `CARGO_TARGET_DIR=/home/oetiker/scratch/cargo-target` (export it). `cargo build
@@ -74,48 +74,87 @@
   `View::valid(&mut self, cmd, ctx)` signature change). **Retired three consumer
   clusters:** all 5 validator `error()` boxes, `FileEditor::valid`'s Yes/No/Cancel
   modified-save prompt, and `FileEditor` save-error boxes (design note:
-  `docs/design/async-modal-from-view.md`). The `#[delegate]` proc-macro is landed and adopted codebase-wide.
+  `docs/design/async-modal-from-view.md`),
+  and **row 75 (`TDirListBox`)** — `DirListBox`, a **direct `ListViewer` impl** over
+  `Vec<DirEntry>` (NOT a D2 delegate — a delegate would consult `ListBox`'s
+  `Vec<String>` `get_text`); introduced **deviation D14 (native Linux `/` paths)**:
+  `showDrives`/drive-letters/"Drives"/`\` dropped, `showDirs` → a pure
+  `build_tree` (root `/` + `/`-segment ancestors + sorted `read_dir` subdirs,
+  dotfiles skipped, symlinks followed) split from the FS read for
+  snapshot-testability, faithful unconditional last-entry glyph fix-up; `select_item`
+  payload-command + `set_state` `chDirButton` poke breadcrumbed → row 80. The
+  `#[delegate]` proc-macro is landed and adopted codebase-wide.
 
-## Next — resume PORT-ORDER at row 75 `TDirListBox`
+## Next — resume PORT-ORDER at row 76 `TFileList`
 
-**The async-modal-from-a-view detour is DONE** (landed this session; design note
-`docs/design/async-modal-from-view.md`, narrative in the IMPLEMENTATION-LOG top
-section). Resume the normal "lowest-numbered incomplete row" rule → **row 75**.
+**Row 75 `TDirListBox` is DONE** (landed this session; D14 + the design cycle in
+the IMPLEMENTATION-LOG top section). Resume the normal "lowest-numbered incomplete
+row" rule → **row 76**.
 
-**Seam leftovers worth knowing (two documented interims):**
-- **cmQuit veto.** `valid_end`'s app-quit path now *vetoes* close of a modified
+### The filedlg cluster (rows 76–80) — all inherit deviation D14 (native `/`)
+**D14 is now the law for this whole cluster** (PORTING-GUIDE): `/`-separated paths,
+root `/`, NO drives/`\`/"Drives" entry; FS reads via `std::fs` (follow symlinks,
+like magiblot's `stat`). No `\`↔`/` translation seam anywhere.
+
+- **Row 76 `TFileList`** (`tfillist.cpp`, subclass of `TSortedListBox`): owns the
+  row-74 `FileCollection` (`Vec<SearchRec>` + `search_rec_compare`); **reads a
+  directory** (the `readDirectory`/`findfirst(FA_DIREC|find-files)` loop → a
+  `std::fs::read_dir` populating `SearchRec` — the fs-read layer breadcrumbed at
+  rows 73/74 lands here). `getText` formats name + size/date columns; `..` handling.
+  Like row 75, expect owner-coupling to `TFileDialog` (`cmFileFocused`/
+  `cmFileDoubleClicked` broadcasts) — **breadcrumb the owner messages to row 79** if
+  payload-carrying, same pattern as row 75's `select_item`.
+  - **⚠ NOT a routine MECHANICAL leaf — the row-70/75 item-source seam comes fully
+    due here.** `TFileList` stores `Vec<SearchRec>` with an overridden `getText`, so
+    (like row 75) it **cannot be a D2 delegate** over `SortedListBox` — it must be a
+    **direct `ListViewer` impl** over `Vec<SearchRec>`. But unlike `DirListBox` it
+    *also* needs `SortedListBox`'s **incremental type-to-search**, which today lives
+    *inside* `SortedListBox` operating on its inner `ListBox`'s `Vec<String>`. A
+    plain direct impl would have to **duplicate** that search. **Before implementing
+    76, extract `SortedListBox`'s search** (the `curString` re-seed + binary search,
+    `src/widgets/list_box.rs`) into a **free function over the `ListViewer` trait**
+    (mirroring `list_viewer::draw`/`handle_event`), so `FileList` is a direct
+    `ListViewer` impl over `Vec<SearchRec>` *and* gets search for free. This is the
+    deferred "list-viewer item-source seam refactor" — a FOUNDATION sub-step, not a
+    leaf. (`get_key`/`shift_state` breadcrumbs in `list_box.rs` were left for this.)
+- Then **77 `TFileInputLine`**, **78 `TFileInfoPane`**, **79 `TFileDialog`**
+  (assembles 76+77+78+buttons), **80 `TChDirDialog`** (assembles `TInputLine` +
+  the row-75 `DirListBox` + buttons).
+
+### Row 80 will need the typed-payload-command seam (row 75 breadcrumbs come due)
+Row 75 left two owner-coupling breadcrumbs that **row 80 `TChDirDialog` must
+resolve** (it is their only consumer — the seam is designed here, at first use):
+1. **`DirListBox::select_item`** must deliver `cmChangeDir` **carrying the chosen
+   `DirEntry`** to the owner. rstv's `Event::Broadcast { command, source }` is
+   payload-less — design a typed-payload command path (a new `Deferred`/event
+   variant carrying the `DirEntry`, brokered by the pump to the owner, OR resolve
+   the chosen entry by id at apply-time). Same shape will recur for row 79's
+   `TFileList` → `TFileDialog` messages.
+2. **`DirListBox::set_state`** must, on `sfFocused` change, `makeDefault(enable)`
+   the owner `TChDirDialog`'s `chDirButton` — needs the owner-downcast + button
+   default seam.
+Both are `TODO(row 80 TChDirDialog)` in `src/dialog/filedlg.rs`.
+
+**Precondition footgun:** `DirListBox::build_tree`/`new_directory` assume `dir`
+ends with `/` (the ancestor walk is robust to a missing slash, but subdir nav
+paths silently malform — `/home/oetikerprojects` — without it). When row 80 wires
+the caller, either guarantee the trailing `/` or add the 1-line normalize at the
+top of `new_directory`: `let dir = if dir.ends_with('/') { dir.to_string() } else
+{ format!("{dir}/") };`.
+
+Once **`TFileDialog` (row 79)** lands it **un-blocks** `FileEditor::saveAs` and
+`EditWindow`'s dynamic-title (`cmUpdateTitle`) path.
+
+**Editor seam leftovers (still open, latent):**
+- **cmQuit veto.** `valid_end`'s app-quit path *vetoes* close of a modified
   `FileEditor` **without a prompt** (the orphaned box is dropped, not leaked). C++
   prompts on quit; doing so needs a **whole-tree inline drive** (every modified
   editor prompts), not the single-id `validate_modal_close`. Deferred — **latent**
-  (no runnable app wires a `FileEditor` yet). Pick this up when an editor app
-  exists; the fix is a whole-tree analogue of `validate_modal_close`. *(If a quit
-  prompt is wanted before that, the cheap alternative is to gate `FileEditor::valid`'s
-  prompt to `cmd == cmClose` so cmQuit reverts to allow-close — the spec reviewer's
-  advisory.)*
-- **Still breadcrumbed:** `saveAs`/`edSaveAs` (needs `TFileDialog`),
+  (no runnable app wires a `FileEditor` yet); the fix is a whole-tree analogue of
+  `validate_modal_close`. *(Cheap interim if a quit prompt is wanted sooner: gate
+  `FileEditor::valid`'s prompt to `cmd == cmClose` so cmQuit reverts to allow-close.)*
+- **Still breadcrumbed:** `saveAs`/`edSaveAs` (needs `TFileDialog`, row 79),
   `edReadError` on **load** (the ctor has no `ctx`).
-
-### Row 75 `TDirListBox` — NOT mechanical despite its tag (an Opus/main-thread design cycle)
-Three real problems (confirmed against the C++):
-1. **Owner-coupled to the unported `TChDirDialog`.** `setState` downcasts the owner
-   to poke `chDirButton->makeDefault(...)`; `selectItem` does `message(owner,
-   cmChangeDir, list()->at(item))` — **a command carrying a `DirEntry` payload**,
-   which rstv's payload-less `Event::Broadcast { command, source }` cannot carry.
-   A typed-payload-command design problem, not a translation. Decide: port 75
-   standalone with owner-interactions breadcrumbed, or jointly with `TChDirDialog`.
-2. **DOS-drive-specific.** `showDrives` walks A:–Z: via `getdisk`/`driveValid`
-   (C++ `#if !defined(_TV_UNIX)`-guards the "Drives" entry). On Linux there are no
-   drive letters — the root ("/") behavior must be **designed**, not ported.
-3. **Holds `Vec<DirEntry>` (not `Vec<String>`) and overrides `get_text`** — the
-   row-70 breadcrumb coming due: `ListBox`/`SortedListBox` `get_text`/`get_key`
-   are fixed to the inner `Vec<String>`; `TDirListBox` subclasses **`TListBox`** and
-   needs an overridable `get_text` over its own `Vec<DirEntry>` (a small
-   list-viewer item-source seam refactor).
-
-Then `TFileList`/`TFileDialog`/`TChDirDialog` (consuming 71–74's
-`FileCollection`/`SearchRec` + 75's `TDirListBox`) + the filesystem-read layer that
-populates `SearchRec`. Once `TFileDialog` lands it **un-blocks** `FileEditor::saveAs`
-and `EditWindow`'s dynamic-title (`cmUpdateTitle`) path.
 
 ### Other non-gating seam still open (independent of the above)
 - **The `ModalFrame` deliver-outside-to-modal seam** (row 56/57 deferred — STILL

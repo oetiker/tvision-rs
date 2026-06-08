@@ -5,6 +5,64 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## Session — row 75 `TDirListBox` + deviation D14 (native Linux `/` paths)
+
+Ported **row 75 `TDirListBox`** as `DirListBox` in `src/dialog/filedlg.rs`.
+802→810 lib tests (+8). The HANDOVER flagged this row as *not* mechanical despite
+its tag — three real problems, resolved as follows.
+
+**The design decision — deviation D14 (native Linux `/` paths).** The C++
+file-dialog cluster (rows 75–80) is DOS-flavored: `\` separators, A:–Z: drive
+letters, a "Drives" tree entry, `getdisk`/`driveValid`. magiblot keeps `\` in the
+TV layer and translates at the syscall boundary (`path_dos2unix`), emulating a
+single disk on UNIX. rstv is a **native-Linux** port → **D14** (new, documented in
+PORTING-GUIDE Baseline→Deviation→Integration): paths are `/`-separated, the tree
+root is `/`, `showDrives`/drive-letters/the "Drives" entry are **dropped**, subdirs
+come from `std::fs::read_dir`. D14 is inherited by all of rows 75–80 — one
+`/`-native path model, no `\`↔`/` translation seam anywhere. *(User-confirmed the
+native-`/` direction over a faithful-DOS port, which would be unusable on Linux.)*
+
+**Problem 1 — owner-coupling to the unported `TChDirDialog` (row 80).** C++
+`selectItem` does `message(owner, cmChangeDir, list()->at(item))` — a command
+**carrying a `DirEntry` payload**, which rstv's payload-less `Event::Broadcast {
+command, source }` cannot carry; `setState` downcasts the owner to poke
+`chDirButton->makeDefault`. Both **breadcrumbed as no-ops with a row-80 TODO** (the
+typed-payload-command seam is designed at its first consumer — row 80 — not
+speculatively now). `set_state` still performs the base `list_viewer::set_state`.
+
+**Problem 2 — the `get_text`-over-`Vec<DirEntry>` seam.** `TDirListBox` subclasses
+`TListBox` but holds a `Vec<DirEntry>` (not `Vec<String>`) and overrides `getText`.
+In rstv this **cannot** be a D2 embed-delegate: a delegated `View::draw` would run
+with the inner `ListBox` as `self` and call *its* `get_text` over `Vec<String>`,
+never consulting the `Vec<DirEntry>`. So `DirListBox` is a **second, parallel
+direct `ListViewer` impl** over its own storage (exactly as `ListBox` is over
+`Vec<String>`) — `lv`/`lv_mut` + overridden `get_text`/`is_selected`/`select_item`,
+delegating all `View` methods to the `list_viewer` free fns. The row-70 "fixed to
+`Vec<String>`" breadcrumb was about *delegation*; a direct impl sidesteps it.
+
+**The tree builder.** The DOS `showDirs` (pointer-arithmetic over a space-filled
+buffer) is ported to a **pure `build_tree(dir, subdirs) -> (Vec<DirEntry>, cur)`**
+split from the `read_dir` FS read (the editor "ctx-threading split" pattern → the
+tree is snapshot-testable without the filesystem). `dir` arrives with a trailing
+`/`; entries = root `└─┬/` (indent 0) + each `/`-segment ancestor (indent 2,4,…,
+`directory` = absolute path, no trailing slash) + the immediate subdirs (`└┬─`
+first, ` ├─` rest, indent = cur-depth+2). The **last-entry glyph fix-up** is
+faithful to the C++ byte surgery on `dirs->at(getCount()-1)` and runs
+**unconditionally**: `└…`→the two chars after `└` become `──`, else `├`→`└`. The
+non-obvious case (a first pass got wrong): with **no subdirs** the last entry is
+the deepest ancestor, so `└─┬name`→`└──name` (a leaf corner). Subdir enumeration
+**follows symlinks** (`std::fs::metadata`, not lstat-based `file_type()`) to match
+magiblot's `findfirst`/`cvtAttr` `stat()`. Two snapshot tests (focused==cur and
+focused≠cur) lock the rendered tree and prove `is_selected` (the *current dir*,
+not the cursor) is wired through draw.
+
+**Process.** Subagent-driven: Sonnet implementer → fresh Opus spec-compliance +
+code-quality reviewers (parallel) → fix round → integrate. Spec review found one
+faithfulness bug (the unconditional fix-up — the brief's error) and confirmed one
+subtle divergence (symlink-following), both fixed; quality review trimmed
+`build_tree` to private, doc-breadcrumbed the write-only `dir` field, and applied
+minor doc/format tidies.
+
 ## Session — the async-modal-from-a-view seam (FOUNDATION detour, before row 75)
 
 A deliberate PORT-ORDER detour (decided in HANDOVER): build the

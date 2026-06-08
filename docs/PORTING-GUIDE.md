@@ -710,6 +710,38 @@ blank continuation cell.
 
 ---
 
+## D14 — DOS drives/backslash paths → native Linux `/` filesystem · *moderate*
+
+**Baseline.** The file-dialog cluster (`TDirListBox`, `TFileList`, `TFileDialog`,
+`TChDirDialog`; rows 75–80) is DOS-flavored: backslash (`\`) separators, A:–Z:
+drive letters, a literal **"Drives"** tree entry, `getdisk`/`driveValid`/
+`getcurdir`. magiblot keeps `\`-style strings inside the TV layer and translates
+to `/` at the syscall boundary (`path_dos2unix` in `source/platform/findfrst.cpp`),
+emulating a *single* disk on UNIX; it already `#if !defined(_TV_UNIX)`-drops the
+"Drives" entry on UNIX.
+
+**Deviation.** rstv is a **native-Linux** port — model paths as Linux paths
+end-to-end, no DOS layer to translate:
+- **Separator is `/`**, never `\`. The tree root is **`/`** (not `C:\`).
+- **No drives.** Drop `showDrives`, the `drives`/`"Drives"` entry, the A–Z scan,
+  `getdisk`/`driveValid`/`getcurdir`. `TDirListBox::newDirectory` has only the
+  `showDirs` branch.
+- **`showDirs` walks `/`-segments:** root `/` at the top, each ancestor directory
+  indented one extra level, then the current directory's immediate
+  subdirectories. Enumerate subdirs with **`std::fs::read_dir`** filtering to
+  directories, skipping names starting with `.`, sorted (case-insensitive, the
+  row-70 ordering). The DOS `findfirst(FA_DIREC)` loop → a `read_dir` filter.
+- **Tree glyphs** keep the C++ structure (`pathDir`/`firstDir`/`middleDir`/
+  `lastDir` connector strings + the last-entry `graphics` fix-up) but render via
+  D7 Theme glyphs (CP437 box-drawing → the project's Unicode box-drawing).
+
+**Integration.** Inherited by **all of rows 75–80** — they share one `/`-native
+path model; there is no `\`↔`/` translation seam anywhere. `pathValid`/`isDir`/
+`validFileName` (in `TFileList`/dialog rows) likewise become thin `std::fs`/
+`std::path` wrappers: root `/` is always valid; a path is valid if it `is_dir()`.
+
+---
+
 ## Vendoring & licensing
 
 - **ratatui** cell-buffer + diff is **copied** (not depended on) and adapted —
