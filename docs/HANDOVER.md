@@ -15,15 +15,20 @@
 
 ## Current state
 
-- **HEAD = row 79 `TFileDialog` (`FileDialog`) — row 79 COMPLETE, landed this
-  session as B1 (skeleton) + B2 (valid/path-logic), on top of rows 77
-  `TFileInputLine` + 78 `TFileInfoPane`. The whole filedlg consumer cluster
-  (77/78/79) is done — see the IMPLEMENTATION-LOG top section.** Build: **868 lib
-  tests** green (incl. a pump-level integration test exercising the real
-  `ResolveFocusedFile` broker arm end-to-end); `cargo clippy --workspace
-  --all-targets -- -D warnings` and
+- **HEAD = row 80 `TChDirDialog` (`ChDirDialog`) — COMPLETE, landed this session
+  on top of the 77/78/79 filedlg cluster. The file-dialog family (75–80) is now
+  finished.** See the IMPLEMENTATION-LOG top section. Build: **881 lib tests**
+  green; `cargo clippy --workspace --all-targets -- -D warnings` and
   `cargo fmt --all --check` clean (verify clippy with a forced re-lint — a cached
   run can mask a fresh warning).
+- **The makeDefault broker is now built** (FOUNDATION, row 80):
+  `Deferred::MakeButtonDefault { button, enable }` + `Context::make_button_default`
+  + a pump arm that downcasts `Button` and calls `make_default(enable, ctx)`.
+  `Button::make_default` is now `pub(crate)` and `Button::as_any_mut` returns
+  `Some(self)`. Reuse this for any future "a leaf view makes a sibling button the
+  default" need. The two row-75 `DirListBox` breadcrumbs are resolved (row 80 was
+  their only consumer): `select_item`→`ctx.post(cmChangeDir)` + the dialog reads
+  `focused_entry()`; `set_state`→the new broker.
 - **The payload-carrying-broadcast seam is now built** (FOUNDATION, row 77):
   `Deferred::ResolveFocusedFile { subscriber, source }` + a defaulted
   `ListViewer::on_focus_changed` hook (called at the `focus_item` tail — the
@@ -101,53 +106,25 @@
   payload-command + `set_state` `chDirButton` poke breadcrumbed → row 80. The
   `#[delegate]` proc-macro is landed and adopted codebase-wide.
 
-## Next — resume PORT-ORDER at row 80 `TChDirDialog`
+## Next — resume PORT-ORDER at row 81 (the color-selection family)
 
-**Rows 75–79 are DONE.** The filedlg consumer cluster (77/78/79) landed this
-session on top of 75/76 — see the IMPLEMENTATION-LOG top section. Resume the
-normal "lowest-numbered incomplete row" rule → **row 80 `TChDirDialog`**.
+**The file-dialog family (75–80) is DONE.** Resume the normal "lowest-numbered
+incomplete row" rule → **row 81 `TColorItem`/`TColorGroup`/`TColorIndex`**, the
+start of the **color-selection cluster (81–87, `colordlg`)**: pure data classes
+(81) → the `TView` leaves `TColorSelector`/`TColorDisplay` (82/83) →
+`TMonoSelector` (84, a `TCluster`) → the two `TListViewer`s
+`TColorGroupList`/`TColorItemList` (85/86) → `TColorDialog` (87) which assembles
+82–86 and edits a `TPalette`. Sources: `colorsel.h`/`colorsel.cpp` +
+`sclrsel.cpp`. Mostly MECHANICAL; the cluster interlocks (85/86 own 81's data,
+87 brokers selection across 82–86) so it is likely another small consumer
+cluster like 77–79. After it: the outline family (88–90) and the terminal
+family (91–92).
 
-### Row 80 `TChDirDialog` — the last filedlg row (inherits D14 native `/`)
-**D14 is the law** (PORTING-GUIDE): `/`-separated paths, root `/`, NO
-drives/`\`/"Drives" entry; FS reads via `std::fs` (follow symlinks). `TChDirDialog`
-(`tchdrdlg.cpp`, `schdrdlg.cpp`, `nmchdrdl.cpp`) is a `TDialog` assembling a
-`TInputLine` + the row-75 `DirListBox` + `Chdir`/`Revert`/`OK`/`Help` buttons.
-**Assembly precedent is now `FileDialog` (row 79)** — same `Dialog::insert_child` /
-ViewId-at-insertion / guarded-`reset_current`-init / `child_mut` owner→child
-pattern. Use it.
-
-**The two row-75 breadcrumbs that row 80 must resolve** (it is their only consumer):
-
-1. **`DirListBox::select_item`** must deliver `cmChangeDir` **carrying the chosen
-   `DirEntry`** to the owner. **The seam now exists** — row 79 built the
-   payload-carrying-broadcast pattern (`Deferred::ResolveFocusedFile` + the
-   `on_focus_changed`/broadcast-by-`source` shape). For `cmChangeDir`, mirror it:
-   `DirListBox::select_item` broadcasts a payload-less `CHANGE_DIR {source=self}`;
-   the `TChDirDialog` owner resolves the chosen `DirEntry` from the source by id
-   (a `DirListBox::focused_entry()` accessor, like `FileList::focused_rec()`) —
-   either via a broker arm or, since the dialog **owns** the group, directly with
-   `child_mut` in its `handle_event` (the row-79 owner→child precedent — simpler
-   than a broker). `CHANGE_DIR`/`REVERT` `Command`s are already minted (row 77).
-2. **`DirListBox::set_state`** must, on `sfFocused` change, `makeDefault(enable)`
-   the owner `TChDirDialog`'s `chDirButton` — the owner-downcast + button-default
-   seam. Again the dialog owns the group, so `child_mut` to the button + a
-   default-flag setter is the likely shape (no cross-view broker needed).
-
-Both are `TODO(row 80 TChDirDialog)` in `src/dialog/filedlg.rs`.
-
-**Precondition footgun (row 80):** `DirListBox::build_tree`/`new_directory` assume
-`dir` ends with `/` (the ancestor walk is robust to a missing slash, but subdir nav
-paths silently malform — `/home/oetikerprojects` — without it). When row 80 wires
-the caller, either guarantee the trailing `/` or add the 1-line normalize at the
-top of `new_directory`: `let dir = if dir.ends_with('/') { dir.to_string() } else
-{ format!("{dir}/") };`. (Row 79's `reset_current`/`valid` already apply exactly
-this normalize — reuse the pattern.)
-
-**`TFileDialog` (row 79) has landed → `FileEditor::saveAs` is now UNBLOCKED**
-(read the chosen filename from `FileDialog::value()` → `FieldValue::Text`), as is
-`EditWindow`'s dynamic-title (`cmUpdateTitle`) path. These consumers are still
-open (a separate follow-up, not row 80): wire `FileEditor::saveAs`/`edSaveAs` to
-exec a `FileDialog` and read its `value()`.
+**`FileEditor::saveAs` is UNBLOCKED** (row 79 `FileDialog` landed): read the chosen
+filename from `FileDialog::value()` → `FieldValue::Text`, as is `EditWindow`'s
+dynamic-title (`cmUpdateTitle`) path. Still open (a follow-up, not on the PORT-ORDER
+critical path): wire `FileEditor::saveAs`/`edSaveAs` to exec a `FileDialog` and read
+its `value()`.
 
 **Editor seam leftovers (still open, latent):**
 - **cmQuit veto.** `valid_end`'s app-quit path *vetoes* close of a modified

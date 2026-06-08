@@ -1592,6 +1592,23 @@ impl Program {
                                         fip.on_file_focused(rec);
                                     }
                                 }
+                                // -- row 80: TDirListBox → chDirButton makeDefault --
+                                //
+                                // The dir list (a leaf, D3) gained/lost focus and
+                                // wants its sibling chDirButton to grab/release the
+                                // default look. Resolve the button, downcast, and call
+                                // make_default(enable, ctx); its GRAB/RELEASE_DEFAULT
+                                // re-broadcast settles next pump (like EditorPaste).
+                                Deferred::MakeButtonDefault { button, enable } => {
+                                    use crate::widgets::Button;
+                                    if let Some(b) = group
+                                        .find_mut(button)
+                                        .and_then(|view| view.as_any_mut())
+                                        .and_then(|a| a.downcast_mut::<Button>())
+                                    {
+                                        b.make_default(enable, &mut ctx);
+                                    }
+                                }
                                 // -- the async-modal-from-a-view seam (handle_event paths) --
                                 //
                                 // A downward-borrowed `&mut View`'s valid() requested

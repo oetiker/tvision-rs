@@ -5,6 +5,73 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## Session — row 80 `TChDirDialog` (the last filedlg row)
+
+Landed **row 80 `TChDirDialog`** (`ChDirDialog`) — the change-directory dialog —
+completing the file-dialog family. One fresh-implementer (Opus) → two-stage
+review (spec ✅ then quality ✅) → fix → integrate → commit cycle. 868 → **881 lib
+tests** (+13). The orchestrator owned the shared-file foundation edits directly
+(per CLAUDE.md), the implementer owned `filedlg.rs`.
+
+### The new FOUNDATION seam: the makeDefault broker (D3)
+C++ `TDirListBox::setState` does `((TChDirDialog*)owner)->chDirButton->makeDefault(enable)`
+on every `sfFocused` change — focus the dir tree and the **Chdir** button becomes
+the default (Enter triggers it). The dir list is a leaf holding only `&mut Context`
+(D3), so it cannot reach its sibling button inline. New broker, the same shape as
+the row-77 `ResolveFocusedFile`:
+- **`Deferred::MakeButtonDefault { button, enable }`** (`view/context.rs`) +
+  `Context::make_button_default(button, enable)` convenience (mirrors
+  `request_focus`). The pump arm (`app/program.rs`) resolves `button`, downcasts to
+  `Button`, calls `make_default(enable, ctx)` — whose `cmGrabDefault`/`cmReleaseDefault`
+  re-broadcast settles next pump (like `EditorPaste`).
+- **`Button::make_default` is now `pub(crate)`** and **`Button::as_any_mut` returns
+  `Some(self)`** (so the broker can downcast a sibling button). Both behavior-
+  preserving additions to the leaf.
+
+### The two row-75 `DirListBox` breadcrumbs, resolved (row 80 is their only consumer)
+1. **`select_item`** (the dir-tree double-click/Enter) → `ctx.post(Command::CHANGE_DIR)`.
+   Faithful to C++ `message(owner, evCommand, cmChangeDir, …)`: a posted **command**,
+   not a broadcast — it unifies with the **Chdir** button press (also a `cmChangeDir`
+   command) into ONE `Event::Command(CHANGE_DIR)` handler arm. The dialog reads the
+   **focused** entry itself (`DirListBox::focused_entry()`, like `FileList::focused_rec()`),
+   ignoring any payload — exactly as the C++ dialog reads `dirList->focused`.
+2. **`set_state`** → on the `sfFocused` flag change, `ctx.make_button_default(chdir_button, enable)`
+   via the new broker. `DirListBox` gained a `chdir_button: Option<ViewId>` field (wired
+   after assembly by `set_chdir_button`); `None` outside a `TChDirDialog`, so it is a
+   no-op for any other owner.
+
+### `ChDirDialog` (D2 embed-and-delegate, the `FileDialog` precedent)
+Embeds a `Dialog`, `#[delegate(to = dialog, skip(…))]`, overrides only
+`handle_event`/`size_limits`/`reset_current`/`as_any_mut`/`valid`. Assembly verbatim
+from the C++ ctor (`TRect(16,2,64,20)`, `ofCentered`, dirInput + label + history +
+scrollbar + dirList + label + OK/Chdir/Revert/[Help] buttons in exact insertion
+order with grow modes). Key faithfulness points:
+- **`valid` does NOT chain to the base** `TDialog::valid` (unlike `FileDialog`) —
+  the C++ `TChDirDialog::valid` goes straight to the `cmOK` check: `fexpand` →
+  `trimEndSeparator` → **real** `chdir` (`std::env::set_current_dir`); on error an
+  informational "Invalid directory: '…'." box + keep-open.
+- **`handle_event`**: base first, then `cmRevert` (re-read **live** cwd) / `cmChangeDir`
+  (focused entry's path); the shared tail passes the **untrimmed** (trailing-`/`) path
+  to `new_directory` and the **trimmed** path to `dirInput`, then focuses the dir list
+  (`dirList->select()`) and clears.
+- **`reset_current`** = `setUpDialog` (one-time `needs_setup` guard, gated by
+  `(opts & cdNoLoadDir)==0`) + `selectNext(False)` (the base `reset_current` focuses
+  dirInput first).
+- **D10**: `dataSize()==0` → `value`/`set_value` skip-listed to the trait default
+  (`None`/no-op), NOT the inner Dialog's gather.
+- **D14**: native Linux `/` paths throughout — the `drivesText`/`driveValid`/`\\`
+  branches dropped; `trimEndSeparator`'s DOS `len>3` guard becomes `len>1` (protect
+  root `/`); `new_directory` trailing-`/`-normalizes its input at the top (protects the
+  new cwd-derived callers — the HANDOVER footgun).
+
+### Test isolation (process-global cwd)
+`valid`/`reset_current` touch the process cwd, and tests run multi-threaded in one
+binary. So: the `valid` test exercises ONLY the failure path (nonexistent absolute
+dir → `set_current_dir` errs, cwd untouched, one box queued); the snapshot test seeds
+a deterministic `build_tree` listing and sets the input by hand, never calling the
+cwd-reading `reset_current` — mirroring how row 79's `FileDialog` tests stayed
+deterministic.
+
 ## Session — the filedlg consumer cluster: rows 77 `TFileInputLine`, 78 `TFileInfoPane`, 79 `TFileDialog`
 
 Landed the **interlocked file-dialog cluster** (77 + 78 + 79) on top of row 76,

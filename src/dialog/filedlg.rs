@@ -258,6 +258,13 @@ pub struct DirListBox {
     /// base port** — like `SortedListBox::shift_state`, it is captured but has
     /// no reader until its consumer lands.
     dir: String,
+    /// The owner `TChDirDialog`'s `chDirButton` id, wired by
+    /// [`set_chdir_button`](DirListBox::set_chdir_button) after assembly. On an
+    /// `sfFocused` change, [`set_state`](DirListBox::set_state) requests the pump
+    /// make this button (un-)default — the C++ `setState`'s
+    /// `((TChDirDialog*)owner)->chDirButton->makeDefault(enable)`. `None` outside a
+    /// `TChDirDialog` (e.g. a `TFileDialog` never wires one).
+    chdir_button: Option<crate::view::ViewId>,
 }
 
 impl DirListBox {
@@ -279,12 +286,27 @@ impl DirListBox {
             items: Vec::new(),
             cur: 0,
             dir: String::new(),
+            chdir_button: None,
         }
     }
 
     /// The current item collection (`TDirListBox::list()`).
     pub fn list(&self) -> &[DirEntry] {
         &self.items
+    }
+
+    /// Wire the owner `TChDirDialog`'s `chDirButton` id (set after assembly, once
+    /// the button's id is known). Read only by [`set_state`](DirListBox::set_state)
+    /// to drive the C++ `chDirButton->makeDefault(enable)` on a focus change.
+    pub fn set_chdir_button(&mut self, id: crate::view::ViewId) {
+        self.chdir_button = Some(id);
+    }
+
+    /// The focused [`DirEntry`] (`list()->at(focused)`), or `None` when the list is
+    /// empty / `focused` is out of range. Read by `TChDirDialog::handleEvent`'s
+    /// `cmChangeDir` arm (the C++ reads `dirList->list()->at(dirList->focused)`).
+    pub fn focused_entry(&self) -> Option<&DirEntry> {
+        self.items.get(self.lv.focused as usize)
     }
 
     /// Pure tree-builder — ports the `showDirs` block of `TDirListBox::newDirectory`.
@@ -384,6 +406,16 @@ impl DirListBox {
     /// The only impure operation (filesystem read) is isolated here; all tree
     /// construction is in the pure `build_tree`.
     pub fn new_directory(&mut self, dir: &str, ctx: &mut crate::view::Context) {
+        // Normalize to a trailing `/` (build_tree's precondition). The row-80
+        // callers (`reset_current`/`cmRevert`) pass `std::env::current_dir()`,
+        // which has NO trailing slash; without this, `build_tree`'s segment
+        // joins and the subdir `dir + name` concatenation would mis-form paths.
+        let dir = if dir.ends_with('/') {
+            dir.to_string()
+        } else {
+            format!("{dir}/")
+        };
+        let dir = dir.as_str();
         self.dir = dir.to_string();
 
         // Read immediate subdirectories from the filesystem.
@@ -457,15 +489,17 @@ impl crate::widgets::list_viewer::ListViewer for DirListBox {
         item as usize == self.cur
     }
 
-    /// `TDirListBox::selectItem` — sends cmChangeDir carrying the chosen
-    /// [`DirEntry`] payload to the owner `TChDirDialog`.
+    /// `TDirListBox::selectItem` — `message(owner, evCommand, cmChangeDir,
+    /// list()->at(item))`: post `cmChangeDir` to the owner `TChDirDialog`.
     ///
-    /// TODO(row 80 TChDirDialog): selectItem sends cmChangeDir carrying the
-    /// chosen DirEntry payload to the owner. rstv's payload-less
-    /// Event::Broadcast can't carry it; design the typed-payload command seam
-    /// when TChDirDialog (the only consumer) lands.
-    fn select_item(&mut self, _item: i32, _ctx: &mut crate::view::Context) {
-        // Intentionally empty — see TODO above.
+    /// The C++ carries the chosen [`DirEntry`] as the command's `infoPtr`, but the
+    /// dialog's `cmChangeDir` handler ignores it and re-reads
+    /// `dirList->list()->at(dirList->focused)` itself — so the faithful rstv path
+    /// is just a payload-less posted command. `selectItem` runs on a
+    /// double-click/Enter, by which point `focused == item` (the list focuses an
+    /// item before selecting it), so the dialog reads the same entry.
+    fn select_item(&mut self, _item: i32, ctx: &mut crate::view::Context) {
+        ctx.post(crate::command::Command::CHANGE_DIR);
     }
 }
 
@@ -486,13 +520,16 @@ impl crate::view::View for DirListBox {
         crate::widgets::list_viewer::handle_event(self, ev, ctx);
     }
 
-    /// `TDirListBox::setState` — delegates to `list_viewer::set_state`, then (on
-    /// `sfFocused` change) would call `makeDefault(enable)` on the owner's
-    /// `chDirButton`.
+    /// `TDirListBox::setState` — `TListBox::setState(...)` then, on an `sfFocused`
+    /// change, `((TChDirDialog*)owner)->chDirButton->makeDefault(enable)`: the dir
+    /// list grabs the dialog's default button when focused and releases it when
+    /// not.
     ///
-    /// TODO(row 80 TChDirDialog): on sfFocused change, also makeDefault(enable)
-    /// the owner's chDirButton. Needs the owner-downcast + button seam; deferred
-    /// to TChDirDialog.
+    /// rstv (D3): the leaf list cannot poke its sibling button inline, so it
+    /// requests the change through the pump's
+    /// [`MakeButtonDefault`](crate::view::Deferred::MakeButtonDefault) broker via
+    /// [`Context::make_button_default`]. `chdir_button` is `None` outside a
+    /// `TChDirDialog`, so this is a no-op for any other owner.
     fn set_state(
         &mut self,
         flag: crate::view::StateFlag,
@@ -500,6 +537,11 @@ impl crate::view::View for DirListBox {
         ctx: &mut crate::view::Context,
     ) {
         crate::widgets::list_viewer::set_state(self, flag, enable, ctx);
+        if flag == crate::view::StateFlag::Focused
+            && let Some(btn) = self.chdir_button
+        {
+            ctx.make_button_default(btn, enable);
+        }
     }
 
     fn cursor_request(&self) -> Option<crate::view::Point> {
@@ -1551,6 +1593,23 @@ pub const FD_HELP_BUTTON: u16 = 0x0010;
 /// `fdNoLoadDir` — skip the initial `readDirectory` on open.
 pub const FD_NO_LOAD_DIR: u16 = 0x0100;
 
+// --- TChDirDialog options (row 80) -----------------------------------------
+
+/// `cdNormal` — no extra buttons, load the directory on open.
+pub const CD_NORMAL: u16 = 0x0000;
+/// `cdNoLoadDir` — skip the initial `setUpDialog` (directory read) on open.
+pub const CD_NO_LOAD_DIR: u16 = 0x0001;
+/// `cdHelpButton` — insert a "Help" button (`cmHelp`).
+pub const CD_HELP_BUTTON: u16 = 0x0002;
+
+// `TChDirDialog` text (tvtext2.cpp). `drivesText` is DROPPED (D14 — no drives).
+const CHANGE_DIR_TITLE: &str = "Change Directory";
+const DIR_NAME_TEXT: &str = "Directory ~n~ame";
+const DIR_TREE_TEXT: &str = "Directory ~t~ree";
+const CHDIR_TEXT: &str = "~C~hdir";
+const REVERT_TEXT: &str = "~R~evert";
+const INVALID_DIR_TEXT: &str = "Invalid directory";
+
 // Button / label text. `~X~` is rstv's hotkey markup (the widgets parse it).
 const FILES_TEXT: &str = "~F~iles";
 const OPEN_TEXT: &str = "~O~pen";
@@ -2180,6 +2239,422 @@ impl crate::view::View for FileDialog {
         // downcasting to a concrete type so the delegation runs.
         if let Some(fil) = self.dialog.child_mut(self.file_name_id) {
             crate::view::View::set_value(fil, v);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ChDirDialog — row 80
+// ---------------------------------------------------------------------------
+
+/// `TChDirDialog` (tchdrdlg.cpp) — a [`Dialog`] that lets the user change the
+/// process current directory, assembling a path input line, a directory-tree
+/// pane ([`DirListBox`]), a history icon, and the OK / Chdir / Revert (and
+/// optional Help) buttons.
+///
+/// ## Structural shape (D2 embed-and-delegate)
+///
+/// Like [`FileDialog`], `TChDirDialog` is a C++ subclass of `TDialog`; in rstv it
+/// **embeds** a [`Dialog`] and forwards the un-overridden
+/// [`View`](crate::view::View) methods via `#[crate::delegate(to = dialog)]`. It
+/// overrides only `handle_event`, `size_limits`, `reset_current`, and
+/// `as_any_mut`. `value`/`set_value` are **skip-listed** (left at the trait
+/// default — `None` / no-op) because the C++ `dataSize()` returns 0 (the dialog
+/// carries no transfer data); skipping them stops the macro forwarding to the
+/// inner `Dialog`'s gather/scatter. `calc_bounds` is skip-listed so an
+/// owner-driven resize routes through this type's `size_limits` 48×18 floor.
+///
+/// ## D14 — native Linux paths
+///
+/// `/`-separated, root `/`, no drives / `\` / "Drives" entry. The initial
+/// directory comes from [`std::env::current_dir`]; `cmRevert` re-reads the
+/// **live** cwd (not a saved baseline — there is no `directory` field); `valid`'s
+/// accept does the real `chdir` via [`std::env::set_current_dir`].
+///
+/// ## Deferrals
+///
+/// - The "21st-century" screen-relative resize block and `wfGrow` — `TODO`
+///   (mirroring [`FileDialog`]; `WindowFlags` is private behind `Dialog`).
+/// - **D12:** `TStreamable` (`write`/`read`/`build`/`streamableName`) dropped.
+pub struct ChDirDialog {
+    /// The embedded `TDialog` — the D2 delegation target.
+    dialog: Dialog,
+    /// The path [`InputLine`](crate::widgets::InputLine) child's id (`dirInput`).
+    dir_input_id: crate::view::ViewId,
+    /// The [`DirListBox`] child's id (`dirList`).
+    dir_list_id: crate::view::ViewId,
+    /// The Chdir [`Button`](crate::widgets::Button)'s id (`chDirButton`) — wired
+    /// into the dir list so its focus changes (un-)default it.
+    chdir_button_id: crate::view::ViewId,
+    /// One-time guard for the `reset_current` initial `setUpDialog`
+    /// (`(opts & cdNoLoadDir) == 0`).
+    needs_setup: bool,
+}
+
+impl ChDirDialog {
+    /// `TChDirDialog::TChDirDialog(opts, histId)`.
+    ///
+    /// Assembles the children in the **exact C++ insertion order** (so the labels
+    /// link to the already-captured input-line / dir-list ids, and `reset_current`
+    /// focuses the first selectable = the input line). Bounds are verbatim from the
+    /// C++; `grow_mode` is set per the C++ table on each child before insert.
+    pub fn new(opts: u16, history_id: u8) -> Self {
+        use crate::view::{GrowMode, Rect, View};
+        use crate::widgets::{
+            Button, ButtonFlags, InputLine, Label, LimitMode, ScrollBar, THistory,
+        };
+
+        // TDialog(TRect(16,2,64,20), changeDirTitle); options |= ofCentered;
+        // flags |= wfGrow.
+        let mut dialog = Dialog::new(Rect::new(16, 2, 64, 20), Some(CHANGE_DIR_TITLE.into()));
+        {
+            let opts = &mut dialog.state_mut().options;
+            opts.center_x = true;
+            opts.center_y = true;
+        }
+        // TODO(row 80): flags |= wfGrow (WindowFlags is private behind Dialog; not
+        // snapshot-visible, so the grow flag is deferred — mirrors FileDialog).
+
+        // --- dirInput: TInputLine(TRect(3,3,42,4), MAXPATH-1) ----------------
+        // growMode = gfGrowHiX. C++ TInputLine(bounds, aMaxLen) → maxLen =
+        // aMaxLen-1, and InputLine::new(MaxBytes) does the same `limit-1`, so
+        // pass MAXPATH-1 to get the C++ maxLen = MAXPATH-2.
+        let mut dir_input = InputLine::new(
+            Rect::new(3, 3, 42, 4),
+            MAXPATH - 1,
+            None,
+            LimitMode::MaxBytes,
+        );
+        dir_input.state_mut().grow_mode = GrowMode {
+            hi_x: true,
+            ..Default::default()
+        };
+        let dir_input_id = dialog.insert_child(Box::new(dir_input));
+
+        // --- TLabel(TRect(2,2,17,3), dirNameText, dirInput) ------------------
+        // growMode = 0.
+        dialog.insert_child(Box::new(Label::new(
+            Rect::new(2, 2, 17, 3),
+            DIR_NAME_TEXT,
+            Some(dir_input_id),
+        )));
+
+        // --- THistory(TRect(42,3,45,4), dirInput, histId) --------------------
+        // growMode = gfGrowLoX | gfGrowHiX.
+        let mut hist = THistory::new(Rect::new(42, 3, 45, 4), dir_input_id, history_id);
+        hist.state_mut().grow_mode = GrowMode {
+            lo_x: true,
+            hi_x: true,
+            ..Default::default()
+        };
+        dialog.insert_child(Box::new(hist));
+
+        // --- TScrollBar(TRect(32,6,33,16)) -----------------------------------
+        let sb_id = dialog.insert_child(Box::new(ScrollBar::new(Rect::new(32, 6, 33, 16))));
+
+        // --- dirList: TDirListBox(TRect(3,6,32,16), sb) ----------------------
+        // growMode = gfGrowHiX | gfGrowHiY.
+        let mut dir_list = DirListBox::new(Rect::new(3, 6, 32, 16), None, Some(sb_id));
+        dir_list.lv.state.grow_mode = GrowMode {
+            hi_x: true,
+            hi_y: true,
+            ..Default::default()
+        };
+        let dir_list_id = dialog.insert_child(Box::new(dir_list));
+
+        // --- TLabel(TRect(2,5,17,6), dirTreeText, dirList) -------------------
+        // growMode = 0.
+        dialog.insert_child(Box::new(Label::new(
+            Rect::new(2, 5, 17, 6),
+            DIR_TREE_TEXT,
+            Some(dir_list_id),
+        )));
+
+        let grow_lo_hi_x = GrowMode {
+            lo_x: true,
+            hi_x: true,
+            ..Default::default()
+        };
+
+        // --- okButton: TButton(TRect(35,6,45,8), okText, cmOK, bfDefault) ----
+        let mut ok_button = Button::new(
+            Rect::new(35, 6, 45, 8),
+            OK_TEXT,
+            crate::command::Command::OK,
+            ButtonFlags {
+                default: true,
+                ..Default::default()
+            },
+        );
+        ok_button.state.grow_mode = grow_lo_hi_x;
+        dialog.insert_child(Box::new(ok_button));
+
+        // --- chDirButton: TButton(TRect(35,9,45,11), chdirText, cmChangeDir) -
+        let mut chdir_button = Button::new(
+            Rect::new(35, 9, 45, 11),
+            CHDIR_TEXT,
+            crate::command::Command::CHANGE_DIR,
+            ButtonFlags::new(),
+        );
+        chdir_button.state.grow_mode = grow_lo_hi_x;
+        let chdir_button_id = dialog.insert_child(Box::new(chdir_button));
+
+        // --- revertButton: TButton(TRect(35,12,45,14), revertText, cmRevert) -
+        let mut revert_button = Button::new(
+            Rect::new(35, 12, 45, 14),
+            REVERT_TEXT,
+            crate::command::Command::REVERT,
+            ButtonFlags::new(),
+        );
+        revert_button.state.grow_mode = grow_lo_hi_x;
+        dialog.insert_child(Box::new(revert_button));
+
+        // --- helpButton: TButton(TRect(35,15,45,17), helpText, cmHelp) -------
+        // Inserted only when cdHelpButton is set.
+        if opts & CD_HELP_BUTTON != 0 {
+            let mut help_button = Button::new(
+                Rect::new(35, 15, 45, 17),
+                HELP_TEXT,
+                crate::command::Command::HELP,
+                ButtonFlags::new(),
+            );
+            help_button.state.grow_mode = grow_lo_hi_x;
+            dialog.insert_child(Box::new(help_button));
+        }
+
+        // selectNext(False): reset_current establishes currency (focuses the first
+        // selectable child = dirInput, inserted first) — see View::reset_current.
+
+        let mut cd = ChDirDialog {
+            dialog,
+            dir_input_id,
+            dir_list_id,
+            chdir_button_id,
+            needs_setup: opts & CD_NO_LOAD_DIR == 0,
+        };
+        // Wire the chdir button into the dir list so its focus (un-)defaults it
+        // (C++ `TDirListBox::setState` → `owner->chDirButton->makeDefault`). Both
+        // ids are now known, so this is an after-insert child_mut reading the
+        // stored `chdir_button_id`.
+        cd.wire_chdir_button();
+        cd
+    }
+
+    /// Hand the dir list the `chDirButton` id so its focus changes (un-)default
+    /// the button (the C++ `TDirListBox::setState` →
+    /// `owner->chDirButton->makeDefault`). Called once from the ctor.
+    fn wire_chdir_button(&mut self) {
+        let btn = self.chdir_button_id;
+        if let Some(dl) = self
+            .dialog
+            .child_mut(self.dir_list_id)
+            .and_then(|v| v.as_any_mut())
+            .and_then(|a| a.downcast_mut::<DirListBox>())
+        {
+            dl.set_chdir_button(btn);
+        }
+    }
+
+    /// Trim a single trailing `/` from `path`, **keeping the root `/`**
+    /// (`trimEndSeparator`). D14 adaptation of the DOS `if (len > 3 &&
+    /// isSeparator(path[len-1]))` guard — the DOS `len > 3` protected `"C:\"`; here
+    /// `len > 1` protects the bare root `"/"`.
+    fn trim_end_separator(path: &str) -> String {
+        if path.len() > 1 && path.ends_with('/') {
+            path[..path.len() - 1].to_string()
+        } else {
+            path.to_string()
+        }
+    }
+
+    /// Read the current process directory (`getCurrentDir`/`getCurDir`) as a
+    /// `/`-terminated absolute path (D14, `std::env::current_dir`), falling back to
+    /// `/` when it cannot be read.
+    fn current_dir_normalized() -> String {
+        let dir = std::env::current_dir()
+            .ok()
+            .and_then(|p| p.to_str().map(String::from))
+            .unwrap_or_else(|| "/".into());
+        if dir.ends_with('/') {
+            dir
+        } else {
+            format!("{dir}/")
+        }
+    }
+
+    /// The navigation tail shared by `cmRevert` and a successful `cmChangeDir`
+    /// (the C++ `handleEvent` body after the switch): re-read `dir` into the
+    /// [`DirListBox`], reflect the trimmed path in `dirInput`, and focus the dir
+    /// list (`dirList->select()`). Direct child mutation (the dialog owns the
+    /// group), sequenced like [`FileDialog::navigate`] (one `child_mut` borrow at a
+    /// time).
+    fn navigate_to(&mut self, dir: &str, ctx: &mut crate::view::Context) {
+        if let Some(dl) = self
+            .dialog
+            .child_mut(self.dir_list_id)
+            .and_then(|v| v.as_any_mut())
+            .and_then(|a| a.downcast_mut::<DirListBox>())
+        {
+            dl.new_directory(dir, ctx);
+        }
+        let trimmed = Self::trim_end_separator(dir);
+        if let Some(input) = self.dialog.child_mut(self.dir_input_id) {
+            crate::view::View::set_value(input, crate::data::FieldValue::Text(trimmed));
+        }
+        // dirList->select() — make the dir list the current view.
+        ctx.request_focus(self.dir_list_id);
+    }
+}
+
+#[crate::delegate(
+    to = dialog,
+    skip(
+        apply_list_scroll,
+        as_any_mut,
+        calc_bounds,
+        grabs_focus_on_click,
+        select_window_num,
+        set_value,
+        size_limits,
+        value
+    )
+)]
+impl crate::view::View for ChDirDialog {
+    /// `TChDirDialog::handleEvent` — delegate to `TDialog::handleEvent` first (the
+    /// faithful base call), then handle `cmRevert` / `cmChangeDir`:
+    /// - `cmRevert` → re-read the **live** cwd (`getCurrentDir`).
+    /// - `cmChangeDir` → read the **focused** dir-list entry's path; under D14, if
+    ///   it starts with `/` ((`isSeparator`)) append a trailing `/` (the C++
+    ///   `\\`); otherwise `return` leaving the event uncleared (passes through —
+    ///   faithful to the C++ `else return;`, NOT a `clearEvent`). The C++
+    ///   `drivesText` compare is dropped (D14).
+    ///
+    /// Both feed the shared navigate tail ([`navigate_to`](ChDirDialog::navigate_to)):
+    /// `newDirectory` → reflect in `dirInput` → focus the dir list, then clear.
+    fn handle_event(&mut self, ev: &mut crate::event::Event, ctx: &mut crate::view::Context) {
+        use crate::command::Command;
+        use crate::event::Event;
+
+        // TDialog::handleEvent FIRST (faithful order).
+        self.dialog.handle_event(ev, ctx);
+
+        if let Event::Command(c) = *ev {
+            let cur_dir = match c {
+                Command::REVERT => Self::current_dir_normalized(),
+                Command::CHANGE_DIR => {
+                    // Read the focused entry's path directly (C++
+                    // `dirList->list()->at(dirList->focused)`).
+                    let focused = self
+                        .dialog
+                        .child_mut(self.dir_list_id)
+                        .and_then(|v| v.as_any_mut())
+                        .and_then(|a| a.downcast_mut::<DirListBox>())
+                        .and_then(|dl| dl.focused_entry().map(|e| e.dir().to_string()));
+                    let Some(mut path) = focused else {
+                        return;
+                    };
+                    // D14: the drivesText compare is dropped; only the isSeparator
+                    // branch remains (a `/`-rooted path). Anything else → return
+                    // (leave the event uncleared, NOT clearEvent).
+                    if path.starts_with('/') {
+                        if !path.ends_with('/') {
+                            path.push('/');
+                        }
+                        path
+                    } else {
+                        return;
+                    }
+                }
+                _ => return,
+            };
+
+            self.navigate_to(&cur_dir, ctx);
+            ev.clear();
+        }
+    }
+
+    /// `TChDirDialog::sizeLimits` — `min = {48, 18}`; `max` from the embedded
+    /// dialog. `calc_bounds` is skip-listed so an owner-driven resize routes
+    /// through this floor (the [`FileDialog`]/`EditWindow` pattern).
+    fn size_limits(
+        &self,
+        owner_size: crate::view::Point,
+    ) -> (crate::view::Point, crate::view::Point) {
+        let (_min, max) = crate::view::View::size_limits(&self.dialog, owner_size);
+        (crate::view::Point::new(48, 18), max)
+    }
+
+    /// The ctx-bearing init hook — `setUpDialog()` + `selectNext(False)`. Establish
+    /// the dialog's internal currency first (focuses dirInput), then, once, do the
+    /// initial directory read: the live cwd (D14, `/`-terminated) is read into the
+    /// [`DirListBox`] and reflected (trimmed) into `dirInput`.
+    fn reset_current(&mut self, ctx: &mut crate::view::Context) {
+        self.dialog.reset_current(ctx);
+
+        if self.needs_setup {
+            self.needs_setup = false;
+            let dir = Self::current_dir_normalized();
+            if let Some(dl) = self
+                .dialog
+                .child_mut(self.dir_list_id)
+                .and_then(|v| v.as_any_mut())
+                .and_then(|a| a.downcast_mut::<DirListBox>())
+            {
+                dl.new_directory(&dir, ctx);
+            }
+            let trimmed = Self::trim_end_separator(&dir);
+            if let Some(input) = self.dialog.child_mut(self.dir_input_id) {
+                crate::view::View::set_value(input, crate::data::FieldValue::Text(trimmed));
+            }
+        }
+    }
+
+    /// The modal loop and any owner-downcast target must reach the `ChDirDialog`,
+    /// so `as_any_mut` returns `self`, NOT the inner `Dialog`.
+    fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
+        Some(self)
+    }
+
+    /// `TChDirDialog::valid` — accept gate. `cmOK` reads `dirInput`, `fexpand`s it
+    /// (relative to the live cwd, matching C++ `fexpand`), trims the trailing
+    /// separator, and attempts the **real** `chdir` ([`std::env::set_current_dir`]).
+    /// On error → an informational "Invalid directory" box + `false` (cwd is
+    /// untouched — `set_current_dir` does not mutate on error). Any other command
+    /// is always valid.
+    fn valid(&mut self, cmd: crate::command::Command, ctx: &mut crate::view::Context) -> bool {
+        if cmd != crate::command::Command::OK {
+            return true;
+        }
+
+        // Read dirInput's text (D10 value protocol → FieldValue::Text).
+        let field_text = self
+            .dialog
+            .child_mut(self.dir_input_id)
+            .and_then(|v| v.value())
+            .and_then(|val| match val {
+                crate::data::FieldValue::Text(s) => Some(s),
+                _ => None,
+            })
+            .unwrap_or_default();
+
+        // fexpand(path): expand relative to the live cwd (C++ fexpand uses the
+        // current dir as the base), then trim the trailing separator.
+        let base = Self::current_dir_normalized();
+        let expanded = expand_path(&base, &field_text);
+        let path = Self::trim_end_separator(&expanded);
+
+        // changeDir(path) == chdir(path): the REAL process cwd change.
+        if std::env::set_current_dir(&path).is_err() {
+            ctx.request_message_box(
+                format!("{INVALID_DIR_TEXT}: '{path}'."),
+                crate::dialog::MessageBoxKind::Error,
+                crate::dialog::MessageBoxButtons::ok(),
+                None,
+                None,
+            );
+            false
+        } else {
+            true
         }
     }
 }
@@ -4160,5 +4635,327 @@ mod tests {
             .text()
             .to_string();
         assert_eq!(text, "loaded.txt");
+    }
+
+    // =========================================================================
+    // ChDirDialog — row 80
+    // =========================================================================
+
+    /// Resolve the `DirListBox` child by id (for deterministic injection).
+    fn cd_dir_list(cd: &mut ChDirDialog) -> &mut DirListBox {
+        cd.dialog
+            .child_mut(cd.dir_list_id)
+            .and_then(|v| v.as_any_mut())
+            .and_then(|a| a.downcast_mut::<DirListBox>())
+            .expect("dir_list resolves")
+    }
+
+    // -- assembly --------------------------------------------------------------
+
+    /// The three captured ids are distinct, resolve to the right types, and the
+    /// Chdir button carries `cmChangeDir`. (Mirrors `file_dialog_assembles_children`
+    /// — id-distinctness + downcast, no child-count accessor on `Dialog`.)
+    #[test]
+    fn chdir_dialog_assembles_children() {
+        let mut cd = ChDirDialog::new(CD_NORMAL, 0);
+
+        assert_ne!(cd.dir_input_id, cd.dir_list_id);
+        assert_ne!(cd.dir_list_id, cd.chdir_button_id);
+        assert_ne!(cd.dir_input_id, cd.chdir_button_id);
+
+        // dir_input is a plain InputLine (no as_any_mut override → not
+        // downcastable); verify it resolves and exposes a Text value (D10).
+        assert!(
+            matches!(
+                cd.dialog.child_mut(cd.dir_input_id).and_then(|v| v.value()),
+                Some(crate::data::FieldValue::Text(_))
+            ),
+            "dir_input resolves to a Text-valued InputLine"
+        );
+        assert!(
+            cd.dialog
+                .child_mut(cd.dir_list_id)
+                .and_then(|v| v.as_any_mut())
+                .and_then(|a| a.downcast_mut::<DirListBox>())
+                .is_some(),
+            "dir_list resolves to a DirListBox"
+        );
+        // The Chdir button carries cmChangeDir (public `command` field).
+        let cmd = cd
+            .dialog
+            .child_mut(cd.chdir_button_id)
+            .and_then(|v| v.as_any_mut())
+            .and_then(|a| a.downcast_mut::<crate::widgets::Button>())
+            .map(|b| b.command);
+        assert_eq!(cmd, Some(Command::CHANGE_DIR), "chdir button cmChangeDir");
+    }
+
+    /// D10 / `dataSize() == 0`: `value`/`set_value` are skip-listed so they fall to
+    /// the `View` trait default (`None` / no-op), NOT the inner `Dialog`'s
+    /// group-gather. Proven empirically: `value()` returns `None` (a gather would
+    /// return `Some(Record(..))`), and `set_value` is a silent no-op (value stays
+    /// `None` after a set).
+    #[test]
+    fn chdir_dialog_value_is_trait_default_none() {
+        let mut cd = ChDirDialog::new(CD_NORMAL, 0);
+        assert_eq!(
+            crate::view::View::value(&cd),
+            None,
+            "value() is the trait default None (skip-listed; not the Dialog gather)"
+        );
+        // set_value is a no-op (trait default) — it does not establish a value.
+        crate::view::View::set_value(&mut cd, crate::data::FieldValue::Text("x".into()));
+        assert_eq!(
+            crate::view::View::value(&cd),
+            None,
+            "set_value is a no-op; value() stays None"
+        );
+    }
+
+    /// The Chdir button id is wired into the dir list (so its focus changes
+    /// (un-)default it).
+    #[test]
+    fn chdir_dialog_wires_chdir_button_into_dir_list() {
+        let mut cd = ChDirDialog::new(CD_NORMAL, 0);
+        let chdir_id = cd.chdir_button_id;
+        assert_eq!(
+            cd_dir_list(&mut cd).chdir_button,
+            Some(chdir_id),
+            "dir list knows the chdir button id"
+        );
+    }
+
+    // -- breadcrumb 1: select_item posts cmChangeDir ---------------------------
+
+    /// `TDirListBox::selectItem` → `message(owner, evCommand, cmChangeDir)`: posts
+    /// a `cmChangeDir` command (payload-less; the dialog reads the focused entry).
+    #[test]
+    fn dir_list_select_item_posts_change_dir() {
+        let mut dl = DirListBox::new(Rect::new(0, 0, 30, 10), None, None);
+        let mut out: VecDeque<Event> = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+        {
+            let mut ctx = fl_make_ctx(&mut out, &mut timers, &mut deferred);
+            dl.select_item(2, &mut ctx);
+        }
+        assert_eq!(
+            out.iter()
+                .filter(|e| matches!(e, Event::Command(c) if *c == Command::CHANGE_DIR))
+                .count(),
+            1,
+            "selectItem posts exactly one cmChangeDir"
+        );
+    }
+
+    // -- breadcrumb 2: set_state -> MakeButtonDefault --------------------------
+
+    /// `TDirListBox::setState` on an `sfFocused` change queues
+    /// `MakeButtonDefault { button, enable }` for the wired chdir button.
+    #[test]
+    fn dir_list_set_state_focus_queues_make_button_default() {
+        let mut dl = DirListBox::new(Rect::new(0, 0, 30, 10), None, None);
+        let btn = crate::view::ViewId::next();
+        dl.set_chdir_button(btn);
+
+        let mut out: VecDeque<Event> = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+        {
+            let mut ctx = fl_make_ctx(&mut out, &mut timers, &mut deferred);
+            View::set_state(&mut dl, crate::view::StateFlag::Focused, true, &mut ctx);
+        }
+        assert!(
+            deferred.iter().any(|d| matches!(
+                d,
+                Deferred::MakeButtonDefault { button, enable: true } if *button == btn
+            )),
+            "focus-gain queues MakeButtonDefault(enable=true)"
+        );
+    }
+
+    /// Losing focus queues `MakeButtonDefault { enable: false }`.
+    #[test]
+    fn dir_list_set_state_unfocus_queues_make_button_default_false() {
+        let mut dl = DirListBox::new(Rect::new(0, 0, 30, 10), None, None);
+        let btn = crate::view::ViewId::next();
+        dl.set_chdir_button(btn);
+
+        let mut out: VecDeque<Event> = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+        {
+            let mut ctx = fl_make_ctx(&mut out, &mut timers, &mut deferred);
+            View::set_state(&mut dl, crate::view::StateFlag::Focused, false, &mut ctx);
+        }
+        assert!(
+            deferred.iter().any(|d| matches!(
+                d,
+                Deferred::MakeButtonDefault { button, enable: false } if *button == btn
+            )),
+            "focus-loss queues MakeButtonDefault(enable=false)"
+        );
+    }
+
+    /// A non-`sfFocused` state change, or no wired button, queues nothing.
+    #[test]
+    fn dir_list_set_state_no_button_queues_nothing() {
+        let mut dl = DirListBox::new(Rect::new(0, 0, 30, 10), None, None);
+        // chdir_button is None (no TChDirDialog owner).
+        let mut out: VecDeque<Event> = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+        {
+            let mut ctx = fl_make_ctx(&mut out, &mut timers, &mut deferred);
+            View::set_state(&mut dl, crate::view::StateFlag::Focused, true, &mut ctx);
+        }
+        assert!(
+            !deferred
+                .iter()
+                .any(|d| matches!(d, Deferred::MakeButtonDefault { .. })),
+            "no wired button -> no MakeButtonDefault"
+        );
+    }
+
+    // -- new_directory trailing-slash normalize --------------------------------
+
+    /// `new_directory` normalizes a no-trailing-slash dir (as `current_dir`
+    /// returns) to a trailing `/` before building the tree, so `self.dir` is
+    /// always `/`-terminated. `/tmp` (a real dir) is used so the fs read succeeds.
+    #[test]
+    fn new_directory_normalizes_trailing_slash() {
+        let mut dl = DirListBox::new(Rect::new(0, 0, 30, 10), None, None);
+        let mut out: VecDeque<Event> = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+        {
+            let mut ctx = fl_make_ctx(&mut out, &mut timers, &mut deferred);
+            // No trailing slash on input.
+            dl.new_directory("/tmp", &mut ctx);
+        }
+        assert_eq!(dl.dir, "/tmp/", "stored dir is trailing-slash-normalized");
+        // The root entry plus the /tmp ancestor are present.
+        assert_eq!(dl.list()[0].dir(), "/", "root entry");
+    }
+
+    // -- trim_end_separator (D14 root guard) -----------------------------------
+
+    #[test]
+    fn trim_end_separator_keeps_root() {
+        assert_eq!(ChDirDialog::trim_end_separator("/"), "/", "root preserved");
+        assert_eq!(ChDirDialog::trim_end_separator("/home/"), "/home");
+        assert_eq!(ChDirDialog::trim_end_separator("/home"), "/home");
+        assert_eq!(ChDirDialog::trim_end_separator("/a/b/c/"), "/a/b/c");
+    }
+
+    // -- valid: failure path ONLY (never really chdir's; cwd is process-global) -
+
+    /// `valid(cmOK)` on a guaranteed-nonexistent directory: the real
+    /// `set_current_dir` fails, so an "Invalid directory" box is queued and the
+    /// dialog stays open (`false`). The cwd is NOT changed (`set_current_dir`
+    /// does not mutate on error), so this is safe to run alongside other tests.
+    #[test]
+    fn chdir_valid_bad_dir_queues_error_box() {
+        let mut cd = ChDirDialog::new(CD_NO_LOAD_DIR, 0);
+        // Set the dirInput text directly (ChDirDialog has no set_value of its own
+        // — value/set_value are skip-listed to the trait default). A path that
+        // cannot exist (absolute, so expand_path passes it through verbatim).
+        if let Some(input) = cd.dialog.child_mut(cd.dir_input_id) {
+            crate::view::View::set_value(
+                input,
+                crate::data::FieldValue::Text("/nonexistent_rstv_xyz_zzz".into()),
+            );
+        }
+
+        let mut out: VecDeque<Event> = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+        let accepted = {
+            let mut ctx = fl_make_ctx(&mut out, &mut timers, &mut deferred);
+            cd.valid(Command::OK, &mut ctx)
+        };
+        assert!(!accepted, "bad dir keeps the dialog open");
+        assert_eq!(count_open_boxes(&deferred), 1, "one invalid-dir box queued");
+    }
+
+    /// `valid` for any non-`cmOK` command is always true (and queues nothing).
+    #[test]
+    fn chdir_valid_non_ok_always_true() {
+        let mut cd = ChDirDialog::new(CD_NO_LOAD_DIR, 0);
+        let mut out: VecDeque<Event> = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+        let ok = {
+            let mut ctx = fl_make_ctx(&mut out, &mut timers, &mut deferred);
+            cd.valid(Command::CANCEL, &mut ctx)
+        };
+        assert!(ok, "non-cmOK is always valid");
+        assert_eq!(count_open_boxes(&deferred), 0, "no box for non-cmOK");
+    }
+
+    // -- snapshot: deterministic, NO reset_current (which reads cwd) -----------
+
+    #[test]
+    fn snapshot_chdir_dialog() {
+        use crate::backend::{HeadlessBackend, Renderer};
+        use crate::screen::Buffer;
+        use crate::theme::Theme;
+        use crate::view::DrawCtx;
+
+        let mut cd = ChDirDialog::new(CD_HELP_BUTTON, 0);
+        cd.dialog.state_mut().state.selected = true;
+        cd.dialog.state_mut().state.active = true;
+
+        // Inject a deterministic dir tree (no fs read): /home/user/ with two
+        // subdirs. build_tree gives a real tree + cur index.
+        {
+            let (items, cur) =
+                DirListBox::build_tree("/home/user/", &["projects".into(), "src".into()]);
+            let dl = cd_dir_list(&mut cd);
+            dl.items = items;
+            dl.cur = cur;
+            dl.dir = "/home/user/".into();
+            dl.lv.range = dl.items.len() as i32;
+            dl.lv.focused = cur as i32;
+            dl.lv.state.state.selected = true;
+            dl.lv.state.state.active = true;
+        }
+        // Set the dirInput text deterministically (the trimmed current dir).
+        if let Some(input) = cd.dialog.child_mut(cd.dir_input_id) {
+            crate::view::View::set_value(input, crate::data::FieldValue::Text("/home/user".into()));
+        }
+
+        let theme = Theme::classic_blue();
+        let (backend, screen) = HeadlessBackend::new(64, 20);
+        let mut r = Renderer::new(Box::new(backend));
+        let mut view: Box<dyn View> = Box::new(cd);
+        r.render(|buf: &mut Buffer| {
+            let bounds = view.state().get_bounds();
+            let mut dc = DrawCtx::new(buf, &theme, bounds, bounds.a);
+            view.draw(&mut dc);
+        });
+        insta::assert_snapshot!(screen.snapshot());
+    }
+
+    // -- reset_current focuses dirInput (currency) without the cwd read --------
+
+    /// `reset_current` with `cdNoLoadDir` set establishes currency (focuses the
+    /// first selectable = dirInput) but skips the cwd read, so it is cwd-safe.
+    #[test]
+    fn chdir_reset_current_no_load_dir_skips_read() {
+        let mut cd = ChDirDialog::new(CD_NO_LOAD_DIR, 0);
+        assert!(!cd.needs_setup, "cdNoLoadDir clears the setup guard");
+        let mut out: VecDeque<Event> = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+        {
+            let mut ctx = fl_make_ctx(&mut out, &mut timers, &mut deferred);
+            View::reset_current(&mut cd, &mut ctx);
+        }
+        // The dir list was never populated (no cwd read).
+        assert!(
+            cd_dir_list(&mut cd).list().is_empty(),
+            "no directory read under cdNoLoadDir"
+        );
     }
 }

@@ -1,0 +1,60 @@
+---
+source: src/dialog/filedlg.rs
+expression: screen.snapshot()
+---
+size: 64x20
+cursor: hidden
+text:
+|                                                                |
+|                                                                |
+|                ┌────────────── Change Directory ──────────────┐|
+|                │                                              │|
+|                │  Directory name                              │|
+|                │   /home/user                            ▐↓▌  │|
+|                │                                              │|
+|                │  Directory tree                              │|
+|                │   └─┬/                        ▲      OK   ▄  │|
+|                │     └─┬home                   ▓    ▀▀▀▀▀▀▀▀  │|
+|                │       └─┬user                 ▓              │|
+|                │         └┬─projects           ▓    Chdir  ▄  │|
+|                │          └─src                ▓    ▀▀▀▀▀▀▀▀  │|
+|                │                               ▓              │|
+|                │                               ▓    Revert ▄  │|
+|                │                               ▓    ▀▀▀▀▀▀▀▀  │|
+|                │                               ▓              │|
+|                │                               ▼     Help  ▄  │|
+|                │                                    ▀▀▀▀▀▀▀▀  │|
+|                └──────────────────────────────────────────────┘|
+attr:
+|................................................................|
+|................................................................|
+|................aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|................aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|................aabbbbbbbbbbbcbbbaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|................aaaddddddddddddddddddddddddddddddddddddddddedaaa|
+|................aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|................aabbbbbbbbbbbcbbbaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|................aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaafaaghhhhihhhgaaa|
+|................aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaafaaggggggggggaaa|
+|................aaajjjjjjjjjjjjjjjjjjjjjjjjjjjjjfaaaaaaaaaaaaaaa|
+|................aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaafaaghihhhhhhgaaa|
+|................aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaafaaggggggggggaaa|
+|................aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaafaaaaaaaaaaaaaaa|
+|................aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaafaaghihhhhhhgaaa|
+|................aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaafaaggggggggggaaa|
+|................aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaafaaaaaaaaaaaaaaa|
+|................aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaafaaghhihhhhhgaaa|
+|................aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaggggggggggaaa|
+|................aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+legend:
+  . default
+  a fg=BIOS(7) bg=BIOS(1)
+  b fg=BIOS(0) bg=BIOS(7)
+  c fg=BIOS(4) bg=BIOS(7)
+  d fg=BIOS(0) bg=BIOS(3)
+  e fg=BIOS(14) bg=BIOS(3)
+  f fg=BIOS(1) bg=BIOS(3)
+  g fg=BIOS(8) bg=BIOS(0)
+  h fg=BIOS(0) bg=BIOS(2)
+  i fg=BIOS(14) bg=BIOS(2)
+  j fg=BIOS(15) bg=BIOS(1)

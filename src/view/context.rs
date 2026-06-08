@@ -317,6 +317,28 @@ pub enum Deferred {
         source: ViewId,
     },
 
+    // -- row 80: the TDirListBox → chDirButton makeDefault broker (D3) ---------
+    /// **Make a sibling [`Button`](crate::widgets::Button) the default** on a
+    /// dir-list focus change (`TDirListBox::setState` →
+    /// `((TChDirDialog*)owner)->chDirButton->makeDefault(enable)`). The dir list
+    /// is a leaf holding only `&mut Context` (D3), so it cannot reach its sibling
+    /// button inline; it queues this and the pump resolves `button`, downcasts to
+    /// [`Button`](crate::widgets::Button), and calls
+    /// [`make_default`](crate::widgets::Button::make_default) (which re-broadcasts
+    /// `cmGrabDefault`/`cmReleaseDefault` so the real default button relinquishes /
+    /// retakes the look — that re-broadcast settling on the next pump is expected,
+    /// like the other write-back brokers).
+    ///
+    /// Touches the **view-tree** family (same as the scroller/list broker ops), so
+    /// the insertion-order drain stays order-equivalent.
+    MakeButtonDefault {
+        /// The button to make (or un-make) the default.
+        button: ViewId,
+        /// True when the dir list gained focus (grab the default), false when it
+        /// lost focus (release).
+        enable: bool,
+    },
+
     // -- the async-modal-from-a-view seam (messageBox from valid()) -----------
     /// **View-triggered modal `messageBox`** (the async-modal-from-a-view seam —
     /// `docs/design/async-modal-from-view.md`). A downward-borrowed `&mut View`
@@ -719,6 +741,17 @@ impl<'a> Context<'a> {
     /// check it.
     pub fn request_focus(&mut self, id: ViewId) {
         self.deferred.push(Deferred::FocusById(id));
+    }
+
+    /// Request the `button` be made (or un-made) the dialog's default —
+    /// **deferred** ([`Deferred::MakeButtonDefault`]). The pump resolves `button`,
+    /// downcasts to [`Button`](crate::widgets::Button), and calls
+    /// [`make_default`](crate::widgets::Button::make_default). A leaf view (the
+    /// `TChDirDialog` dir list, on a focus change) holds only `&mut Context` and
+    /// cannot poke its sibling button inline (D3); it requests the change here.
+    pub fn make_button_default(&mut self, button: ViewId, enable: bool) {
+        self.deferred
+            .push(Deferred::MakeButtonDefault { button, enable });
     }
 
     /// Request the (modal) loop end with `cmd` — **deferred** ([`Deferred::EndModal`]).

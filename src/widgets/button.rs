@@ -219,7 +219,11 @@ impl Button {
     /// broadcasts `cmGrabDefault`/`cmReleaseDefault` (so the real default button
     /// relinquishes/retakes the look) and toggles its own `am_default`. The C++
     /// `drawView()` is a D8 no-op.
-    fn make_default(&mut self, enable: bool, ctx: &mut Context) {
+    ///
+    /// `pub(crate)` so the pump's
+    /// [`MakeButtonDefault`](crate::view::Deferred::MakeButtonDefault) broker
+    /// (row 80: `TDirListBox` focus → `chDirButton`) can drive it on a sibling.
+    pub(crate) fn make_default(&mut self, enable: bool, ctx: &mut Context) {
         if !self.flags.default {
             let id = self.state.id();
             ctx.broadcast(
@@ -254,6 +258,14 @@ impl View for Button {
 
     fn state_mut(&mut self) -> &mut ViewState {
         &mut self.state
+    }
+
+    /// Exposes the concrete `Button` so the pump's
+    /// [`MakeButtonDefault`](crate::view::Deferred::MakeButtonDefault) broker can
+    /// downcast a sibling button and call [`make_default`](Button::make_default)
+    /// (row 80: `TDirListBox` focus → `chDirButton`).
+    fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
+        Some(self)
     }
 
     /// `TButton::draw` → `drawState(down)`. Builds each row explicitly so the
