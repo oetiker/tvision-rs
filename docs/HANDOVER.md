@@ -15,17 +15,25 @@
 
 ## Current state
 
-- **HEAD = row 76 `TFileList` (`FileList`), landed this session on top of a
-  FOUNDATION sorted-search-seam extraction (separate commit) — see the
-  IMPLEMENTATION-LOG top two sections.** Build: **822 lib tests** green; `cargo
-  clippy --workspace --all-targets -- -D warnings` and `cargo fmt --all --check`
-  clean (verify clippy with a forced re-lint — a cached run can mask a fresh
-  warning).
-- **The sorted-search seam is now extracted** (`SortedSearch: ListViewer` sub-trait
-  + `sorted_handle_event`/`sorted_cursor` free fns in `list_viewer.rs`): both
+- **HEAD = row 79 `TFileDialog` (`FileDialog`) — row 79 COMPLETE, landed this
+  session as B1 (skeleton) + B2 (valid/path-logic), on top of rows 77
+  `TFileInputLine` + 78 `TFileInfoPane`. The whole filedlg consumer cluster
+  (77/78/79) is done — see the IMPLEMENTATION-LOG top section.** Build: **867 lib
+  tests** green; `cargo clippy --workspace --all-targets -- -D warnings` and
+  `cargo fmt --all --check` clean (verify clippy with a forced re-lint — a cached
+  run can mask a fresh warning).
+- **The payload-carrying-broadcast seam is now built** (FOUNDATION, row 77):
+  `Deferred::ResolveFocusedFile { subscriber, source }` + a defaulted
+  `ListViewer::on_focus_changed` hook (called at the `focus_item` tail — the
+  faithful virtual-`focusItem`). `FileList` broadcasts payload-less
+  `FILE_FOCUSED {source=self}` on every focus change; the pump resolves
+  `focused_rec()` and concrete-downcasts the subscriber (`FileInputLine` /
+  `FileInfoPane`). Reuse this for any future payload-carrying broadcast.
+- **The sorted-search seam** (`SortedSearch: ListViewer` sub-trait +
+  `sorted_handle_event`/`sorted_cursor` free fns in `list_viewer.rs`): both
   `SortedListBox` and `FileList` are direct `ListViewer` impls implementing it.
   Row 80's `TChDirDialog` uses `DirListBox` (a direct impl that does NOT need the
-  search machine); row 79's other panes are plain views.
+  search machine).
 - **Cargo workspace** (`tvision` + `tvision-macros`) — use `--workspace` for
   test/clippy/fmt. Artifacts land in
   `CARGO_TARGET_DIR=/home/oetiker/scratch/cargo-target` (export it). `cargo build
@@ -91,68 +99,53 @@
   payload-command + `set_state` `chDirButton` poke breadcrumbed → row 80. The
   `#[delegate]` proc-macro is landed and adopted codebase-wide.
 
-## Next — resume PORT-ORDER at row 77 `TFileInputLine`
+## Next — resume PORT-ORDER at row 80 `TChDirDialog`
 
-**Rows 75 `TDirListBox` and 76 `TFileList` are DONE** (76 + the FOUNDATION
-sorted-search-seam extraction landed this session — see the IMPLEMENTATION-LOG top
-two sections). Resume the normal "lowest-numbered incomplete row" rule → **row 77**.
+**Rows 75–79 are DONE.** The filedlg consumer cluster (77/78/79) landed this
+session on top of 75/76 — see the IMPLEMENTATION-LOG top section. Resume the
+normal "lowest-numbered incomplete row" rule → **row 80 `TChDirDialog`**.
 
-### The filedlg cluster (rows 77–80) — all inherit deviation D14 (native `/`)
-**D14 is the law for this whole cluster** (PORTING-GUIDE): `/`-separated paths,
-root `/`, NO drives/`\`/"Drives" entry; FS reads via `std::fs` (follow symlinks,
-like magiblot's `stat`). No `\`↔`/` translation seam anywhere.
+### Row 80 `TChDirDialog` — the last filedlg row (inherits D14 native `/`)
+**D14 is the law** (PORTING-GUIDE): `/`-separated paths, root `/`, NO
+drives/`\`/"Drives" entry; FS reads via `std::fs` (follow symlinks). `TChDirDialog`
+(`tchdrdlg.cpp`, `schdrdlg.cpp`, `nmchdrdl.cpp`) is a `TDialog` assembling a
+`TInputLine` + the row-75 `DirListBox` + `Chdir`/`Revert`/`OK`/`Help` buttons.
+**Assembly precedent is now `FileDialog` (row 79)** — same `Dialog::insert_child` /
+ViewId-at-insertion / guarded-`reset_current`-init / `child_mut` owner→child
+pattern. Use it.
 
-- **Row 77 `TFileInputLine`** (`sfinputl.cpp` + member code in `stddlg.cpp`; no
-  `t*` file): a `TInputLine` subclass — the filename field. It **reacts to
-  `cmFileFocused`** broadcasts (updates its text from the focused file) and emits
-  `cmFileDoubleClicked` on Enter. D2 embed-delegate over `InputLine` is the likely
-  shape. The `cmFileFocused`/`cmFileDoubleClicked` consumer side is part of the
-  **row-79 owner-message seam** (see below) — 77 is a leaf that participates in it,
-  so it may need to land alongside 79's wiring rather than standalone.
-- Then **78 `TFileInfoPane`** (`sfinfpne.cpp`; a `TView` showing the focused file's
-  size/date — needs the `time`/date packing breadcrumbed at row 76), **79
-  `TFileDialog`** (assembles 76+77+78+buttons), **80 `TChDirDialog`** (assembles
-  `TInputLine` + the row-75 `DirListBox` + buttons).
+**The two row-75 breadcrumbs that row 80 must resolve** (it is their only consumer):
 
-### Row 79 owns the file-dialog owner-message seam (row 76 breadcrumbs come due)
-Row 76 `FileList` left **three** owner broadcasts deferred to **row 79
-`TFileDialog`** (all payload-carrying — rstv's `Event::Broadcast` is payload-less,
-so this is the same typed-payload-command seam row 80 also needs; design it once at
-its first consumer):
-1. `FileList::focus_item` → `cmFileFocused` carrying the focused `SearchRec`, on
-   **every** focus change (live-updates `TFileInfoPane`/`TFileInputLine`). Because
-   rstv `focus_item` is a free fn (not virtual), row 79 should build this on the
-   `old_value != focused` diff **already computed in `sorted_handle_event`** — i.e.
-   a focus-change *observation* hook, broader than row 75's commit-only `select_item`.
-2. `FileList::read_directory`'s post-`new_list` `cmFileFocused` for item 0 (or a
-   `noFile` sentinel when the listing is empty).
-3. `FileList::select_item` → `cmFileDoubleClicked` carrying the chosen `SearchRec`
-   (the no-op `select_item` deliberately does NOT call the base — no `cmListItemSelected`).
-All three are `TODO(row 79 TFileDialog)` in `src/dialog/filedlg.rs`.
-
-### Row 80 will need the typed-payload-command seam (row 75 breadcrumbs come due)
-Row 75 left two owner-coupling breadcrumbs that **row 80 `TChDirDialog` must
-resolve** (it is their only consumer — the seam is designed here, at first use):
 1. **`DirListBox::select_item`** must deliver `cmChangeDir` **carrying the chosen
-   `DirEntry`** to the owner. rstv's `Event::Broadcast { command, source }` is
-   payload-less — design a typed-payload command path (a new `Deferred`/event
-   variant carrying the `DirEntry`, brokered by the pump to the owner, OR resolve
-   the chosen entry by id at apply-time). Same shape will recur for row 79's
-   `TFileList` → `TFileDialog` messages.
+   `DirEntry`** to the owner. **The seam now exists** — row 79 built the
+   payload-carrying-broadcast pattern (`Deferred::ResolveFocusedFile` + the
+   `on_focus_changed`/broadcast-by-`source` shape). For `cmChangeDir`, mirror it:
+   `DirListBox::select_item` broadcasts a payload-less `CHANGE_DIR {source=self}`;
+   the `TChDirDialog` owner resolves the chosen `DirEntry` from the source by id
+   (a `DirListBox::focused_entry()` accessor, like `FileList::focused_rec()`) —
+   either via a broker arm or, since the dialog **owns** the group, directly with
+   `child_mut` in its `handle_event` (the row-79 owner→child precedent — simpler
+   than a broker). `CHANGE_DIR`/`REVERT` `Command`s are already minted (row 77).
 2. **`DirListBox::set_state`** must, on `sfFocused` change, `makeDefault(enable)`
-   the owner `TChDirDialog`'s `chDirButton` — needs the owner-downcast + button
-   default seam.
+   the owner `TChDirDialog`'s `chDirButton` — the owner-downcast + button-default
+   seam. Again the dialog owns the group, so `child_mut` to the button + a
+   default-flag setter is the likely shape (no cross-view broker needed).
+
 Both are `TODO(row 80 TChDirDialog)` in `src/dialog/filedlg.rs`.
 
-**Precondition footgun:** `DirListBox::build_tree`/`new_directory` assume `dir`
-ends with `/` (the ancestor walk is robust to a missing slash, but subdir nav
+**Precondition footgun (row 80):** `DirListBox::build_tree`/`new_directory` assume
+`dir` ends with `/` (the ancestor walk is robust to a missing slash, but subdir nav
 paths silently malform — `/home/oetikerprojects` — without it). When row 80 wires
 the caller, either guarantee the trailing `/` or add the 1-line normalize at the
 top of `new_directory`: `let dir = if dir.ends_with('/') { dir.to_string() } else
-{ format!("{dir}/") };`.
+{ format!("{dir}/") };`. (Row 79's `reset_current`/`valid` already apply exactly
+this normalize — reuse the pattern.)
 
-Once **`TFileDialog` (row 79)** lands it **un-blocks** `FileEditor::saveAs` and
-`EditWindow`'s dynamic-title (`cmUpdateTitle`) path.
+**`TFileDialog` (row 79) has landed → `FileEditor::saveAs` is now UNBLOCKED**
+(read the chosen filename from `FileDialog::value()` → `FieldValue::Text`), as is
+`EditWindow`'s dynamic-title (`cmUpdateTitle`) path. These consumers are still
+open (a separate follow-up, not row 80): wire `FileEditor::saveAs`/`edSaveAs` to
+exec a `FileDialog` and read its `value()`.
 
 **Editor seam leftovers (still open, latent):**
 - **cmQuit veto.** `valid_end`'s app-quit path *vetoes* close of a modified
@@ -162,8 +155,9 @@ Once **`TFileDialog` (row 79)** lands it **un-blocks** `FileEditor::saveAs` and
   (no runnable app wires a `FileEditor` yet); the fix is a whole-tree analogue of
   `validate_modal_close`. *(Cheap interim if a quit prompt is wanted sooner: gate
   `FileEditor::valid`'s prompt to `cmd == cmClose` so cmQuit reverts to allow-close.)*
-- **Still breadcrumbed:** `saveAs`/`edSaveAs` (needs `TFileDialog`, row 79),
-  `edReadError` on **load** (the ctor has no `ctx`).
+- **Still breadcrumbed:** `saveAs`/`edSaveAs` — `TFileDialog` (row 79) has now
+  landed, so this is **unblocked** (exec a `FileDialog`, read `value()`); just not
+  yet wired. `edReadError` on **load** (the ctor has no `ctx`) remains.
 
 ### Other non-gating seam still open (independent of the above)
 - **The `ModalFrame` deliver-outside-to-modal seam** (row 56/57 deferred — STILL
@@ -191,9 +185,9 @@ relevant prerequisites land):
    `EditWindow::close`'s `isClipboard→hide` branch is breadcrumbed for it.
 5. `TStreamable` write/read/build (D12).
 
-Phase 5 then continues in PORT-ORDER with **75** (`TDirListBox`), then
-`TFileList`/`TFileDialog`/`TChDirDialog` and the color / outline families.
-`cmDosShell` is still deferred — needs a backend terminal-suspend seam + SIGTSTP.
+Phase 5 then continues in PORT-ORDER with **80** (`TChDirDialog`, the last filedlg
+row), then the color / outline families. `cmDosShell` is still deferred — needs a
+backend terminal-suspend seam + SIGTSTP.
 
 ## What this session left available / changed
 

@@ -5,6 +5,85 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## Session — the filedlg consumer cluster: rows 77 `TFileInputLine`, 78 `TFileInfoPane`, 79 `TFileDialog`
+
+Landed the **interlocked file-dialog cluster** (77 + 78 + 79) on top of row 76,
+each as a fresh-implementer → two-stage review (spec ✅ then quality ✅) → fix →
+integrate → commit cycle. 822 → 867 lib tests (+45). Five commits:
+`4f325ca` (77), `15e2ca0` (78), `5270a78` (79 B1), `2342e3e` (79 B2), plus this
+docs commit.
+
+**Why a cluster, not three independent leaves.** Both 77 (`TFileInputLine`) and
+78 (`TFileInfoPane`) react to a `cmFileFocused` broadcast **carrying a
+`TSearchRec`**, and 79 (`TFileDialog`) is its producer/assembler. rstv's
+`Event::Broadcast { command, source }` is **payload-less** (D4 — `source` is the
+resolvable subject, not a value carrier), so the cluster shares one new
+FOUNDATION piece: the **payload-carrying-broadcast seam**, designed once at its
+first consumer.
+
+### The payload-broadcast seam (FOUNDATION, row 77)
+The faithful translation of C++ `message(owner, evBroadcast, cmFileFocused,
+list()->at(item))` under D4/D3:
+- **Producer.** C++ `TFileList::focusItem` is **virtual** and fires on *every*
+  focus change (keyboard, mouse, scrollbar-at-apply-time, readDirectory). rstv's
+  `focus_item` is a shared free fn, not virtual — so a defaulted no-op
+  `ListViewer::on_focus_changed(&mut ctx)` hook is called at the **tail of
+  `focus_item`** (the sole funnel all focus changes pass through), and `FileList`
+  overrides it to `ctx.broadcast(FILE_FOCUSED, Some(self_id))`. Behaviour-preserving
+  for every other `ListViewer` impl. (The advisor initially suggested a
+  `handle_event` before/after diff; we rejected it — the **scrollbar** path
+  changes focus at *deferred-apply* time, which a synchronous `handle_event` diff
+  structurally cannot see. `focus_item` is the only correct single point.)
+- **Broker.** `Deferred::ResolveFocusedFile { subscriber, source }` — the pump
+  reads `FileList::focused_rec()` from `source` (own `find_mut`, borrow dropped),
+  then concrete-downcasts `subscriber` to `FileInputLine` (row 77) or
+  `FileInfoPane` (row 78, an `else if` arm) and calls `on_file_focused(rec)`. The
+  consumer holds only `&mut Context` (D3) so it can't read its sibling — it
+  filters the broadcast in `handle_event` and requests the broker by its own id +
+  the broadcast `source`. Same shape as the `cmScrollBarChanged`→`SyncScrollerDelta`
+  broker. **`as_any_mut`→`self`** on both consumers (the opposite of `Memo`, which
+  forwards to its inner) so the downcast targets the consumer, not its embed.
+- `cmFileDoubleClicked` is faithfully **payload-less** (the only consumer,
+  `TFileDialog::handleEvent`, turns it into cmOK and never reads the record).
+
+### Row 78 — the draw-time owner-state problem (D-time + Role::InfoPane)
+`TFileInfoPane::draw` needs `directory`/`wildCard`/`file_block` but `draw()` has
+**no `Context`** — so caching on the consumer is *forced*, not a choice:
+`file_block` flows via the broker; `directory`/`wild_card` are owner-state the
+dialog pushes. The **date** introduced a **D-time deviation**: C++ read DOS
+local time from `findfirst`; rstv packs `std::fs` mtime into the same DOS `ftime`
+u32 (so the bitfield unpack ports verbatim), computed in **UTC** via Hinnant's
+days-from-civil (no tz crate); pre-1980 clamps to the DOS epoch; ≥2044 sets the
+`i32` sign bit and round-trips through `as u32`. `Role::InfoPane` traces the
+classic palette chain to BIOS `0x13` (cyan on blue).
+
+### Row 79 — the assembly (B1 skeleton + B2 valid/path-logic)
+- **The ctor-has-no-ctx problem.** C++ calls `readDirectory()` at the end of the
+  ctor; rstv's `FileList::read_directory` needs `ctx` (it broadcasts). The
+  ctx-bearing hook the modal loop runs **once, right after insert, before the
+  first draw** is `View::reset_current` — so the initial `readDirectory` maps
+  there (guarded by a one-time flag). The owner-state push to children is **not**
+  a cross-view broker (that's for leaf views): the dialog **owns** the group, so
+  it mutates its children directly via the new `pub(crate) Dialog::child_mut`
+  (`set_dir_info` on the info pane, `read_directory` on the file list).
+- **`valid()` is the gate, not `handle_event`.** `handle_event` just
+  `end_modal(cmFileOpen)`; the pump's `validate_modal_close` calls
+  `valid(endState, ctx)` before accepting. The faithful 4-branch `valid`
+  **navigates** (isWild/isDir → re-read, return *false* = keep open) or
+  **accepts** (validFileName → true); the two error boxes (`invalidDrive`,
+  `invalidFile`) are `mfError|mfOKButton` → **Informational** consumers of the
+  async-modal-from-view seam (request + return false; `validate_modal_close`
+  drives the box inline — no pump change).
+- **D14 lexical path helpers** (`expand_path`/`is_wild`/`is_dir_only`/
+  `split_dir_file`/`path_valid`/`valid_file_name`) over `std::path` — no
+  `canonicalize` (faithful fexpand is purely lexical). The bug worth recording:
+  `Path::file_name()` returns `Some` for a trailing-slash path, so it can't
+  detect a bare directory — hence the explicit `is_dir_only`.
+
+**Still breadcrumbed (row 79):** the "21st-century percentages" screen-resize
+block, `wfGrow`, and the `FileEditor::saveAs` consumer (now **unblocked** by
+`FileDialog::value()`).
+
 ## Session — row 76 `TFileList`
 
 Ported **row 76 `TFileList`** as `FileList` in `src/dialog/filedlg.rs` (on top of

@@ -742,6 +742,32 @@ path model; there is no `\`↔`/` translation seam anywhere. `pathValid`/`isDir`
 
 ---
 
+## D15 — DOS `findfirst` local time → `std::fs` mtime, UTC · *minor*
+
+**Baseline.** `TFileList::readDirectory` reads each entry's timestamp from the DOS
+`findfirst`/`ffblk` as a packed `ftime` 32-bit word (`(ff_fdate<<16)|ff_ftime` —
+year-1980/month/day in the high half, hour/min/sec÷2 in the low half, **local
+time**), stored on `TSearchRec::time`. `TFileInfoPane::draw` unpacks that bitfield
+to render `Mon DD, YYYY HH:MMa/p` (row 78).
+
+**Deviation.** rstv reads the timestamp from **`std::fs::Metadata::modified()`**
+(a `SystemTime`) and packs it into the **same DOS `ftime` u32** so the info-pane
+unpack ports **verbatim**. The civil date is computed **in UTC** (Howard Hinnant's
+days-from-civil — no `chrono`/`time` crate dependency for one info pane). Edge
+handling: pre-1980 (and `duration_since` errors) clamp to the DOS epoch
+(`0x0021_0000` = Jan 01 1980 00:00); far-future years (≥2044) intentionally set
+the `i32` sign bit and round-trip through `as u32` at unpack; the synthesized `..`
+entry uses the epoch constant unconditionally (C++ stats the real parent — a
+cosmetic date difference on that one row).
+
+**Integration.** Confined to `FileList::build_listing` (the pack) and
+`FileInfoPane::draw` (the verbatim unpack), both in `src/dialog/filedlg.rs`. The
+**UTC vs local** display difference is the only user-visible divergence; accepted
+to avoid a timezone dependency. `TSearchRec::time` keeps the faithful DOS layout
+so the C++ draw code is unchanged.
+
+---
+
 ## Vendoring & licensing
 
 - **ratatui** cell-buffer + diff is **copied** (not depended on) and adapted —
