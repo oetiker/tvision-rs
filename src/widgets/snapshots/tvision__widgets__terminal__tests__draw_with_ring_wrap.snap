@@ -1,0 +1,21 @@
+---
+source: src/widgets/terminal.rs
+expression: "render_terminal(&mut t, 20, 5)"
+---
+size: 20x5
+cursor: hidden
+text:
+|second              |
+|third               |
+|fourth              |
+|fifth               |
+|                    |
+attr:
+|aaaaaaaaaaaaaaaaaaaa|
+|aaaaaaaaaaaaaaaaaaaa|
+|aaaaaaaaaaaaaaaaaaaa|
+|aaaaaaaaaaaaaaaaaaaa|
+|aaaaaaaaaaaaaaaaaaaa|
+legend:
+  . default
+  a fg=BIOS(8) bg=BIOS(2)

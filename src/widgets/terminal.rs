@@ -355,9 +355,12 @@ impl View for Terminal {
         };
 
         // Draw rows from y_start down to 0, newest to oldest.
+        // Use `while y >= 0` (mirrors C++ `for (; y >= 0; y--)`) so that when
+        // size.y == 0 and y_start == -1, the body is skipped entirely instead
+        // of looping forever on a y that never reaches 0.
         let mut cur_end = end_line;
         let mut y = y_start;
-        loop {
+        while y >= 0 {
             let beg_line = self.prev_lines(cur_end, 1);
 
             // Inner loop: process the line in 256-byte chunks, faithful to the C++
@@ -375,9 +378,14 @@ impl View for Terminal {
                     let copy_len = (cur_end - line_pos).min(MAX_SCRATCH);
                     scratch.extend_from_slice(&self.buffer[line_pos..line_pos + copy_len]);
 
+                    // Compute raw byte count to advance line_pos (always positive,
+                    // preventing hang when a chunk starts with an invalid/continuation
+                    // UTF-8 byte that makes valid_utf8 return "" i.e. slen == 0).
+                    let raw_advance = copy_len;
+
                     // Trim possibly-truncated UTF-8 at end only when at the 256-byte cap
-                    // (faithful to C++ `discardPossiblyTruncatedCharsAtEnd`). Use raw
-                    // length for advance — always positive so no hang on invalid bytes.
+                    // (faithful to C++ `discardPossiblyTruncatedCharsAtEnd`). slen is
+                    // used for rendering only — NOT for advancing line_pos.
                     let slen = if scratch.len() == MAX_SCRATCH {
                         Self::valid_utf8(&scratch).len()
                     } else {
@@ -385,13 +393,11 @@ impl View for Terminal {
                     };
                     scratch.truncate(slen);
 
-                    // C++: `if (linePos >= bufSize - sLen) linePos = sLen - (bufSize - linePos);
-                    //        else linePos += sLen;`
-                    // Equivalent: `if linePos + slen >= buf_size { ... }`
-                    if line_pos + slen >= self.buf_size {
-                        line_pos = slen - (self.buf_size - line_pos);
+                    // Advance line_pos by raw count, not slen.
+                    if line_pos + raw_advance >= self.buf_size {
+                        line_pos = raw_advance - (self.buf_size - line_pos);
                     } else {
-                        line_pos += slen;
+                        line_pos += raw_advance;
                     }
                 } else {
                     // Wrap: copy buf[line_pos..buf_size] then buf[0..cur_end].
@@ -400,7 +406,10 @@ impl View for Terminal {
                     let snd_len = cur_end.min(MAX_SCRATCH - fst_len);
                     scratch.extend_from_slice(&self.buffer[..snd_len]);
 
-                    // Trim at cap only; use raw slen for advance (same rationale).
+                    // Raw byte count for advancing line_pos (always >= 1 since fst_len >= 1).
+                    let raw_advance = fst_len + snd_len;
+
+                    // Trim at cap only; raw_advance is used for line_pos, not slen.
                     let slen = if scratch.len() == MAX_SCRATCH {
                         Self::valid_utf8(&scratch).len()
                     } else {
@@ -408,10 +417,11 @@ impl View for Terminal {
                     };
                     scratch.truncate(slen);
 
-                    if line_pos + slen >= self.buf_size {
-                        line_pos = slen - (self.buf_size - line_pos);
+                    // Advance line_pos by raw count, not slen.
+                    if line_pos + raw_advance >= self.buf_size {
+                        line_pos = raw_advance - (self.buf_size - line_pos);
                     } else {
-                        line_pos += slen;
+                        line_pos += raw_advance;
                     }
                 }
 
@@ -430,9 +440,6 @@ impl View for Terminal {
                 self.scroller.state_mut().cursor = Point::new(x, y);
             }
 
-            if y == 0 {
-                break;
-            }
             y -= 1;
 
             cur_end = beg_line;
@@ -625,8 +632,9 @@ mod tests {
             // Now write another 5 bytes that force eviction.
             t.write_bytes(b"DDDD\n", &mut ctx); // 5 bytes
             // The buffer cannot hold 14 + 5 = 19 bytes; lines evicted from front.
-            // Limit.y should not grow unboundedly.
-            assert!(t.scroller.limit().y >= 1, "limit.y >= 1 after eviction");
+            assert!(t.que_back > 0, "que_back advanced — old data was evicted");
+            // Limit should be bounded (not more than the lines that fit in the buffer).
+            assert!(t.scroller.limit().y <= 5, "limit bounded after eviction");
         }
     }
 
@@ -668,6 +676,26 @@ mod tests {
             t.init(&mut ctx);
             t.write_bytes(b"hello\nworld\nfoo\n", &mut ctx);
         }
+        insta::assert_snapshot!(render_terminal(&mut t, 20, 5));
+    }
+
+    #[test]
+    fn draw_with_ring_wrap() {
+        // buf_size=32 (31 usable). Write enough data to force que_front to wrap
+        // around the end of the ring buffer, exercising the wrap branch in draw().
+        let mut t = make_terminal(20, 5, 32);
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            t.init(&mut ctx);
+            // First write: 19 bytes, 3 newlines — fills most of the 31-byte buffer.
+            t.write_bytes(b"first\nsecond\nthird\n", &mut ctx);
+            // Second write: 13 bytes — causes que_front to wrap around buf end.
+            t.write_bytes(b"fourth\nfifth\n", &mut ctx);
+        }
+        // Should not panic; snapshot verifies rendering of wrapped ring buffer.
         insta::assert_snapshot!(render_terminal(&mut t, 20, 5));
     }
 
