@@ -3381,6 +3381,40 @@ mod tests {
         }
     }
 
+    /// A plain modal (Probe, simulating a Dialog without `!mouseInView` logic)
+    /// must NOT cancel when an outside click is delivered.  C++: only
+    /// `THistoryWindow` has the `!mouseInView → endModal(cmCancel)` override;
+    /// `TDialog` does not.
+    #[test]
+    fn plain_dialog_modal_ignores_outside_click() {
+        let (mut program, _screen, _clock) = program_with_desktop(20, 10);
+        let modal_log = Rc::new(RefCell::new(Vec::new()));
+
+        let modal_bounds = Rect::new(5, 2, 15, 8);
+        let modal_id = {
+            let modal = Probe::new(modal_bounds, 'D', modal_log.clone());
+            program.group_mut().insert(Box::new(modal))
+        };
+        program.with_ctx(|g, ctx| g.set_current(Some(modal_id), SelectMode::Normal, ctx));
+        program
+            .captures
+            .push(Box::new(ModalFrame::new(modal_id, modal_bounds)));
+
+        // Click at (1, 1) is outside modal_bounds (x=5..15, y=2..8).
+        program.out_events.clear();
+        program.out_events.push_back(mouse_down_at(1, 1));
+        program.pump_once();
+
+        // The modal view receives the outside click (delivery path confirmed).
+        assert_eq!(modal_log.borrow().len(), 1, "outside click delivered to modal");
+        // No endModal was posted — end_state stays None (the plain Probe does
+        // not call ctx.end_modal, so no modal close).
+        assert!(
+            program.end_state().is_none(),
+            "plain Dialog must not cancel on outside click"
+        );
+    }
+
     // -- 6. resetCursor ------------------------------------------------------
 
     #[test]

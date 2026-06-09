@@ -139,12 +139,6 @@ impl CaptureStack {
         self.handlers.is_empty()
     }
 
-    /// Returns the [`ViewId`] of the top capture handler, if it has one.
-    /// Used by the pump to detect an active modal before dispatch.
-    pub fn top_view(&self) -> Option<ViewId> {
-        self.handlers.last().and_then(|h| h.view())
-    }
-
     /// Returns the [`ViewId`] of the top capture handler only when it is a
     /// modal-bounds gate ([`CaptureHandler::is_modal_gate`] == `true`).
     /// Used by the pump's outside-modal redirect to avoid firing on drag or
