@@ -36,6 +36,7 @@
 //!   only [`Group::valid`](crate::view::Group); the return-consuming `message()`
 //!   has no consumer at row 34 (it needs a validating control).
 
+mod colorpick;
 #[allow(clippy::module_inception)]
 mod dialog;
 mod filedlg;
