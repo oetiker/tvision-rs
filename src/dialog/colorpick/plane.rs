@@ -194,16 +194,6 @@ impl Surface for PlaneSurface {
                     m.set_hsv(Hsv { v: new_v, ..m.hsv });
                     ev.clear();
                 }
-                Key::Char(']') => {
-                    let new_h = (m.hsv.h + 6.0).rem_euclid(360.0);
-                    m.set_hsv(Hsv { h: new_h, ..m.hsv });
-                    ev.clear();
-                }
-                Key::Char('[') => {
-                    let new_h = (m.hsv.h - 6.0).rem_euclid(360.0);
-                    m.set_hsv(Hsv { h: new_h, ..m.hsv });
-                    ev.clear();
-                }
                 _ => {}
             },
             Event::MouseDown(me) => {
@@ -280,9 +270,7 @@ mod tests {
     fn key(k: Key) -> Event {
         Event::KeyDown(KeyEvent::new(k, KeyModifiers::default()))
     }
-    fn ch(c: char) -> Event {
-        Event::KeyDown(KeyEvent::new(Key::Char(c), KeyModifiers::default()))
-    }
+
     const BODY: Rect = Rect {
         a: Point { x: 0, y: 1 },
         b: Point { x: 37, y: 18 },
@@ -352,14 +340,6 @@ mod tests {
         assert!((m.hsv.h - h0).abs() < 0.5, "plain Down must not change hue");
     }
 
-    #[test]
-    fn bracket_changes_hue() {
-        let mut s = PlaneSurface::new();
-        let mut m = ColorModel::new(Color::Rgb(255, 0, 0)); // hue 0
-        let mut ev = ch(']');
-        with_ctx(|ctx| s.handle_event(&mut ev, BODY, &mut m, ctx));
-        assert!(m.hsv.h > 0.0, "] should advance hue");
-    }
 
     #[test]
     fn down_arrow_decreases_value_without_scrambling_hue() {
