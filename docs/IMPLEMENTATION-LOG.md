@@ -5,6 +5,57 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## Session — outline family (rows 88–90)
+
+Ported the **outline cluster** (`TNode`/`TOutlineViewer`/`TOutline`) into a new
+`src/widgets/outline.rs`. This is the faithful-port resumption after the
+color-picker extension; rows 81–87 stay dropped (see the next session below).
+
+`TOutlineViewer` is a `TScroller` subclass whose abstract virtuals
+(`getRoot`/`getNext`/`getChild`/`getText`/`isExpanded`/`hasChildren`/`adjust`) are
+called from *inside* the base's own `draw`/`handleEvent`/`update`. As with
+`TListViewer` (row 28), a concrete-struct embed can't dispatch from the base's draw
+back into the embedder, so it is modeled as the **`OutlineViewer` trait + free
+functions generic over `<L: OutlineViewer + ?Sized>`** (`traverse`, `ov_draw`,
+`ov_handle_event`, `ov_set_state`, `ov_update`, `ov_expand_all`, `adjust_focus`,
+`ov_get_node_info`, `ov_get_graph`, `create_graph`) + an `OutlineViewerState` for
+the non-virtual data (`delta`/`limit`/`foc`/scrollbar ids).
+
+### Commit
+
+- **`7472343` feat(outline): port TNode/TOutlineViewer/TOutline (rows 88–90)** —
+  - **`Node` (row 88):** owned `Box<Node>` tree (`text`/`child_list`/`next`/`expanded`)
+    with a builder API (`new`/`with_children`/`with_next`/`with_expanded`); Rust's
+    recursive `Box` drop replaces C++ `disposeNode` (D12 streaming dropped).
+  - **`OutlineViewer` (row 89, FOUNDATION):** `traverse` ports `iterate`+`traverseTree`
+    (DFS, 0-based pre-incremented positions, `ovExpanded`/`ovChildren`/`ovLast` flags,
+    `lines` continuation-bar bitset, root-level sibling walk). `ov_draw` ports
+    `drawTree` (focus/select/normal color matrix, `delta.x` horizontal skip via
+    `put_str_part`, the `(flags & ovExpanded) ? color : color>>8` not-expanded text
+    color, trailing blank-fill). `create_graph`/`ov_get_graph` port the box-drawing
+    graph string (`levWidth=endWidth=3`, glyphs from `ctx.glyphs()`). Keyboard nav,
+    `+`/`-`/`*` expand/collapse, `adjust_focus` scroll-into-view all faithful;
+    **mouse drag-loop deferred** (`TODO(row 31, D9)`, single-click only).
+  - **`Outline` (row 90):** concrete impl over the owned tree; `adjust(pos, expand)`
+    resolves a DFS position to the owned node via the **safe recursive**
+    `set_expanded_at_pos` (no `unsafe`). The ctor does **not** call `update()`
+    (needs a `Context`) — consumers call `ov_update` after insertion, like the
+    scroller/list-viewer.
+  - **Seams added:** `Role::Outline{Normal,Focused,Selected,NotExpanded}` (D7,
+    `cpOutlineViewer "\x6\x7\x3\x8"`; indices 58–61, `ROLE_COUNT` 58→62);
+    `Command::OUTLINE_ITEM_SELECTED` (`cmOutlineItemSelected = 301`);
+    `Deferred::SyncOutlineViewerDelta` + `Context::request_sync_outline_viewer_delta`
+    + a pump apply-arm (the scrollbar→delta read-broker, downcast to `Outline`,
+    mirroring `SyncScrollerDelta`).
+  - Two snapshot tests (expanded-tree draw, focused-collapsed text color). No new
+    `View` trait methods → `tvision-macros/src/specs.rs` unchanged.
+  - **Two-stage review caught two issues, both fixed:** spec reviewer found
+    `ov_expand_all`'s subtree-boundary guard was `level == start_level` (would leak
+    into an ancestor's siblings at a shallower level) → fixed to `level <= start_level`;
+    quality reviewer found an unsound `*const Node → *mut Node` write in `adjust`
+    (UB under Stacked Borrows — provenance traced to a `&Node`) → replaced with the
+    safe recursive traversal. **941 lib tests green; clippy + fmt clean.**
+
 ## Session — truecolor color-picker extension (rows 81–87 dropped)
 
 Built the **truecolor color-picker** (`src/dialog/colorpick/`) as an

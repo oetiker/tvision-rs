@@ -189,9 +189,9 @@ concrete validators (Phase 5). Split accordingly.
 | 85 ~~DROPPED~~ | `TColorGroupList` | `TListViewer` | `colorsel.cpp`, `sclrsel.cpp` | `dialog` (colordlg) | MECHANICAL | **DROPPED** — see row 81. |
 | 86 ~~DROPPED~~ | `TColorItemList` | `TListViewer` | `colorsel.cpp`, `sclrsel.cpp` | `dialog` (colordlg) | MECHANICAL | **DROPPED** — see row 81. |
 | 87 ~~DROPPED~~ | `TColorDialog` | `TDialog` | `sclrsel.cpp`/`colorsel.cpp` | `dialog` (colordlg) | MECHANICAL | **DROPPED** — see row 81. |
-| 88 | `TNode` | — | `outline.h` (inline), `soutline.cpp` | `widgets::outline` | MECHANICAL | tree node (text/children/expanded) |
-| 89 | `TOutlineViewer` | `TScroller` | `toutline.cpp`, `soutline.cpp` | `widgets::outline` | FOUNDATION | abstract tree walker; line glyphs (D7) |
-| 90 | `TOutline` | `TOutlineViewer` | `toutline.cpp`, `soutline.cpp`, `nmoutlin.cpp` | `widgets::outline` | MECHANICAL | concrete `TNode`-backed outline (→88) |
+| ✅ 88 | `TNode` | — | `outline.h` (inline), `soutline.cpp` | `widgets::outline` | MECHANICAL | tree node (text/children/expanded) |
+| ✅ 89 | `TOutlineViewer` | `TScroller` | `toutline.cpp`, `soutline.cpp` | `widgets::outline` | FOUNDATION | abstract tree walker; line glyphs (D7) |
+| ✅ 90 | `TOutline` | `TOutlineViewer` | `toutline.cpp`, `soutline.cpp`, `nmoutlin.cpp` | `widgets::outline` | MECHANICAL | concrete `TNode`-backed outline (→88) |
 | 91 | `TTextDevice` | `TScroller` | `textview.cpp` | `widgets::terminal` | MECHANICAL | abstract scrollable text sink (was `streambuf`) |
 | 92 | `TTerminal` | `TTextDevice` | `textview.cpp` | `widgets::terminal` | MECHANICAL | ring-buffer terminal view |
 

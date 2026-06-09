@@ -15,6 +15,18 @@
 
 ## Current state
 
+- **The outline family (rows 88–90) is COMPLETE and on `main`.** `Node` /
+  `OutlineViewer` (trait + free functions, like `TListViewer`) / `Outline` live in
+  `src/widgets/outline.rs`. **HEAD = `7472343`; 941 lib tests green; clippy + fmt
+  clean.** Reusable seams added: `Role::Outline{Normal,Focused,Selected,NotExpanded}`
+  (`ROLE_COUNT` 58→62), `Command::OUTLINE_ITEM_SELECTED`,
+  `Deferred::SyncOutlineViewerDelta` (+ `Context::request_sync_outline_viewer_delta`
+  + pump arm — the scrollbar→delta read-broker, mirrors `SyncScrollerDelta`).
+  **Known follow-ups (deferred, faithful):** mouse drag-loop / edge-scroll
+  (`TODO(row 31, D9)` — single-click positioning only, like every other widget);
+  `Outline` ctor does not call `update()` (no `Context`), consumers call `ov_update`
+  after insertion (documented, same as scroller/list-viewer); no runnable app wires
+  an `Outline` yet, so the scrollbar read-broker is exercised only by unit tests.
 - **The truecolor color-picker extension (tasks 0–9) is COMPLETE and on `main`.**
   Rows 81–82 were reverted (`9aa8e12`); the picker is built in
   `src/dialog/colorpick/` — `ColorModel` + `Hsv` + conversions, four surfaces
@@ -130,19 +142,19 @@
   payload-command + `set_state` `chDirButton` poke breadcrumbed → row 80. The
   `#[delegate]` proc-macro is landed and adopted codebase-wide.
 
-## Next — resume faithful port at row 88 (outline family)
+## Next — resume faithful port at row 91 (terminal family)
 
-**The color-picker extension is fully landed** (tasks 0–10, `5b1fabf`). Rows
-81–87 are dropped and documented. The docs reconciliation (PORT-ORDER, this file,
-IMPLEMENTATION-LOG, PORTING-GUIDE) is the remaining Task 11 — currently in
-progress.
+**The outline family (88–90) is fully landed** (`7472343`). Rows 81–87 stay
+dropped and documented.
 
-**Resume the faithful port at row 88** (`TNode` / the outline family 88–90):
-- Row 88: `TNode` — tree node (text/children/expanded), `outline.h` inline,
-  `soutline.cpp`. MECHANICAL leaf.
-- Row 89: `TOutlineViewer` — abstract tree walker + line glyphs. FOUNDATION.
-- Row 90: `TOutline` — concrete `TNode`-backed outline. MECHANICAL.
-Then rows 91–92 (terminal family: `TTextDevice` / `TTerminal`).
+**Resume the faithful port at row 91** (terminal family 91–92) — the last two rows
+of the 92-class checklist. Both port from `textview.cpp` into a new
+`widgets::terminal`, both tagged MECHANICAL:
+- Row 91: `TTextDevice` (`: TScroller`) — abstract scrollable text sink (the C++
+  `streambuf` base; the sink/overflow seam is the thing to design under D11/D13).
+- Row 92: `TTerminal` (`: TTextDevice`) — ring-buffer terminal view (→91).
+The `TScroller` base + the scrollbar read-broker the outline family just reused are
+the precedent.
 
 **Entry point for `color_dialog`:** `Program::color_dialog(initial: Color) ->
 Option<Color>` at `src/app/program.rs`. Also re-exported as `tvision::ColorPicker`
