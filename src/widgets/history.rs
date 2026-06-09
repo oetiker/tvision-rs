@@ -503,11 +503,17 @@ impl View for HistoryWindow {
         }
         // (B) TWindow::handleEvent (faithful order: base first).
         self.window.handle_event(ev, ctx);
-        // (C) TODO(row 57 modal-loop seam): the C++ `evMouseDown && !mouseInView ->
-        // endModal(cmCancel)` outside-click cancel is omitted here: ModalFrame
-        // (program.rs) swallows outside positional events before they reach this view.
-        // Porting it needs ModalFrame to DELIVER (not Consume) outside clicks to the
-        // modal view — designed alongside the Deferred::OpenModal async-modal path.
+        // (C) Outside-click cancel — C++ THistoryWindow::handleEvent:
+        //   if (event.what == evMouseDown && !mouseInView(event.mouse.where))
+        //       endModal(cmCancel);
+        // The pump delivers outside clicks to us with the position already localized
+        // (subtracted modal_bounds.a), so !mouseInView == !extent.contains(position).
+        if let Event::MouseDown(m) = ev
+            && !View::state(self).get_extent().contains(m.position)
+        {
+            ctx.end_modal(Command::CANCEL);
+            ev.clear();
+        }
     }
 }
 
@@ -1459,10 +1465,10 @@ mod window_tests {
     use crate::backend::{HeadlessBackend, HeadlessHandle};
     use crate::command::Command;
     use crate::desktop::Desktop;
-    use crate::event::{Event, Key, KeyEvent, KeyModifiers};
+    use crate::event::{Event, Key, KeyEvent, KeyModifiers, MouseButtons, MouseEvent};
     use crate::theme::Theme;
     use crate::timer::ManualClock;
-    use crate::view::{Deferred, Rect, View};
+    use crate::view::{Deferred, Point, Rect, View};
     use std::rc::Rc;
 
     fn key_ev(k: Key) -> Event {
@@ -1761,5 +1767,68 @@ mod window_tests {
             "Enter dismisses the modal cleanly after setup with negative h-bar max"
         );
         // Reaching here without panic confirms the negative-max path (-32 → 0) is safe.
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 6: history_window_cancels_on_outside_click
+    //
+    // Simulate what the pump redirect does: deliver a MouseDown with a position
+    // outside the window's extent (localized to the window's frame) and verify
+    // that Deferred::EndModal(Command::CANCEL) is queued.
+    //
+    // The pump subtracts modal_bounds.a before calling handle_event. A
+    // HistoryWindow at Rect::new(10, 5, 50, 20) has size (40, 15), so
+    // get_extent() = (0, 0)...(40, 15). Deliver with position=(-1, 0)
+    // (outside the extent) to simulate an outside click.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn history_window_cancels_on_outside_click() {
+        clear_history();
+        history_add(110, "entry");
+
+        let mut hw = HistoryWindow::new(Rect::new(10, 5, 50, 20), 110);
+
+        // Run setup first (first-event guard) via a harmless broadcast.
+        let mut out = std::collections::VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+        {
+            let mut ctx = crate::view::Context::new(&mut out, &mut timers, 0, &mut deferred);
+            let mut ev = Event::Broadcast {
+                command: Command::SCROLL_BAR_CHANGED,
+                source: None,
+            };
+            hw.handle_event(&mut ev, &mut ctx);
+        }
+        deferred.clear();
+
+        // Deliver a MouseDown with position outside the extent — simulates the
+        // pump redirect with the position already localized (modal_bounds.a
+        // subtracted). Position (-1, 0) is outside extent (0,0)...(40,15).
+        let outside_click = Event::MouseDown(MouseEvent {
+            position: Point::new(-1, 0),
+            buttons: MouseButtons {
+                left: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        let mut ev = outside_click;
+        {
+            let mut ctx = crate::view::Context::new(&mut out, &mut timers, 0, &mut deferred);
+            hw.handle_event(&mut ev, &mut ctx);
+        }
+
+        assert!(
+            ev.is_nothing(),
+            "outside-click MouseDown consumed by HistoryWindow"
+        );
+        assert!(
+            deferred
+                .iter()
+                .any(|x| matches!(x, Deferred::EndModal(Command::CANCEL))),
+            "outside click must queue EndModal(CANCEL)"
+        );
     }
 }

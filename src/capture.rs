@@ -54,6 +54,15 @@ pub trait CaptureHandler {
         None
     }
 
+    /// Returns `true` if this handler is a modal-bounds gate (a [`ModalFrame`]
+    /// equivalent).  Used by the pump's outside-modal redirect to distinguish a
+    /// true modal frame from other capture handlers that also have a `view()`
+    /// (drag, menu-box, etc.).  **Default is `false`** — only `ModalFrame`
+    /// overrides this.
+    fn is_modal_gate(&self) -> bool {
+        false
+    }
+
     /// Update the handler's cached gating bounds for its associated view, called
     /// by [`CaptureStack::sync_gate_bounds`] before each dispatch so a handler
     /// that gates events by the view's *position* (e.g. a modal frame) follows
@@ -128,6 +137,22 @@ impl CaptureStack {
     /// Whether the stack has no handlers.
     pub fn is_empty(&self) -> bool {
         self.handlers.is_empty()
+    }
+
+    /// Returns the [`ViewId`] of the top capture handler, if it has one.
+    /// Used by the pump to detect an active modal before dispatch.
+    pub fn top_view(&self) -> Option<ViewId> {
+        self.handlers.last().and_then(|h| h.view())
+    }
+
+    /// Returns the [`ViewId`] of the top capture handler only when it is a
+    /// modal-bounds gate ([`CaptureHandler::is_modal_gate`] == `true`).
+    /// Used by the pump's outside-modal redirect to avoid firing on drag or
+    /// menu-box handlers that also carry a `view()`.
+    pub fn top_modal_view(&self) -> Option<ViewId> {
+        self.handlers
+            .last()
+            .and_then(|h| if h.is_modal_gate() { h.view() } else { None })
     }
 
     /// Offer `ev` to the handlers top-down (last pushed first).

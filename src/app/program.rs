@@ -180,6 +180,10 @@ impl CaptureHandler for ModalFrame {
         Some(self.id)
     }
 
+    fn is_modal_gate(&self) -> bool {
+        true
+    }
+
     /// Follow the modal view when it is moved/resized (a dragged dialog). Without
     /// this the gate keeps the bounds captured at push time, so after a drag any
     /// positional event on the *moved* dialog that falls outside the stale bounds
@@ -1330,18 +1334,60 @@ impl Program {
                     // drain the deferred queue back into loop/tree state.
                     {
                         let mut ctx = Context::new(out_events, timers, now, deferred);
-                        // Offer to the capture stack first; if consumed, skip view
-                        // routing.
-                        let consumed = captures.dispatch(&mut ev, &mut ctx);
-                        if !consumed {
-                            program_handle_event(
-                                group,
-                                *desktop,
-                                &mut ev,
-                                &mut ctx,
-                                end_state,
-                                app_commands,
-                            );
+                        // Outside-modal redirect: while a ModalFrame is the top capture,
+                        // deliver outside-bounds positional events directly to the modal
+                        // view (localized to its bounds) so the view decides — HistoryWindow
+                        // cancels; plain Dialog ignores. C++: THistoryWindow::handleEvent
+                        // checks !mouseInView AFTER base.
+                        let modal_handled = {
+                            // Resolve top-capture view id and its bounds (only when
+                            // the top handler is a ModalFrame, not drag/menu handlers).
+                            let modal = captures.top_modal_view().and_then(|id| {
+                                group.find_mut(id).map(|v| (id, v.state().get_bounds()))
+                            });
+                            if let Some((modal_id, modal_bounds)) = modal {
+                                let outside = match &ev {
+                                    Event::MouseDown(m)
+                                    | Event::MouseUp(m)
+                                    | Event::MouseMove(m)
+                                    | Event::MouseAuto(m) => !modal_bounds.contains(m.position),
+                                    _ => false,
+                                };
+                                if outside {
+                                    // Localize: subtract the modal view's top-left (makeLocal).
+                                    let origin = modal_bounds.a;
+                                    match &mut ev {
+                                        Event::MouseDown(m) => m.position -= origin,
+                                        Event::MouseUp(m) => m.position -= origin,
+                                        Event::MouseMove(m) => m.position -= origin,
+                                        Event::MouseAuto(m) => m.position -= origin,
+                                        _ => {}
+                                    }
+                                    if let Some(v) = group.find_mut(modal_id) {
+                                        v.handle_event(&mut ev, &mut ctx);
+                                    }
+                                    true
+                                } else {
+                                    false
+                                }
+                            } else {
+                                false
+                            }
+                        };
+                        if !modal_handled {
+                            // Offer to the capture stack first; if consumed, skip view
+                            // routing.
+                            let consumed = captures.dispatch(&mut ev, &mut ctx);
+                            if !consumed {
+                                program_handle_event(
+                                    group,
+                                    *desktop,
+                                    &mut ev,
+                                    &mut ctx,
+                                    end_state,
+                                    app_commands,
+                                );
+                            }
                         }
                     }
                     // Apply the deferred queue AFTER dispatch — one drain, in
@@ -3208,23 +3254,29 @@ mod tests {
             .captures
             .push(Box::new(ModalFrame::new(modal_id, modal_bounds)));
 
-        // A click outside the modal view is swallowed: the beneath probe must NOT
-        // see it.
+        // A click outside the modal view is delivered to the modal view (localized),
+        // NOT to views beneath. The beneath probe must NOT see it.
         program.out_events.clear(); // drop the set_current focus broadcasts
         program.out_events.push_back(mouse_down_at(2, 2));
         program.pump_once();
         assert!(
             beneath_log.borrow().is_empty(),
-            "modal swallows clicks aimed at views beneath it"
+            "outside click is NOT routed to views beneath the modal"
+        );
+        // The modal view itself receives the outside click (localized to its frame).
+        assert_eq!(
+            modal_log.borrow().len(),
+            1,
+            "outside click is delivered to the modal view (localized)"
         );
 
-        // A click on the modal view reaches it.
+        // A click on the modal view also reaches it.
         program.out_events.push_back(mouse_down_at(12, 2));
         program.pump_once();
         assert_eq!(
             modal_log.borrow().len(),
-            1,
-            "modal view receives clicks aimed at it"
+            2,
+            "inside click also reaches the modal view"
         );
 
         // end_modal surfaces the end state. NOTE: row 31 does NOT pop the frame
@@ -3242,6 +3294,91 @@ mod tests {
             1,
             "row 31 does not pop the frame; exec_view (row 34) owns push+pop"
         );
+    }
+
+    // -- 5b. Outside-modal redirect -------------------------------------------
+
+    /// Verifies that when a ModalFrame is the top capture and a MouseDown lands
+    /// outside the modal view's bounds, the event is delivered to the modal view
+    /// (localized), not silently swallowed or routed to views beneath.
+    #[test]
+    fn outside_modal_click_delivered_to_modal_view() {
+        let (mut program, _screen, _clock) = program_with_desktop(20, 10);
+        let modal_log = Rc::new(RefCell::new(Vec::new()));
+
+        // Modal probe occupies the right half of the screen.
+        let modal_bounds = Rect::new(10, 0, 20, 10);
+        let modal_id = {
+            let modal = Probe::new(modal_bounds, 'M', modal_log.clone());
+            program.group_mut().insert(Box::new(modal))
+        };
+        program.with_ctx(|g, ctx| g.set_current(Some(modal_id), SelectMode::Normal, ctx));
+        program
+            .captures
+            .push(Box::new(ModalFrame::new(modal_id, modal_bounds)));
+
+        // A click at (2, 2) is outside modal_bounds (x=10..20). It must be
+        // delivered to the modal view with a localized position, not swallowed.
+        program.out_events.clear();
+        program.out_events.push_back(mouse_down_at(2, 2));
+        program.pump_once();
+
+        assert_eq!(
+            modal_log.borrow().len(),
+            1,
+            "outside click must be delivered to the modal view"
+        );
+        // Verify the localized position: (2,2) - modal_bounds.a=(10,0) = (-8, 2).
+        if let Event::MouseDown(m) = modal_log.borrow()[0] {
+            assert_eq!(
+                m.position,
+                Point::new(-8, 2),
+                "position localized to modal frame"
+            );
+        } else {
+            panic!("expected MouseDown in modal_log");
+        }
+    }
+
+    /// Verifies that a MouseDown INSIDE the modal bounds still goes through
+    /// normal dispatch (not the outside-modal redirect).
+    #[test]
+    fn inside_modal_click_uses_normal_dispatch() {
+        let (mut program, _screen, _clock) = program_with_desktop(20, 10);
+        let modal_log = Rc::new(RefCell::new(Vec::new()));
+
+        let modal_bounds = Rect::new(10, 0, 20, 10);
+        let modal_id = {
+            let modal = Probe::new(modal_bounds, 'M', modal_log.clone());
+            program.group_mut().insert(Box::new(modal))
+        };
+        program.with_ctx(|g, ctx| g.set_current(Some(modal_id), SelectMode::Normal, ctx));
+        program
+            .captures
+            .push(Box::new(ModalFrame::new(modal_id, modal_bounds)));
+
+        // A click at (12, 2) is INSIDE modal_bounds (x=10..20). It reaches the
+        // modal view via normal dispatch (ModalFrame passes it through).
+        program.out_events.clear();
+        program.out_events.push_back(mouse_down_at(12, 2));
+        program.pump_once();
+
+        assert_eq!(
+            modal_log.borrow().len(),
+            1,
+            "inside click reaches modal view via normal dispatch"
+        );
+        // Normal dispatch: position localized to modal frame by Group::deliver.
+        // modal_bounds.a = (10, 0), so (12, 2) -> (2, 2).
+        if let Event::MouseDown(m) = modal_log.borrow()[0] {
+            assert_eq!(
+                m.position,
+                Point::new(2, 2),
+                "position localized by group deliver"
+            );
+        } else {
+            panic!("expected MouseDown in modal_log");
+        }
     }
 
     // -- 6. resetCursor ------------------------------------------------------
