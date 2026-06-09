@@ -66,7 +66,7 @@ struct HelloApp {
 impl HelloApp {
     /// `HelloApp::HelloApp` → `TProgInit(initStatusLine, initMenuBar, initDeskTop)`.
     fn new(backend: Box<dyn Backend>) -> Self {
-        let program = Program::new(
+        let mut program = Program::new(
             backend,
             Box::new(SystemClock::new()),
             Theme::classic_blue(),
@@ -74,6 +74,9 @@ impl HelloApp {
             Self::init_status_line,
             Self::init_menu_bar,
         );
+        // Custom commands must be explicitly enabled (they are not in the default
+        // command set, which only contains framework commands).
+        program.enable_command(CMD_COLOR_PICKER);
         HelloApp { program }
     }
 
