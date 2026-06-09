@@ -15,35 +15,42 @@
 
 ## Current state
 
-- **HEAD = row 82 `TColorSelector` (`ColorSelector`) — COMPLETE, landed this
-  session** on top of row 81. The color-selection cluster (81–87, `colordlg`) is
-  two rows in. Build: **924 lib tests** green; `cargo clippy --workspace
-  --all-targets -- -D warnings` and `cargo fmt --all --check` clean (verify clippy
-  with a forced re-lint — a cached run can mask a fresh warning).
-- **Row 82 established two reusable things for the rest of the cluster:**
-  1. **Raw-BIOS-color drawing** — the first widget to draw palette colors
-     literally (not via theme `Role`s): `Style::new(Color::Bios(c&0xF),
-     Color::Bios((c>>4)&0xF))`; attr `0x70` = `Bios(0)`/`Bios(7)`. Rows 83/84
-     (`TColorDisplay`/`TMonoSelector`) draw raw colors the same way.
-  2. **The color-changed seam** — `colorChanged` emits a **payload-less**
-     `COLOR_FOREGROUND/BACKGROUND_CHANGED {source=self}` (D4); consumers resolve
-     the color via `ColorSelector::color()` + `as_any_mut` downcast (the
-     `FileList::focused_rec` precedent, NOT D10 value). The **inbound** `cmColorSet`
-     is breadcrumbed inert `TODO(row 83)` — its `TColorDisplay` source doesn't
-     exist yet. **Row 83 owns building the resolver/broker** for both directions
-     (the `ResolveFocusedFile`/`MakeButtonDefault` broker pattern).
-- **The row-81 data shape (foundation for the rest of the cluster):**
-  collections→`Vec`. `ColorGroup::index` is **mutable focus state** (focused-item
-  position; defaults 0, set later by row-85 `setGroupIndex`), distinct from the
-  immutable palette `ColorItem::index` — the one real naming trap, documented in
-  the file. Groups = bare `Vec<ColorGroup>` (no newtype); `with_item` builder
-  replaces C++ `operator+`. `ColorIndex.color_index: Vec<u8>` with `colorSize`→
-  `color_index.len()` (the C++ `[256]` is a sentinel; real alloc is
-  `new uchar[numGroups+2]`). Rows 85/87 will add `setGroupIndex`/`getNumGroups`/
-  `setIndexes`/`getIndexes` etc. atop these (NOT pulled forward at row 81).
-- **New `Command`s (colorsel.h):** `COLOR_FOREGROUND_CHANGED` (71),
-  `COLOR_BACKGROUND_CHANGED` (72), `COLOR_SET` (73). Rows 85/86 will add
-  `cmNewColorItem`/`cmNewColorIndex`/`cmSaveColorIndex` (74/75/76).
+- **DIRECTION CHANGE (2026-06-09): the faithful color-selection cluster
+  (PORT-ORDER 81–87, `colordlg`) is DROPPED — superseded by a *modern truecolor
+  color-picker* extension.** Why: the C++ `TColorDialog` family exists solely to
+  edit `app->palette->data[index]` — the flat runtime-mutable BIOS palette that
+  rstv **deleted under D7** (palette → `Theme`; `Role` is a closed enum resolved
+  at draw time; `WindowPalette` is only a Blue/Cyan/Gray *tag*, not data). A
+  faithful 83–87 would edit a `TPalette` nothing in rstv reads — dead code by
+  construction. The user chose to build a reusable truecolor color-picker instead
+  (a runtime **theme editor** becomes a later consumer). **This is an
+  rstv-original extension, like `RegexValidator` — off the faithful critical
+  path.**
+- **The color-picker design is APPROVED** (brainstorm complete, spec committed):
+  [`docs/superpowers/specs/2026-06-09-color-picker-design.md`](file:///home/oetiker/checkouts/rstv/docs/superpowers/specs/2026-06-09-color-picker-design.md).
+  Summary: one `ColorPicker` view owning a shared `ColorModel` (Approach A,
+  surfaces as internal components, NOT separate Views); produces any `Color`
+  variant (Default/Bios/Indexed/Rgb); four **tabbed** surfaces (Presets · RGB+hex
+  · HSV plane · xterm-256 grid); old/new swatch + variant readout; keyboard +
+  **full mouse-drag** (the `window.rs` capture seam + one new
+  `Deferred::ColorPickerDrag`); `color_dialog(initial) -> Option<Color>` modal
+  entry. **Next step in the brainstorming flow is `writing-plans`** (the impl plan
+  was not yet written).
+- **HEAD = the design-spec commit, on top of row 82.** The two *faithful* color
+  rows landed earlier this session — **row 81** (`ColorItem`/`ColorGroup`/
+  `ColorIndex`, `c92ed19`) and **row 82** (`ColorSelector`, `f3c34ad`) — are
+  **superseded and will be REVERTED as the first step of the picker work** (the
+  picker's Presets surface subsumes the 16-color grid; the palette-bookkeeping
+  data classes have no consumer). They are still committed for now. The 3
+  `COLOR_*` commands in `command.rs` may be kept or dropped (unused by the
+  picker — see spec open items). Build currently: **924 lib tests** green; clippy
+  (forced re-lint) + fmt clean.
+- **Still valid & reusable from row 82:** **raw-BIOS-color drawing** — the first
+  widget to draw colors literally via `Style::new(Color::Bios(..), ..)` rather
+  than theme `Role`s. The picker's surfaces draw raw truecolor the same way
+  (`Color::Rgb`), and the existing `ColorDepth` quantization ladder degrades it on
+  lesser terminals. (The row-82 *color-changed broadcast seam* does NOT carry
+  over — the picker is one view, so it needs no cross-view color sync.)
 - **The makeDefault broker is now built** (FOUNDATION, row 80):
   `Deferred::MakeButtonDefault { button, enable }` + `Context::make_button_default`
   + a pump arm that downcasts `Button` and calls `make_default(enable, ctx)`.
@@ -129,46 +136,37 @@
   payload-command + `set_state` `chDirButton` poke breadcrumbed → row 80. The
   `#[delegate]` proc-macro is landed and adopted codebase-wide.
 
-## Next — resume PORT-ORDER at row 83 (`TColorDisplay`)
+## Next — build the color-picker extension, then resume PORT-ORDER at row 88
 
-**Rows 81–82 are DONE.** Continue the color-selection cluster (81–87, `colordlg`)
-→ **row 83 `TColorDisplay`** (a `TView`, sample-text preview), then `TMonoSelector`
-(84, a `TCluster`), the two `TListViewer`s `TColorGroupList`/`TColorItemList`
-(85/86 — they own row-81's data + drive `setGroupIndex`/`getNumGroups`/`focusItem`/
-`getText` over the `Vec<ColorGroup>`), then `TColorDialog` (87) which assembles
-82–86 and edits a `TPalette` (its `setIndexes`/`getIndexes` use row-81's
-`ColorIndex`). Sources: `colorsel.cpp` + `sclrsel.cpp` (already read this session
-— see the impl bodies in the IMPLEMENTATION-LOG investigation).
+**Immediate next: `writing-plans`** — turn the approved spec
+([`docs/superpowers/specs/2026-06-09-color-picker-design.md`](file:///home/oetiker/checkouts/rstv/docs/superpowers/specs/2026-06-09-color-picker-design.md))
+into an implementation plan, then build it **subagent-driven** (the standard
+implementer → review → integrate cycle). Read the spec first — it has the full
+architecture, module layout (`src/dialog/colorpick/`), the four surfaces, the
+mouse-drag capture design, the testing plan, and the **plan-level open items**
+(exact `Hsv` repr + rounding for deterministic snapshots, dialog/sub-rect
+geometry, the curated preset list, where the BIOS→RGB table lives).
 
-**Row 83 `TColorDisplay` is the broker-building row** (the row-82 breadcrumb owner).
-It holds a `TColorAttr* color` pointer into the dialog's palette and a sample text;
-its `draw` shows the text in that attr; it **owns the broadcast wiring** the cluster
-needs (all raw-color, like row 82):
-- It **consumes** `cmColorForegroundChanged`/`cmColorBackgroundChanged` (from the
-  row-82 selectors) — `*color = (*color & 0xF0) | (fg & 0x0F)` etc. The color value
-  lives on the **source selector** (`ColorSelector::color()` — already exposed +
-  `as_any_mut`), so build a resolver broker like `ResolveFocusedFile`: on the
-  payload-less broadcast, resolve the source's `color()` and apply the nibble.
-- Its `setColor` **emits** `cmColorSet` carrying the new attr — which the row-82
-  selectors consume (their inbound `cmColorSet` arm is the breadcrumb waiting for
-  this). Under D4 that broadcast is payload-less with `source = the TColorDisplay`,
-  and the selectors resolve the attr via a `TColorDisplay` color accessor (add one
-  mirroring `ColorSelector::color()`). **So row 83 unblocks and wires the row-82
-  `TODO(row 83)` arm.**
-The mutable `TColorAttr* color` pointer-into-the-palette is the D3 wrinkle: the
-display doesn't own the attr; in rstv it can't hold an up-pointer. Decide the
-ownership shape at row 83 (likely: the display caches the attr value + the dialog
-brokers the write-back, the row-77/80 broker style) — this is the row's one real
-design call; consult before locking it. After the cluster: the outline family
-(88–90) and the terminal family (91–92).
+**Step 0 of the picker work: REVERT rows 81–82** — delete `src/dialog/colordlg.rs`
++ its 3 `colordlg` snapshots + the `dialog/mod.rs` exports (and decide on the 3
+`COLOR_*` commands). The picker supersedes them. Then mark **PORT-ORDER rows
+81–87** as dropped/superseded (a documented D7 consequence, like `TStreamable`),
+pointing at the spec. *(PORT-ORDER still shows 81/82 ✅ and 83–87 as pending — it
+needs this reconciliation; the user asked only for HANDOVER this turn.)*
 
-**Row-81 data API available to 82–87:** `ColorItem::{new,name,index}`,
-`ColorGroup::{new,with_item,name,index,set_index,items}`,
-`ColorIndex::{new,group_index,set_group_index,color_index,color_size}`. The
-read-only walks the C++ does over linked lists become `Vec` indexing; the
-write methods 85/87 need beyond `set_index`/`set_group_index` (e.g. rebuilding a
-group's `items`, resizing `color_index`) were intentionally NOT added yet — add
-them in the consuming row.
+**Reusable seams the picker leans on (already built — see the spec):** raw-color
+drawing (row 82), the `window.rs` `DragCapture` capture-handler pattern (proven —
+you can drag window frames in `examples/hello.rs`), the
+"`Deferred` variant + pump downcast via `as_any_mut`" broker shape (scroller/
+editor/`MakeButtonDefault`), and the `exec_view_with_completion` gather-closure
+(inputBox) for returning the chosen `Color`.
+
+**After the picker lands: resume the faithful port at the lowest incomplete row,
+which is now `row 88` (`TNode` / the outline family 88–90)** — 81–87 are dropped,
+so 88 is the next faithful work. The terminal family (91–92) follows. A future
+**theme editor** (consuming this picker) needs the D7 "Theme extension point"
+(runtime `Role→Style` registration) built first — a separate sub-project, not on
+the critical path.
 
 **`FileEditor::saveAs` is UNBLOCKED** (row 79 `FileDialog` landed): read the chosen
 filename from `FileDialog::value()` → `FieldValue::Text`, as is `EditWindow`'s
@@ -214,9 +212,10 @@ relevant prerequisites land):
    `EditWindow::close`'s `isClipboard→hide` branch is breadcrumbed for it.
 5. `TStreamable` write/read/build (D12).
 
-Phase 5 then continues in PORT-ORDER with **80** (`TChDirDialog`, the last filedlg
-row), then the color / outline families. `cmDosShell` is still deferred — needs a
-backend terminal-suspend seam + SIGTSTP.
+After the color-picker extension, the faithful port resumes at **row 88**
+(`TNode` / the outline family) — the color cluster (81–87) is dropped (see
+*Current state*). `cmDosShell` is still deferred — needs a backend
+terminal-suspend seam + SIGTSTP.
 
 ## What this session left available / changed
 
