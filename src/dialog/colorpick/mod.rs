@@ -11,6 +11,7 @@
 pub(crate) mod drag;
 pub mod model;
 pub(crate) mod presets;
+pub(crate) mod rgb;
 
 use crate::color::Color;
 use crate::event::Event;
