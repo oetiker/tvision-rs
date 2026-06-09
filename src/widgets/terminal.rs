@@ -164,6 +164,12 @@ impl Terminal {
     /// the `lines`-th-previous logical line.
     ///
     /// Faithful port of `ttprvlns.cpp`. Handles ring-buffer wrap.
+    ///
+    /// Key difference from naive implementations: `find_lf_backwards` returns
+    /// `(found, last_pos)`. On `!found` the loop continues (just as the C++
+    /// do-while does) — there is **no early return**. This correctly handles
+    /// the ring-buffer wrap case where a newline is in the "other half" of the
+    /// buffer not covered by the current `count` window.
     fn prev_lines(&self, mut pos: usize, mut lines: usize) -> usize {
         if lines > 0 && pos != self.que_back {
             loop {
@@ -178,18 +184,18 @@ impl Terminal {
                 } else {
                     pos + 1
                 };
-                // find_lf_backwards: scan backward, return true if '\n' found,
-                // leaving `pos` at the found character.
-                if let Some(lf_pos) = self.find_lf_backwards(pos, count) {
-                    pos = lf_pos;
+                // find_lf_backwards: scan backward, mutates pos to last-checked byte.
+                // Returns (true, lf_pos) on found, (false, last_byte) on not-found.
+                // The C++ do-while continues regardless; only --lines is conditional.
+                let (found, last_pos) = self.find_lf_backwards(pos, count);
+                pos = last_pos;
+                if found {
                     lines -= 1;
                     if lines == 0 {
                         break;
                     }
-                } else {
-                    // No newline found in this backward scan → reached queBack.
-                    return self.que_back;
                 }
+                // If !found, loop continues naturally (faithful to C++ do-while).
             }
             pos = self.buf_inc(pos);
         }
@@ -199,22 +205,19 @@ impl Terminal {
     /// Helper for `prev_lines` — port of `findLfBackwards`.
     ///
     /// Scans backward from `pos` for up to `count` bytes.
-    /// Returns `Some(pos_of_newline)` or `None`.
-    /// On `None`, `pos` has been decremented to the last checked byte.
-    /// NOTE: this is a pure function — it does not mutate `pos` in place
-    /// like the C++ does (the C++ passes by `&`); the caller must use the
-    /// returned position.
-    fn find_lf_backwards(&self, mut pos: usize, count: usize) -> Option<usize> {
+    /// Returns `(true, pos_of_newline)` when found, or `(false, last_checked_pos)`
+    /// when not found. The last-checked position replicates the C++ behaviour of
+    /// mutating `pos` by reference so the caller can continue iterating.
+    fn find_lf_backwards(&self, mut pos: usize, count: usize) -> (bool, usize) {
         // C++: ++pos; do { if (buffer[--pos] == '\n') return True; } while (--count > 0);
-        // We model this as: start from `pos` (already at the character), scan backward.
-        // The C++ increments first then immediately decrements, so it starts at `pos`.
+        // We start from `pos` (already at the character) and scan backward.
         let mut remaining = count;
         loop {
             if self.buffer[pos] == b'\n' {
-                return Some(pos);
+                return (true, pos);
             }
             if remaining <= 1 {
-                return None;
+                return (false, pos); // last byte checked
             }
             remaining -= 1;
             pos = self.buf_dec(pos);
@@ -357,63 +360,66 @@ impl View for Terminal {
         loop {
             let beg_line = self.prev_lines(cur_end, 1);
 
-            // Build scratch: copy ring-buffer bytes from beg_line..cur_end into a
-            // contiguous Vec<u8> (up to 256 bytes, faithful to the C++ `char s[256]`).
+            // Inner loop: process the line in 256-byte chunks, faithful to the C++
+            // inner while-loop which declares `char s[256]` as a stack-local each
+            // iteration. `x` accumulates across chunks (C++: `x += b.moveStr(x,...)`).
             const MAX_SCRATCH: usize = 256;
-            let mut scratch: Vec<u8> = Vec::with_capacity(MAX_SCRATCH);
-
+            let mut x = 0i32;
             let mut line_pos = beg_line;
             while line_pos != cur_end {
+                // Fresh scratch buffer each chunk iteration (faithful to C++ `char s[256]`).
+                let mut scratch: Vec<u8> = Vec::with_capacity(MAX_SCRATCH);
+
                 if cur_end >= line_pos {
-                    // No wrap: copy min(cur_end - line_pos, remaining) bytes.
-                    let remaining = MAX_SCRATCH - scratch.len();
-                    let copy_len = (cur_end - line_pos).min(remaining);
-                    if copy_len == 0 {
-                        break;
-                    }
+                    // No wrap: copy min(cur_end - line_pos, MAX_SCRATCH) bytes.
+                    let copy_len = (cur_end - line_pos).min(MAX_SCRATCH);
                     scratch.extend_from_slice(&self.buffer[line_pos..line_pos + copy_len]);
 
-                    // Trim possibly-truncated UTF-8 chars at end if buffer is full.
+                    // Trim possibly-truncated UTF-8 at end only when at the 256-byte cap
+                    // (faithful to C++ `discardPossiblyTruncatedCharsAtEnd`). Use raw
+                    // length for advance — always positive so no hang on invalid bytes.
                     let slen = if scratch.len() == MAX_SCRATCH {
-                        let text = Self::valid_utf8(&scratch);
-                        text.len()
+                        Self::valid_utf8(&scratch).len()
                     } else {
                         scratch.len()
                     };
+                    scratch.truncate(slen);
 
-                    if line_pos + slen > self.buf_size {
+                    // C++: `if (linePos >= bufSize - sLen) linePos = sLen - (bufSize - linePos);
+                    //        else linePos += sLen;`
+                    // Equivalent: `if linePos + slen >= buf_size { ... }`
+                    if line_pos + slen >= self.buf_size {
                         line_pos = slen - (self.buf_size - line_pos);
                     } else {
                         line_pos += slen;
                     }
-                    scratch.truncate(slen);
                 } else {
-                    // Wrap: copy from line_pos..buf_size, then from 0..cur_end.
-                    let remaining = MAX_SCRATCH - scratch.len();
-                    let fst_len = (self.buf_size - line_pos).min(remaining);
+                    // Wrap: copy buf[line_pos..buf_size] then buf[0..cur_end].
+                    let fst_len = (self.buf_size - line_pos).min(MAX_SCRATCH);
                     scratch.extend_from_slice(&self.buffer[line_pos..line_pos + fst_len]);
-                    let remaining2 = MAX_SCRATCH - scratch.len();
-                    let snd_len = cur_end.min(remaining2);
+                    let snd_len = cur_end.min(MAX_SCRATCH - fst_len);
                     scratch.extend_from_slice(&self.buffer[..snd_len]);
 
-                    // Trim possibly-truncated UTF-8 chars at end if buffer is full.
+                    // Trim at cap only; use raw slen for advance (same rationale).
                     let slen = if scratch.len() == MAX_SCRATCH {
-                        let text = Self::valid_utf8(&scratch);
-                        text.len()
+                        Self::valid_utf8(&scratch).len()
                     } else {
                         scratch.len()
                     };
                     scratch.truncate(slen);
-                    line_pos = fst_len + snd_len;
-                    if line_pos >= self.buf_size {
-                        line_pos -= self.buf_size;
+
+                    if line_pos + slen >= self.buf_size {
+                        line_pos = slen - (self.buf_size - line_pos);
+                    } else {
+                        line_pos += slen;
                     }
                 }
+
+                // Render this chunk and advance x (C++: `x += b.moveStr(x, y, s, slen, ...)`).
+                let text = Self::valid_utf8(&scratch);
+                x += ctx.put_str(x, y, text, color);
             }
 
-            // Render the line text.
-            let text = Self::valid_utf8(&scratch);
-            let x = ctx.put_str(0, y, text, color);
             // Pad the rest of the row with spaces.
             if x < size.x {
                 ctx.fill(Rect::new(x, y, size.x, y + 1), ' ', color);
@@ -549,13 +555,13 @@ mod tests {
         //   buffer[5]='\n' → found. lines=0. bufInc(5)→6. Returns 6.
         //   (The empty trailing line after "world\n".)
         //
-        // prevLines(6, 2): finds '\n' at 5 (lines=1), then loops:
-        //   bufDec(5)→4. count=(4>=10?...:4)+1=5. findLf backward from 4: no '\n' found
-        //   (buffer[4..0] = "world"). Returns que_back=10 early (no '\n' in this segment).
-        //   Hmm: Wait—findLf scans backward from 4,3,2,1,0. None is '\n'. Returns que_back=10.
-        //   BUT there IS a '\n' at buffer[15] (end of "hello\n"). This is the wrap scenario.
-        //   Since count = pos+1 = 5 (only covers 0..4, not the wrapped part), findLf
-        //   returns False. So we return que_back=10. That's where "hello\n" starts.
+        // prevLines(6, 2): iteration 1 — finds '\n' at 5 (lines→1), pos=5.
+        //   iteration 2: pos=5≠10. bufDec(5)→4. count=(4>=10?...:4)+1=5.
+        //   findLf backward from 4: scans 4,3,2,1,0 — no '\n' (buffer= "world").
+        //   Returns (false, 0). pos=0. lines stays 1. Loop continues (no early return).
+        //   iteration 3: pos=0≠10. bufDec(0)→15. count=(15-10+1)=6.
+        //   findLf backward from 15, count=6: buffer[15]='\n' → found. lines→0. Break.
+        //   bufInc(15)→0. Returns 0 (start of "world\n", the byte after "hello\n"'s '\n').
         let mut t = make_terminal(20, 5, 16);
         let first_line = b"hello\n"; // written first, sits at [10..16]
         let second_line = b"world\n"; // written second (wrapped), sits at [0..6]
@@ -572,8 +578,8 @@ mod tests {
 
         let pos2 = t.prev_lines(6, 2);
         assert_eq!(
-            pos2, 10,
-            "prevLines(front,2) → 10 (start of 'hello', via queBack)"
+            pos2, 0,
+            "prevLines(front,2) → 0 (start of 'world', C++ faithful)"
         );
     }
 
