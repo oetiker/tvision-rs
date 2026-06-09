@@ -1,5 +1,8 @@
 //! Xterm-256 surface — a true 16×16 grid of the 256-color palette.
 
+// Drag-related imports are scaffolded for Task 9; allow until wired.
+#![allow(unused_imports)]
+
 use crate::backend::{rgb_to_xterm256, xterm256_to_rgb};
 use crate::color::{Color, Style};
 use crate::dialog::colorpick::model::{ColorModel, color_to_display_rgb};

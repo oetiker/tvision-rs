@@ -1,0 +1,49 @@
+---
+source: src/dialog/colorpick/mod.rs
+expression: "render_picker(Color::Bios(4), Tab::Presets)"
+---
+size: 40x12
+cursor: hidden
+text:
+| Presets RGB Plane W 6                  |
+|   Default                             O|
+|   Black                                |
+|   Blue                                N|
+|   Green                                |
+|   Cyan                                 |
+|   Red                                 B|
+|   Magenta                              |
+|   Brown                                |
+|   Light Gray                           |
+|   Dark Gray                            |
+|   Light Blue                           |
+attr:
+|abbbbbbbacccacccccccacaaaaaaaaaaaaaaaaaa|
+|dddddddddddddddddddddddddddddddddddddddd|
+|eedddddddddddddddddddddddddddddddddddddf|
+|ggdddddddddddddddddddddddddddddddddddddd|
+|hhdddddddddddddddddddddddddddddddddddddf|
+|iidddddddddddddddddddddddddddddddddddddd|
+|ffjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjdd|
+|kkdddddddddddddddddddddddddddddddddddddd|
+|lldddddddddddddddddddddddddddddddddddddd|
+|mmdddddddddddddddddddddddddddddddddddddd|
+|nndddddddddddddddddddddddddddddddddddddd|
+|oodddddddddddddddddddddddddddddddddddddd|
+legend:
+  . default
+  a fg=BIOS(7) bg=BIOS(1)
+  b fg=BIOS(15) bg=BIOS(2)
+  c fg=BIOS(0) bg=BIOS(2)
+  d fg=BIOS(8) bg=BIOS(2)
+  e fg=RGB(0,0,0) bg=RGB(0,0,0)
+  f fg=RGB(170,0,0) bg=RGB(170,0,0)
+  g fg=RGB(0,0,170) bg=RGB(0,0,170)
+  h fg=RGB(0,170,0) bg=RGB(0,170,0)
+  i fg=RGB(0,170,170) bg=RGB(0,170,170)
+  j fg=BIOS(4) bg=BIOS(2)
+  k fg=RGB(170,0,170) bg=RGB(170,0,170)
+  l fg=RGB(170,85,0) bg=RGB(170,85,0)
+  m fg=RGB(170,170,170) bg=RGB(170,170,170)
+  n fg=RGB(85,85,85) bg=RGB(85,85,85)
+  o fg=RGB(85,85,255) bg=RGB(85,85,255)

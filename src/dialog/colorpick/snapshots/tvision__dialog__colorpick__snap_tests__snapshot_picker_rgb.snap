@@ -1,0 +1,40 @@
+---
+source: src/dialog/colorpick/mod.rs
+expression: "render_picker(Color::Rgb(30, 144, 255), Tab::Rgb)"
+---
+size: 40x12
+cursor: hidden
+text:
+| Presets RGB Plane W 6                  |
+|                                       O|
+|R 030 ███                               |
+|                                       N|
+|                                        |
+|G 144 ██████████████████                |
+|                                       R|
+|                                        |
+|B 255 ████████████████████████████████  |
+|                                        |
+|                                        |
+|#1E90FF                                 |
+attr:
+|abbbbbbbacccabbbbbbbabaaaaaaaaaaaaaaaaaa|
+|......................................dd|
+|eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeedf|
+|......................................dd|
+|......................................df|
+|dddddddddddddddddddddddddddddddddddddddd|
+|......................................dd|
+|......................................dd|
+|dddddddddddddddddddddddddddddddddddddddd|
+|......................................dd|
+|......................................dd|
+|dddddddddddddddddddddddddddddddddddddddd|
+legend:
+  . default
+  a fg=BIOS(7) bg=BIOS(1)
+  b fg=BIOS(0) bg=BIOS(2)
+  c fg=BIOS(15) bg=BIOS(2)
+  d fg=BIOS(8) bg=BIOS(2)
+  e fg=BIOS(4) bg=BIOS(2)
+  f fg=RGB(30,144,255) bg=RGB(30,144,255)

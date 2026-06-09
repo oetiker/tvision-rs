@@ -1,7 +1,7 @@
 //! Presets surface — a scrolling list of {name, Color}: Default + 16 BIOS + 12 Rgb.
 
 // Scaffolding consumed progressively; allow until ColorPicker wires up presets.
-#![allow(dead_code)]
+#![allow(dead_code, unused_imports)]
 
 use crate::color::{Color, Style};
 use crate::dialog::colorpick::model::{ColorModel, color_to_display_rgb};
