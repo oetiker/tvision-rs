@@ -1,0 +1,64 @@
+---
+source: src/dialog/colorpick/presets.rs
+expression: "render(&s, &m)"
+---
+size: 40x18
+cursor: hidden
+text:
+|                                        |
+|   Default                              |
+|   Black                                |
+|   Blue                                 |
+|   Green                                |
+|   Cyan                                 |
+|   Red                                  |
+|   Magenta                              |
+|   Brown                                |
+|   Light Gray                           |
+|   Dark Gray                            |
+|   Light Blue                           |
+|   Light Green                          |
+|   Light Cyan                           |
+|   Light Red                            |
+|   Light Magenta                        |
+|   Yellow                               |
+|   White                                |
+attr:
+|........................................|
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa...|
+|bbaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa...|
+|ccaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa...|
+|ddaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa...|
+|eeaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa...|
+|ffggggggggggggggggggggggggggggggggggg...|
+|hhaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa...|
+|iiaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa...|
+|jjaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa...|
+|kkaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa...|
+|llaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa...|
+|mmaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa...|
+|nnaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa...|
+|ooaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa...|
+|ppaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa...|
+|qqaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa...|
+|rraaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa...|
+legend:
+  . default
+  a fg=BIOS(8) bg=BIOS(2)
+  b fg=RGB(0,0,0) bg=RGB(0,0,0)
+  c fg=RGB(0,0,170) bg=RGB(0,0,170)
+  d fg=RGB(0,170,0) bg=RGB(0,170,0)
+  e fg=RGB(0,170,170) bg=RGB(0,170,170)
+  f fg=RGB(170,0,0) bg=RGB(170,0,0)
+  g fg=BIOS(4) bg=BIOS(2)
+  h fg=RGB(170,0,170) bg=RGB(170,0,170)
+  i fg=RGB(170,85,0) bg=RGB(170,85,0)
+  j fg=RGB(170,170,170) bg=RGB(170,170,170)
+  k fg=RGB(85,85,85) bg=RGB(85,85,85)
+  l fg=RGB(85,85,255) bg=RGB(85,85,255)
+  m fg=RGB(85,255,85) bg=RGB(85,255,85)
+  n fg=RGB(85,255,255) bg=RGB(85,255,255)
+  o fg=RGB(255,85,85) bg=RGB(255,85,85)
+  p fg=RGB(255,85,255) bg=RGB(255,85,255)
+  q fg=RGB(255,255,85) bg=RGB(255,255,85)
+  r fg=RGB(255,255,255) bg=RGB(255,255,255)
