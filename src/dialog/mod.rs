@@ -42,6 +42,7 @@ mod dialog;
 mod filedlg;
 mod msgbox;
 
+pub use colorpick::{ColorPicker, Tab};
 pub use dialog::Dialog;
 pub use filedlg::{
     CD_HELP_BUTTON, CD_NO_LOAD_DIR, CD_NORMAL, ChDirDialog, DirCollection, DirEntry, DirListBox,

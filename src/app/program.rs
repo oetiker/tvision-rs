@@ -1609,6 +1609,24 @@ impl Program {
                                         b.make_default(enable, &mut ctx);
                                     }
                                 }
+                                // -- colorpick: the color-picker drag broker (D3) --
+                                //
+                                // `ColorDragCapture` posts `ColorPickerDrag` on each
+                                // `MouseMove`/`MouseUp`. Resolve `picker`, downcast to
+                                // `ColorPicker` via `as_any_mut`, and call `apply_drag(pos)`.
+                                // The region being scrubbed lives in the picker's
+                                // `active_drag` — no widget-layer type in this variant.
+                                Deferred::ColorPickerDrag { picker, pos } => {
+                                    if let Some(p) = group
+                                        .find_mut(picker)
+                                        .and_then(|v| v.as_any_mut())
+                                        .and_then(|a| {
+                                            a.downcast_mut::<crate::dialog::ColorPicker>()
+                                        })
+                                    {
+                                        p.apply_drag(pos);
+                                    }
+                                }
                                 // -- the async-modal-from-a-view seam (handle_event paths) --
                                 //
                                 // A downward-borrowed `&mut View`'s valid() requested
@@ -2622,6 +2640,144 @@ mod tests {
         assert!(
             !am_default(&mut program, ok_id),
             "okButton relinquished the default on the chDirButton's cmGrabDefault"
+        );
+    }
+
+    // -- colorpick: Deferred::ColorPickerDrag wires through the pump -----------
+
+    /// **End-to-end test of the `ColorPickerDrag` pump arm + capture lifecycle.**
+    ///
+    /// Inserts a `ColorPicker` at a **non-zero absolute origin** (10, 5) so the
+    /// frame-locking assertion is meaningful: if the broker mistakenly forwarded
+    /// absolute coordinates as picker-local, the computed sat/val would differ and
+    /// the color assertion would catch it. The test also exercises the capture
+    /// lifecycle (push on `MouseDown`, scrub on `MouseMove`, pop on `MouseUp`).
+    ///
+    /// Coordinate frame (reference):
+    ///   picker bounds  = (10, 5, 66, 23) → body_origin = (10, 5)
+    ///   body_rect      = Rect(0, 1, 38, 18) → box_x=3, bw=35, height=17
+    ///   picker-local (37, 1) → sat=34/35, val=1.0 → Rgb(255, 7, 7) [frame-lock target]
+    ///   absolute (47, 6)     → sat=44/35→1.0, val=12/17 → Rgb(180, 0, 0) [wrong-frame]
+    #[test]
+    fn deferred_color_picker_drag_frame_lock_and_lifecycle() {
+        use crate::dialog::ColorPicker;
+        use crate::view::SelectMode;
+
+        fn picker_color(program: &mut Program, id: ViewId) -> Color {
+            program
+                .group_mut()
+                .find_mut(id)
+                .and_then(|v| v.as_any_mut())
+                .and_then(|a| a.downcast_mut::<ColorPicker>())
+                .map(|p| p.color())
+                .expect("picker resolves")
+        }
+
+        let (mut program, _screen, _clock) = program_with_desktop(80, 25);
+
+        // Insert the picker into the root group at (10,5,66,23) — absolute origin
+        // (10, 5). This non-zero origin makes the frame-locking assertion live.
+        let picker_id = {
+            program.group_mut().insert(Box::new(ColorPicker::new(
+                Rect::new(10, 5, 66, 23),
+                Color::Rgb(255, 0, 0),
+            )))
+        };
+
+        // Make the picker the current and selected child of the root group so
+        // keyboard events reach it (mirrors the DragCapture test setup).
+        program.with_ctx(|g, ctx| {
+            g.set_current(Some(picker_id), SelectMode::Normal, ctx);
+        });
+        program.out_events.clear();
+
+        // Initial pump: draws the tree → caches picker's body_origin = (10, 5).
+        program.out_events.push_back(Event::Broadcast {
+            command: Command::custom("test.noop"),
+            source: None,
+        });
+        program.pump_once();
+
+        // Switch from Presets tab to Plane tab via Ctrl+Right ×2.
+        for _ in 0..2 {
+            program.out_events.push_back(Event::KeyDown(KeyEvent::new(
+                Key::Right,
+                KeyModifiers {
+                    ctrl: true,
+                    ..Default::default()
+                },
+            )));
+            program.pump_once();
+        }
+
+        // MouseDown at absolute (13, 6) = picker-local (3, 1) = top-left of the SV
+        // box. The picker's handle_event: drag_region_at returns SvBox; sets
+        // active_drag, applies the immediate click (sat=0, val=1 → white), pushes
+        // the ColorDragCapture (deferred → applied this pump).
+        program.out_events.push_back(mouse_down_at(13, 6));
+        program.pump_once();
+        assert_eq!(
+            program.capture_len(),
+            1,
+            "ColorDragCapture pushed after MouseDown in the SV box"
+        );
+        assert_eq!(
+            picker_color(&mut program, picker_id),
+            Color::Rgb(255, 255, 255),
+            "immediate apply_drag at top-left of SV box: sat=0, val=1 → white"
+        );
+
+        // -- Frame-locking assertion -----------------------------------------------
+        //
+        // Push Deferred::ColorPickerDrag directly for picker-local pos (37, 1).
+        //   sat = (37-3)/35 = 34/35, val = 1-(1-1)/17 = 1.0, hue = 0.0
+        //   → hsv_to_rgb(0, 34/35, 1) = Rgb(255, 7, 7).
+        // Wrong-frame path (absolute coords as picker-local, i.e. pos (47, 6)):
+        //   sat = (47-3)/35 = 44/35 clamped to 1.0, val = 1-(6-1)/17 = 12/17
+        //   → hsv_to_rgb(0, 1, 12/17) = Rgb(180, 0, 0) — different, so the test
+        //   would fail if the broker forwarded absolute coords.
+        program.deferred.push(Deferred::ColorPickerDrag {
+            picker: picker_id,
+            pos: Point::new(37, 1),
+        });
+        program.out_events.push_back(Event::Broadcast {
+            command: Command::custom("test.noop"),
+            source: None,
+        });
+        program.pump_once();
+        assert_eq!(
+            picker_color(&mut program, picker_id),
+            Color::Rgb(255, 7, 7),
+            "frame-locking: picker-local (37,1) gives Rgb(255,7,7); wrong-frame would give Rgb(180,0,0)"
+        );
+
+        // -- Capture lifecycle (MouseMove → scrub, MouseUp → pop) -----------------
+
+        // MouseMove at absolute (35, 15).
+        // ColorDragCapture: local = (35-10, 15-5) = (25, 10). Posts ColorPickerDrag.
+        // apply_drag(SvBox, (25,10)): sat=(25-3)/35=22/35, val=1-(10-1)/17=8/17.
+        //   c = (22/35)*(8/17) = 176/595, m = 8/17-176/595 = 104/595
+        //   r = (280/595)*255+0.5 = 120, g = b = (104/595)*255+0.5 = 45 → Rgb(120,45,45)
+        program.out_events.push_back(mouse_move_at(35, 15));
+        program.pump_once();
+        assert_eq!(
+            picker_color(&mut program, picker_id),
+            Color::Rgb(120, 45, 45),
+            "MouseMove scrubs via the capture→broker→apply_drag chain"
+        );
+        assert_eq!(
+            program.capture_len(),
+            1,
+            "capture still live after MouseMove"
+        );
+
+        // MouseUp: ConsumedPop → capture popped.
+        program.out_events.push_back(mouse_up_at(35, 15));
+        program.pump_once();
+        assert_eq!(
+            program.capture_len(),
+            0,
+            "ColorDragCapture popped on MouseUp"
         );
     }
 

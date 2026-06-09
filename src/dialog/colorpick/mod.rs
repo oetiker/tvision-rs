@@ -297,9 +297,49 @@ impl View for ColorPicker {
                 x += w + 1;
             }
         }
-        // TODO(Task 9): push drag capture
-        // Delegate to the active surface — inline match to split borrows correctly
+        // Drag: if the active surface reports a draggable region at a MouseDown,
+        // record it in `active_drag`, apply the down-click immediately (so a plain
+        // click still works), and push a ColorDragCapture so subsequent MouseMove
+        // events keep scrubbing. Picker-local coords throughout — no pre-subtraction
+        // of BODY_TOP (surfaces subtract body.a exactly once).
         let body = self.body_rect();
+        if let Event::MouseDown(me) = *ev {
+            // Borrow surfaces read-only first to check for a drag region.
+            let region = match self.active {
+                Tab::Presets => self.presets.drag_region_at(me.position, body),
+                Tab::Rgb => self.rgb.drag_region_at(me.position, body),
+                Tab::Plane => self.plane.drag_region_at(me.position, body),
+                Tab::Xterm256 => self.grid.drag_region_at(me.position, body),
+            };
+            if let Some(region) = region
+                && let Some(id) = self.state.id()
+            {
+                self.active_drag = Some(region);
+                let origin = self.body_origin;
+                // Apply the down-click immediately (single click works).
+                match self.active {
+                    Tab::Presets => {
+                        self.presets
+                            .apply_drag(region, me.position, body, &mut self.model)
+                    }
+                    Tab::Rgb => self
+                        .rgb
+                        .apply_drag(region, me.position, body, &mut self.model),
+                    Tab::Plane => self
+                        .plane
+                        .apply_drag(region, me.position, body, &mut self.model),
+                    Tab::Xterm256 => {
+                        self.grid
+                            .apply_drag(region, me.position, body, &mut self.model)
+                    }
+                }
+                // Push a capture so subsequent moves keep scrubbing.
+                ctx.push_capture(Box::new(drag::ColorDragCapture::new(id, origin)));
+                ev.clear();
+                return;
+            }
+        }
+        // Delegate to the active surface — inline match to split borrows correctly
         let model = &mut self.model;
         match self.active {
             Tab::Presets => self.presets.handle_event(ev, body, model, ctx),

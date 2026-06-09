@@ -339,6 +339,33 @@ pub enum Deferred {
         enable: bool,
     },
 
+    // -- colorpick: the color-picker drag broker (D3) -------------------------
+    //
+    // The color picker is one view (Approach A), so a leaf surface cannot reach
+    // the picker's `apply_drag` inline under D3 — it holds only `&mut Context`.
+    // `ColorDragCapture` posts this on each `MouseMove`/`MouseUp`; the pump
+    // resolves `picker`, downcasts to `ColorPicker` via `as_any_mut`, and calls
+    // `apply_drag(pos)`. The region being scrubbed lives in the picker's own
+    // `active_drag` field (set when the capture was pushed) — so neither this
+    // variant nor the capture handler carries a widget-layer type. Same family
+    // as the scroller/list broker ops (view-tree), so the insertion-order drain
+    // stays order-equivalent.
+    /// **Color-picker drag broker** (the picker is one view, so a leaf surface
+    /// can't reach the picker's `apply_drag` inline — D3). The drag capture
+    /// handler posts this on each `MouseMove`/`MouseUp`; the pump resolves
+    /// `picker`, downcasts to
+    /// [`ColorPicker`](crate::dialog::ColorPicker) via `as_any_mut`, and calls
+    /// `apply_drag(pos)` (which reads the picker's own `active_drag` region).
+    /// `pos` is **picker-local** (the handler converted from absolute via the
+    /// picker's cached `body_origin`). Same family (view tree) as the scroller
+    /// brokers.
+    ColorPickerDrag {
+        /// The picker whose active surface to scrub.
+        picker: ViewId,
+        /// Picker-local pointer position.
+        pos: Point,
+    },
+
     // -- the async-modal-from-a-view seam (messageBox from valid()) -----------
     /// **View-triggered modal `messageBox`** (the async-modal-from-a-view seam —
     /// `docs/design/async-modal-from-view.md`). A downward-borrowed `&mut View`
@@ -841,6 +868,14 @@ impl<'a> Context<'a> {
     /// `TMenuView`'s `cmCommandSetChanged` handler requests this by its own id.
     pub fn request_update_menu(&mut self, id: ViewId) {
         self.deferred.push(Deferred::UpdateMenu(id));
+    }
+
+    /// Request a color-picker drag update — **deferred**
+    /// ([`Deferred::ColorPickerDrag`]). Posted by the picker's drag capture
+    /// handler on each `MouseMove`/`MouseUp`.
+    pub fn request_color_drag(&mut self, picker: ViewId, pos: Point) {
+        self.deferred
+            .push(Deferred::ColorPickerDrag { picker, pos });
     }
 
     /// Request a [`MenuBox`](crate::menu::MenuBox) be opened over `bounds`
