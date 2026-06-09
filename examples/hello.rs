@@ -45,9 +45,12 @@ use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
 use signal_hook::iterator::Signals;
 
 use tvision::{
-    Backend, Command, CrosstermBackend, Desktop, Key, KeyEvent, Menu, MenuBar, Program, Rect,
-    StatusDef, StatusLine, SystemClock, Theme, View, Window, alt,
+    Backend, Color, Command, CrosstermBackend, Desktop, Key, KeyEvent, Menu, MenuBar, Program,
+    Rect, StatusDef, StatusLine, SystemClock, Theme, View, Window, alt,
 };
+
+/// Application-level command: open the color picker demo.
+const CMD_COLOR_PICKER: Command = Command::custom("hello.color_picker");
 
 // ---------------------------------------------------------------------------
 // HelloApp : public TApplication
@@ -138,13 +141,27 @@ impl HelloApp {
                     .command("~T~ile", Command::TILE)
                     .command("C~a~scade", Command::CASCADE)
             })
+            .submenu("~C~olor", alt('c'), |m| {
+                m.command("Color ~P~icker…", CMD_COLOR_PICKER)
+            })
             .build();
         Some(Box::new(MenuBar::new(r, menu)))
     }
 
     /// `TApplication::run` — spin the real event loop until a `cmQuit` ends it.
+    /// Uses [`Program::run_app`] to intercept application-level commands
+    /// (the `TApplication::handleEvent` slot), specifically `CMD_COLOR_PICKER`.
     fn run(&mut self) -> Command {
-        self.program.run()
+        self.program.run_app(|prog, cmd| {
+            if cmd == CMD_COLOR_PICKER {
+                // Open the truecolor color picker, seeded with dodger blue.
+                // The chosen color is printed to stderr for demo purposes.
+                let initial = Color::Rgb(30, 144, 255);
+                if let Some(color) = prog.color_dialog(initial) {
+                    eprintln!("Color picker returned: {color:?}");
+                }
+            }
+        })
     }
 }
 

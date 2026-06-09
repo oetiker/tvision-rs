@@ -261,6 +261,11 @@ pub struct Program {
     /// default button (Yes/OK) is focused, `None` for `OpenHistory` (the
     /// `HistoryWindow` manages its own focus).
     pending_modal: Option<(Box<dyn View>, ModalCompletion, Option<ViewId>)>,
+    /// Commands that survived every level of handling (not consumed by any view or
+    /// the built-in program-level handlers for QUIT/TILE/CASCADE/Alt-N). Drained by
+    /// [`run_app`](Self::run_app) between pump cycles — the slot for application-level
+    /// command handling, analogous to `TApplication::handleEvent` in C++ tvision.
+    app_commands: VecDeque<Command>,
 }
 
 /// What to do with a view-triggered modal's result, run AFTER the modal loop ends
@@ -396,6 +401,7 @@ impl Program {
             end_state: None,
             command_set_changed: false,
             pending_modal: None,
+            app_commands: VecDeque::new(),
         }
     }
 
@@ -495,6 +501,46 @@ impl Program {
             self.end_state = None;
             while self.end_state.is_none() {
                 self.pump_and_drive();
+            }
+            let es = self.end_state.unwrap();
+            if self.valid_end(es) {
+                return es;
+            }
+        }
+    }
+
+    /// Run the application, calling `on_command` for each [`Command`] that reaches
+    /// the program level but is not consumed by any view or the built-in program
+    /// handlers (QUIT, TILE, CASCADE, Alt-N window select). This is the rstv
+    /// equivalent of `TApplication::handleEvent` — the hook for application-level
+    /// commands such as "File → Color Picker" → `color_dialog`.
+    ///
+    /// The handler receives `&mut Program` so it can call methods like
+    /// [`color_dialog`](Self::color_dialog), [`message_box`](Self::message_box),
+    /// and [`input_box`](Self::input_box) in response to menu-driven commands.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// use tvision::{Color, Command};
+    /// const CMD_PICK: Command = Command::custom("my_app.pick_color");
+    /// // program.run_app(|prog, cmd| {
+    /// //     if cmd == CMD_PICK { prog.color_dialog(Color::Default); }
+    /// // });
+    /// ```
+    pub fn run_app<F>(&mut self, mut on_command: F) -> Command
+    where
+        F: FnMut(&mut Self, Command),
+    {
+        loop {
+            self.end_state = None;
+            while self.end_state.is_none() {
+                self.pump_and_drive();
+                // Drain any commands that survived all routing — these are meant
+                // for the application level (TApplication::handleEvent slot).
+                let cmds: Vec<Command> = self.app_commands.drain(..).collect();
+                for cmd in cmds {
+                    on_command(self, cmd);
+                }
             }
             let es = self.end_state.unwrap();
             if self.valid_end(es) {
@@ -1169,6 +1215,7 @@ impl Program {
             end_state,
             command_set_changed,
             pending_modal,
+            app_commands,
         } = self;
 
         // 1. Resize check — the D9 realization of setScreenMode/cmScreenChanged.
@@ -1287,7 +1334,14 @@ impl Program {
                         // routing.
                         let consumed = captures.dispatch(&mut ev, &mut ctx);
                         if !consumed {
-                            program_handle_event(group, *desktop, &mut ev, &mut ctx, end_state);
+                            program_handle_event(
+                                group,
+                                *desktop,
+                                &mut ev,
+                                &mut ctx,
+                                end_state,
+                                app_commands,
+                            );
                         }
                     }
                     // Apply the deferred queue AFTER dispatch — one drain, in
@@ -1934,6 +1988,7 @@ fn program_handle_event(
     ev: &mut Event,
     ctx: &mut Context,
     end_state: &mut Option<Command>,
+    app_commands: &mut VecDeque<Command>,
 ) {
     // TODO(Phase 4: modal isolation): when menus + multiple windows + a modal
     // coexist, program-level interception (this Alt-N block + the cmQuit catch
@@ -2011,6 +2066,14 @@ fn program_handle_event(
             }
         }
         ev.clear(); // clearEvent after handling.
+    }
+
+    // Any command that nobody cleared is available for application-level handling
+    // (the TApplication::handleEvent slot). Deposit it so run_app can drain it
+    // after the pump cycle and call the user's handler with &mut Program.
+    if let Event::Command(cmd) = *ev {
+        app_commands.push_back(cmd);
+        ev.clear();
     }
 }
 
