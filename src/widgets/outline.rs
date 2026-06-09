@@ -948,7 +948,6 @@ fn clear_and_adjust<L: OutlineViewer + ?Sized>(
     adjust_focus(this, new_focus, ctx);
 }
 
-
 // ---------------------------------------------------------------------------
 // TOutline (row 90) — the concrete outline over an owned tree
 // ---------------------------------------------------------------------------
@@ -996,7 +995,9 @@ fn set_expanded_at_pos(node: &mut Node, target: i32, counter: &mut i32, expand: 
         return true;
     }
     // Recurse into visible children first.
-    if node.expanded && let Some(child) = node.child_list.as_deref_mut() {
+    if node.expanded
+        && let Some(child) = node.child_list.as_deref_mut()
+    {
         *counter += 1;
         if set_expanded_at_pos(child, target, counter, expand) {
             return true;
