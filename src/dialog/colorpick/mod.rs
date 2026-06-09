@@ -10,6 +10,7 @@
 
 pub(crate) mod drag;
 pub mod model;
+pub(crate) mod plane;
 pub(crate) mod presets;
 pub(crate) mod rgb;
 
