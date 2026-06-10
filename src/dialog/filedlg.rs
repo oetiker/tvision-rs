@@ -84,9 +84,10 @@ pub const FA_DIREC: u8 = 0x10;
 /// it POD-copyable for the collection.  In Rust, `name` is a `String` and the
 /// struct derives `Clone`.
 ///
-/// `attr`, `time`, and `size` are populated by the filesystem-reading layer in
-/// `TFileList`/`TFileDialog` (deferred to those rows).
-/// `TODO(filedlg fs-read): populate attr/time/size from std::fs.`
+/// `attr`, `time`, and `size` are populated by [`FileList::raw_from_fs`] /
+/// [`FileList::build_listing`]: `size` is `meta.len()` (saturated to `i32`),
+/// `time` is the `modified()` mtime packed into the DOS `ftime` bitfield by
+/// [`pack_dos_time`], and `attr` carries [`FA_DIREC`] for directories.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SearchRec {
     /// `attr` — DOS file-attribute byte; only [`FA_DIREC`] is examined here.
@@ -1731,10 +1732,11 @@ fn button_specs(options: u16) -> Vec<(&'static str, crate::command::Command, boo
 ///
 /// ## Deferrals
 ///
-/// - The "21st-century percentages" screen-relative resize block in the ctor —
-///   `TODO(row 79 B2)`; the dialog keeps its base 49×19 size.
-/// - `wfGrow` — `TODO(row 79 B2)`; `WindowFlags` is private behind `Dialog` and
-///   not snapshot-visible, so the grow flag is not wired in the skeleton.
+/// - The "21st-century percentages" screen-relative resize block — applied at
+///   the first `handle_event` call (when `ctx.owner_size()` is available), not
+///   at ctor time (D3: no `Context` in ctor). See
+///   [`needs_screen_resize`](FileDialog::needs_screen_resize) + the deviation
+///   note in `handle_event`.
 /// - **D12:** `TStreamable` (`write`/`read`/`build`/`streamableName`) dropped.
 pub struct FileDialog {
     /// The embedded `TDialog` — the D2 delegation target.
@@ -1754,6 +1756,16 @@ pub struct FileDialog {
     info_pane_id: crate::view::ViewId,
     /// One-time guard for the `reset_current` initial `readDirectory`.
     needs_read_directory: bool,
+    /// One-time guard for the "21st-century percentages" screen-relative resize.
+    ///
+    /// The C++ ctor applies this immediately (it has `TProgram::application->size`).
+    /// In rstv a `Context` is required to get the screen size via `ctx.owner_size()`
+    /// and to queue the `Deferred::ChangeBounds` — neither is available at ctor
+    /// time (D3: no `Context` in ctor). **D-deviation from C++**: the resize fires
+    /// at the first `handle_event` call where `ctx.owner_size()` is non-zero,
+    /// before the first dispatch to children — observably identical to C++ (both
+    /// happen before the first draw).
+    needs_screen_resize: bool,
     /// Cache of the last [`get_file_name`](FileDialog::get_file_name) result, so
     /// the `&self` [`value`](FileDialog::value) (D10 `getData`) can return the
     /// resolved filename. `get_file_name` needs `&mut self` (it reads the input
@@ -1794,8 +1806,13 @@ impl FileDialog {
             opts.center_x = true;
             opts.center_y = true;
         }
-        // TODO(row 79 B2): flags |= wfGrow (WindowFlags is private behind Dialog;
-        // not snapshot-visible, so the grow flag is deferred to B2).
+        // flags |= wfGrow — faithful C++ port; Dialog::set_flags/flags are
+        // pub(crate) accessors added on Dialog for this row (row 79 B6).
+        {
+            let mut f = dialog.flags();
+            f.grow = true;
+            dialog.set_flags(f);
+        }
 
         // --- fileName: TFileInputLine(TRect(3,3,31,4), MAXPATH) --------------
         // strnzcpy(fileName->data, wildCard) — initial text = the wildcard.
@@ -1886,9 +1903,9 @@ impl FileDialog {
         // (focuses the first selectable child = the input line, inserted first),
         // so no explicit selectNext is needed here (see View::reset_current).
 
-        // TODO(row 79 B2): the "21st-century percentages" screen-relative resize
-        // block — scales the dialog from the base 49x19 using application->size.
-        // It needs the app size; skip it, keep the base 49x19.
+        // The "21st-century percentages" screen-relative resize (C++ ctor lines
+        // 141-167) is deferred to the first handle_event (needs ctx.owner_size()).
+        // See the `needs_screen_resize` field doc for the full deviation note.
 
         FileDialog {
             dialog,
@@ -1898,6 +1915,7 @@ impl FileDialog {
             file_list_id,
             info_pane_id,
             needs_read_directory: options & FD_NO_LOAD_DIR == 0,
+            needs_screen_resize: true,
             resolved_name: String::new(),
         }
     }
@@ -2024,9 +2042,63 @@ impl crate::view::View for FileDialog {
     /// - `cmFileDoubleClicked` broadcast → re-inject as `cmOK` (`putEvent`) +
     ///   clear. The base `TDialog::handleEvent` then turns `cmOK` into
     ///   `endModal(cmOK)` on the next cycle (the dialog is modal).
+    ///
+    /// **One-time pre-delegate work** (before the base call): if
+    /// `needs_screen_resize` is true and the screen size is available from
+    /// `ctx.owner_size()`, applies the C++ ctor's "21st-century percentages"
+    /// resize formula (C++ tfildlg.cpp lines 141-167). D-deviation: the C++
+    /// ctor runs this immediately against `TProgram::application->size`; rstv
+    /// defers it to the first handle_event where `ctx.owner_size()` is non-zero
+    /// (set by the owning group's handle_event bracket). Before-first-draw
+    /// ordering is preserved.
     fn handle_event(&mut self, ev: &mut crate::event::Event, ctx: &mut crate::view::Context) {
         use crate::command::Command;
         use crate::event::Event;
+
+        // "21st-century percentages" screen-relative resize (C++ ctor lines
+        // 141-167 in tfildlg.cpp). D-deviation: the C++ ctor runs this
+        // immediately against `TProgram::application->size`; rstv defers it to
+        // the first `handle_event` where `ctx.owner_size()` (set by the owning
+        // group's `handle_event` bracket) is non-zero. Before-first-draw
+        // ordering is preserved: no event is dispatched to children before this
+        // fires.
+        if self.needs_screen_resize {
+            let screen_size = ctx.owner_size();
+            if screen_size.x > 0 {
+                self.needs_screen_resize = false;
+                let original = crate::view::View::state(self).get_bounds();
+                let mut bounds = original;
+                let screen_bounds = crate::view::Rect::new(0, 0, screen_size.x, screen_size.y);
+                if screen_size.x > 90 {
+                    bounds.grow(15, 0); // new width 79
+                } else if screen_size.x > 63 {
+                    let mut sb = screen_bounds;
+                    sb.grow(-7, 0);
+                    bounds.a.x = sb.a.x;
+                    bounds.b.x = sb.b.x;
+                }
+                if screen_size.y > 34 {
+                    bounds.grow(0, 5); // new height 29
+                } else if screen_size.y > 25 {
+                    let mut sb = screen_bounds;
+                    sb.grow(0, -3);
+                    bounds.a.y = sb.a.y;
+                    bounds.b.y = sb.b.y;
+                }
+                // Apply the size floor (49x19 — FileDialog::size_limits min).
+                let w = (bounds.b.x - bounds.a.x).max(49);
+                let h = (bounds.b.y - bounds.a.y).max(19);
+                bounds.b.x = bounds.a.x + w;
+                bounds.b.y = bounds.a.y + h;
+                // Only queue if bounds actually changed (mirrors C++ `locate`'s
+                // `if (bounds != getBounds())` guard).
+                if bounds != original
+                    && let Some(id) = crate::view::View::state(self).id()
+                {
+                    ctx.request_bounds(id, bounds);
+                }
+            }
+        }
 
         // TDialog::handleEvent FIRST (faithful order).
         self.dialog.handle_event(ev, ctx);
@@ -2273,8 +2345,6 @@ impl crate::view::View for FileDialog {
 ///
 /// ## Deferrals
 ///
-/// - The "21st-century" screen-relative resize block and `wfGrow` — `TODO`
-///   (mirroring [`FileDialog`]; `WindowFlags` is private behind `Dialog`).
 /// - **D12:** `TStreamable` (`write`/`read`/`build`/`streamableName`) dropped.
 pub struct ChDirDialog {
     /// The embedded `TDialog` — the D2 delegation target.
@@ -2312,8 +2382,13 @@ impl ChDirDialog {
             opts.center_x = true;
             opts.center_y = true;
         }
-        // TODO(row 80): flags |= wfGrow (WindowFlags is private behind Dialog; not
-        // snapshot-visible, so the grow flag is deferred — mirrors FileDialog).
+        // flags |= wfGrow — faithful C++ port; Dialog::set_flags/flags are
+        // pub(crate) accessors added on Dialog for row 79 B6 (mirrors FileDialog).
+        {
+            let mut f = dialog.flags();
+            f.grow = true;
+            dialog.set_flags(f);
+        }
 
         // --- dirInput: TInputLine(TRect(3,3,42,4), MAXPATH-1) ----------------
         // growMode = gfGrowHiX. C++ TInputLine(bounds, aMaxLen) → maxLen =
@@ -4957,5 +5032,251 @@ mod tests {
             cd_dir_list(&mut cd).list().is_empty(),
             "no directory read under cdNoLoadDir"
         );
+    }
+
+    // =========================================================================
+    // B6 finishers: wfGrow, screen-relative resize, SearchRec fs metadata
+    // =========================================================================
+
+    // ---- finisher 1: wfGrow -------------------------------------------------
+
+    /// `TFileDialog::TFileDialog` does `flags |= wfGrow`; verify the flag is set
+    /// after construction (C++ tfildlg.cpp line 62).
+    #[test]
+    fn file_dialog_ctor_sets_wf_grow() {
+        let fd = FileDialog::new("*.*", "Test", "Name", FD_OPEN_BUTTON, 0);
+        let flags = fd.dialog.flags();
+        assert!(flags.grow, "wfGrow must be set on FileDialog");
+        assert!(flags.r#move, "wfMove retained");
+        assert!(flags.close, "wfClose retained");
+        assert!(!flags.zoom, "wfZoom not set (dialog has no zoom)");
+    }
+
+    /// `TChDirDialog::TChDirDialog` does `flags |= wfGrow`; verify the flag is
+    /// set after construction (C++ tchdrdlg.cpp line 45).
+    #[test]
+    fn chdir_dialog_ctor_sets_wf_grow() {
+        let cd = ChDirDialog::new(CD_NO_LOAD_DIR, 0);
+        let flags = cd.dialog.flags();
+        assert!(flags.grow, "wfGrow must be set on ChDirDialog");
+        assert!(flags.r#move, "wfMove retained");
+        assert!(flags.close, "wfClose retained");
+        assert!(!flags.zoom, "wfZoom not set");
+    }
+
+    // ---- finisher 2: screen-relative resize ---------------------------------
+
+    /// On a wide screen (> 90 cols) the C++ formula fires `grow(15, 0)` —
+    /// dialog width goes from 49 to 79.  Verify via handle_event with
+    /// `ctx.owner_size` = (100, 25).
+    #[test]
+    fn file_dialog_screen_resize_wide_screen() {
+        use crate::view::Point;
+
+        let mut fd = FileDialog::new("*.*", "T", "N", FD_NO_LOAD_DIR, 0);
+        assert!(fd.needs_screen_resize, "flag set by ctor");
+
+        // Assign an id so request_bounds can reference it.
+        fd.dialog.state_mut().id = Some(crate::view::ViewId::next());
+
+        let bounds_before = crate::view::View::state(&fd).get_bounds();
+        let w_before = bounds_before.b.x - bounds_before.a.x;
+        assert_eq!(w_before, 49, "base width 49 before resize");
+
+        let mut out: VecDeque<Event> = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+        {
+            let mut ctx = fl_make_ctx(&mut out, &mut timers, &mut deferred);
+            // owner_size = (100, 25): triggers the x > 90 branch (grow 15) but
+            // NOT the y > 34 branch, so height stays 19.
+            ctx.set_owner_size(Point::new(100, 25));
+            let mut ev = crate::event::Event::Nothing;
+            crate::view::View::handle_event(&mut fd, &mut ev, &mut ctx);
+        }
+
+        assert!(
+            !fd.needs_screen_resize,
+            "flag cleared after first handle_event"
+        );
+        // A ChangeBounds deferred should have been queued.
+        let bounds_deferred = deferred.iter().find_map(|d| {
+            if let Deferred::ChangeBounds(_, r) = d {
+                Some(*r)
+            } else {
+                None
+            }
+        });
+        let new_bounds = bounds_deferred.expect("ChangeBounds deferred must be queued");
+        let new_w = new_bounds.b.x - new_bounds.a.x;
+        let new_h = new_bounds.b.y - new_bounds.a.y;
+        assert_eq!(
+            new_w, 79,
+            "wide screen: width grows from 49 to 79 (grow 15)"
+        );
+        assert_eq!(new_h, 19, "height unchanged (y <= 34)");
+    }
+
+    /// On a tall screen (> 34 rows) the C++ formula fires `grow(0, 5)` —
+    /// dialog height goes from 19 to 29. Width stays 49 (screen width = 64,
+    /// neither > 90 nor > 63).
+    #[test]
+    fn file_dialog_screen_resize_tall_screen() {
+        use crate::view::Point;
+
+        let mut fd = FileDialog::new("*.*", "T", "N", FD_NO_LOAD_DIR, 0);
+        fd.dialog.state_mut().id = Some(crate::view::ViewId::next());
+
+        let mut out: VecDeque<Event> = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+        {
+            let mut ctx = fl_make_ctx(&mut out, &mut timers, &mut deferred);
+            // owner_size = (64, 40): exactly on the x > 63 boundary AND y > 34.
+            ctx.set_owner_size(Point::new(64, 40));
+            let mut ev = crate::event::Event::Nothing;
+            crate::view::View::handle_event(&mut fd, &mut ev, &mut ctx);
+        }
+
+        let bounds_deferred = deferred.iter().find_map(|d| {
+            if let Deferred::ChangeBounds(_, r) = d {
+                Some(*r)
+            } else {
+                None
+            }
+        });
+        let new_bounds = bounds_deferred.expect("ChangeBounds deferred must be queued");
+        let new_h = new_bounds.b.y - new_bounds.a.y;
+        assert_eq!(
+            new_h, 29,
+            "tall screen: height grows from 19 to 29 (grow 5)"
+        );
+    }
+
+    /// A second handle_event call does NOT re-queue a ChangeBounds — the resize
+    /// fires exactly once.
+    #[test]
+    fn file_dialog_screen_resize_fires_once() {
+        use crate::view::Point;
+
+        let mut fd = FileDialog::new("*.*", "T", "N", FD_NO_LOAD_DIR, 0);
+        fd.dialog.state_mut().id = Some(crate::view::ViewId::next());
+
+        let dispatch = |fd: &mut FileDialog, deferred: &mut Vec<Deferred>| {
+            let mut out: VecDeque<Event> = VecDeque::new();
+            let mut timers = crate::timer::TimerQueue::new();
+            let mut ctx = fl_make_ctx(&mut out, &mut timers, deferred);
+            ctx.set_owner_size(Point::new(100, 25));
+            let mut ev = crate::event::Event::Nothing;
+            crate::view::View::handle_event(fd, &mut ev, &mut ctx);
+        };
+
+        let mut deferred: Vec<Deferred> = vec![];
+        dispatch(&mut fd, &mut deferred);
+        let count_first: usize = deferred
+            .iter()
+            .filter(|d| matches!(d, Deferred::ChangeBounds(..)))
+            .count();
+        assert_eq!(count_first, 1, "exactly one ChangeBounds on first call");
+
+        deferred.clear();
+        dispatch(&mut fd, &mut deferred);
+        let count_second: usize = deferred
+            .iter()
+            .filter(|d| matches!(d, Deferred::ChangeBounds(..)))
+            .count();
+        assert_eq!(
+            count_second, 0,
+            "no ChangeBounds on second call (fires once)"
+        );
+    }
+
+    /// On a small screen (<= 63 wide, <= 25 tall) no resize fires: the dialog
+    /// keeps its base 49×19 size.
+    #[test]
+    fn file_dialog_screen_resize_small_screen_no_change() {
+        use crate::view::Point;
+
+        let mut fd = FileDialog::new("*.*", "T", "N", FD_NO_LOAD_DIR, 0);
+        fd.dialog.state_mut().id = Some(crate::view::ViewId::next());
+
+        let mut out: VecDeque<Event> = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+        {
+            let mut ctx = fl_make_ctx(&mut out, &mut timers, &mut deferred);
+            ctx.set_owner_size(Point::new(63, 25)); // at the boundary, not over
+            let mut ev = crate::event::Event::Nothing;
+            crate::view::View::handle_event(&mut fd, &mut ev, &mut ctx);
+        }
+
+        // No ChangeBounds should be queued — the formula branches don't fire.
+        let cb_count: usize = deferred
+            .iter()
+            .filter(|d| matches!(d, Deferred::ChangeBounds(..)))
+            .count();
+        assert_eq!(cb_count, 0, "small screen: no resize queued");
+    }
+
+    // ---- finisher 3: SearchRec fs metadata ----------------------------------
+
+    /// `FileList::raw_from_fs` populates real size, mtime, and is_dir from the
+    /// filesystem. This test creates a fixture directory with a known-size file
+    /// and a subdirectory, then asserts the metadata is non-stub:
+    /// - size > 0 for the regular file
+    /// - time != 0 for the regular file (mtime present)
+    /// - attr has FA_DIREC for the directory entry
+    /// - attr is 0 for the file entry
+    #[test]
+    fn search_rec_metadata_populated_from_fixture_dir() {
+        let tmp = std::env::temp_dir().join(format!("rstv_b6_searchrec_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        // Write a file with known content so size > 0.
+        std::fs::write(tmp.join("hello.rs"), b"fn main() {}").unwrap();
+        // Create a subdirectory.
+        std::fs::create_dir_all(tmp.join("subdir")).unwrap();
+        let dir = format!("{}/", tmp.to_string_lossy());
+
+        let raw = FileList::raw_from_fs(&dir);
+        let _ = std::fs::remove_dir_all(&tmp);
+
+        // Find the file entry.
+        let file_entry = raw
+            .iter()
+            .find(|(name, _, _, _)| name == "hello.rs")
+            .expect("hello.rs must appear in the raw listing");
+        let (_, is_dir_file, size, mtime) = file_entry;
+        assert!(!is_dir_file, "hello.rs is not a directory");
+        assert!(*size > 0, "file size must be > 0");
+        assert!(
+            mtime.is_some(),
+            "mtime must be populated for a regular file"
+        );
+
+        // Find the subdir entry.
+        let dir_entry = raw
+            .iter()
+            .find(|(name, _, _, _)| name == "subdir")
+            .expect("subdir must appear in the raw listing");
+        let (_, is_dir_dir, _, _) = dir_entry;
+        assert!(*is_dir_dir, "subdir must be flagged as a directory");
+
+        // Verify that build_listing correctly maps these to SearchRec attr/size/time.
+        let recs = FileList::build_listing(&dir, "*.rs", &raw);
+        let file_rec = recs
+            .iter()
+            .find(|r| r.name == "hello.rs")
+            .expect("hello.rs must be in listing (matches *.rs)");
+        assert_eq!(file_rec.attr, 0, "file attr must not have FA_DIREC");
+        assert!(file_rec.size > 0, "file size propagated to SearchRec");
+        assert_ne!(file_rec.time, 0, "time propagated to SearchRec (non-zero)");
+
+        let dir_rec = recs
+            .iter()
+            .find(|r| r.name == "subdir")
+            .expect("subdir must be in listing (dirs always included)");
+        assert_eq!(dir_rec.attr, FA_DIREC, "directory attr must be FA_DIREC");
+        assert_eq!(dir_rec.size, 0, "directory size is 0 in listing");
     }
 }

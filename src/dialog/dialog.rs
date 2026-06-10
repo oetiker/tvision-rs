@@ -75,6 +75,24 @@ impl Dialog {
     pub(crate) fn child_mut(&mut self, id: ViewId) -> Option<&mut dyn View> {
         self.window.child_mut(id)
     }
+
+    /// Override the decoration flags after construction.
+    ///
+    /// Mirrors [`Window::set_flags`]; used by `FileDialog` (row 79) and
+    /// `ChDirDialog` (row 80) to add `wfGrow` on top of the Dialog defaults
+    /// (`wfMove | wfClose`). Re-pushes to the frame child so the grow handle
+    /// draws immediately.
+    pub(crate) fn set_flags(&mut self, flags: crate::window::WindowFlags) {
+        self.window.set_flags(flags);
+    }
+
+    /// Read the current decoration flags.
+    ///
+    /// Mirrors [`Window::flags`]; exposed so `FileDialog` / `ChDirDialog` tests
+    /// can assert the `wfGrow` bit is set post-construction.
+    pub(crate) fn flags(&self) -> crate::window::WindowFlags {
+        self.window.flags()
+    }
 }
 
 #[crate::delegate(
