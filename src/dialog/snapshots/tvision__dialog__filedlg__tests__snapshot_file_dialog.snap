@@ -1,5 +1,6 @@
 ---
 source: src/dialog/filedlg.rs
+assertion_line: 4261
 expression: screen.snapshot()
 ---
 size: 64x20
@@ -30,21 +31,21 @@ attr:
 |...............aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
 |...............aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
 |...............aabbbbbaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
-|...............aaacccccccccccccccccccccccccccccdcaeffgffffffeaaa|
-|...............aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaeeeeeeeeeeeaaa|
-|...............aabhbbbbaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
-|...............aaaiiiiiiiiiiiiiiiaaaaaaaaaaaaaaaaaefffffffffeaaa|
-|...............aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaeeeeeeeeeeeaaa|
+|...............aaacccccccccccccccccccccccccccccdcabeefeeeeeebaaa|
+|...............aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbaaa|
+|...............aabgbbbbaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|...............aaahhhhhhhhhhhhhhhaaaaaaaaaaaaaaaaabeeeeeeeeebaaa|
+|...............aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbaaa|
 |...............aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
 |...............aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
 |...............aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
 |...............aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
 |...............aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
 |...............aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
-|...............aaajjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjaaaaaaaaaaaaaaa|
+|...............aaaiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiaaaaaaaaaaaaaaa|
 |...............aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
-|...............akkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkka|
-|...............akkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkka|
+|...............ajjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjja|
+|...............ajjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjja|
 |...............aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
 legend:
   . default
@@ -52,10 +53,9 @@ legend:
   b fg=BIOS(0) bg=BIOS(7)
   c fg=BIOS(0) bg=BIOS(3)
   d fg=BIOS(14) bg=BIOS(3)
-  e fg=BIOS(8) bg=BIOS(0)
-  f fg=BIOS(0) bg=BIOS(2)
-  g fg=BIOS(14) bg=BIOS(2)
-  h fg=BIOS(4) bg=BIOS(7)
-  i fg=BIOS(15) bg=BIOS(1)
-  j fg=BIOS(1) bg=BIOS(3)
-  k fg=BIOS(3) bg=BIOS(1)
+  e fg=BIOS(0) bg=BIOS(2)
+  f fg=BIOS(14) bg=BIOS(2)
+  g fg=BIOS(4) bg=BIOS(7)
+  h fg=BIOS(15) bg=BIOS(1)
+  i fg=BIOS(1) bg=BIOS(3)
+  j fg=BIOS(3) bg=BIOS(1)

@@ -555,9 +555,10 @@ impl Theme {
         // Button family (row 37). Provisional values resolved through the classic
         // palette chain `cpButton` → `cpGrayDialog` → `cpAppColor` for a gray
         // dialog: green-faced buttons (black text, white when selected, yellow
-        // shortcut), darkgray-on-lightgray when disabled. The shadow uses the
-        // classic dark drop-shadow attribute rather than the literal chain value
-        // (which is not shadow-like). Realigns with `TODO(row 34 gray theming)`.
+        // shortcut), darkgray-on-lightgray when disabled. The shadow follows the
+        // literal chain value 0x70 (black on lightgray): black half-block shadow
+        // glyphs over the gray dialog surface. Realigns with `TODO(row 34 gray
+        // theming)`.
         set(&mut styles, Role::ButtonNormal, 0x0, 0x2); // black on green
         set(&mut styles, Role::ButtonDefault, 0xB, 0x2); // light cyan on green
         set(&mut styles, Role::ButtonSelected, 0xF, 0x2); // white on green
@@ -565,7 +566,7 @@ impl Theme {
         set(&mut styles, Role::ButtonNormalShortcut, 0xE, 0x2); // yellow on green
         set(&mut styles, Role::ButtonDefaultShortcut, 0xE, 0x2); // yellow on green
         set(&mut styles, Role::ButtonSelectedShortcut, 0xE, 0x2); // yellow on green
-        set(&mut styles, Role::ButtonShadow, 0x8, 0x0); // darkgray on black
+        set(&mut styles, Role::ButtonShadow, 0x0, 0x7); // black on lightgray (chain: cpButton[8]=0x0F → cpGrayDialog[15]=0x2E → cpAppColor[46]=0x70)
 
         // Label family (row 41). Provisional values modelled on the classic
         // gray-dialog `cpLabel` chain (dialog palette idx 7/8/9): black on

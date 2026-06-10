@@ -1,5 +1,6 @@
 ---
 source: src/dialog/filedlg.rs
+assertion_line: 4937
 expression: screen.snapshot()
 ---
 size: 64x20
@@ -34,17 +35,17 @@ attr:
 |................aaaddddddddddddddddddddddddddddddddddddddddedaaa|
 |................aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
 |................aabbbbbbbbbbbcbbbaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
-|................aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaafaaghhhhihhhgaaa|
-|................aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaafaaggggggggggaaa|
-|................aaajjjjjjjjjjjjjjjjjjjjjjjjjjjjjfaaaaaaaaaaaaaaa|
-|................aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaafaaghihhhhhhgaaa|
-|................aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaafaaggggggggggaaa|
+|................aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaafaabgggghgggbaaa|
+|................aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaafaabbbbbbbbbbaaa|
+|................aaaiiiiiiiiiiiiiiiiiiiiiiiiiiiiifaaaaaaaaaaaaaaa|
+|................aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaafaabghggggggbaaa|
+|................aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaafaabbbbbbbbbbaaa|
 |................aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaafaaaaaaaaaaaaaaa|
-|................aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaafaaghihhhhhhgaaa|
-|................aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaafaaggggggggggaaa|
+|................aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaafaabghggggggbaaa|
+|................aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaafaabbbbbbbbbbaaa|
 |................aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaafaaaaaaaaaaaaaaa|
-|................aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaafaaghhihhhhhgaaa|
-|................aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaggggggggggaaa|
+|................aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaafaabgghgggggbaaa|
+|................aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbaaa|
 |................aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
 legend:
   . default
@@ -54,7 +55,6 @@ legend:
   d fg=BIOS(0) bg=BIOS(3)
   e fg=BIOS(14) bg=BIOS(3)
   f fg=BIOS(1) bg=BIOS(3)
-  g fg=BIOS(8) bg=BIOS(0)
-  h fg=BIOS(0) bg=BIOS(2)
-  i fg=BIOS(14) bg=BIOS(2)
-  j fg=BIOS(15) bg=BIOS(1)
+  g fg=BIOS(0) bg=BIOS(2)
+  h fg=BIOS(14) bg=BIOS(2)
+  i fg=BIOS(15) bg=BIOS(1)
