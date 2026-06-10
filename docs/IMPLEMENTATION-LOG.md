@@ -5,6 +5,28 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## Session addendum — phased key dispatch + plain-hotkey accelerators (A5+B4)
+
+**`43c9d30`** — **rows A5 + B4 in one** (subagent-built from a read-only
+design investigation, two-stage reviewed): the design investigation found
+80% of the seam already existed — the pre/current/post walk in
+`Group::route_event` and the `pre_process`/`post_process` option flags were
+faithfully ported long ago; only the **phase signal** was missing (C++
+`TGroup::phase`; exactly three readers in all of C++: tbutton.cpp:219,
+tcluster.cpp:263, tlabel.cpp:94). It now rides the `Context` like
+`owner_size` (D3: no up-pointer): `Phase` enum + `phase()`/`pub(crate)
+set_phase()` + an 8-line save/set/restore bracket in the focused-events arm
+(nested groups restore to the outer section's phase — one shared field
+suffices). No View-trait method, no delegate-macro change. **B4 adoptions
+in the same row:** button + label plain-letter postProcess accelerators,
+the cluster accelerator scan (with the subtle faithful semantics: a
+DISABLED hotkey match stops the scan WITHOUT consuming; deferred-focus
+deviation documented), and `ctrl_to_arrow` WordStar nav for cluster +
+scrollbar. Two end-to-end tests pin the load-bearing TV property that a
+focused InputLine consuming a letter STARVES the post-loop (that's why
+dialogs use Alt-hotkeys). Zero existing-test fallout (one sanctioned
+label-test flip). 1022 lib tests (+13); clippy + fmt clean.
+
 ## Session addendum — OS clipboard by default: the TClipboard chain (A6)
 
 **`dfba123`** — **row A6, the user-directive row** (subagent-built from a

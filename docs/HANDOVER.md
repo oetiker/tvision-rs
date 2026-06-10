@@ -166,9 +166,10 @@ Drop/panic-hook/signal-thread restore, `hello.rs` main is 3 lines).
 chain in `src/backend/clipboard.rs`: arboard native → OSC 52 → internal
 mirror; `os-clipboard` default-on feature; bracketed paste deferred to C9;
 `docs/design/os-clipboard.md`; HEAD `dfba123`, 1009 lib tests).
-**In flight: A5** (phased key dispatch + B4 hotkey adoptions — the `Phase`
-signal on Context, design approved; worktree `rstv-a5-phase`).
-**Approved design, queued behind A5: A3** (D9 hold/auto-repeat capture —
+**Also landed: A5+B4** (`43c9d30` — the `Phase` signal on Context +
+button/label/cluster plain-hotkey accelerators + ctrl_to_arrow; HEAD
+`43c9d30`, 1022 lib tests). **Approved design, now unblocked: A3** (D9
+hold/auto-repeat capture —
 pump-synthesized `Event::MouseAuto` at 440 ms/110 ms (tevent.cpp:52 +
 hardwrvr.cpp:470), `MouseTrackCapture` router + `Deferred::MouseTrack`,
 loop bodies stay in widgets; the A3 design proposal lives in this
