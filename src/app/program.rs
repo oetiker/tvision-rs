@@ -61,6 +61,7 @@ use std::time::Duration;
 use crate::backend::{Backend, Renderer};
 use crate::capture::{CaptureFlow, CaptureHandler, CaptureStack};
 use crate::command::{Command, CommandSet};
+use crate::desktop::Desktop;
 use crate::event::{Event, Key};
 use crate::theme::Theme;
 use crate::timer::Clock;
@@ -585,7 +586,7 @@ impl Program {
     fn pump_and_drive(&mut self) {
         self.pump_once();
         if let Some((view, completion, initial_focus)) = self.pending_modal.take() {
-            self.exec_view_with_completion(view, Some(completion), initial_focus, None);
+            self.exec_view_with_completion(view, Some(completion), initial_focus, None, false);
         }
     }
 
@@ -685,7 +686,8 @@ impl Program {
     /// 8. Pop the frame, `remove` the view, `setCurrent(saveCurrent, leaveSelect)`.
     /// 9. Restore the command set (`setCommands`).
     pub fn exec_view(&mut self, view: Box<dyn View>) -> Command {
-        self.exec_view_with_completion(view, None, None, None).0
+        self.exec_view_with_completion(view, None, None, None, false)
+            .0
     }
 
     // -- message box (row 63, PART 1) ----------------------------------------
@@ -708,7 +710,7 @@ impl Program {
         buttons: crate::dialog::MessageBoxButtons,
     ) -> Command {
         let (d, first_btn) = crate::dialog::build_message_box(r, msg, kind, buttons);
-        self.exec_view_with_completion(Box::new(d), None, first_btn, None)
+        self.exec_view_with_completion(Box::new(d), None, first_btn, None, false)
             .0
     }
 
@@ -801,8 +803,13 @@ impl Program {
         // initial_focus AND gather are both the input line: selectNext(False)
         // focuses the first selectable child (the input line), and getData reads
         // it back out.
-        let (cmd, gathered) =
-            self.exec_view_with_completion(Box::new(d), None, Some(input_id), Some(input_id));
+        let (cmd, gathered) = self.exec_view_with_completion(
+            Box::new(d),
+            None,
+            Some(input_id),
+            Some(input_id),
+            false,
+        );
 
         // On cancel/none, `s` is unchanged (faithful) → return `initial`.
         let text = match gathered {
@@ -875,8 +882,55 @@ impl Program {
             picker: picker_id,
             sink: sink.clone(),
         };
-        self.exec_view_with_completion(Box::new(d), Some(completion), Some(picker_id), None);
+        self.exec_view_with_completion(Box::new(d), Some(completion), Some(picker_id), None, false);
         sink.get()
+    }
+
+    /// The desktop's local extent `(0,0,w,h)` — mirrors `TDeskTop::getExtent()`.
+    /// Use it to compute bounds for windows opened at runtime (e.g. `CMD_NEW`).
+    /// Returns a zero rect when no desktop was created.
+    pub fn desktop_rect(&mut self) -> Rect {
+        let size = self.desktop_size();
+        Rect::new(0, 0, size.x, size.y)
+    }
+
+    /// Insert `view` into the desktop and focus it — the runtime window-open seam
+    /// that mirrors C++ `deskTop->insert(w)` followed by `deskTop->select(w)`.
+    ///
+    /// Returns the new view's [`ViewId`] on success, or `None` if no desktop exists
+    /// or the downcast fails.
+    pub fn desktop_insert(&mut self, view: Box<dyn View>) -> Option<ViewId> {
+        let desk_id = self.desktop?;
+        let now = self.clock.now_ms();
+        let mut ctx = Context::new(
+            &mut self.out_events,
+            &mut self.timers,
+            now,
+            &mut self.deferred,
+        );
+        let dt = self.group.find_mut(desk_id)?;
+        let desk = dt.as_any_mut()?.downcast_mut::<Desktop>()?;
+        Some(desk.insert_and_focus(view, &mut ctx))
+    }
+
+    /// Show a file-open dialog and return the chosen [`PathBuf`], or `None` on
+    /// cancel. Mirrors `TFileDialog` run via `execView` and `getData`.
+    ///
+    /// `wild_card` is the initial filename pattern (e.g. `"*.*"`), `title` is the
+    /// dialog caption (e.g. `"Open a File"`).
+    pub fn open_file_dialog(&mut self, title: &str, wild_card: &str) -> Option<std::path::PathBuf> {
+        use crate::data::FieldValue;
+        use crate::dialog::{FD_OPEN_BUTTON, FileDialog};
+        let fd = FileDialog::new(wild_card, title, "~N~ame", FD_OPEN_BUTTON, 100);
+        // gather_self = true: pre-mints the dialog's id and reads FileDialog::value()
+        // (FieldValue::Text(resolved_name)) while the modal is still in the tree.
+        let (cmd, gathered) = self.exec_view_with_completion(Box::new(fd), None, None, None, true);
+        if cmd != Command::CANCEL
+            && let Some(FieldValue::Text(name)) = gathered
+        {
+            return Some(std::path::PathBuf::from(name));
+        }
+        None
     }
 
     /// The unified `exec_view` body (row 57). Identical to the sync `exec_view`
@@ -907,6 +961,7 @@ impl Program {
         completion: Option<ModalCompletion>,
         initial_focus: Option<ViewId>,
         gather: Option<ViewId>,
+        gather_self: bool,
     ) -> (Command, Option<crate::data::FieldValue>) {
         // 1. getCommands / save the outgoing current.
         let save_current = self.group.current();
@@ -928,7 +983,15 @@ impl Program {
         // when the desktop is inset by a menu/status bar (Phase 4): a desktop-inset
         // modal would then need to clip to the desktop region, compounding the
         // `ModalFrame` (0,0)-coordinate caveat. Do NOT change the insert target now.
-        let id = self.group.insert(view);
+        // When `gather_self` is true we pre-mint the id and insert with that id so
+        // the gather step below can read the modal's OWN `value()` by id.
+        let (id, effective_gather) = if gather_self {
+            let pre_id = ViewId::next();
+            self.group.insert_with_id(view, pre_id);
+            (pre_id, Some(pre_id))
+        } else {
+            (self.group.insert(view), gather)
+        };
 
         // The modal view's bounds in the root group's frame, for the ModalFrame
         // hit-test. For row 31 the root group is at (0,0), so group-local ==
@@ -1069,7 +1132,7 @@ impl Program {
         // C++ inputBox: `if (c != cmCancel) dialog->getData(s)`. Read the gather
         // target's value while the modal is still in the tree by id, before drop.
         let gathered = if retval != Command::CANCEL {
-            gather.and_then(|gid| self.group.find_mut(gid).and_then(|v| v.value()))
+            effective_gather.and_then(|gid| self.group.find_mut(gid).and_then(|v| v.value()))
         } else {
             None
         };
@@ -1188,7 +1251,8 @@ impl Program {
                 };
                 let r = self.centered_msgbox_rect(&text);
                 let (d, first) = crate::dialog::build_message_box(r, &text, kind, buttons);
-                let (answer, _) = self.exec_view_with_completion(Box::new(d), None, first, None);
+                let (answer, _) =
+                    self.exec_view_with_completion(Box::new(d), None, first, None, false);
                 if let Some(target) = answer_to {
                     if let Some(v) = self.group.find_mut(target) {
                         v.set_modal_answer(answer);

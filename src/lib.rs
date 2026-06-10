@@ -97,7 +97,9 @@ pub use color::{Color, Modifiers, Style};
 pub use command::{Command, CommandSet};
 pub use data::FieldValue;
 pub use desktop::{Background, Desktop};
-pub use dialog::{ColorPicker, Dialog, MessageBoxButtons, MessageBoxKind, Tab};
+pub use dialog::{
+    ColorPicker, Dialog, FD_OPEN_BUTTON, FileDialog, MessageBoxButtons, MessageBoxKind, Tab,
+};
 pub use event::{
     Event, EventMask, Key, KeyEvent, KeyModifiers, MouseButtons, MouseEvent, MouseEventFlags,
     MouseWheel, ctrl_to_arrow, hot_key, is_alt_hotkey, is_plain_hotkey,
@@ -120,7 +122,10 @@ pub use view::{
     Context, DragMode, DrawCtx, Group, GrowMode, Options, Point, Rect, SelectMode, State,
     StateFlag, View, ViewId, ViewState,
 };
-pub use widgets::{Editor, InputLine, ListBox, ListViewer, ListViewerState, ScrollBar, Scroller};
+pub use widgets::{
+    EditWindow, Editor, FileEditor, InputLine, ListBox, ListViewer, ListViewerState, ScrollBar,
+    Scroller,
+};
 pub use widgets::{
     HistoryViewer, HistoryWindow, THistory, clear_history, history_add, history_count, history_str,
 };

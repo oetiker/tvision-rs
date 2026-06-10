@@ -22,17 +22,12 @@
 //!   - `F10` enters the menu bar; arrows + Enter navigate it.
 //!   - `Alt-F`/`Alt-W` open the File / Window menus by hot-key.
 //!   - `Alt-X` (or File → Exit) quits.
-//!   - `F5` zooms the current window, `Alt-F3` closes it, `Ctrl-F6` / `F6` cycle.
-//!   - `Alt-1`..`Alt-3` select a window by number.
-//!
-//! **Known limitation:** menu items can only wire commands that already *route*.
-//! Opening a dialog from a menu needs the D9 `OpenModal` async-modal path (row 63),
-//! which is not built yet — so this demo's menu wires only window-management /
-//! quit commands, not a "File → About…" that pops a dialog. Alt-shortcuts reach
-//! the bar via `ofPreProcess` (the menu bar sets `pre_process`, and
-//! `Group::handle_event` runs the preProcess phase before the focused view), and
-//! `F10` enters the menus via the status-line accelerator → both navigation paths
-//! work without a modal-open seam.
+//!   - `F3` or File → Open opens a file in an editor window.
+//!   - `F4` or File → New opens an untitled editor window.
+//!   - `F2` or File → Save saves the current editor file.
+//!   - `F5` zooms the current window, `Alt-F3` closes it, `F6` cycles.
+//!   - `Alt-1`..`Alt-9` select a window by number.
+//!   - `Color → Color Picker…` opens the truecolor picker.
 
 use std::io;
 
@@ -45,12 +40,13 @@ use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
 use signal_hook::iterator::Signals;
 
 use tvision::{
-    Backend, Color, Command, CrosstermBackend, Desktop, Key, KeyEvent, Menu, MenuBar, Program,
-    Rect, StatusDef, StatusLine, SystemClock, Theme, View, Window, alt,
+    Backend, Color, Command, CrosstermBackend, Desktop, EditWindow, Key, KeyEvent, Menu, MenuBar,
+    Program, Rect, StatusDef, StatusLine, SystemClock, Theme, View, Window, alt,
 };
 
-/// Application-level command: open the color picker demo.
 const CMD_COLOR_PICKER: Command = Command::custom("hello.color_picker");
+const CMD_NEW: Command = Command::custom("hello.new");
+const CMD_OPEN: Command = Command::custom("hello.open");
 
 // ---------------------------------------------------------------------------
 // HelloApp : public TApplication
@@ -74,9 +70,9 @@ impl HelloApp {
             Self::init_status_line,
             Self::init_menu_bar,
         );
-        // Custom commands must be explicitly enabled (they are not in the default
-        // command set, which only contains framework commands).
         program.enable_command(CMD_COLOR_PICKER);
+        program.enable_command(CMD_NEW);
+        program.enable_command(CMD_OPEN);
         HelloApp { program }
     }
 
@@ -116,11 +112,13 @@ impl HelloApp {
         r.a.y = r.b.y - 1;
         let defs = StatusDef::list()
             .def_all(|d| {
-                d.item("~Alt-X~ Exit", alt('x'), Command::QUIT)
+                d.item("~F3~ Open", KeyEvent::from(Key::F(3)), CMD_OPEN)
+                    .item("~F4~ New", KeyEvent::from(Key::F(4)), CMD_NEW)
                     .item("~F10~ Menu", KeyEvent::from(Key::F(10)), Command::MENU)
-                    .item("~F5~ Zoom", KeyEvent::from(Key::F(5)), Command::ZOOM)
-                    .item("~F6~ Next", KeyEvent::from(Key::F(6)), Command::NEXT)
+                    .item("~Alt-X~ Exit", alt('x'), Command::QUIT)
                     .key_item(alt_f3(), Command::CLOSE)
+                    .key_item(KeyEvent::from(Key::F(5)), Command::ZOOM)
+                    .key_item(KeyEvent::from(Key::F(6)), Command::NEXT)
             })
             .build();
         Some(Box::new(StatusLine::new(r, defs)))
@@ -135,7 +133,13 @@ impl HelloApp {
         r.b.y = r.a.y + 1;
         let menu = Menu::builder()
             .submenu("~F~ile", alt('f'), |m| {
-                m.command_key("E~x~it", Command::QUIT, alt('x'), "Alt-X")
+                m.command_key("~O~pen…", CMD_OPEN, KeyEvent::from(Key::F(3)), "F3")
+                    .command_key("~N~ew", CMD_NEW, KeyEvent::from(Key::F(4)), "F4")
+                    .separator()
+                    .command_key("~S~ave", Command::SAVE, KeyEvent::from(Key::F(2)), "F2")
+                    .command("Save ~A~s…", Command::SAVE_AS)
+                    .separator()
+                    .command_key("E~x~it", Command::QUIT, alt('x'), "Alt-X")
             })
             .submenu("~W~indow", alt('w'), |m| {
                 m.command_key("~N~ext", Command::NEXT, KeyEvent::from(Key::F(6)), "F6")
@@ -152,13 +156,23 @@ impl HelloApp {
     }
 
     /// `TApplication::run` — spin the real event loop until a `cmQuit` ends it.
-    /// Uses [`Program::run_app`] to intercept application-level commands
-    /// (the `TApplication::handleEvent` slot), specifically `CMD_COLOR_PICKER`.
+    /// Handles application-level commands (the `TApplication::handleEvent` slot).
     fn run(&mut self) -> Command {
-        self.program.run_app(|prog, cmd| {
-            if cmd == CMD_COLOR_PICKER {
-                // Open the truecolor color picker, seeded with dodger blue.
-                // The chosen color is printed to stderr for demo purposes.
+        let mut next_num: i16 = 4; // demo windows 1-3 are pre-inserted; start at 4
+        self.program.run_app(move |prog, cmd| {
+            if cmd == CMD_NEW {
+                let r = prog.desktop_rect();
+                let win = EditWindow::new(r, None, next_num);
+                prog.desktop_insert(Box::new(win));
+                next_num += 1;
+            } else if cmd == CMD_OPEN {
+                if let Some(path) = prog.open_file_dialog("Open a File", "*.*") {
+                    let r = prog.desktop_rect();
+                    let win = EditWindow::new(r, Some(path), next_num);
+                    prog.desktop_insert(Box::new(win));
+                    next_num += 1;
+                }
+            } else if cmd == CMD_COLOR_PICKER {
                 let initial = Color::Rgb(30, 144, 255);
                 if let Some(color) = prog.color_dialog(initial) {
                     eprintln!("Color picker returned: {color:?}");

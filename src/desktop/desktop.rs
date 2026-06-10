@@ -197,9 +197,22 @@ impl Desktop {
     pub fn insert_view(&mut self, view: Box<dyn View>) -> ViewId {
         self.group.insert(view)
     }
+
+    /// Insert `view` into the desktop and immediately focus it — the runtime
+    /// window-open seam used by `Program::desktop_insert`. Combines `insert_view`
+    /// with a `focus_child` call so the new window receives keyboard input at once.
+    pub fn insert_and_focus(
+        &mut self,
+        view: Box<dyn View>,
+        ctx: &mut crate::view::Context,
+    ) -> ViewId {
+        let id = self.group.insert(view);
+        self.group.focus_child(id, ctx);
+        id
+    }
 }
 
-#[crate::delegate(to = group, skip(value, set_value, number, grabs_focus_on_click, apply_list_scroll, as_any_mut))]
+#[crate::delegate(to = group, skip(value, set_value, number, grabs_focus_on_click, apply_list_scroll))]
 impl View for Desktop {
     /// `TDeskTop::handleEvent` — delegate to the embedded group's three-phase
     /// router, then handle the desktop's own `cmNext`/`cmPrev` window cycling
@@ -213,6 +226,12 @@ impl View for Desktop {
     /// }
     /// clearEvent( event );          // reached ONLY for cmNext/cmPrev
     /// ```
+    /// Concrete-reach hatch used by `Program::desktop_insert` to downcast
+    /// `&mut dyn View` → `&mut Desktop` and call `insert_and_focus`.
+    fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
+        Some(self)
+    }
+
     fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
         self.group.handle_event(ev, ctx);
         if let Event::Command(cmd) = *ev {
