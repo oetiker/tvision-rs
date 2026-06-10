@@ -5,6 +5,26 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## Session addendum — the editor holds: B2 COMPLETE
+
+**`694963d`** — the final and largest adoption (teditor1.cpp:539-583, both
+hold loops): drag-select with the loop-local `selectMode` persisted through
+`EditorTrack::Select` (word/line-granular double/triple-click drags), edge
+auto-scroll (scroll-then-setCurPtr order preserved), middle-button pan
+(`EditorTrack::Pan`, the evMouse mask — wheel included, a brief-correction
+verified from system.h), and in-hold wheel forwarding to the scrollbars via
+`Deferred::MouseTrack` + a self-posted `SyncEditorDelta` (the C++ answer is
+a synchronous `message()` rstv's queue-borne broadcast can't deliver past
+the modal capture — one-pump latency, the seam's accepted deviation).
+**Bonus fidelity fix:** untracked wheel pseudo-downs no longer position the
+cursor — C++ TEditor's eventMask excludes evMouseWheel entirely. Spec
+review approved outright. +14 tests.
+
+**B2 IS COMPLETE (8/8): every `while(mouseEvent(...))` hold loop from the
+TODO audit is live** — button, scrollbar, inputline, cluster, frame,
+listviewer, outline, statusline, editor — all on the A3 seam with the
+faithful 440/110 ms Borland cadence.
+
 ## Session addendum — B2 wave 2: listviewer, outline, statusline holds
 
 **`62bbd15`** — **listviewer + outline** (trait-shared adoption): move+auto
