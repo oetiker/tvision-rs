@@ -5,6 +5,29 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## Session addendum — the CommandSet denylist flip (A1)
+
+**`faabc78`** — **row A1** (subagent-built, two-stage reviewed): command
+enablement flipped from the unfaithful allowlist to the faithful
+`tview.cpp::initCommands` **denylist** — everything enabled by default,
+exactly {ZOOM, CLOSE, RESIZE, NEXT, PREV} seeded disabled. The allowlist
+`default_command_set()` + its file-dialog BANDAID are deleted; the "OK does
+nothing" bug class (a new feature's command silently dropped by the central
+list) is structurally gone. `update_menu_commands`' argument is now
+contractually the **disabled set**; `StatusLine`'s cache renamed to match.
+The C++ ">255 always enabled" rule is *subsumed* (open string space, every
+command maskable) — documented in the new
+`docs/design/command-enablement.md` + PORTING-GUIDE D1. **New seam:**
+`Context::command_enabled(cmd)` backed by a per-pump snapshot (refreshed at
+all three dispatch sites) — unblocks B1 (button/inputline graying); the six
+"no command-set query" deferral comments retagged `TODO(B1)`. `CommandSet`
+gained polarity-neutral `insert`/`remove` aliases (quality-review finding:
+seeding a *disabled* set via `enable_cmd` was a polarity trap; the faithful
+`enableCmd`/`disableCmd` names stay for enabled-set use). **Zero snapshot
+changes** — the 5-command seed reproduces old observable behavior everywhere
+it was correct (the spec reviewer verified no code path relied on
+unknown-command filtering). 995 lib tests (+6); clippy + fmt clean.
+
 ## Session — the backlog run begins: TODO audit, BACKLOG.md, theme chain (A4)
 
 The post-port backlog run started with a **full TODO audit** (every marker in

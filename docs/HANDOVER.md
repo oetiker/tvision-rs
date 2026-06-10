@@ -150,8 +150,12 @@ backlog run** — direction lives in
 (audited 2026-06-10; FOUNDATION seams Phase A first, mechanical fan-out
 Phase B after, big features Phase C backlogged). Two standing user
 directives recorded there: **OS clipboard by default** (row A6) and **no
-hand-rolled terminal setup in app code** (row B7). **HEAD = `e8d82f2`; 988 lib tests green; clippy + fmt
-clean.** Cleared recently: the **currency foundation fix** (`focus_child`
+hand-rolled terminal setup in app code** (row B7). **HEAD = `faabc78`; 995
+lib tests green; clippy + fmt clean.** Landed from the backlog run so far:
+**A1** (the CommandSet denylist flip — `Context::command_enabled` now exists
+for B1; `docs/design/command-enablement.md`) and **A4** (the theme
+chain-verification pass — every `theme.rs` value chain-documented, cyan
+window scheme live, `ListRoles`/`list_roles()` seam). Cleared recently: the **currency foundation fix** (`focus_child`
 self-heal + `Program::new` startup `reset_current`; the `insert_and_focus`
 DEVIATION workaround retired — pre-inserted desktop windows now start focused
 and the topmost is clickable), **button mouse hold-tracking** (the button deferral-3
@@ -285,21 +289,10 @@ terminal-suspend seam + SIGTSTP.
 
 ## Standing deferrals (still open — grep the TODOs)
 
-- **🔴 `CommandSet` allowlist → denylist (architecture pass).** `CommandSet`
-  (`src/command.rs`) is an **allowlist** (`has = cmds.contains`, default empty →
-  everything disabled), so `pump_once`'s filter drops any `Event::Command` not in
-  the central `default_command_set()` (`program.rs`). This is **unfaithful** —
-  C++ `tview.cpp::initCommands` is enabled-by-default with a 5-command denylist
-  (cmZoom/cmClose/cmResize/cmNext/cmPrev) + everything `>255` always-enabled — and
-  it **couples** every new feature to a central list (a FileDialog can't
-  self-register; its `cmFileOpen` got silently dropped → "OK does nothing" bug).
-  **Fix:** flip to a denylist (`has = !disabled.contains`), seed startup with the
-  5 disabled window commands; `default_command_set()` shrinks accordingly. User
-  chose a **bandaid for now** (added the file-dialog `>255` result commands —
-  FILE_OPEN/REPLACE/CLEAR/INIT/CHANGE_DIR/REVERT — to the allowlist); do the real
-  flip in the post-port architecture pass. (The numbered-command "90s smell" is a
-  non-issue: `Command` is already an open `&'static str` newtype, `CommandSet` a
-  `HashSet` — only the allowlist *polarity* is wrong.)
+- **✅ RESOLVED (backlog A1, `faabc78`): `CommandSet` allowlist → denylist.**
+  Enablement is now the faithful `initCommands` denylist (everything enabled,
+  5-command seed); the bandaid is deleted; `Context::command_enabled` exists
+  for B1 graying. See `docs/design/command-enablement.md`.
 - **🔴 missing `show()→resetCurrent` cascade at insert (architecture pass).**
   C++ `TView::setState(sfVisible)` calls `owner->resetCurrent()` for an
   `ofSelectable` view, so inserting a selectable child establishes the group's
