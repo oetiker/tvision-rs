@@ -5,6 +5,18 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## Session addendum — B8 COMPLETE (2026-06-10)
+
+**`dae38c1`** — **B8: InputLine max_len clamp on set_value + valid-select focus.**
+
+*max_len clamp on set_value* — C++ `TInputLine::setData` truncates via `strnzcpy(data, s, maxLen+1)`. rstv now applies the same UTF-8-safe char-boundary truncation in the `FieldValue::Text` path of `set_value` (mirrors the clamp already in `paste_text`). Resolves the row-39 gap where `set_value` flowback was unclamped.
+
+*valid-select* — C++ `TInputLine::valid` calls `select()` (= `TView::select()` = focus) on the bad field before returning false. rstv now calls `ctx.request_focus(id)` in the same branch. Unblocked: `valid` already takes `ctx`.
+
+Other B8 items: timer-payload was pre-resolved (`Event::Timer(id)` already in pump idle). `initHistory`/`doneHistory` and help-ctx propagation remain standing deferrals pending the history-subsystem port and a `OneOf` status line respectively.
+
+**Phase B is now fully complete** — all B rows ✅.
+
 ## Session addendum — B5 COMPLETE (2026-06-10)
 
 **`c917b4b`** — **B5: resize republish family + keyboard resize sub-mode.**

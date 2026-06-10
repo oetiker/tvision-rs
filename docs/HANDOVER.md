@@ -14,15 +14,16 @@
 > When a row lands: add an IMPLEMENTATION-LOG section, tick the BACKLOG row,
 > update this file.
 
-## Current state (2026-06-10, B5 committed)
+## Current state (2026-06-10, B5+B8 committed)
 
-**HEAD = `c917b4b`; 1127 lib tests green; clippy + fmt clean.**
+**HEAD = `dae38c1`; 1127 lib tests green; clippy + fmt clean.**
 
 ### What is on `main` (committed):
 - **B1 ✅ (`680aabc`)** — button `cmCommandSetChanged` graying; `Program::new` seeds `command_set_changed: true` for initial broadcast. InputLine `can_update_commands`/`update_commands` from `handle_event` + `set_state`.
 - **B3 ✅ (`680aabc`)** — InputLine cmCut/cmCopy/cmPaste; `Deferred::InputLinePaste` broker; `paste_text` (save_state + max_len clamp + check_valid).
 - **B6 ✅ (`6ae0222`)** — FileDialog/ChDirDialog `wfGrow`; screen-relative resize deferred to first `handle_event`; `SearchRec` attr/size/time from `std::fs` + `pack_dos_time`.
 - **B5 ✅ (`c917b4b`)** — `View::on_bounds_changed` hook; `Scroller::on_bounds_changed`; `list_viewer::on_bounds_changed` free fn (resize formula) adopted by all 5 ListViewer concrete types; Outline uses Scroller formula; `Window::locate` re-pushes `set_zoomed`; `KeyboardResizeCapture` (full keyboard resize: arrows/Ctrl/Home/End/PgUp/PgDn/Enter/Esc); `cmResize` enabled when `sfSelected && (wfMove || wfGrow)`. Resolves TODO(33d).
+- **B8 ✅ (`dae38c1`)** — `InputLine::set_value` clamps to `max_len` (UTF-8-safe, mirrors paste_text); `valid` calls `ctx.request_focus(id)` before returning false (faithful to C++ `select()`). Timer-payload was pre-resolved. init/doneHistory + help-ctx propagation remain standing deferrals.
 
 ## Previous state (2026-06-10, end of the backlog-run session)
 
@@ -91,13 +92,10 @@ This session ran the **backlog run** end to end:
 
 *(none — all paused worktrees integrated this session)*
 
-## Next — the remaining backlog (small, all unblocked)
+## Next — Phase B complete; Phase C backlogged
 
-- **B8 — small singletons:** `max_len` clamp on `InputLine::set_value`
-  (note: the new `paste_text` DOES clamp; only the `set_value` flowback is
-  unclamped), `TODO(valid-select)` (likely unblocked — `valid` takes ctx),
-  timer payload (`program.rs`), `application.rs` init/doneHistory, help-ctx
-  propagation plumbing.
+**All Phase B rows are ✅.** The remaining open work is:
+- **Standing deferrals** (not Phase C): `init/doneHistory` (needs history subsystem port), help-ctx `OneOf` propagation (needs `View::get_help_ctx` + TopView resolver + context-split status line).
 - **Phase C stays backlogged (user decision):** editor find/replace dialogs,
   right-click context menu, internal-clipboard editor, D10 dialog
   gather/scatter group-walk, cmQuit-veto / saveAs-modified-close inline
