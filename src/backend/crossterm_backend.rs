@@ -6,8 +6,10 @@
 //! must compile and be correct/reasonable.
 //!
 //! ## Setup (TODO)
-//! Raw-mode and alternate-screen setup will be added when the event loop lands
-//! (row 31).  For now `CrosstermBackend::new()` just captures stdout.
+//! Raw-mode, alternate-screen, and mouse-capture setup are not yet wired into
+//! `CrosstermBackend::new()`.  The event loop (`Program`, row 31) is live, but
+//! the terminal-lifecycle calls (`enable_raw_mode`, `EnterAlternateScreen`,
+//! `EnableMouseCapture`) have not been added here yet.
 //!
 //! ## Clipboard
 //! The clipboard is implemented as an internal string buffer.  OSC 52 terminal
@@ -77,8 +79,8 @@ pub struct CrosstermBackend {
 impl CrosstermBackend {
     /// Construct a `CrosstermBackend` writing to stdout.
     ///
-    /// Raw mode, alternate-screen enable, and mouse capture will be added when
-    /// the event loop lands (row 31).
+    /// NOTE: raw mode, alternate-screen, and mouse capture are not yet set up
+    /// here (see the module-level `## Setup (TODO)` note).
     pub fn new() -> Self {
         CrosstermBackend {
             out: io::stdout(),
@@ -306,15 +308,20 @@ fn translate_event(ev: crossterm::event::Event) -> Option<Event> {
         crossterm::event::Event::Key(k) => translate_key(k),
         crossterm::event::Event::Mouse(m) => translate_mouse(m),
         crossterm::event::Event::Resize(_, _) => {
-            // TODO: resize handling lands with the event loop (row 31).
+            // NOTE: resize is handled without an Event variant — the pump
+            // (`Program::pump_once`) polls `backend.size()` each iteration and
+            // calls `renderer.resize` + `group.change_bounds` on change.  This
+            // is the D9 realization of `setScreenMode`/`cmScreenChanged`;
+            // deliberately no `Event::Resize` variant (avoids enum churn).
             None
         }
         crossterm::event::Event::Paste(_) => {
-            // TODO: paste event (row 31).
+            // TODO(paste): bracketed paste is not modeled yet (the editor's
+            // kbPaste path is also deferred).
             None
         }
         crossterm::event::Event::FocusGained | crossterm::event::Event::FocusLost => {
-            // TODO: focus events (row 31).
+            // TODO(focus-events): not modeled yet.
             None
         }
     }

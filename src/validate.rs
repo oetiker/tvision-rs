@@ -128,7 +128,8 @@ pub trait Validator {
 ///   individual UTF-8 bytes, we match whole chars) — not a case any caller hits.
 /// - Streaming (`read`/`write`/`name`) dropped project-wide (D12).
 /// - Destructor (`delete[] validChars`) moot — Rust drop handles it.
-/// - `error()` body is a TODO breadcrumb (row-63 `messageBox` not yet built).
+/// - `error()` is live: `messageBox(mfError|mfOKButton, …)` via the
+///   async-modal-from-a-view seam (`ctx.request_message_box`, informational, OK-only).
 pub struct FilterValidator {
     valid_chars: String,
 }
@@ -213,7 +214,8 @@ impl Validator for LookupValidator {}
 /// - `TStringCollection*` → `Vec<String>` (owned, no heap-manual management).
 /// - `lookup()` virtual collapse into `is_valid` (D2).
 /// - Streaming dropped (D12). Destructor moot.
-/// - `error()` is a TODO breadcrumb (row-63 `messageBox` not yet built).
+/// - `error()` is live: `messageBox(mfError|mfOKButton, …)` via the
+///   async-modal-from-a-view seam (`ctx.request_message_box`, informational, OK-only).
 pub struct StringLookupValidator {
     strings: Vec<String>,
 }
@@ -278,7 +280,8 @@ impl Validator for StringLookupValidator {
 /// - `min`/`max` are `i32` (C++ `int32_t`); C++'s `value` is `long` but `isValid`
 ///   bounds it into `[min, max] ⊆ i32`, so [`FieldValue::Int`] is faithful.
 /// - Streaming (`read`/`write`/`name`) dropped project-wide (D12); destructor moot.
-/// - `error()` is a TODO breadcrumb (row-63 `messageBox` not yet built).
+/// - `error()` is live: `messageBox(mfError|mfOKButton, …)` via the
+///   async-modal-from-a-view seam (`ctx.request_message_box`, informational, OK-only).
 ///
 /// [`transfer_get`]: Validator::transfer_get
 /// [`transfer_set`]: Validator::transfer_set

@@ -361,8 +361,9 @@ impl HistoryViewer {
 /// * `getPalette` returns `cpHistoryWindow "\x13\x13\x15\x18\x17\x13\x14"`.
 ///   We have no live palette mapping; the window uses the default `Window`/`Frame`
 ///   rendering.  `TODO(row 34): cpHistoryWindow palette remap`.
-/// * `evMouseDown && !mouseInView → endModal(cmCancel)` is not ported —
-///   see `handle_event` for the breadcrumb.
+/// * `evMouseDown && !mouseInView → endModal(cmCancel)` — ported in
+///   `handle_event` (C): outside-bounds clicks are delivered by the pump's
+///   `ModalFrame` redirect; `!extent.contains(position)` → `end_modal(CANCEL)`.
 pub struct HistoryWindow {
     /// The embedded window (D2). `HistoryWindow` *is-a* `TWindow`.
     window: Window,
@@ -471,7 +472,10 @@ impl View for HistoryWindow {
     ///
     /// (B) `TWindow::handleEvent` (faithful order: base first).
     ///
-    /// (C) **DEFERRED**: see the `TODO(row 57 modal-loop seam)` breadcrumb.
+    /// (C) **Outside-click cancel** — C++ `THistoryWindow::handleEvent`:
+    ///     `if (event.what == evMouseDown && !mouseInView(event.mouse.where)) endModal(cmCancel)`.
+    ///     Delivered via the pump's `ModalFrame` redirect (outside-bounds clicks reach
+    ///     the modal top window); `!mouse_in_view` == `!extent.contains(position)`.
     fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
         // (A) One-time viewer setup BEFORE delegating — ensures range/focused
         // are initialized before the first event reaches the viewer.

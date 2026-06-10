@@ -57,11 +57,14 @@
 //!   plain corners/edges — byte-identical to C++ for the common case (a window
 //!   whose border no `ofFramed` sibling touches). The tee/cross glyphs are
 //!   seeded in [`Glyphs`](crate::theme::Glyphs) for completeness but unused.
-//! * **The drag / press-and-hold loops** (`dragWindow`→`dragView`, the close
-//!   icon's `while(mouseEvent(...))` release-confirm loop, the bottom-row
-//!   grow-drag, the middle-button move) need the live event loop + capture stack
-//!   (rows 31/33, D9). See [`Frame::handle_event`] — each carries a
-//!   `TODO(row 33, D9)`.
+//! * **Window drag loops** (`dragWindow`→`dragView`: title-bar move, bottom-corner
+//!   grows, middle-button move) are handled by the owning `Window` via
+//!   `start_drag`/`DragCapture` (D9). The frame deliberately leaves those
+//!   `MouseDown` events unconsumed so they fall through to `Window::handle_event`.
+//! * **The close icon's press-and-hold release-confirm loop** — we post `cmClose`
+//!   on mouse-**down**; C++ confirms only on release over the icon
+//!   (`while(mouseEvent(...))`). See `TODO(D9 close-icon release-confirm)` in
+//!   [`Frame::handle_event`].
 
 use crate::command::Command;
 use crate::event::Event;
@@ -376,14 +379,15 @@ impl View for Frame {
     ///   the close hot-zone resolves to close (faithful: the close branch runs
     ///   first).
     ///
-    /// **TODO(row 33, D9)** — deferred, all needing the live loop + capture stack:
-    /// * the close icon's press-and-hold release-confirm loop
-    ///   (`while(mouseEvent(...))`): we `post(cmClose)` on mouse-**down** instead.
-    /// * `wfMove` frame-drag (`dragWindow(dmDragMove)`): the row-0 click that is
-    ///   not on an icon — left unconsumed.
-    /// * the bottom-row grow drags (`wfGrow`: `x>=size.x-2` → `dragGrow`,
-    ///   `x<=1` → `dragGrowLeft`).
-    /// * the middle-button move.
+    /// **TODO(D9 close-icon release-confirm)** — the close icon's press-and-hold
+    /// loop: we `post(cmClose)` on mouse-**down**; C++ confirms only on release
+    /// over the icon (`while(mouseEvent(...))`). All other drag cases are handled
+    /// by the owning `Window` via `start_drag`/`DragCapture` (D9):
+    /// * `wfMove` title-bar drag: the row-0 click not on an icon is left
+    ///   unconsumed on purpose — `Window::handle_event` starts the move drag.
+    /// * bottom-row grow drags (`wfGrow`): left unconsumed so `Window` starts
+    ///   a `DragKind::Grow` or `DragKind::GrowLeft` capture.
+    /// * middle-button move: left unconsumed so `Window` starts a move drag.
     ///
     /// The base `View::handle_event` is a no-op, so there is nothing to call
     /// through to (the C++ `TView::handleEvent(event)` did the auto-select, which
@@ -393,10 +397,10 @@ impl View for Frame {
             let w = self.st.size.x;
             if m.position.y == 0 && self.st.state.active {
                 if self.flags.close && (2..=4).contains(&m.position.x) {
-                    // TODO(row 33, D9): the C++ runs a press-and-hold
-                    // `while(mouseEvent(event, evMouseMove))` release-confirm
-                    // loop and only posts cmClose if the button is released over
-                    // the icon. We post on mouse-down for now.
+                    // TODO(D9 close-icon release-confirm): the C++ runs a
+                    // press-and-hold `while(mouseEvent(event, evMouseMove))`
+                    // release-confirm loop and only posts cmClose if the button
+                    // is released over the icon. We post on mouse-down for now.
                     ctx.post(Command::CLOSE);
                     ev.clear();
                 } else if self.flags.zoom
@@ -405,9 +409,11 @@ impl View for Frame {
                     ctx.post(Command::ZOOM);
                     ev.clear();
                 }
-                // else: wfMove frame-drag — TODO(row 33, D9). Left unconsumed.
+                // else: wfMove title-bar drag — left unconsumed ON PURPOSE so
+                // Window::handle_event picks it up and starts the move drag.
             }
-            // else: bottom-row grow drags + middle-button move — TODO(row 33, D9).
+            // else: bottom-row grow drags + middle-button move — left unconsumed
+            // ON PURPOSE so Window::handle_event starts the grow/move drag.
         }
     }
 

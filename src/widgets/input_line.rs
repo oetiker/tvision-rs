@@ -55,8 +55,10 @@
 //! 4. **`valid()`'s `select()` side-effect** — focusing the bad field needs
 //!    `&mut Context`; `valid(&self)` returns the faithful boolean only.
 //!    `TODO(valid-select)`.
-//! 5. **Validator `transfer`** (the D10 typed-non-text hook) — no overrider until
-//!    `TRangeValidator` (row 59); `TODO(row 59)` at the `value`/`set_value` sites.
+//! 5. **Validator `transfer`** (the D10 typed-non-text hook) — live via
+//!    [`Validator::transfer_get`]/[`Validator::transfer_set`]; `RangeValidator`
+//!    (row 59) overrides them. `InputLine::value`/`set_value` consult the hook
+//!    before the text fallback (C++ `getData`/`setData` `voTransfer` path).
 
 use crate::command::Command;
 use crate::data::FieldValue;
@@ -332,10 +334,10 @@ impl InputLine {
             }
             let new_len = candidate.len() as i32;
             self.data = candidate;
-            // TODO(row 59/62): a mutating validator that SHRINKS data can leave
-            // cur_pos past EOS / mid-grapheme; re-clamp cur_pos to a char boundary
-            // <= data.len() when the first auto-fill validator lands (D13 panic
-            // hazard).
+            // TODO(auto-fill clamp): a mutating validator that SHRINKS data can
+            // leave cur_pos past EOS / mid-grapheme; re-clamp cur_pos to a char
+            // boundary <= data.len() when the first auto-fill validator lands
+            // (D13 panic hazard).
             if self.cur_pos >= old_len && new_len > old_len {
                 self.cur_pos = new_len;
             }
