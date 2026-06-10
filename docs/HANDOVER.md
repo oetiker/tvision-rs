@@ -151,16 +151,19 @@ backlog run** — direction lives in
 Phase B after, big features Phase C backlogged). Two standing user
 directives recorded there: **OS clipboard by default** (row A6) and **no
 hand-rolled terminal setup in app code** (row B7 — now DONE). **HEAD =
-`7827235`; 995 lib tests green; clippy + fmt clean.** Landed from the
-backlog run so far: **A1** (the CommandSet denylist flip —
-`Context::command_enabled` now exists for B1;
-`docs/design/command-enablement.md`), **A4** (the theme chain-verification
-pass — every `theme.rs` value chain-documented, cyan window scheme live,
-`ListRoles`/`list_roles()` seam), and **B7** (RAII terminal lifecycle in
-`CrosstermBackend` — fallible `new()`, Drop/panic-hook/signal-thread
-restore, `hello.rs` main is 3 lines). **A2 (resetCurrent cascade) is
-in flight** — design approved (pending-currency flag + pump settle pass;
-see the a2-currency worktree if interrupted mid-run). Cleared recently: the **currency foundation fix** (`focus_child`
+`6a58919`; 1002 lib tests green; clippy + fmt clean.** Landed from the
+backlog run so far — **both 🔴 architecture items are closed**: **A1** (the
+CommandSet denylist flip — `Context::command_enabled` now exists for B1;
+`docs/design/command-enablement.md`), **A2** (the resetCurrent cascade —
+currency is a tree property: `currency_dirty` + post-order
+`settle_currency` + `set_visible_descendant` + remove parity; fixed the
+latent nested keyboard-dead-window gap), **A4** (the theme
+chain-verification pass — every `theme.rs` value chain-documented, cyan
+window scheme live, `ListRoles`/`list_roles()` seam), and **B7** (RAII
+terminal lifecycle in `CrosstermBackend` — fallible `new()`,
+Drop/panic-hook/signal-thread restore, `hello.rs` main is 3 lines).
+**Next: A3 (D9 hold/auto-repeat capture seam), A5 (phased key dispatch),
+A6 (OS clipboard) — then the B1/B2/B3/B4 mechanical fan-out.** Cleared recently: the **currency foundation fix** (`focus_child`
 self-heal + `Program::new` startup `reset_current`; the `insert_and_focus`
 DEVIATION workaround retired — pre-inserted desktop windows now start focused
 and the topmost is clickable), **button mouse hold-tracking** (the button deferral-3
@@ -298,20 +301,16 @@ terminal-suspend seam + SIGTSTP.
   Enablement is now the faithful `initCommands` denylist (everything enabled,
   5-command seed); the bandaid is deleted; `Context::command_enabled` exists
   for B1 graying. See `docs/design/command-enablement.md`.
-- **🔴 missing `show()→resetCurrent` cascade at insert (architecture pass).**
-  C++ `TView::setState(sfVisible)` calls `owner->resetCurrent()` for an
-  `ofSelectable` view, so inserting a selectable child establishes the group's
-  `current` automatically (an `EditWindow`'s `FileEditor` becomes current at
-  construction). rstv's `Group::insert` is deliberately ctx-less and **skips**
-  this, so every focus-establishing path must remember to call `reset_current`
-  itself. This is now compensated in **three** places — `exec_view`
-  (`program.rs`), `HistoryWindow::select_child` (`history.rs`), and
-  `Desktop::insert_and_focus` (`desktop.rs`, added when an inserted EditWindow
-  opened keyboard-dead: typing + Save routed to a `current == None`). Same
-  "every caller must remember the central thing" smell as the CommandSet one.
-  **Fix to consider:** establish currency at insert/show time (a ctx-taking
-  insert, or wiring the `set_visible` deferred to run `resetCurrent`) so the
-  per-caller compensations collapse. See memory `show-resetcurrent-cascade-gap`.
+- **✅ RESOLVED (backlog A2, `6a58919`): the `show()→resetCurrent` cascade.**
+  Currency is now a tree property: `Group::currency_dirty` at insert +
+  post-order `settle_currency` (eager in `Program::new`, pump step 2b) +
+  `set_visible_descendant` (hide direction) + remove parity. The keystone is
+  the clear-on-`set_current` (incl. early return) — protects explicit focus.
+  Old text (for context): rstv's ctx-less insert skipped the C++ cascade, so
+  every focus-establishing path had to remember `reset_current`; compensations
+  existed in `exec_view` (kept — the faithful open hook),
+  `HistoryWindow::select_child` (retired), and `Desktop::insert_and_focus`
+  (retired); the `focus_child` self-heal stays (same-instant focus).
 - **idle→`statusLine->update()` help-ctx refresh** — inert under a single `All`
   `StatusDef`; only worth doing when a context-split `OneOf` line lands (needs a
   `View::get_help_ctx` + a `TopView` resolver).

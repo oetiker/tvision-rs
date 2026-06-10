@@ -5,6 +5,32 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## Session addendum — the resetCurrent cascade: currency is a tree property (A2)
+
+**`6a58919`** — **row A2, the second 🔴** (design by a read-only Plan
+investigation, implemented and two-stage reviewed; the spec review was
+adversarial and every hunt came back clean): the C++
+`setState(sfVisible)→owner->resetCurrent()` cascade that ctx-less
+`Group::insert` (D3) skipped is now automatic. Mechanism: a
+`Group::currency_dirty` marker set at insert (selectable && visible, the
+faithful `insertBefore` gate), cleared FIRST in `set_current` *including the
+early-return leg* (the keystone protecting explicit focus from the settle),
+and a post-order `View::settle_currency` walk — eager in `Program::new`
+(recursive: **fixes the latent nested gap** where a ctor-built selectable
+child inside a pre-inserted window was keyboard-dead) and at pump step 2b
+(before the event pick). The settle runs the *inherent* group reset;
+`exec_view`'s kept virtual reset is the faithful open hook (FileDialog
+one-time init). Hide direction: `set_visible_descendant` tree-op
+(selectable → reset BOTH directions); remove parity (`tgroup.cpp:112`):
+removal of any visible+selectable child resets, not just `was_current`.
+Retired compensations: the startup `set_current(desktop)` block,
+`Desktop::insert_and_focus`'s reset, the `HistoryWindow` select_child
+workaround (`Window::select_child` → `#[cfg(test)]`); the `focus_child`
+self-heal stays (same-instant focus). specs.rs forwarders for both new
+trait methods + delegate spy coverage. **A new `Group::insert` caller now
+gets C++-equivalent currency with no API to remember.** Zero existing-test
+fallout; 1002 lib tests (+7 incl. the nested-gap bite); clippy + fmt clean.
+
 ## Session addendum — RAII terminal lifecycle (B7)
 
 **`7827235`** — **row B7** (subagent-built, two-stage reviewed): the terminal
