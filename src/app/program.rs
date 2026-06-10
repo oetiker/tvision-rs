@@ -7485,6 +7485,45 @@ mod tests {
             }
         }
 
+        // -- EditWindow desktop_insert focus regression -------------------------
+
+        /// REGRESSION: an EditWindow inserted via desktop_insert must arrive with its
+        /// FileEditor focused, or typing (and Save) do nothing — the "edit/save does not
+        /// work" bug. C++ focuses the editor via show()->resetCurrent at insert; rstv's
+        /// ctx-less Group::insert skips that, so insert_and_focus must reset_current
+        /// before focus_child. Drives the REAL pump and asserts the typed char lands in
+        /// the editor buffer (symptom-level, not a focus-flag proxy).
+        #[test]
+        fn inserted_edit_window_receives_typed_characters() {
+            let (mut program, _handle, _clock) = program_with_desktop(80, 25);
+            let r = program.desktop_rect();
+            let ew = crate::widgets::EditWindow::new(r, None, 1);
+            let editor_id = ew.editor_id;
+            program.desktop_insert(Box::new(ew));
+            // Clear any RECEIVED_FOCUS broadcasts queued by the insert (they would
+            // be processed before the typed key and consume the single pump_once
+            // call, leaving the KeyDown undelivered).
+            program.out_events.clear();
+
+            program.out_events.push_back(Event::KeyDown(KeyEvent::new(
+                Key::Char('X'),
+                KeyModifiers::default(),
+            )));
+            program.pump_once();
+
+            let text = program
+                .group_mut()
+                .find_mut(editor_id)
+                .and_then(crate::widgets::editor_mut)
+                .map(|e| String::from_utf8_lossy(&e.text()).into_owned())
+                .unwrap_or_default();
+            assert_eq!(
+                text, "X",
+                "the typed char must land in the inserted EditWindow's editor — a window \
+                 that opens keyboard-dead (editor never focused) would leave this empty"
+            );
+        }
+
         // -- color_dialog (Task 10, rstv-original extension) --------------------
 
         /// OK returns `Some(color)` — the initial color is returned unchanged when

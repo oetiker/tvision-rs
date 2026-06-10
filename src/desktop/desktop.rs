@@ -36,7 +36,7 @@
 
 use crate::command::Command;
 use crate::event::Event;
-use crate::view::{Context, Group, Rect, View, ViewId, locate};
+use crate::view::{Context, Group, Rect, SelectMode, View, ViewId, locate};
 
 use super::Background;
 
@@ -207,7 +207,26 @@ impl Desktop {
         ctx: &mut crate::view::Context,
     ) -> ViewId {
         let id = self.group.insert(view);
-        self.group.focus_child(id, ctx);
+        // Establish the inserted view's INTERNAL currency before focusing it.
+        // rstv's ctx-less Group::insert skips the C++ show()->resetCurrent cascade
+        // (TView::setState sfVisible -> owner->resetCurrent for ofSelectable views),
+        // so a freshly inserted window arrives with current == None. reset_current
+        // sets its current (selected, unfocused) so the subsequent set_current
+        // cascades focus into the first selectable child (e.g. an EditWindow's
+        // FileEditor). Mirrors exec_view's post-insert reset hook in program.rs.
+        // Without this an inserted EditWindow opens keyboard-dead (typing + Save
+        // route to the window's current, which would otherwise be None).
+        //
+        // DEVIATION from the task spec's `focus_child` call: focus_child routes
+        // ofTopSelect windows through make_first -> put_in_front_of, which
+        // short-circuits with an already_in_place no-op when the freshly-inserted
+        // window is already at the top of the Z-order. set_current never runs and
+        // focus never cascades. exec_view (the cited reference) uses set_current
+        // directly, so insert_and_focus must too.
+        if let Some(v) = self.group.find_mut(id) {
+            v.reset_current(ctx);
+        }
+        self.group.set_current(Some(id), SelectMode::Normal, ctx);
         id
     }
 }

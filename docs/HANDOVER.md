@@ -286,6 +286,20 @@ terminal-suspend seam + SIGTSTP.
   flip in the post-port architecture pass. (The numbered-command "90s smell" is a
   non-issue: `Command` is already an open `&'static str` newtype, `CommandSet` a
   `HashSet` — only the allowlist *polarity* is wrong.)
+- **🔴 missing `show()→resetCurrent` cascade at insert (architecture pass).**
+  C++ `TView::setState(sfVisible)` calls `owner->resetCurrent()` for an
+  `ofSelectable` view, so inserting a selectable child establishes the group's
+  `current` automatically (an `EditWindow`'s `FileEditor` becomes current at
+  construction). rstv's `Group::insert` is deliberately ctx-less and **skips**
+  this, so every focus-establishing path must remember to call `reset_current`
+  itself. This is now compensated in **three** places — `exec_view`
+  (`program.rs`), `HistoryWindow::select_child` (`history.rs`), and
+  `Desktop::insert_and_focus` (`desktop.rs`, added when an inserted EditWindow
+  opened keyboard-dead: typing + Save routed to a `current == None`). Same
+  "every caller must remember the central thing" smell as the CommandSet one.
+  **Fix to consider:** establish currency at insert/show time (a ctx-taking
+  insert, or wiring the `set_visible` deferred to run `resetCurrent`) so the
+  per-caller compensations collapse. See memory `show-resetcurrent-cascade-gap`.
 - **idle→`statusLine->update()` help-ctx refresh** — inert under a single `All`
   `StatusDef`; only worth doing when a context-split `OneOf` line lands (needs a
   `View::get_help_ctx` + a `TopView` resolver).

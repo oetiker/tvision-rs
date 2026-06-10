@@ -5,6 +5,38 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## Session — inserted EditWindow opened keyboard-dead (focus-on-insert)
+
+Live testing of the editor wiring surfaced a third pump-only bug: **opening a
+file or a new editor window worked, but typing and Save did nothing.** Both
+symptoms share one root cause.
+
+**Root cause.** C++ `TView::setState(sfVisible)` calls `owner->resetCurrent()`
+for an `ofSelectable` view, so inserting the `FileEditor` into an `EditWindow`
+makes it the window's `current` at construction; focusing the window then
+cascades focus into the editor. rstv's ctx-less `Group::insert` deliberately
+**skips** that cascade, and `Desktop::insert_and_focus` (the `desktop_insert`
+path, unlike the modal `exec_view`) never called `reset_current` — so the
+inserted window arrived with `current == None`, the editor was never focused, and
+both KeyDown inserts and `cmSave` (which `FileEditor::handle_event` does handle)
+routed to nothing.
+
+**Fix** (`src/desktop/desktop.rs::insert_and_focus`): call `reset_current` on the
+inserted view to establish its internal currency, then `set_current(Some(id),
+Normal)` to focus it. Note: the obvious `focus_child` does **not** work for a
+freshly-inserted `ofTopSelect` window — it routes through `make_first →
+put_in_front_of`, which short-circuits with an `already_in_place` no-op when the
+new window is already top of the Z-order, so `set_current` never runs and focus
+never cascades. `set_current` directly is also the faithful C++ insert→show→
+resetCurrent→setCurrent path. Symptom-level regression test
+(`inserted_edit_window_receives_typed_characters`) drives the real pump and
+asserts a typed `'X'` lands in the editor buffer. 967 lib tests green.
+
+This is the **third** site compensating for the missing `show()→resetCurrent`
+cascade (after `exec_view` and `HistoryWindow::select_child`); logged as a
+standing deferral (HANDOVER + memory `show-resetcurrent-cascade-gap`) for the
+post-port architecture pass alongside the CommandSet denylist flip.
+
 ## Session — two runtime bugs from the live editor wiring (`63cbc32`)
 
 Wiring a live `FileEditor`/`FileDialog` into `hello.rs` surfaced two bugs that
