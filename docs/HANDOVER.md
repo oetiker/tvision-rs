@@ -142,10 +142,15 @@
   payload-command + `set_state` `chDirButton` poke breadcrumbed → row 80. The
   `#[delegate]` proc-macro is landed and adopted codebase-wide.
 
-## Next — all 92 rows complete; backlog seams being cleared
+## Next — all 92 rows complete; the backlog run
 
-**All 92 PORT-ORDER rows are COMPLETE.** Post-completion work now clears the
-deferred backlog seams. **HEAD = `e8d82f2`; 988 lib tests green; clippy + fmt
+**All 92 PORT-ORDER rows are COMPLETE.** The work is now the **post-port
+backlog run** — direction lives in
+[`docs/BACKLOG.md`](file:///home/oetiker/checkouts/rstv/docs/BACKLOG.md)
+(audited 2026-06-10; FOUNDATION seams Phase A first, mechanical fan-out
+Phase B after, big features Phase C backlogged). Two standing user
+directives recorded there: **OS clipboard by default** (row A6) and **no
+hand-rolled terminal setup in app code** (row B7). **HEAD = `e8d82f2`; 988 lib tests green; clippy + fmt
 clean.** Cleared recently: the **currency foundation fix** (`focus_child`
 self-heal + `Program::new` startup `reset_current`; the `insert_and_focus`
 DEVIATION workaround retired — pre-inserted desktop windows now start focused
