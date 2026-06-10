@@ -401,6 +401,42 @@ pub fn update_steps<L: ListViewer + ?Sized>(this: &L, ctx: &mut Context) {
     }
 }
 
+/// `TListViewer::changeBounds` resize-step formula — called from
+/// `View::on_bounds_changed` for concrete ListViewer implementors.
+///
+/// Faithful: after the new bounds are applied, re-publish each scrollbar's
+/// `pgStep` preserving `arStep` (tlstview.cpp:68-75):
+///   vbar `pgStep = size.y` (plain height, not `size.y - 1` — the resize formula).
+///   hbar `pgStep = size.x / numCols`.
+///
+/// **Differs from the ctor formula** (`update_steps`): resize uses `size.y` for
+/// vbar (not `size.y - 1` / `size.y * numCols`) and does NOT touch `arStep`.
+pub fn on_bounds_changed<L: ListViewer + ?Sized>(this: &L, ctx: &mut Context) {
+    let lv = this.lv();
+    let size = lv.state.size;
+    let num_cols = lv.num_cols.max(1);
+    if let Some(v) = lv.v_scroll_bar {
+        ctx.request_scroll_bar_params(
+            v,
+            None,         // preserve value
+            None,         // preserve min
+            None,         // preserve max
+            Some(size.y), // pgStep = size.y (resize formula, tlstview.cpp:72)
+            None,         // preserve arStep
+        );
+    }
+    if let Some(h) = lv.h_scroll_bar {
+        ctx.request_scroll_bar_params(
+            h,
+            None,                    // preserve value
+            None,                    // preserve min
+            None,                    // preserve max
+            Some(size.x / num_cols), // pgStep = size.x / numCols (tlstview.cpp:74)
+            None,                    // preserve arStep
+        );
+    }
+}
+
 /// `TListViewer::setState` — flip the flag (+ the Focused broadcast), then on
 /// `Active`/`Selected` show/hide BOTH bars.
 ///

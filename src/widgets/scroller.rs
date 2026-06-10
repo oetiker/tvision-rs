@@ -257,6 +257,15 @@ impl View for Scroller {
         }
     }
 
+    /// `TScroller::changeBounds` — after the pump applies new bounds via
+    /// `Deferred::ChangeBounds`, re-publish scrollbar range/page params with the
+    /// stored `limit` and the **new** `size` (faithful: `setLimit(limit.x, limit.y)`
+    /// after `setBounds`, tscrolle.cpp changeBounds).
+    fn on_bounds_changed(&mut self, ctx: &mut Context) {
+        let (x, y) = (self.limit.x, self.limit.y);
+        self.set_limit(x, y, ctx);
+    }
+
     /// Concrete-reach hatch (the sanctioned downcast, same as `TWindow::zoom`): the
     /// pump downcasts to `&mut Scroller` to call [`apply_delta`](Self::apply_delta)
     /// when applying a `Deferred::SyncScrollerDelta`.

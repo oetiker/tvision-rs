@@ -49,6 +49,8 @@ fn view(f: &Ident, k: &TokenStream) -> Vec<(&'static str, TokenStream)> {
          quote! { fn calc_bounds(&mut self, owner_size: #k::Point, delta: #k::Point) -> #k::Rect { self.#f.calc_bounds(owner_size, delta) } }),
         ("change_bounds",
          quote! { fn change_bounds(&mut self, bounds: #k::Rect) { self.#f.change_bounds(bounds) } }),
+        ("on_bounds_changed",
+         quote! { fn on_bounds_changed(&mut self, ctx: &mut #k::Context) { self.#f.on_bounds_changed(ctx) } }),
         ("cursor_request",
          quote! { fn cursor_request(&self) -> ::core::option::Option<#k::Point> { self.#f.cursor_request() } }),
         ("find_mut",

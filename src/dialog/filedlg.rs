@@ -545,6 +545,11 @@ impl crate::view::View for DirListBox {
         }
     }
 
+    /// `TListViewer::changeBounds` resize step republish — B5.
+    fn on_bounds_changed(&mut self, ctx: &mut crate::view::Context) {
+        crate::widgets::list_viewer::on_bounds_changed(self, ctx);
+    }
+
     fn cursor_request(&self) -> Option<crate::view::Point> {
         crate::widgets::list_viewer::focused_cursor(self)
     }
@@ -1003,6 +1008,11 @@ impl crate::view::View for FileList {
         ctx: &mut crate::view::Context,
     ) {
         crate::widgets::list_viewer::set_state(self, flag, enable, ctx);
+    }
+
+    /// `TListViewer::changeBounds` resize step republish — B5.
+    fn on_bounds_changed(&mut self, ctx: &mut crate::view::Context) {
+        crate::widgets::list_viewer::on_bounds_changed(self, ctx);
     }
 
     fn apply_list_scroll(

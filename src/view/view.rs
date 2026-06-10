@@ -737,6 +737,16 @@ pub trait View {
         self.state_mut().set_bounds(bounds);
     }
 
+    /// Called by the pump after [`change_bounds`](Self::change_bounds) is applied via
+    /// [`Deferred::ChangeBounds`](crate::view::Deferred::ChangeBounds) — provides a
+    /// `Context` for re-publishing state that depends on the new bounds (e.g. scrollbar
+    /// params). Default implementation is a no-op.
+    ///
+    /// B5: `TScroller::changeBounds` calls `setLimit(limit.x, limit.y)` after
+    /// `setBounds`; `TListViewer::changeBounds` re-publishes step params. Both are
+    /// realized by overriding this hook in their respective concrete types.
+    fn on_bounds_changed(&mut self, _ctx: &mut Context) {}
+
     /// `TView::resetCursor` support — the view-local hardware-cursor position
     /// this view wants shown, or `None` to hide it. Base: `Some(cursor)` iff the
     /// view is focused with a visible cursor (`sfFocused && sfCursorVis`), else

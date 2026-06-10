@@ -1678,6 +1678,10 @@ impl Program {
                             Deferred::ChangeBounds(id, r) => {
                                 if let Some(v) = group.find_mut(id) {
                                     v.change_bounds(r);
+                                    // B5: TScroller/TListViewer::changeBounds call
+                                    // setLimit/setStep after setBounds — realized as
+                                    // this post-apply hook (view.rs on_bounds_changed).
+                                    v.on_bounds_changed(&mut ctx);
                                 }
                             }
                             Deferred::SetState(id, f, e) => {

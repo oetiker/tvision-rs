@@ -1293,6 +1293,15 @@ impl View for Outline {
     fn set_state(&mut self, flag: StateFlag, enable: bool, ctx: &mut Context) {
         ov_set_state(self, flag, enable, ctx);
     }
+
+    /// `TScroller::changeBounds` — re-publish scrollbar range/page params with
+    /// the stored `limit` and the new `size` after the pump applies new bounds
+    /// (B5, identical to the Scroller override — Outline inherits from TScroller).
+    fn on_bounds_changed(&mut self, ctx: &mut Context) {
+        let (x, y) = (self.ov().limit.x, self.ov().limit.y);
+        self.ov_mut().set_limit(x, y, ctx);
+    }
+
     fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
         Some(self)
     }

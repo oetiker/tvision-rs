@@ -341,6 +341,11 @@ impl View for HistoryViewer {
         list_viewer::set_state(self, flag, enable, ctx);
     }
 
+    /// `TListViewer::changeBounds` resize step republish — B5.
+    fn on_bounds_changed(&mut self, ctx: &mut Context) {
+        list_viewer::on_bounds_changed(self, ctx);
+    }
+
     fn cursor_request(&self) -> Option<Point> {
         list_viewer::focused_cursor(self)
     }

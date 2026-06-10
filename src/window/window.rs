@@ -364,9 +364,8 @@ impl Window {
         }
         // D3: the C++ TFrame::draw recomputes `owner->size == maxSize` every draw
         // to pick the zoom vs unzoom icon. We can't read the owner from the frame,
-        // so push the bool down through the downcast seam.
-        // TODO(33d): re-push set_zoomed on owner resize / change_bounds (this
-        // pushed bool goes stale vs C++'s per-draw recompute).
+        // so push the bool down through the downcast seam. Re-pushed in `locate`
+        // on every bounds change, so this stays current (B5, resolves TODO(33d)).
         let zoomed = self.group.state().size == max;
         if let Some(frame) = self
             .group
@@ -389,6 +388,20 @@ impl Window {
         if bounds != self.group.state().get_bounds() {
             // Faithful: TGroup::changeBounds (resizes children by the delta).
             self.group.change_bounds(bounds);
+            // B5: re-push set_zoomed so the frame's zoom icon reflects the new
+            // size (C++ TFrame::draw recomputes `owner->size == maxSize` every
+            // draw; we push the bool through the downcast seam instead — D3).
+            // This resolves TODO(33d): the pushed bool went stale on owner resize
+            // / change_bounds; now re-pushed here, matching C++'s per-draw recompute.
+            let zoomed = self.group.state().size == max;
+            if let Some(frame) = self
+                .group
+                .child_mut(self.frame_id)
+                .and_then(|v| v.as_any_mut())
+                .and_then(|a| a.downcast_mut::<Frame>())
+            {
+                frame.set_zoomed(zoomed);
+            }
         }
     }
 
@@ -589,6 +602,204 @@ impl CaptureHandler for DragCapture {
     }
 }
 
+// ---------------------------------------------------------------------------
+// KeyboardResizeCapture — D9 replacement for dragView's keyboard branch
+// ---------------------------------------------------------------------------
+
+/// The D9 replacement for `TView::dragView`'s keyboard `else` branch
+/// (`tview.cpp:294-356`), reached from [`Window::handle_event`] on a
+/// `cmResize` command. Mirrors [`DragCapture`] for the mouse side.
+///
+/// State captured at push time (C++ `saveBounds`, `limits`, `sizeLimits`):
+/// - `save_bounds` — bounds at entry, restored on Esc.
+/// - `limits`     — owner's extent at entry (`owner->getExtent()`).
+/// - `min`, `max` — from `sizeLimits()` at entry.
+/// - `mode`       — `dragMode | (flags & (wfMove|wfGrow))` (limit bits + move/grow).
+/// - `origin`, `size` — current position/size, updated by each arrow key.
+///
+/// The C++ `change(mode, delta, p, s)` logic:
+///   `dmDragMove in mode` → `p += delta`; `dmDragGrow in mode` → `s += delta`.
+/// Arrow keys map to `delta = (±1, 0)` / `(0, ±1)`; Ctrl variants to `(±8, 0)` / `(0, ±4)`.
+struct KeyboardResizeCapture {
+    window_id: ViewId,
+    /// Bounds at entry — restored by Esc.
+    save_bounds: Rect,
+    /// `owner->getExtent()` captured at push time.
+    limits: Rect,
+    /// Minimum window size from `sizeLimits()`.
+    min: Point,
+    /// Maximum window size from `sizeLimits()`.
+    max: Point,
+    /// `dragMode | (flags & (wfMove|wfGrow))` — limit bits + drag-move/grow.
+    mode: DragMode,
+    /// Current window origin (top-left), updated by each arrow.
+    origin: Point,
+    /// Current window size, updated by each arrow.
+    size: Point,
+}
+
+impl KeyboardResizeCapture {
+    /// Apply `change(mode, delta)` + `moveGrow` and request new bounds.
+    ///
+    /// Faithful to C++ `tview.cpp`:
+    /// `if mode & dmDragMove: p += delta`; `if mode & dmDragGrow: s += delta`.
+    fn apply_delta(&mut self, delta: Point, ctx: &mut Context) {
+        if self.mode.drag_move {
+            self.origin += delta;
+        }
+        if self.mode.drag_grow {
+            self.size += delta;
+        }
+        let r = move_grow(
+            self.origin,
+            self.size,
+            self.limits,
+            self.min,
+            self.max,
+            self.mode,
+        );
+        // Sync tracked origin/size to the clamped result so repeated presses stay
+        // within limits (mirrors the C++ loop's implicit update through locate).
+        self.origin = r.a;
+        self.size = r.b - r.a;
+        ctx.request_bounds(self.window_id, r);
+    }
+}
+
+impl CaptureHandler for KeyboardResizeCapture {
+    /// `dragView`'s keyboard loop body — each key adjusts origin/size via
+    /// `change(mode, delta)`, then `moveGrow` to clamp; Enter accepts, Esc restores.
+    fn handle(&mut self, ev: &mut Event, ctx: &mut Context) -> CaptureFlow {
+        let Event::KeyDown(k) = ev else {
+            // Swallow everything that is not a key (mouse events, commands,
+            // broadcasts) while the keyboard resize is modal — faithful to C++
+            // `do { keyEvent(event); … } while (…)` which discards non-key events.
+            return CaptureFlow::Consumed;
+        };
+        match k.key {
+            Key::Left if !k.modifiers.ctrl => {
+                self.apply_delta(Point::new(-1, 0), ctx);
+                CaptureFlow::Consumed
+            }
+            Key::Right if !k.modifiers.ctrl => {
+                self.apply_delta(Point::new(1, 0), ctx);
+                CaptureFlow::Consumed
+            }
+            Key::Up if !k.modifiers.ctrl => {
+                self.apply_delta(Point::new(0, -1), ctx);
+                CaptureFlow::Consumed
+            }
+            Key::Down if !k.modifiers.ctrl => {
+                self.apply_delta(Point::new(0, 1), ctx);
+                CaptureFlow::Consumed
+            }
+            Key::Left => {
+                // Ctrl+Left — C++ kbCtrlLeft, delta {-8, 0}.
+                self.apply_delta(Point::new(-8, 0), ctx);
+                CaptureFlow::Consumed
+            }
+            Key::Right => {
+                // Ctrl+Right — C++ kbCtrlRight, delta {+8, 0}.
+                self.apply_delta(Point::new(8, 0), ctx);
+                CaptureFlow::Consumed
+            }
+            Key::Up => {
+                // Ctrl+Up — C++ kbCtrlUp, delta {0, -4}.
+                self.apply_delta(Point::new(0, -4), ctx);
+                CaptureFlow::Consumed
+            }
+            Key::Down => {
+                // Ctrl+Down — C++ kbCtrlDown, delta {0, +4}.
+                self.apply_delta(Point::new(0, 4), ctx);
+                CaptureFlow::Consumed
+            }
+            Key::Home => {
+                // kbHome: p.x = limits.a.x
+                self.origin.x = self.limits.a.x;
+                let r = move_grow(
+                    self.origin,
+                    self.size,
+                    self.limits,
+                    self.min,
+                    self.max,
+                    self.mode,
+                );
+                self.origin = r.a;
+                self.size = r.b - r.a;
+                ctx.request_bounds(self.window_id, r);
+                CaptureFlow::Consumed
+            }
+            Key::End => {
+                // kbEnd: p.x = limits.b.x - s.x
+                self.origin.x = self.limits.b.x - self.size.x;
+                let r = move_grow(
+                    self.origin,
+                    self.size,
+                    self.limits,
+                    self.min,
+                    self.max,
+                    self.mode,
+                );
+                self.origin = r.a;
+                self.size = r.b - r.a;
+                ctx.request_bounds(self.window_id, r);
+                CaptureFlow::Consumed
+            }
+            Key::PageUp => {
+                // kbPgUp: p.y = limits.a.y
+                self.origin.y = self.limits.a.y;
+                let r = move_grow(
+                    self.origin,
+                    self.size,
+                    self.limits,
+                    self.min,
+                    self.max,
+                    self.mode,
+                );
+                self.origin = r.a;
+                self.size = r.b - r.a;
+                ctx.request_bounds(self.window_id, r);
+                CaptureFlow::Consumed
+            }
+            Key::PageDown => {
+                // kbPgDn: p.y = limits.b.y - s.y
+                self.origin.y = self.limits.b.y - self.size.y;
+                let r = move_grow(
+                    self.origin,
+                    self.size,
+                    self.limits,
+                    self.min,
+                    self.max,
+                    self.mode,
+                );
+                self.origin = r.a;
+                self.size = r.b - r.a;
+                ctx.request_bounds(self.window_id, r);
+                CaptureFlow::Consumed
+            }
+            Key::Enter => {
+                // Accept — clear sfDragging and pop.
+                ctx.request_set_state(self.window_id, StateFlag::Dragging, false);
+                CaptureFlow::ConsumedPop
+            }
+            Key::Esc => {
+                // Cancel — restore save_bounds, clear sfDragging, pop.
+                ctx.request_bounds(self.window_id, self.save_bounds);
+                ctx.request_set_state(self.window_id, StateFlag::Dragging, false);
+                CaptureFlow::ConsumedPop
+            }
+            _ => {
+                // Any other key passes through (C++ loop does not break on unknown keys).
+                CaptureFlow::Pass
+            }
+        }
+    }
+
+    fn view(&self) -> Option<ViewId> {
+        Some(self.window_id)
+    }
+}
+
 /// `TView::moveGrow` (`tview.cpp`) — clamp size to `[min, max]` and origin to the
 /// limits, honoring the `dmLimit*` mode bits, and return the resulting bounds.
 ///
@@ -663,14 +874,12 @@ impl View for Window {
     ///   [`start_drag`](Self::start_drag) (the D9 [`DragCapture`] replacement for
     ///   `TFrame::dragWindow` → `dragView`'s mouse loop, 33d-1).
     ///
-    /// Deferred C++ command/broadcast cases, each needing infrastructure not yet
-    /// built:
-    /// * `cmResize` → `dragView(dragMode | (flags & (wfMove|wfGrow)), limits, …)`
-    ///   — **TODO(33d-2/later, D9):** the keyboard resize sub-mode (arrows until
-    ///   Enter/Esc, `dragView`'s `else` branch). No menu can trigger `cmResize` yet,
-    ///   so a handler would be unreachable; per 33c's principle we must not *enable*
-    ///   a command we do not handle, so `cmResize` is omitted from the `set_state`
-    ///   enable set.
+    /// * `cmResize` → [`KeyboardResizeCapture`] push (B5, D9). Enables `sfDragging`
+    ///   and pushes a [`KeyboardResizeCapture`] that handles arrow keys until
+    ///   Enter (accept) or Esc (restore). Faithful to `TWindow::handleEvent`'s
+    ///   `cmResize` case + `TView::dragView`'s `else` (keyboard) branch.
+    ///   `cmResize` is now enabled in [`set_state`](Self::set_state) when `sfSelected`
+    ///   and `(wfMove || wfGrow)`.
     /// * `cmSelectWindowNum` matching `number` → `select()` — **realized at 33d-2
     ///   as a direct walk, NOT on the window.** The window number is an *integer*
     ///   argument (not a `ViewId`), so the `Broadcast` `source` substrate does not
@@ -713,6 +922,39 @@ impl View for Window {
                     ctx.request_close(id);
                 }
             }
+        }
+        // `cmResize` — faithful to `TWindow::handleEvent`'s cmResize case +
+        // `TView::dragView`'s keyboard else-branch (B5, D9). Pushes a
+        // `KeyboardResizeCapture` that handles arrow keys until Enter/Esc.
+        if let Event::Command(c) = *ev
+            && c == Command::RESIZE
+            && (self.flags.r#move || self.flags.grow)
+            && let Some(id) = self.group.state().id()
+        {
+            let owner_size = ctx.owner_size();
+            let limits = Rect::new(0, 0, owner_size.x, owner_size.y);
+            let (min, max) = View::size_limits(self, owner_size);
+            let save_bounds = self.group.state().get_bounds();
+            let origin = save_bounds.a;
+            let size = save_bounds.b - save_bounds.a;
+            // dragMode | (flags & (wfMove|wfGrow)): build a DragMode that
+            // carries the window's limit bits AND the move/grow bits from flags.
+            let mut mode = self.group.state().drag_mode; // limit bits
+            mode.drag_move = self.flags.r#move;
+            mode.drag_grow = self.flags.grow;
+            // setState(sfDragging, True) — direct, same as start_drag.
+            View::set_state(self, StateFlag::Dragging, true, ctx);
+            ctx.push_capture(Box::new(KeyboardResizeCapture {
+                window_id: id,
+                save_bounds,
+                limits,
+                min,
+                max,
+                mode,
+                origin,
+                size,
+            }));
+            ev.clear();
         }
         if let Event::KeyDown(k) = *ev
             && k.key == Key::Tab
@@ -791,7 +1033,8 @@ impl View for Window {
     ///   cmNext, cmPrev: UNCONDITIONAL (handler in `TDeskTop::handleEvent`, 33d-2).
     ///   33c: cmZoom (if `wfZoom`; handler in [`handle_event`](Self::handle_event)).
     ///   33d-1: cmClose (if `wfClose`; handler in `handle_event`).
-    ///   DROPPED (no handler): cmResize (the keyboard resize sub-mode).
+    ///   B5: cmResize (if `wfMove || wfGrow`; handler in `handle_event` →
+    ///       [`KeyboardResizeCapture`]).
     fn set_state(&mut self, flag: StateFlag, enable: bool, ctx: &mut Context) {
         self.group.set_state(flag, enable, ctx);
         if flag == StateFlag::Selected {
@@ -810,9 +1053,9 @@ impl View for Window {
                 ctx.disable_command(Command::NEXT);
                 ctx.disable_command(Command::PREV);
             }
-            // The flag-gated subset: cmClose (if wfClose), cmZoom (if wfZoom) —
-            // both handled in handle_event. cmResize stays DROPPED (no keyboard
-            // resize handler yet — the `TODO(33d-2/later, D9)` in handle_event).
+            // The flag-gated subset: cmClose (if wfClose), cmZoom (if wfZoom),
+            // cmResize (if wfMove || wfGrow) — all handled in handle_event.
+            // B5: cmResize is now enabled (keyboard resize capture implemented).
             let mut toggle = |cmd: Command, cond: bool| {
                 if cond {
                     if enable {
@@ -824,6 +1067,7 @@ impl View for Window {
             };
             toggle(Command::CLOSE, self.flags.close);
             toggle(Command::ZOOM, self.flags.zoom);
+            toggle(Command::RESIZE, self.flags.r#move || self.flags.grow);
         }
     }
 
@@ -1588,6 +1832,50 @@ mod tests {
                 .iter()
                 .any(|d| matches!(d, Deferred::DisableCommand(Command::PREV))),
             "deselect disables cmPrev"
+        );
+    }
+
+    // -- 13. locate() re-pushes set_zoomed on bounds change (B5) ---------------
+
+    /// After `locate` changes the window bounds (non-trivially), the frame's
+    /// `zoomed` flag is updated to reflect the new size vs max. This verifies
+    /// B5: the pushed bool no longer goes stale on owner resize / change_bounds.
+    #[test]
+    fn locate_repushes_set_zoomed_after_bounds_change() {
+        let mut w = Window::new(Rect::new(0, 0, 20, 8), Some("Edit".into()), 1);
+        let desktop_size = Point::new(80, 25);
+
+        // Manually set frame zoomed = true to confirm it gets RESET after a
+        // non-max locate.
+        {
+            let frame_id = w.frame_id();
+            if let Some(frame) = w
+                .group
+                .child_mut(frame_id)
+                .and_then(|v| v.as_any_mut())
+                .and_then(|a| a.downcast_mut::<Frame>())
+            {
+                frame.set_zoomed(true);
+            }
+        }
+        assert!(
+            frame_zoomed(&mut w),
+            "precondition: frame zoomed = true before locate"
+        );
+
+        // locate to a smaller-than-max rect → zoomed must become false.
+        w.locate(Rect::new(5, 3, 30, 12), desktop_size);
+        assert!(
+            !frame_zoomed(&mut w),
+            "locate to non-max rect pushes zoomed = false"
+        );
+
+        // locate to exactly the max rect → zoomed must become true.
+        let (_, max) = View::size_limits(&w, desktop_size);
+        w.locate(Rect::new(0, 0, max.x, max.y), desktop_size);
+        assert!(
+            frame_zoomed(&mut w),
+            "locate to max rect pushes zoomed = true"
         );
     }
 }
