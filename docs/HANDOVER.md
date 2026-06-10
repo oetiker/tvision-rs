@@ -145,8 +145,11 @@
 ## Next — all 92 rows complete; backlog seams being cleared
 
 **All 92 PORT-ORDER rows are COMPLETE.** Post-completion work now clears the
-deferred backlog seams. **HEAD = `14544f6`; 985 lib tests green; clippy + fmt
-clean.** Cleared recently: **button mouse hold-tracking** (the button deferral-3
+deferred backlog seams. **HEAD = `e8d82f2`; 988 lib tests green; clippy + fmt
+clean.** Cleared recently: the **currency foundation fix** (`focus_child`
+self-heal + `Program::new` startup `reset_current`; the `insert_and_focus`
+DEVIATION workaround retired — pre-inserted desktop windows now start focused
+and the topmost is clickable), **button mouse hold-tracking** (the button deferral-3
 D9 capture: press-down, track, fire-on-release-inside) + the **gray dialog
 surface** (row-34 gray theming: `FrameGray*` roles, `Frame.palette` role-family
 selection, `Window::set_palette` propagation — cyan still blue-fallback) + the

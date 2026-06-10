@@ -5,6 +5,37 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## Session addendum — topmost pre-inserted window unfocusable (currency foundation)
+
+Follow-up user report on `examples/hello.rs`: the three pre-inserted windows
+start with **no window focused**, and clicking the topmost (Window 3) does
+nothing — only clicking a lower window focuses it.
+
+**Root cause** (`e8d82f2`): C++ maintains the invariant *topmost ofTopSelect
+window == current* via insert-time `show() → owner->resetCurrent()`; two
+faithful pieces depend on it — `putInFrontOf`'s `already_in_place` no-op
+(which skips its `resetCurrent` tail) and `select()`'s makeFirst-only path.
+rstv's ctx-less `Group::insert` (deliberate, D3) skips currency and broke the
+invariant: `Desktop::insert_view` left `current == None`, so a click on the
+already-topmost window ran `focus_child → make_first → already_in_place
+no-op` and **never reached `set_current`**. `Desktop::insert_and_focus` had
+already documented this exact trap as a local DEVIATION workaround — the
+second compensation site (after `exec_view`), so this was fixed at the
+foundation instead of adding a third:
+
+- **`Group::focus_child` self-heal**: after `make_first`, re-assert currency
+  when `current != id` — a no-op whenever the C++ invariant holds.
+- **`Program::new` startup currency**: desktop-internal `reset_current` after
+  the root `set_current(desktop)` (the C++ insert-time cascade collapsed to
+  one startup call); the queued `EnableCommand` deferreds drain on the first
+  pump (out_events guaranteed non-empty by the desktop focus broadcast).
+- **`insert_and_focus` DEVIATION retired** → plain `focus_child` (also more
+  faithful: the `focus()` validate gate now applies on the runtime open path).
+
+One existing test adapted (it relied on nothing-focused-at-startup, i.e. on
+the bug). Verified live in tmux (startup active frame + clicks both ways) and
+by 3 new tests. 988 lib tests green; clippy + fmt clean. Spec-reviewed.
+
 ## Session — button shadow color, mouse hold-tracking, gray dialog surface
 
 User report, two button bugs from live testing: **(a)** the cells around every
