@@ -38,20 +38,21 @@ pub struct WindowFlags {
 /// Which colour scheme the window draws in — ports the `wpBlueWindow` /
 /// `wpCyanWindow` / `wpGrayWindow` palette index (`views.h`).
 ///
-/// Under D7 there is no `getPalette` returning a `TPalette*`; the scheme is just
-/// recorded here. **Multi-scheme theming is deferred to row 34:** the `Frame`
-/// currently renders the single (blue) scheme via `Role::FrameActive` /
-/// `FramePassive` / `FrameDragging`. Mapping `Cyan`/`Gray` to distinct theme
-/// roles is row 34's job (`TDialog` uses `Gray`); we do **not** expand the
-/// `Theme`/`Role` set now.
+/// Under D7 there is no `getPalette` returning a `TPalette*`; the scheme is
+/// recorded here and pushed down to the [`Frame`] child (D3), which selects the
+/// matching role family: `Blue` → `Role::FrameActive` / `FramePassive` /
+/// `FrameDragging` / `FrameIcon`; `Gray` (dialogs, row 34 gray theming) →
+/// `Role::FrameGray*`. `Cyan` still falls back to the blue family
+/// (`TODO(row 34 cyan theming)`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum WindowPalette {
     /// `wpBlueWindow` — the default window scheme (the ctor default).
     #[default]
     Blue,
-    /// `wpCyanWindow` — the cyan scheme (theming → row 34).
+    /// `wpCyanWindow` — the cyan scheme (faithful theming →
+    /// `TODO(row 34 cyan theming)`; renders the blue family for now).
     Cyan,
-    /// `wpGrayWindow` — the gray scheme used by dialogs (theming → row 34).
+    /// `wpGrayWindow` — the gray scheme used by dialogs (`Role::FrameGray*`).
     Gray,
 }
 
@@ -248,12 +249,21 @@ impl Window {
     }
 
     /// Override the colour scheme after construction (`TDialog::TDialog` sets
-    /// `palette = dpGrayDialog`). TODO(row 34 gray theming): the `Gray` scheme is
-    /// only recorded here; the frame still renders the blue `Frame*` roles. The
-    /// gray/cyan to theme-role mapping is a follow-on cosmetic chunk (see the
-    /// `WindowPalette` doc).
+    /// `palette = dpGrayDialog`). Re-pushes to the frame child (D3
+    /// owner-data-down, the [`set_flags`](Self::set_flags) pattern) so the frame
+    /// renders the matching role family: `Gray` → `Role::FrameGray*` (row 34
+    /// gray theming, wired); `Cyan` still falls back to the blue family
+    /// (`TODO(row 34 cyan theming)`).
     pub(crate) fn set_palette(&mut self, palette: WindowPalette) {
         self.palette = palette;
+        if let Some(frame) = self
+            .group
+            .child_mut(self.frame_id)
+            .and_then(|v| v.as_any_mut())
+            .and_then(|a| a.downcast_mut::<Frame>())
+        {
+            frame.set_palette(palette);
+        }
     }
 
     /// Override the grow mode after construction (`TDialog::TDialog` sets

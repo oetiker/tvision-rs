@@ -1,6 +1,5 @@
 ---
 source: src/dialog/filedlg.rs
-assertion_line: 4261
 expression: screen.snapshot()
 ---
 size: 64x20
@@ -30,18 +29,18 @@ attr:
 |................................................................|
 |...............aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
 |...............aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
-|...............aabbbbbaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
-|...............aaacccccccccccccccccccccccccccccdcabeefeeeeeebaaa|
-|...............aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbaaa|
-|...............aabgbbbbaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
-|...............aaahhhhhhhhhhhhhhhaaaaaaaaaaaaaaaaabeeeeeeeeebaaa|
-|...............aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbaaa|
 |...............aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|...............aaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbcbaaddeddddddaaaa|
 |...............aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
-|...............aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
-|...............aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
-|...............aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
-|...............aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|...............aaafaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|...............aaaggggggggggggggghhhhhhhhhhhhhhhhaadddddddddaaaa|
+|...............aaahhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhaaaaaaaaaaaaaaa|
+|...............aaahhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhaaaaaaaaaaaaaaa|
+|...............aaahhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhaaaaaaaaaaaaaaa|
+|...............aaahhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhaaaaaaaaaaaaaaa|
+|...............aaahhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhaaaaaaaaaaaaaaa|
+|...............aaahhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhaaaaaaaaaaaaaaa|
+|...............aaahhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhaaaaaaaaaaaaaaa|
 |...............aaaiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiaaaaaaaaaaaaaaa|
 |...............aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
 |...............ajjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjja|
@@ -49,13 +48,13 @@ attr:
 |...............aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
 legend:
   . default
-  a fg=BIOS(7) bg=BIOS(1)
-  b fg=BIOS(0) bg=BIOS(7)
-  c fg=BIOS(0) bg=BIOS(3)
-  d fg=BIOS(14) bg=BIOS(3)
-  e fg=BIOS(0) bg=BIOS(2)
-  f fg=BIOS(14) bg=BIOS(2)
-  g fg=BIOS(4) bg=BIOS(7)
-  h fg=BIOS(15) bg=BIOS(1)
+  a fg=BIOS(0) bg=BIOS(7)
+  b fg=BIOS(0) bg=BIOS(3)
+  c fg=BIOS(14) bg=BIOS(3)
+  d fg=BIOS(0) bg=BIOS(2)
+  e fg=BIOS(14) bg=BIOS(2)
+  f fg=BIOS(4) bg=BIOS(7)
+  g fg=BIOS(15) bg=BIOS(1)
+  h fg=BIOS(7) bg=BIOS(1)
   i fg=BIOS(1) bg=BIOS(3)
   j fg=BIOS(3) bg=BIOS(1)

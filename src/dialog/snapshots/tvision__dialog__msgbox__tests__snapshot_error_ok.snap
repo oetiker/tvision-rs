@@ -1,6 +1,5 @@
 ---
 source: src/dialog/msgbox.rs
-assertion_line: 373
 expression: "render_dialog(&mut d, 40, 9)"
 ---
 size: 40x9
@@ -18,16 +17,15 @@ text:
 attr:
 |aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
 |aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
-|aaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbaa|
-|aaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbaa|
-|aaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbaa|
-|aaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbaa|
-|aaaaaaaaaaaaaaabccccdcccbaaaaaaaaaaaaaaa|
-|aaaaaaaaaaaaaaabbbbbbbbbbaaaaaaaaaaaaaaa|
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|aaaaaaaaaaaaaaaabbbbcbbbaaaaaaaaaaaaaaaa|
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
 |aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
 legend:
   . default
-  a fg=BIOS(7) bg=BIOS(1)
-  b fg=BIOS(0) bg=BIOS(7)
-  c fg=BIOS(0) bg=BIOS(2)
-  d fg=BIOS(14) bg=BIOS(2)
+  a fg=BIOS(0) bg=BIOS(7)
+  b fg=BIOS(0) bg=BIOS(2)
+  c fg=BIOS(14) bg=BIOS(2)

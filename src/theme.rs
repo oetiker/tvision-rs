@@ -35,6 +35,16 @@ pub enum Role {
     FrameDragging,
     /// A frame icon (close/zoom/resize glyphs).
     FrameIcon,
+    /// An active (focused) **gray-scheme** frame (row 34: `TDialog` /
+    /// `wpGrayWindow`). The frame selects the `FrameGray*` family when its
+    /// owner's [`WindowPalette`](crate::window::WindowPalette) is `Gray`.
+    FrameGrayActive,
+    /// A passive (unfocused) gray-scheme frame.
+    FrameGrayPassive,
+    /// A gray-scheme frame being dragged/resized.
+    FrameGrayDragging,
+    /// A gray-scheme frame icon (close/zoom/resize glyphs).
+    FrameGrayIcon,
     /// A scroll-bar page (trough) area.
     ScrollBarPage,
     /// Scroll-bar control glyphs (arrows / thumb).
@@ -201,7 +211,7 @@ pub enum Role {
 }
 
 /// Number of [`Role`] variants — the fixed length of [`Theme`]'s style array.
-const ROLE_COUNT: usize = 63;
+const ROLE_COUNT: usize = 67;
 
 impl Role {
     /// Total mapping of each variant to its index into the style array.
@@ -273,6 +283,10 @@ impl Role {
             Role::OutlineSelected => 60,
             Role::OutlineNotExpanded => 61,
             Role::Shadow => 62,
+            Role::FrameGrayActive => 63,
+            Role::FrameGrayPassive => 64,
+            Role::FrameGrayDragging => 65,
+            Role::FrameGrayIcon => 66,
         }
     }
 }
@@ -509,6 +523,20 @@ impl Theme {
         set(&mut styles, Role::FramePassive, 0x7, 0x1); // lightgray on blue
         set(&mut styles, Role::FrameDragging, 0xE, 0x1); // yellow on blue
         set(&mut styles, Role::FrameIcon, 0xA, 0x1); // light green on blue
+
+        // Gray-scheme frames (row 34: TDialog / wpGrayWindow). Faithful palette
+        // chains — TFrame's color slots (tframe.cpp) resolve through cpFrame
+        // "\x01\x01\x02\x02\x03" into the OWNER's palette, here cpGrayDialog
+        // (dialogs.h) instead of cpBlueWindow, then into cpAppColor (app.h):
+        //   active   getColor(0x0503) lo: cpFrame[3]=0x02 → cpGrayDialog[2]=0x21 → cpAppColor[33]=0x7F
+        //   passive  getColor(0x0101):    cpFrame[1]=0x01 → cpGrayDialog[1]=0x20 → cpAppColor[32]=0x70
+        //   dragging getColor(0x0505):    cpFrame[5]=0x03 → cpGrayDialog[3]=0x22 → cpAppColor[34]=0x7A
+        //   icon     getColor(0x0503) hi: cpFrame[5]=0x03 → cpGrayDialog[3]=0x22 → cpAppColor[34]=0x7A
+        set(&mut styles, Role::FrameGrayActive, 0xF, 0x7); // white on lightgray (0x7F)
+        set(&mut styles, Role::FrameGrayPassive, 0x0, 0x7); // black on lightgray (0x70)
+        set(&mut styles, Role::FrameGrayDragging, 0xA, 0x7); // lightgreen on lightgray (0x7A)
+        set(&mut styles, Role::FrameGrayIcon, 0xA, 0x7); // lightgreen on lightgray (0x7A)
+
         set(&mut styles, Role::ScrollBarPage, 0x1, 0x3); // blue on cyan
         set(&mut styles, Role::ScrollBarControls, 0x1, 0x3); // blue on cyan
 
@@ -737,6 +765,10 @@ mod tests {
         Role::OutlineSelected,
         Role::OutlineNotExpanded,
         Role::Shadow,
+        Role::FrameGrayActive,
+        Role::FrameGrayPassive,
+        Role::FrameGrayDragging,
+        Role::FrameGrayIcon,
     ];
 
     #[test]

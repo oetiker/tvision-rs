@@ -1,6 +1,5 @@
 ---
 source: src/dialog/filedlg.rs
-assertion_line: 4937
 expression: screen.snapshot()
 ---
 size: 64x20
@@ -31,29 +30,29 @@ attr:
 |................................................................|
 |................aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
 |................aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
-|................aabbbbbbbbbbbcbbbaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
-|................aaaddddddddddddddddddddddddddddddddddddddddedaaa|
+|................aaaaaaaaaaaaabaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|................aaaccccccccccccccccccccccccccccccccccccccccdcaaa|
 |................aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
-|................aabbbbbbbbbbbcbbbaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
-|................aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaafaabgggghgggbaaa|
-|................aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaafaabbbbbbbbbbaaa|
+|................aaaaaaaaaaaaabaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|................aaaeeeeeeeeeeeeeeeeeeeeeeeeeeeeefaaagggghgggaaaa|
+|................aaaeeeeeeeeeeeeeeeeeeeeeeeeeeeeefaaaaaaaaaaaaaaa|
 |................aaaiiiiiiiiiiiiiiiiiiiiiiiiiiiiifaaaaaaaaaaaaaaa|
-|................aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaafaabghggggggbaaa|
-|................aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaafaabbbbbbbbbbaaa|
-|................aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaafaaaaaaaaaaaaaaa|
-|................aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaafaabghggggggbaaa|
-|................aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaafaabbbbbbbbbbaaa|
-|................aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaafaaaaaaaaaaaaaaa|
-|................aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaafaabgghgggggbaaa|
-|................aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbaaa|
+|................aaaeeeeeeeeeeeeeeeeeeeeeeeeeeeeefaaaghggggggaaaa|
+|................aaaeeeeeeeeeeeeeeeeeeeeeeeeeeeeefaaaaaaaaaaaaaaa|
+|................aaaeeeeeeeeeeeeeeeeeeeeeeeeeeeeefaaaaaaaaaaaaaaa|
+|................aaaeeeeeeeeeeeeeeeeeeeeeeeeeeeeefaaaghggggggaaaa|
+|................aaaeeeeeeeeeeeeeeeeeeeeeeeeeeeeefaaaaaaaaaaaaaaa|
+|................aaaeeeeeeeeeeeeeeeeeeeeeeeeeeeeefaaaaaaaaaaaaaaa|
+|................aaaeeeeeeeeeeeeeeeeeeeeeeeeeeeeefaaagghgggggaaaa|
+|................aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
 |................aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
 legend:
   . default
-  a fg=BIOS(7) bg=BIOS(1)
-  b fg=BIOS(0) bg=BIOS(7)
-  c fg=BIOS(4) bg=BIOS(7)
-  d fg=BIOS(0) bg=BIOS(3)
-  e fg=BIOS(14) bg=BIOS(3)
+  a fg=BIOS(0) bg=BIOS(7)
+  b fg=BIOS(4) bg=BIOS(7)
+  c fg=BIOS(0) bg=BIOS(3)
+  d fg=BIOS(14) bg=BIOS(3)
+  e fg=BIOS(7) bg=BIOS(1)
   f fg=BIOS(1) bg=BIOS(3)
   g fg=BIOS(0) bg=BIOS(2)
   h fg=BIOS(14) bg=BIOS(2)

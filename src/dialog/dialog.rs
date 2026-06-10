@@ -230,14 +230,28 @@ mod tests {
             !gm.lo_x && !gm.lo_y && !gm.hi_x && !gm.hi_y && !gm.rel && !gm.fixed,
             "growMode = 0 (dialog does not track owner resize)"
         );
-        // palette = Gray.
+        // palette = Gray — AND pushed down into the frame child (row 34 gray
+        // theming: the frame renders the FrameGray* role family).
         assert_eq!(d.window.palette(), WindowPalette::Gray);
+        let mut d = d;
+        let frame_id = d.window.frame_id();
+        let frame = d
+            .window
+            .child_mut(frame_id)
+            .and_then(|v| v.as_any_mut())
+            .and_then(|a| a.downcast_mut::<crate::frame::Frame>())
+            .expect("dialog window has a Frame child");
+        assert_eq!(
+            frame.palette(),
+            WindowPalette::Gray,
+            "set_palette(Gray) must propagate to the frame child"
+        );
         // wnNoNumber -> number None.
         assert_eq!(View::number(&d), None, "wnNoNumber -> no number");
     }
 
     /// The frame shows **no zoom icon and no number** (the flags-pushed-to-frame
-    /// check). Inherited blue frame is fine (gray theming deferred).
+    /// check). The frame renders the gray dialog scheme (row 34 gray theming).
     #[test]
     fn dialog_frame_has_no_zoom_icon_no_number_snapshot() {
         let theme = Theme::classic_blue();

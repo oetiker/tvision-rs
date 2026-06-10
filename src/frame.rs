@@ -31,13 +31,17 @@
 //! * **D5** — `wf*` flag word → [`WindowFlags`] struct-of-bools. Now owned by
 //!   the `window` module (relocated at row 33); `frame.rs` imports it via
 //!   `use crate::window::WindowFlags;` and renders the pushed-down copy.
-//! * **D7** — no `getColor`/`getPalette`; border roles are
-//!   [`Role::FrameActive`] / [`Role::FramePassive`] / [`Role::FrameDragging`],
-//!   icons are [`Role::FrameIcon`]. The C++ has distinct title palette entries
-//!   (2 passive / 4 active) routed through the *window's* palette + the
-//!   blue/cyan/gray per-window schemes; those belong to row 33, so the title
-//!   **reuses the border role** here (colours are provisional anyway, see
-//!   [`Theme`](crate::theme::Theme)).
+//! * **D7** — no `getColor`/`getPalette`; the border/icon roles come in
+//!   **per-palette families** selected by the owner's
+//!   [`WindowPalette`](crate::window::WindowPalette) (pushed down via
+//!   [`Frame::set_palette`], D3): `Blue` → [`Role::FrameActive`] /
+//!   [`Role::FramePassive`] / [`Role::FrameDragging`] / [`Role::FrameIcon`];
+//!   `Gray` (dialogs) → the `Role::FrameGray*` family. `Cyan` falls back to the
+//!   blue family for now (`TODO(row 34 cyan theming)`). This mirrors the C++,
+//!   where `TFrame::draw` resolves its colors through the owner's palette
+//!   (`cpBlueWindow` / `cpGrayDialog` / …). The C++ has distinct title palette
+//!   entries (2 passive / 4 active) routed through the same chain; those belong
+//!   to row 33, so the title **reuses the border role** here.
 //! * **D8** — no `writeLine`/`TDrawBuffer`/`drawView`; we draw straight through
 //!   [`DrawCtx`] in view-local coords. The C++ `setState` override only calls
 //!   `drawView()`, which is redundant under whole-tree redraw + diff, so there
@@ -63,7 +67,7 @@ use crate::command::Command;
 use crate::event::Event;
 use crate::theme::Role;
 use crate::view::{Context, DrawCtx, GrowMode, Rect, View, ViewState};
-use crate::window::WindowFlags;
+use crate::window::{WindowFlags, WindowPalette};
 
 // ---------------------------------------------------------------------------
 // Frame
@@ -88,6 +92,10 @@ pub struct Frame {
     /// Whether the window is maximized — replaces `owner->size == maxSize` for
     /// the unZoom-vs-zoom icon choice. Pushed down by the window (D3).
     zoomed: bool,
+    /// The owner's colour scheme, pushed down from `owner->palette` (D3, row 34
+    /// gray theming). Selects the `Role::Frame*` vs `Role::FrameGray*` family
+    /// in [`draw`](View::draw).
+    palette: WindowPalette,
 }
 
 impl Frame {
@@ -115,6 +123,7 @@ impl Frame {
             flags: WindowFlags::default(),
             number: None,
             zoomed: false,
+            palette: WindowPalette::Blue,
         }
     }
 
@@ -159,6 +168,19 @@ impl Frame {
     pub fn zoomed(&self) -> bool {
         self.zoomed
     }
+
+    /// Set the owner's colour scheme (`owner->palette` pushed down, D3 — row 34
+    /// gray theming). `Gray` makes [`draw`](View::draw) use the
+    /// `Role::FrameGray*` family; `Cyan` currently falls back to the blue
+    /// family (`TODO(row 34 cyan theming)`).
+    pub(crate) fn set_palette(&mut self, palette: WindowPalette) {
+        self.palette = palette;
+    }
+
+    /// The owner's colour scheme.
+    pub fn palette(&self) -> WindowPalette {
+        self.palette
+    }
 }
 
 impl View for Frame {
@@ -173,7 +195,8 @@ impl View for Frame {
     /// `TFrame::draw` — paint the border, title, number and icons.
     ///
     /// State selection is faithful to C++ (`dragging` checked first, then
-    /// `!active`, else `active`):
+    /// `!active`, else `active`); the role family follows the owner's
+    /// [`WindowPalette`] (blue family shown; `Gray` substitutes `FrameGray*`):
     ///
     /// | state    | border role     | line set    |
     /// |----------|-----------------|-------------|
@@ -195,16 +218,34 @@ impl View for Frame {
             return;
         }
 
+        // -- Palette → role family (the C++ resolves through the owner's
+        // palette: cpBlueWindow vs cpGrayDialog). Cyan falls back to the blue
+        // family — TODO(row 34 cyan theming): faithful cpCyanWindow values.
+        let (r_dragging, r_passive, r_active, r_icon) = match self.palette {
+            WindowPalette::Blue | WindowPalette::Cyan => (
+                Role::FrameDragging,
+                Role::FramePassive,
+                Role::FrameActive,
+                Role::FrameIcon,
+            ),
+            WindowPalette::Gray => (
+                Role::FrameGrayDragging,
+                Role::FrameGrayPassive,
+                Role::FrameGrayActive,
+                Role::FrameGrayIcon,
+            ),
+        };
+
         // -- State → (border role, double-line) -- faithful order: dragging first.
         let (border_role, double) = if self.st.state.dragging {
-            (Role::FrameDragging, false)
+            (r_dragging, false)
         } else if !self.st.state.active {
-            (Role::FramePassive, false)
+            (r_passive, false)
         } else {
-            (Role::FrameActive, true)
+            (r_active, true)
         };
         let border = ctx.style(border_role);
-        let icon = ctx.style(Role::FrameIcon);
+        let icon = ctx.style(r_icon);
 
         // Pick the single- or double-line box glyphs.
         let (tl, tr, bl, br, h_edge, v_edge) = if double {
@@ -594,6 +635,50 @@ mod tests {
         // (b) border style is the FrameDragging style.
         let expected = Theme::classic_blue().style(Role::FrameDragging);
         assert_eq!(buf.get(0, 0).style(), expected, "top-left border style");
+    }
+
+    // -- draw: gray palette → FrameGray* role family (row 34 gray theming) ----
+
+    /// With `palette = Gray` (a dialog's frame), the border AND interior must
+    /// carry the `FrameGray*` styles: `FrameGrayActive` when active,
+    /// `FrameGrayPassive` when passive — never the blue `Frame*` family.
+    #[test]
+    fn gray_palette_draws_border_and_interior_in_gray_roles() {
+        let theme = Theme::classic_blue();
+
+        // Active gray frame → FrameGrayActive everywhere (border + interior).
+        let mut f = Frame::new(Rect::new(0, 0, 20, 6));
+        f.st.state.active = true;
+        f.set_palette(WindowPalette::Gray);
+        let buf = render_frame(&mut f, 20, 6);
+        let expected = theme.style(Role::FrameGrayActive);
+        assert_eq!(buf.get(0, 0).style(), expected, "active border corner");
+        assert_eq!(buf.get(5, 2).style(), expected, "active interior fill");
+        assert_ne!(
+            expected,
+            theme.style(Role::FrameActive),
+            "gray and blue active styles must differ for the test to be meaningful"
+        );
+
+        // Passive gray frame → FrameGrayPassive.
+        let mut p = Frame::new(Rect::new(0, 0, 20, 6));
+        p.set_palette(WindowPalette::Gray);
+        let bufp = render_frame(&mut p, 20, 6);
+        let expected_p = theme.style(Role::FrameGrayPassive);
+        assert_eq!(bufp.get(0, 0).style(), expected_p, "passive border corner");
+        assert_eq!(bufp.get(5, 2).style(), expected_p, "passive interior fill");
+
+        // Dragging gray frame → FrameGrayDragging.
+        let mut d = Frame::new(Rect::new(0, 0, 20, 6));
+        d.st.state.active = true;
+        d.st.state.dragging = true;
+        d.set_palette(WindowPalette::Gray);
+        let bufd = render_frame(&mut d, 20, 6);
+        assert_eq!(
+            bufd.get(0, 0).style(),
+            theme.style(Role::FrameGrayDragging),
+            "dragging border corner"
+        );
     }
 
     // -- handle_event: close --------------------------------------------------
