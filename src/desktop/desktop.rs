@@ -36,7 +36,7 @@
 
 use crate::command::Command;
 use crate::event::Event;
-use crate::view::{Context, Group, Rect, SelectMode, View, ViewId, locate};
+use crate::view::{Context, Group, Rect, View, ViewId, locate};
 
 use super::Background;
 
@@ -217,16 +217,19 @@ impl Desktop {
         // Without this an inserted EditWindow opens keyboard-dead (typing + Save
         // route to the window's current, which would otherwise be None).
         //
-        // DEVIATION from the task spec's `focus_child` call: focus_child routes
-        // ofTopSelect windows through make_first -> put_in_front_of, which
-        // short-circuits with an already_in_place no-op when the freshly-inserted
-        // window is already at the top of the Z-order. set_current never runs and
-        // focus never cascades. exec_view (the cited reference) uses set_current
-        // directly, so insert_and_focus must too.
+        // focus_child == the faithful C++ focus()/select() path. It used to be a
+        // trap here: a freshly-inserted window is already at the top of the
+        // Z-order, so make_first -> put_in_front_of hit the already_in_place
+        // no-op and its resetCurrent tail (the only thing that established
+        // currency) never ran — this site worked around it with a direct
+        // set_current. That trap was fixed at the foundation in
+        // `Group::focus_child` (the self-heal: after make_first it re-asserts
+        // currency when the child is still not current), so the workaround is
+        // retired and the normal focus path applies.
         if let Some(v) = self.group.find_mut(id) {
             v.reset_current(ctx);
         }
-        self.group.set_current(Some(id), SelectMode::Normal, ctx);
+        self.group.focus_child(id, ctx);
         id
     }
 }

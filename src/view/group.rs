@@ -338,6 +338,18 @@ impl Group {
     /// [`set_current`](Self::set_current). Returns `false` if the validate gate
     /// refused the switch.
     ///
+    /// **Self-heal (deviation from the pure C++ mapping):** after `make_first`,
+    /// if the child is still not current we re-assert currency with an explicit
+    /// `set_current`. C++ `select()` does only `makeFirst()` because
+    /// `putInFrontOf`'s trailing `resetCurrent` establishes currency — but that
+    /// tail is skipped by the already-in-place no-op, which is safe in C++ only
+    /// because insert-time `show()`→`resetCurrent()` keeps the topmost
+    /// `ofTopSelect` window current (an already-top window is already current).
+    /// rstv's ctx-less `Group::insert` (D3) can break that invariant — a freshly
+    /// inserted window is topmost but `current == None` — and a click on it
+    /// would then be a complete no-op. When the invariant holds, the self-heal
+    /// is itself a no-op (`set_current` early-returns on `current == p`).
+    ///
     /// **`ofSelectable` gate:** the real C++ `TView::select()` has an outer guard
     /// `if( (options & ofSelectable) != 0 && owner != 0 )`. That gate is enforced
     /// at the **call sites** — the mouse-down auto-select path checks
@@ -360,6 +372,18 @@ impl Group {
         };
         if top_select {
             self.make_first(id, ctx);
+            // Self-heal: C++ select() relies on putInFrontOf's resetCurrent tail,
+            // which the already_in_place no-op skips. That is safe in C++ only
+            // because insert-time show()->resetCurrent() keeps the topmost
+            // ofTopSelect window current (so an already-top window is already
+            // current). rstv's ctx-less Group::insert (D3) can break that
+            // invariant -- a freshly inserted window is topmost but current ==
+            // None -- and a click on it would then be a complete no-op. Re-assert
+            // currency explicitly; when the invariant holds this is a no-op
+            // (set_current early-returns on current == p).
+            if self.current != Some(id) {
+                self.set_current(Some(id), SelectMode::Normal, ctx);
+            }
         } else {
             self.set_current(Some(id), SelectMode::Normal, ctx);
         }
@@ -2013,6 +2037,91 @@ mod tests {
         );
         assert_eq!(order_after, vec![ida, idb]);
         assert_eq!(group.current(), Some(ida), "A is current via set_current");
+    }
+
+    // -- 14b. focus_child self-heal (ctx-less insert broke the invariant) ----
+
+    /// `focus_child` on a `top_select` child that is ALREADY topmost but NOT
+    /// current must still make it current+selected. This is the post-insert
+    /// state rstv's ctx-less `Group::insert` (D3) produces (C++ never sees it:
+    /// insert-time show()->resetCurrent keeps the topmost ofTopSelect window
+    /// current). Without the self-heal, make_first hits put_in_front_of's
+    /// already-in-place no-op, its resetCurrent tail never runs, and the click
+    /// that called focus_child is a complete no-op.
+    #[test]
+    fn focus_child_self_heals_topmost_non_current_top_select_child() {
+        let mut out = VecDeque::new();
+        let mut timers = TimerQueue::new();
+        let log = Rc::new(RefCell::new(Vec::new()));
+
+        // Two selectable + top_select "windows"; B inserted last == topmost.
+        // The ctx-less insert leaves current == None (the broken invariant).
+        let mut group = Group::new(Rect::new(0, 0, 20, 10));
+        group.st.state.focused = true; // focused group: currency also focuses
+        let (ida, idb) = with_ctx(&mut out, &mut timers, |_ctx| {
+            let mut a = Probe::new(Rect::new(0, 0, 12, 8), 'A', log.clone());
+            a.st.options.selectable = true;
+            a.st.options.top_select = true;
+            let ida = group.insert(Box::new(a));
+            let mut b = Probe::new(Rect::new(6, 2, 18, 10), 'B', log.clone());
+            b.st.options.selectable = true;
+            b.st.options.top_select = true;
+            let idb = group.insert(Box::new(b));
+            (ida, idb)
+        });
+        assert_eq!(group.current(), None, "ctx-less insert never sets current");
+
+        // focus_child on the TOPMOST child: make_first no-ops (already top), so
+        // only the self-heal can establish currency.
+        let ok = with_ctx(&mut out, &mut timers, |ctx| group.focus_child(idb, ctx));
+        assert!(ok, "focus accepted");
+        assert_eq!(group.current(), Some(idb), "topmost child became current");
+        let st = group.children[group.index_of(idb).unwrap()].view.state();
+        assert!(st.state.selected, "self-heal selected the child");
+        assert!(
+            st.state.focused,
+            "focused group cascades focus to the child"
+        );
+        // Z-order untouched (A bottom, B top — make_first's no-op stays a no-op).
+        let order: Vec<_> = (0..group.len()).map(|i| group.children[i].id).collect();
+        assert_eq!(order, vec![ida, idb], "no reorder for an already-top child");
+    }
+
+    /// Companion: `focus_child` on an already-current topmost child stays a
+    /// no-op — the self-heal's `current != id` guard skips `set_current`, so no
+    /// duplicate focus broadcasts are queued.
+    #[test]
+    fn focus_child_on_current_topmost_child_is_a_noop() {
+        let mut out = VecDeque::new();
+        let mut timers = TimerQueue::new();
+        let log = Rc::new(RefCell::new(Vec::new()));
+
+        let mut group = Group::new(Rect::new(0, 0, 20, 10));
+        group.st.state.focused = true;
+        let idb = with_ctx(&mut out, &mut timers, |_ctx| {
+            let mut a = Probe::new(Rect::new(0, 0, 12, 8), 'A', log.clone());
+            a.st.options.selectable = true;
+            a.st.options.top_select = true;
+            group.insert(Box::new(a));
+            let mut b = Probe::new(Rect::new(6, 2, 18, 10), 'B', log.clone());
+            b.st.options.selectable = true;
+            b.st.options.top_select = true;
+            group.insert(Box::new(b))
+        });
+        // Establish the C++ invariant first (topmost is current), then drain the
+        // focus broadcasts that establishing it queued.
+        with_ctx(&mut out, &mut timers, |ctx| group.focus_child(idb, ctx));
+        assert_eq!(group.current(), Some(idb));
+        out.clear();
+
+        // Re-focusing the already-current topmost child must queue nothing.
+        let ok = with_ctx(&mut out, &mut timers, |ctx| group.focus_child(idb, ctx));
+        assert!(ok);
+        assert_eq!(group.current(), Some(idb), "still current");
+        assert!(
+            out.is_empty(),
+            "no duplicate focus broadcasts for an already-current child: {out:?}"
+        );
     }
 
     // -- 15. owner_size set during routing + unconditional restore (33c) ------

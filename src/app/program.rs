@@ -411,6 +411,33 @@ impl Program {
             let now = clock.now_ms();
             let mut ctx = Context::new(&mut out_events, &mut timers, now, &mut deferred);
             group.set_current(Some(id), SelectMode::Normal, &mut ctx);
+
+            // STARTUP CURRENCY (the insert-time show()->resetCurrent cascade,
+            // collapsed to one call). In C++, every `insert` of an ofSelectable
+            // view runs `show() -> setState(sfVisible) -> owner->resetCurrent()`,
+            // so by `run()` time a desktop pre-populated with windows (the
+            // examples/hello.rs `init_desktop` shape) already has its topmost
+            // ofTopSelect window current+focused. rstv's ctx-less `Group::insert`
+            // (D3) deliberately never touches currency, so a factory-populated
+            // desktop would start with `current == None`: no window focused, and
+            // (before the focus_child self-heal) a click on the topmost window
+            // was a no-op. Establish the desktop's INTERNAL currency once here,
+            // AFTER the desktop itself was focused above, so set_current's
+            // focusView cascade reaches the chosen window — exactly the order a
+            // runtime C++ insert sees (desktop already focused). With no
+            // selectable child (an empty desktop) this is a no-op
+            // (set_current(None) early-returns on current == None).
+            //
+            // Side-effect bookkeeping: the window's set_state(Selected) queues
+            // Deferred::EnableCommand(NEXT/PREV/...) and the focus cascade queues
+            // RECEIVED_FOCUS broadcasts into out_events. The first pump pops one
+            // of those broadcasts (out_events is non-empty: the desktop-focus
+            // broadcast above is unconditional), and its post-dispatch drain
+            // applies the whole deferred queue — so nothing is lost and no
+            // explicit apply step is needed here.
+            if let Some(v) = group.find_mut(id) {
+                v.reset_current(&mut ctx);
+            }
         }
 
         Program {
@@ -2538,9 +2565,11 @@ mod tests {
         program.out_events.clear();
 
         // Select window #1 through the *production* path: inject Alt+'1' and pump.
-        // At construction the desktop is root-current with its own `current == None`,
-        // so `desktop.valid(cmReleasedFocus)` (canMoveFocus) is true and the Alt-N
-        // walk selects window 1. The pump then drains `deferred`, so the
+        // At construction the desktop is root-current with its own `current` on the
+        // topmost window #n (Program::new's startup reset_current — the C++
+        // insert-time invariant); window valid(cmReleasedFocus) (canMoveFocus) is
+        // true by default and the Alt-N walk selects window 1. The pump then drains
+        // `deferred`, so the
         // `EnableCommand(cmNext/cmPrev)` that `set_state(Selected)` queued is really
         // applied to `command_set` — exactly the enable-filter path the cmNext/cmPrev
         // round-trip tests exercise. No test-only command-enable shortcut.
@@ -2975,6 +3004,13 @@ mod tests {
             move |r| {
                 let mut desktop = Desktop::new(r, |r2| Some(Desktop::init_background(r2)));
                 // okButton: bfDefault (the initial default). chDirButton: bfNormal.
+                // Insert chdir FIRST so the bfDefault okButton is topmost: startup
+                // currency (Program::new's reset_current, the C++ insert-time
+                // show()->resetCurrent invariant) focuses the topmost selectable
+                // child, and a focused NON-default button would grab the default
+                // (TButton::setState sfFocused -> makeDefault) before the test's
+                // preconditions run. Focusing the bfDefault button is a no-op
+                // (makeDefault's `(flags & bfDefault) == 0` guard).
                 let ok = Button::new(
                     Rect::new(2, 2, 12, 4),
                     "O~K~",
@@ -2990,8 +3026,8 @@ mod tests {
                     Command::CHANGE_DIR,
                     ButtonFlags::new(),
                 );
-                let ok_id = desktop.insert_view(Box::new(ok));
                 let chdir_id = desktop.insert_view(Box::new(chdir));
+                let ok_id = desktop.insert_view(Box::new(ok));
                 *ids_cap.borrow_mut() = (Some(ok_id), Some(chdir_id));
                 Some(Box::new(desktop))
             },
@@ -3493,6 +3529,96 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, Event::KeyDown(k) if k.key == Key::Char('9'))),
             "can && !matched: the live Alt+9 fell through to the group (not cleared)"
+        );
+    }
+
+    // -- startup currency: insert-time show()->resetCurrent, collapsed ---------
+
+    /// The examples/hello.rs shape: a desktop pre-populated with staggered
+    /// windows via the ctx-less `Desktop::insert_view`. C++'s insert-time
+    /// `show()->resetCurrent()` cascade guarantees the topmost ofTopSelect
+    /// window is current by `run()` time; rstv collapses that into the single
+    /// `reset_current` at the end of `Program::new`. Bite (the fixed bug):
+    /// without it NO window was focused at startup, and a click on the topmost
+    /// window was a complete no-op (focus_child -> make_first hit
+    /// put_in_front_of's already-in-place no-op, so set_current never ran).
+    #[test]
+    fn startup_focuses_topmost_preinserted_window_and_click_moves_focus() {
+        // Build in the hello.rs shape (program_with_windows minus its Alt-1
+        // pre-selection pump — this test asserts the STARTUP state itself).
+        let (backend, _handle) = HeadlessBackend::new(80, 25);
+        let theme = Theme::classic_blue();
+        let clock = Rc::new(ManualClock::new(0));
+        let ids: Rc<RefCell<Vec<crate::view::ViewId>>> = Rc::new(RefCell::new(Vec::new()));
+        let ids_cap = ids.clone();
+        let mut program = Program::new(
+            Box::new(backend),
+            Box::new(clock),
+            theme,
+            move |r| {
+                let mut desktop = Desktop::new(r, |r2| Some(Desktop::init_background(r2)));
+                for num in 1..=3i16 {
+                    // Staggered: w1 (4,1)-(24,9), w2 (6,2)-(26,10), w3 (8,3)-(28,11).
+                    let x = 2 + (num as i32) * 2;
+                    let win = Window::new(
+                        Rect::new(x, num as i32, x + 20, num as i32 + 8),
+                        Some(format!("W{num}")),
+                        num,
+                    );
+                    ids_cap
+                        .borrow_mut()
+                        .push(desktop.insert_view(Box::new(win)));
+                }
+                Some(Box::new(desktop))
+            },
+            |_r| None,
+            |_r| None,
+        );
+        let (w1, w2, w3) = {
+            let b = ids.borrow();
+            (b[0], b[1], b[2])
+        };
+
+        // Startup = new + first pump (the pump pops the startup focus broadcasts
+        // and drains the deferred command enables).
+        program.pump_once();
+
+        // The LAST-inserted (topmost) window is the desktop's current: selected,
+        // focused, and active (the active-frame render state).
+        let flags = |program: &mut Program, id| {
+            program
+                .group_mut()
+                .find_mut(id)
+                .map(|v| {
+                    let s = &v.state().state;
+                    (s.selected, s.focused, s.active)
+                })
+                .expect("window resolves")
+        };
+        assert_eq!(
+            flags(&mut program, w3),
+            (true, true, true),
+            "topmost pre-inserted window is current at startup (selected+focused+active frame)"
+        );
+        assert!(!win_selected(&mut program, w1), "w1 not selected");
+        assert!(!win_selected(&mut program, w2), "w2 not selected");
+
+        // Drain the remaining startup focus broadcasts (the pump pops one event
+        // per pass; the click below must be the next event the pump sees).
+        program.out_events.clear();
+
+        // Regression for the normal path: click a LOWER window's title bar
+        // ((7,2) is on w2's frame row, outside w3) — focus must move to it.
+        program.out_events.push_back(mouse_down_at(7, 2));
+        program.pump_once();
+        assert_eq!(
+            flags(&mut program, w2),
+            (true, true, true),
+            "clicking a lower window focuses it"
+        );
+        assert!(
+            !win_selected(&mut program, w3),
+            "w3 deselected after the click"
         );
     }
 
