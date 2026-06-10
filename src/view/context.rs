@@ -1202,9 +1202,13 @@ impl<'a> Context<'a> {
     }
 
     /// Forward a localized mouse event to the tracked view — **deferred**
-    /// ([`Deferred::MouseTrack`]). `pub(crate)`: only
-    /// [`MouseTrackCapture`](crate::capture::MouseTrackCapture) posts this;
-    /// widgets enter tracking via [`start_mouse_track`](Self::start_mouse_track).
+    /// ([`Deferred::MouseTrack`]). `pub(crate)`: two posters only —
+    /// [`MouseTrackCapture`](crate::capture::MouseTrackCapture) (the router), and
+    /// `Editor::handle_event`'s wheel-in-hold arm, which uses the same direct
+    /// find_mut+handle_event delivery to forward a wheel pseudo-down to its
+    /// sibling scrollbars (the C++ `vScrollBar->handleEvent(event)` /
+    /// `hScrollBar->handleEvent(event)`, teditor1.cpp:574-579). Widgets enter
+    /// tracking via [`start_mouse_track`](Self::start_mouse_track).
     pub(crate) fn request_mouse_track(&mut self, view: ViewId, event: Event) {
         self.deferred.push(Deferred::MouseTrack { view, event });
     }

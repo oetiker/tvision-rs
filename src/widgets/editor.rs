@@ -42,12 +42,27 @@
 //! contiguous slice, and run [`text::next`]/[`text::prev`]. There is no
 //! `maxCharSize` stack buffer.
 //!
+//! ## Mouse hold-tracking (the A3 `MouseTrackCapture` seam)
+//!
+//! The two `evMouseDown` hold loops (teditor1.cpp:539-583) are ported as
+//! tracked event arms (`docs/design/mouse-track.md`): the `MouseDown` arm runs
+//! the first loop iteration and arms the capture; the `MouseMove`/`MouseAuto`/
+//! wheel-pseudo-down arms are the loop bodies; `MouseUp` clears. Which loop is
+//! in flight lives in [`EditorTrack`] (`Select` carries the live C++ loop-local
+//! `selectMode`; `Pan` carries `lastMouse`) — both loop masks cover
+//! move+auto+wheel, so the kind discriminates the *body*, not the event class.
+//! A wheel during the `Select` hold forwards to both scrollbars via
+//! `Deferred::MouseTrack` (the C++ `vScrollBar->handleEvent`, :574-579) and
+//! self-posts `SyncEditorDelta` (the C++ answer is a synchronous `message()`
+//! that bypasses the hold loop; rstv's queue-borne broadcast would be swallowed
+//! by the modal capture) — the delta lands next pump (the seam's accepted
+//! one-pump latency). Outside a hold a wheel falls through unconsumed: C++
+//! `TEditor`'s `eventMask` excludes `evMouseWheel` (teditor1.cpp:195).
+//!
 //! ## Deferrals (breadcrumbed in the code)
 //!
 //! * Find/Replace **dialogs** (`editorDialog`, `find`/`replace`/prompt) — needs
 //!   dialog views not yet built. [`Editor::search`] is fully ported + unit-tested.
-//! * Mouse **drag-select / edge-scroll / wheel / middle-button pan** — single-click
-//!   cursor positioning is kept; the loops become a `DragCapture` (TODO).
 //! * Right-click **context menu** (`initContextMenu`/`popupMenu`).
 //! * Internal-clipboard **TEditor branch** (`insertFrom`) — row 69.
 //! * `TStreamable` (D12).
@@ -102,6 +117,31 @@ pub(crate) const EF_BACKUP_FILES: u16 = 0x0100;
 
 /// `maxLineLength` — the fixed `limit.x` content width (editors.h).
 const MAX_LINE_LENGTH: i32 = 256;
+
+/// Which `evMouseDown` hold loop is in flight (`TEditor::handleEvent`,
+/// teditor1.cpp:539-583) — the editor's track-kind discriminator (the scrollbar
+/// `tracked_part` discipline). `None` in [`Editor::track`] = no hold; the
+/// tracked `MouseMove`/`MouseAuto`/wheel/`MouseUp` arms are guarded on it
+/// (mandatory A3 rule — a stray event falls through unconsumed).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EditorTrack {
+    /// The main drag-select loop (teditor1.cpp:553-583). `select_mode` is the
+    /// C++ loop-local `selectMode`: seeded by the press (smExtend/smDouble/
+    /// smTriple), then `selectMode |= smExtend` after EVERY iteration's
+    /// `setCurPtr` (:581) — so smDouble/smTriple persist for word/line-granular
+    /// drags.
+    Select {
+        /// The live `selectMode` byte (`SM_*` bits).
+        select_mode: u8,
+    },
+    /// The middle-button pan loop (teditor1.cpp:540-551). `last` is the C++
+    /// loop-local `lastMouse` (view-local): each tick scrolls by the mouse
+    /// delta and never touches cursor/selection.
+    Pan {
+        /// The previous tick's view-local mouse position (`lastMouse`).
+        last: Point,
+    },
+}
 
 /// `sfSearchFailed` sentinel — `scan`/`iScan` "not found". C++ uses `(uint)-1`.
 const SEARCH_FAILED: usize = usize::MAX;
@@ -392,6 +432,14 @@ pub struct Editor {
     replace_str: String,
     /// `editorFlags` — the `ef*` search options (per-instance; see [`find_str`]).
     editor_flags: u16,
+    /// Absolute screen position of view-local `(0, 0)`, cached by `draw` so the
+    /// mouse-tracking capture can localize absolute mouse coords (D3/D9 — the
+    /// `Button::abs_origin` pattern, mouse-track recipe step 1).
+    abs_origin: Point,
+    /// Per-hold mouse-track state — `Some` while a hold loop is in flight (see
+    /// [`EditorTrack`]). Guards the tracked `MouseMove`/`MouseAuto`/wheel/
+    /// `MouseUp` arms against stray events.
+    track: Option<EditorTrack>,
 }
 
 impl Editor {
@@ -455,6 +503,8 @@ impl Editor {
             find_str: String::new(),
             replace_str: String::new(),
             editor_flags: 0,
+            abs_origin: Point::new(0, 0),
+            track: None,
         };
         // setBufLen(0) — flag-set only (no flush; ctor has no Context).
         ed.set_buf_len(0);
@@ -1256,6 +1306,22 @@ impl Editor {
         }
     }
 
+    /// One tick of the middle-button pan loop body (teditor1.cpp:543-548):
+    /// `mouse = makeLocal(event.mouse.where); TPoint d = delta + (lastMouse -
+    /// mouse); scrollTo(d.x, d.y); lastMouse = mouse;` — scroll by the mouse
+    /// delta, never touching cursor/selection. The C++ pan loop does not
+    /// lock(): `scrollTo`'s `update(ufView)` flushes inline at `lockCount == 0`,
+    /// which `flush_if_unlocked` mirrors.
+    fn pan_tick(&mut self, last: Point, mouse: Point, ctx: &mut Context) {
+        let d = Point::new(
+            self.delta.x + last.x - mouse.x,
+            self.delta.y + last.y - mouse.y,
+        );
+        self.scroll_to(d.x, d.y);
+        self.track = Some(EditorTrack::Pan { last: mouse });
+        self.flush_if_unlocked(ctx);
+    }
+
     /// `trackCursor(center)` — scroll so the cursor is visible.
     fn track_cursor(&mut self, center: bool) {
         if center {
@@ -1544,6 +1610,10 @@ impl View for Editor {
     /// viewport rows. NB: `draw_ptr`/`draw_line` are display caches; mutating them
     /// in `draw` is faithful to the C++ (it does the same).
     fn draw(&mut self, ctx: &mut DrawCtx) {
+        // Cache the absolute origin for the mouse-tracking capture (D3/D9 — the
+        // MouseTrackCapture localizes abs mouse coords via this value,
+        // mirroring the Button `abs_origin` pattern; recipe step 1).
+        self.abs_origin = ctx.origin();
         if self.draw_line != self.delta.y {
             self.draw_ptr = self.line_move(self.draw_ptr, self.delta.y - self.draw_line);
             self.draw_line = self.delta.y;
@@ -1581,17 +1651,88 @@ impl View for Editor {
         match ev {
             Event::MouseDown(m) => {
                 let m = *m;
+                // -- wheel pseudo-down (the evMouseWheel event class) ---------
+                // During a hold the capture forwards it under `mask.wheel` (the
+                // evMouseWheel slice of both loop masks, teditor1.cpp:551/:583).
+                // Outside a hold the C++ editor never receives evMouseWheel —
+                // absent from TEditor's eventMask (teditor1.cpp:195) — so an
+                // untracked wheel falls through unconsumed.
+                if m.wheel != crate::event::MouseWheel::None {
+                    match self.track {
+                        // The wheel iteration of the drag-select loop
+                        // (teditor1.cpp:574-579): `vScrollBar->handleEvent(ev);
+                        // hScrollBar->handleEvent(ev);` then the unconditional
+                        // body (:580-581). The bars are siblings (D3): deliver
+                        // via Deferred::MouseTrack (find_mut + handle_event —
+                        // exactly the C++ direct call, one pump later). The C++
+                        // bar answers with a *synchronous* cmScrollBarChanged
+                        // message() that bypasses the hold loop; rstv's
+                        // queue-borne broadcast would be swallowed by the modal
+                        // capture, so the editor posts the SyncEditorDelta
+                        // broker itself. Both land next pump (the seam's
+                        // accepted one-pump latency), so this iteration's
+                        // setCurPtr still sees the pre-scroll `delta`; the next
+                        // tick corrects it.
+                        Some(EditorTrack::Select { select_mode: sm }) => {
+                            self.lock();
+                            if let Some(v) = self.v_scroll_bar {
+                                ctx.request_mouse_track(v, Event::MouseDown(m));
+                            }
+                            if let Some(h) = self.h_scroll_bar {
+                                ctx.request_mouse_track(h, Event::MouseDown(m));
+                            }
+                            if let Some(id) = self.state.id() {
+                                ctx.request_sync_editor_delta(
+                                    id,
+                                    self.h_scroll_bar,
+                                    self.v_scroll_bar,
+                                );
+                            }
+                            // :580-581 — setCurPtr(getMousePtr(where),
+                            // selectMode); selectMode |= smExtend.
+                            let ptr = self.get_mouse_ptr(m.position);
+                            self.set_cur_ptr(ptr, sm);
+                            self.track = Some(EditorTrack::Select {
+                                select_mode: sm | SM_EXTEND,
+                            });
+                            self.unlock(ctx);
+                        }
+                        // The pan loop's mask is evMouse (teditor1.cpp:542),
+                        // which includes evMouseWheel: a wheel tick runs the
+                        // same scroll-by-mouse-delta body (:543-548).
+                        Some(EditorTrack::Pan { last }) => {
+                            self.pan_tick(last, m.position, ctx);
+                        }
+                        None => return, // untracked wheel — fall through
+                    }
+                    ev.clear();
+                    return;
+                }
                 if m.buttons.right {
                     // TODO(row 66 context menu): initContextMenu + popupMenu.
                     ev.clear();
                     return;
                 }
                 if m.buttons.middle {
-                    // TODO(row 66 mouse drag-select, D9): port as a DragCapture
-                    // capture-handler (see window.rs DragCapture) — extend
-                    // selection on MouseMove, edge-scroll on MouseAuto,
-                    // wheel→scrollbars; deferred like scrollbar's own drag (TODO
-                    // row 31). Middle-button pan deferred with the same handler.
+                    // Middle-button pan (teditor1.cpp:540-551): `lastMouse =
+                    // makeLocal(event.mouse.where); while (mouseEvent(event,
+                    // evMouse)) { … }` — a WHILE loop, so the press itself runs
+                    // no body: record `lastMouse` and arm the capture with the
+                    // evMouse mask (move + auto + wheel). Without an id
+                    // (uninserted) there is nothing to track — the press is a
+                    // no-op, like the C++ loop with no further events.
+                    if let Some(id) = self.state.id() {
+                        self.track = Some(EditorTrack::Pan { last: m.position });
+                        ctx.start_mouse_track(
+                            id,
+                            self.abs_origin,
+                            crate::capture::TrackMask {
+                                mouse_move: true,
+                                mouse_auto: true,
+                                wheel: true,
+                            },
+                        );
+                    }
                     ev.clear();
                     return;
                 }
@@ -1600,13 +1741,104 @@ impl View for Editor {
                 } else if m.flags.triple_click {
                     select_mode |= SM_TRIPLE;
                 }
-                // Single-click cursor positioning (the inner mouse loop is the
-                // TODO above). Position is already view-local (Group::deliver
-                // makeLocal'd it).
+                // The first iteration of the drag-select do{}while
+                // (teditor1.cpp:557-583 — the body runs once for the press):
+                // lock; setCurPtr(getMousePtr(where), selectMode); selectMode
+                // |= smExtend; unlock. Position is already view-local
+                // (Group::deliver makeLocal'd it). Then enter the loop: arm the
+                // capture with the loop mask evMouseMove + evMouseAuto +
+                // evMouseWheel (:583), carrying the live selectMode in the
+                // track state (the C++ loop-local survives across iterations).
+                // Without an id (uninserted) the press stays single-shot.
                 self.lock();
                 let ptr = self.get_mouse_ptr(m.position);
                 self.set_cur_ptr(ptr, select_mode);
                 self.unlock(ctx);
+                if let Some(id) = self.state.id() {
+                    self.track = Some(EditorTrack::Select {
+                        select_mode: select_mode | SM_EXTEND,
+                    });
+                    ctx.start_mouse_track(
+                        id,
+                        self.abs_origin,
+                        crate::capture::TrackMask {
+                            mouse_move: true,
+                            mouse_auto: true,
+                            wheel: true,
+                        },
+                    );
+                }
+            }
+            // -- evMouseMove (tracked) — a loop-body tick. Guarded by `track`
+            // (mandatory A3 rule): a stray move falls through unconsumed.
+            Event::MouseMove(m) if self.track.is_some() => {
+                let m = *m;
+                match self.track {
+                    // Drag-select body (teditor1.cpp:558,580-582): lock;
+                    // setCurPtr(getMousePtr(where), selectMode); selectMode |=
+                    // smExtend; unlock. (Neither the auto nor the wheel branch
+                    // applies to a plain move.)
+                    Some(EditorTrack::Select { select_mode: sm }) => {
+                        self.lock();
+                        let ptr = self.get_mouse_ptr(m.position);
+                        self.set_cur_ptr(ptr, sm);
+                        self.track = Some(EditorTrack::Select {
+                            select_mode: sm | SM_EXTEND,
+                        });
+                        self.unlock(ctx);
+                    }
+                    // Pan body (teditor1.cpp:543-548).
+                    Some(EditorTrack::Pan { last }) => self.pan_tick(last, m.position, ctx),
+                    None => unreachable!("guarded by track.is_some()"),
+                }
+            }
+            // -- evMouseAuto (tracked) — a loop-body tick with the edge-scroll
+            // prelude. Guarded by `track`.
+            Event::MouseAuto(m) if self.track.is_some() => {
+                let m = *m;
+                match self.track {
+                    // Drag-select auto body (teditor1.cpp:559-572): per-axis
+                    // out-of-bounds check against the view size, scrollTo(delta
+                    // ± 1), THEN the unconditional setCurPtr tail (:580-581) —
+                    // order preserved (getMousePtr reads the post-scroll delta).
+                    Some(EditorTrack::Select { select_mode: sm }) => {
+                        self.lock();
+                        let mouse = m.position;
+                        let mut d = self.delta;
+                        if mouse.x < 0 {
+                            d.x -= 1;
+                        }
+                        if mouse.x >= self.state.size.x {
+                            d.x += 1;
+                        }
+                        if mouse.y < 0 {
+                            d.y -= 1;
+                        }
+                        if mouse.y >= self.state.size.y {
+                            d.y += 1;
+                        }
+                        self.scroll_to(d.x, d.y);
+                        let ptr = self.get_mouse_ptr(mouse);
+                        self.set_cur_ptr(ptr, sm);
+                        self.track = Some(EditorTrack::Select {
+                            select_mode: sm | SM_EXTEND,
+                        });
+                        self.unlock(ctx);
+                    }
+                    // Pan body (teditor1.cpp:543-548): an auto at the held
+                    // position has lastMouse == mouse — a no-op scroll,
+                    // faithful to the C++ evMouse-masked loop.
+                    Some(EditorTrack::Pan { last }) => self.pan_tick(last, m.position, ctx),
+                    None => unreachable!("guarded by track.is_some()"),
+                }
+            }
+            // -- evMouseUp (tracked) — both loops simply exit (`mouseEvent`
+            // returns False on evMouseUp, tview.cpp:642; no post-loop code at
+            // teditor1.cpp:551/:583-584). Guarded by `track`: MouseUp is not
+            // mask-gated in Group::wants, so a stray, untracked up must fall
+            // through unconsumed.
+            Event::MouseUp(_) if self.track.is_some() => {
+                self.track = None;
             }
             Event::KeyDown(k) => {
                 let k = *k;
@@ -3768,5 +4000,533 @@ mod tests {
             view.draw(&mut dc);
         });
         insta::assert_snapshot!(screen.snapshot());
+    }
+
+    // -- mouse hold-tracking (the A3 MouseTrackCapture seam) ------------------
+    //
+    // These tests drive the tracked arms directly with view-local positions, as
+    // the pump's Deferred::MouseTrack apply does (the seam itself is unit-tested
+    // in capture::tests; here we verify the editor's loop bodies).
+
+    use crate::event::{MouseButtons, MouseEvent, MouseEventFlags, MouseWheel};
+
+    fn left_mouse(x: i32, y: i32) -> MouseEvent {
+        MouseEvent {
+            position: Point::new(x, y),
+            buttons: MouseButtons {
+                left: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    fn mouse_down_at(x: i32, y: i32) -> Event {
+        Event::MouseDown(left_mouse(x, y))
+    }
+
+    fn mouse_move_at(x: i32, y: i32) -> Event {
+        Event::MouseMove(left_mouse(x, y))
+    }
+
+    fn mouse_auto_at(x: i32, y: i32) -> Event {
+        Event::MouseAuto(left_mouse(x, y))
+    }
+
+    fn mouse_up_at(x: i32, y: i32) -> Event {
+        Event::MouseUp(MouseEvent {
+            position: Point::new(x, y),
+            ..Default::default()
+        })
+    }
+
+    fn middle_down_at(x: i32, y: i32) -> Event {
+        Event::MouseDown(MouseEvent {
+            position: Point::new(x, y),
+            buttons: MouseButtons {
+                middle: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+    }
+
+    /// A wheel pseudo-down (crossterm ScrollUp/Down → `MouseDown` with `wheel`
+    /// set and NO buttons).
+    fn wheel_down_at(x: i32, y: i32, wheel: MouseWheel) -> Event {
+        Event::MouseDown(MouseEvent {
+            position: Point::new(x, y),
+            wheel,
+            ..Default::default()
+        })
+    }
+
+    /// Stamp the editor with a fresh ViewId (as Group::insert would do).
+    fn give_id(e: &mut Editor) -> ViewId {
+        let id = ViewId::next();
+        e.state.id = Some(id);
+        id
+    }
+
+    /// A 40×10 editor holding 15 one-word lines (`line00\n` … `line14\n`,
+    /// 7 bytes each) — tall enough to vertical-scroll (limit.y = 16 > 10).
+    fn tall_ed() -> Editor {
+        let mut e = ed();
+        let text: String = (0..15).map(|i| format!("line{i:02}\n")).collect();
+        insert(&mut e, &text);
+        e.set_cur_ptr(0, 0);
+        e
+    }
+
+    /// `MouseDown` (left) on an inserted editor: first loop iteration positions
+    /// the cursor, the track state carries `selectMode | smExtend`
+    /// (teditor1.cpp:580-581), and the PushCapture deferred names this editor's
+    /// id.
+    #[test]
+    fn track_mouse_down_arms_select_capture() {
+        let mut e = ed();
+        insert(&mut e, "hello world");
+        let id = give_id(&mut e);
+
+        let mut cx = Cx::new();
+        let mut ev = mouse_down_at(2, 0);
+        {
+            let mut ctx = cx.ctx();
+            e.handle_event(&mut ev, &mut ctx);
+        }
+        assert!(ev.is_nothing(), "MouseDown consumed");
+        assert_eq!(e.cur_ptr, 2, "first iteration: setCurPtr(getMousePtr)");
+        assert_eq!(
+            e.track,
+            Some(EditorTrack::Select {
+                select_mode: SM_EXTEND
+            }),
+            "track carries selectMode |= smExtend after the first iteration"
+        );
+        let pushes: Vec<_> = cx
+            .deferred
+            .iter()
+            .filter_map(|d| match d {
+                Deferred::PushCapture(h) => Some(h.view()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(pushes, vec![Some(id)], "one PushCapture naming the editor");
+    }
+
+    /// A double-click press seeds `smDouble` into the live track selectMode
+    /// (the C++ loop-local persists across iterations → word-granular drag).
+    #[test]
+    fn track_double_click_persists_sm_double() {
+        let mut e = ed();
+        insert(&mut e, "hello world");
+        give_id(&mut e);
+
+        let mut cx = Cx::new();
+        let mut ev = Event::MouseDown(MouseEvent {
+            position: Point::new(1, 0),
+            buttons: MouseButtons {
+                left: true,
+                ..Default::default()
+            },
+            flags: MouseEventFlags {
+                double_click: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        {
+            let mut ctx = cx.ctx();
+            e.handle_event(&mut ev, &mut ctx);
+        }
+        assert_eq!(
+            e.track,
+            Some(EditorTrack::Select {
+                select_mode: SM_DOUBLE | SM_EXTEND
+            }),
+            "smDouble persists in the live selectMode"
+        );
+    }
+
+    /// `MouseMove` while drag-tracking extends the selection over the real
+    /// buffer text (the loop body, teditor1.cpp:580-581) and does NOT scroll.
+    #[test]
+    fn track_move_extends_selection() {
+        let mut e = ed();
+        insert(&mut e, "hello world");
+        give_id(&mut e);
+
+        let mut cx = Cx::new();
+        let mut ev = mouse_down_at(2, 0);
+        {
+            let mut ctx = cx.ctx();
+            e.handle_event(&mut ev, &mut ctx);
+        }
+
+        let mut ev = mouse_move_at(8, 0);
+        {
+            let mut ctx = cx.ctx();
+            e.handle_event(&mut ev, &mut ctx);
+        }
+        assert!(ev.is_nothing(), "tracked move consumed");
+        assert_eq!((e.sel_start, e.sel_end), (2, 8), "selection 2..8");
+        assert_eq!(&text(&e)[2..8], "llo wo", "selection covers the real text");
+        assert_eq!(e.cur_ptr, 8, "cursor at the drag position");
+        assert_eq!(e.delta, Point::new(0, 0), "a plain move never scrolls");
+        assert!(e.track.is_some(), "still tracking after the move");
+    }
+
+    /// `MouseAuto` below the view edge-scrolls down by one (`delta.y + 1`,
+    /// teditor1.cpp:566-571) THEN extends the selection to the post-scroll
+    /// mouse position (the unconditional setCurPtr tail).
+    #[test]
+    fn track_auto_below_edge_scrolls_then_extends() {
+        let mut e = tall_ed();
+        give_id(&mut e);
+
+        // Down on row 5 (line05, offset 35).
+        let mut cx = Cx::new();
+        let mut ev = mouse_down_at(0, 5);
+        {
+            let mut ctx = cx.ctx();
+            e.handle_event(&mut ev, &mut ctx);
+        }
+        assert_eq!(e.cur_ptr, 35);
+
+        // Auto at y = 10 (== size.y, out of bounds below): scroll down one,
+        // then setCurPtr at the clamped row 9 + new delta.y 1 = line 10.
+        let mut ev = mouse_auto_at(0, 10);
+        {
+            let mut ctx = cx.ctx();
+            e.handle_event(&mut ev, &mut ctx);
+        }
+        assert!(ev.is_nothing(), "tracked auto consumed");
+        assert_eq!(e.delta.y, 1, "scrolled down one row");
+        assert_eq!(
+            (e.sel_start, e.sel_end),
+            (35, 70),
+            "selection extended to the start of line10 (post-scroll getMousePtr)"
+        );
+    }
+
+    /// `MouseAuto` above the view edge-scrolls up by one (`delta.y - 1`,
+    /// teditor1.cpp:564-565) then extends backwards.
+    #[test]
+    fn track_auto_above_edge_scrolls_then_extends() {
+        let mut e = tall_ed();
+        give_id(&mut e);
+        e.scroll_to(0, 3); // viewport starts at line 3
+
+        // Down on view row 2 = buffer line 5 (offset 35).
+        let mut cx = Cx::new();
+        let mut ev = mouse_down_at(0, 2);
+        {
+            let mut ctx = cx.ctx();
+            e.handle_event(&mut ev, &mut ctx);
+        }
+        assert_eq!(e.cur_ptr, 35);
+
+        // Auto at y = -1 (out of bounds above): delta.y 3 → 2, then setCurPtr
+        // at clamped row 0 + delta.y 2 = line 2 (offset 14).
+        let mut ev = mouse_auto_at(0, -1);
+        {
+            let mut ctx = cx.ctx();
+            e.handle_event(&mut ev, &mut ctx);
+        }
+        assert!(ev.is_nothing(), "tracked auto consumed");
+        assert_eq!(e.delta.y, 2, "scrolled up one row");
+        assert_eq!(
+            (e.sel_start, e.sel_end),
+            (14, 35),
+            "selection extended backwards to the start of line02"
+        );
+    }
+
+    /// A wheel pseudo-down during the drag-select hold forwards to BOTH
+    /// scrollbars (teditor1.cpp:574-579 — `vScrollBar->handleEvent(ev);
+    /// hScrollBar->handleEvent(ev)`) via `Deferred::MouseTrack`, self-posts the
+    /// `SyncEditorDelta` broker (the C++ cmScrollBarChanged answer is a direct
+    /// message() the modal capture would swallow), and still runs the
+    /// unconditional setCurPtr tail.
+    #[test]
+    fn track_wheel_in_hold_forwards_to_bars_and_syncs() {
+        let hbar = ViewId::next();
+        let vbar = ViewId::next();
+        let mut e = Editor::new(Rect::new(0, 0, 40, 10), Some(hbar), Some(vbar), None, 1024);
+        insert(&mut e, "hello world");
+        let id = give_id(&mut e);
+
+        let mut cx = Cx::new();
+        let mut ev = mouse_down_at(2, 0);
+        {
+            let mut ctx = cx.ctx();
+            e.handle_event(&mut ev, &mut ctx);
+        }
+
+        // The wheel arrives view-localized via the capture's wheel mask.
+        let mut cx = Cx::new();
+        let mut ev = wheel_down_at(8, 0, MouseWheel::Down);
+        {
+            let mut ctx = cx.ctx();
+            e.handle_event(&mut ev, &mut ctx);
+        }
+        assert!(ev.is_nothing(), "wheel-in-hold consumed");
+        // Forwarded to the v-bar then the h-bar (C++ order), wheel payload intact.
+        let forwards: Vec<_> = cx
+            .deferred
+            .iter()
+            .filter_map(|d| match d {
+                Deferred::MouseTrack {
+                    view,
+                    event: Event::MouseDown(m),
+                } if m.wheel == MouseWheel::Down => Some(*view),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(forwards, vec![vbar, hbar], "wheel forwarded to both bars");
+        assert!(
+            cx.deferred.iter().any(|d| matches!(
+                d,
+                Deferred::SyncEditorDelta { editor, h, v }
+                    if *editor == id && *h == Some(hbar) && *v == Some(vbar)
+            )),
+            "SyncEditorDelta self-posted (the swallowed-broadcast workaround)"
+        );
+        // The unconditional body still ran: selection extended to the wheel pos.
+        assert_eq!((e.sel_start, e.sel_end), (2, 8), "setCurPtr tail ran");
+    }
+
+    /// A wheel pseudo-down with NO hold in flight falls through unconsumed —
+    /// C++ TEditor's eventMask excludes evMouseWheel (teditor1.cpp:195).
+    #[test]
+    fn track_wheel_outside_hold_falls_through() {
+        let mut e = ed();
+        insert(&mut e, "hello world");
+        give_id(&mut e);
+        let cur_before = e.cur_ptr;
+
+        let mut cx = Cx::new();
+        let mut ev = wheel_down_at(3, 0, MouseWheel::Up);
+        {
+            let mut ctx = cx.ctx();
+            e.handle_event(&mut ev, &mut ctx);
+        }
+        assert!(!ev.is_nothing(), "untracked wheel falls through");
+        assert_eq!(e.cur_ptr, cur_before, "no cursor positioning from a wheel");
+        assert!(cx.deferred.is_empty(), "nothing armed, nothing forwarded");
+    }
+
+    /// Middle-button `MouseDown` arms the pan track (teditor1.cpp:540-542):
+    /// `lastMouse` recorded, capture pushed, NO body on the press (a `while`
+    /// loop, not `do{}while`) — cursor and selection untouched.
+    #[test]
+    fn track_middle_down_arms_pan() {
+        let mut e = tall_ed();
+        let id = give_id(&mut e);
+        let cur_before = e.cur_ptr;
+
+        let mut cx = Cx::new();
+        let mut ev = middle_down_at(5, 5);
+        {
+            let mut ctx = cx.ctx();
+            e.handle_event(&mut ev, &mut ctx);
+        }
+        assert!(ev.is_nothing(), "middle down consumed");
+        assert_eq!(
+            e.track,
+            Some(EditorTrack::Pan {
+                last: Point::new(5, 5)
+            }),
+            "pan track armed with lastMouse"
+        );
+        assert_eq!(e.cur_ptr, cur_before, "no cursor change on the press");
+        assert!(!e.has_selection(), "no selection from a pan press");
+        let pushes: Vec<_> = cx
+            .deferred
+            .iter()
+            .filter_map(|d| match d {
+                Deferred::PushCapture(h) => Some(h.view()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(pushes, vec![Some(id)], "one PushCapture naming the editor");
+    }
+
+    /// `MouseMove` while panning scrolls by the mouse delta
+    /// (teditor1.cpp:543-548) and never touches cursor/selection — the
+    /// kind-discrimination guard in the other direction.
+    #[test]
+    fn track_pan_move_scrolls_without_selection() {
+        let mut e = tall_ed();
+        give_id(&mut e);
+        let cur_before = e.cur_ptr;
+
+        let mut cx = Cx::new();
+        let mut ev = middle_down_at(5, 5);
+        {
+            let mut ctx = cx.ctx();
+            e.handle_event(&mut ev, &mut ctx);
+        }
+
+        // Move up-left by (2,1): d = delta(0,0) + last(5,5) − mouse(3,4) = (2,1).
+        let mut ev = mouse_move_at(3, 4);
+        {
+            let mut ctx = cx.ctx();
+            e.handle_event(&mut ev, &mut ctx);
+        }
+        assert!(ev.is_nothing(), "pan move consumed");
+        assert_eq!(e.delta, Point::new(2, 1), "scrolled by the mouse delta");
+        assert_eq!(
+            e.track,
+            Some(EditorTrack::Pan {
+                last: Point::new(3, 4)
+            }),
+            "lastMouse updated"
+        );
+        assert_eq!(e.cur_ptr, cur_before, "pan never moves the cursor");
+        assert!(!e.has_selection(), "pan never selects");
+    }
+
+    /// A wheel pseudo-down during the pan hold runs the same pan body (the
+    /// loop mask is evMouse, teditor1.cpp:542) — no scrollbar forwarding.
+    #[test]
+    fn track_pan_wheel_tick_pans() {
+        let mut e = tall_ed();
+        give_id(&mut e);
+
+        let mut cx = Cx::new();
+        let mut ev = middle_down_at(5, 5);
+        {
+            let mut ctx = cx.ctx();
+            e.handle_event(&mut ev, &mut ctx);
+        }
+
+        let mut cx = Cx::new();
+        let mut ev = wheel_down_at(4, 3, MouseWheel::Up);
+        {
+            let mut ctx = cx.ctx();
+            e.handle_event(&mut ev, &mut ctx);
+        }
+        assert!(ev.is_nothing(), "pan wheel tick consumed");
+        // d = delta(0,0) + last(5,5) − mouse(4,3) = (1,2).
+        assert_eq!(e.delta, Point::new(1, 2), "wheel tick pans by the delta");
+        assert!(
+            !cx.deferred
+                .iter()
+                .any(|d| matches!(d, Deferred::MouseTrack { .. })),
+            "no scrollbar forwarding from the pan body"
+        );
+    }
+
+    /// `MouseUp` clears the track (both loops just exit; no post-loop code,
+    /// teditor1.cpp:551/:583-584).
+    #[test]
+    fn track_up_clears_track() {
+        for arm in [mouse_down_at(2, 0), middle_down_at(2, 0)] {
+            let mut e = tall_ed();
+            give_id(&mut e);
+
+            let mut cx = Cx::new();
+            let mut ev = arm;
+            {
+                let mut ctx = cx.ctx();
+                e.handle_event(&mut ev, &mut ctx);
+            }
+            assert!(e.track.is_some(), "armed");
+
+            let mut ev = mouse_up_at(2, 0);
+            {
+                let mut ctx = cx.ctx();
+                e.handle_event(&mut ev, &mut ctx);
+            }
+            assert!(ev.is_nothing(), "tracked up consumed");
+            assert!(e.track.is_none(), "track cleared on MouseUp");
+        }
+    }
+
+    /// Stray `MouseUp` / `MouseMove` / `MouseAuto` with no track in flight fall
+    /// through unconsumed (the mandatory A3 guard).
+    #[test]
+    fn track_stray_events_fall_through() {
+        let mut e = tall_ed();
+        give_id(&mut e);
+
+        for mut ev in [mouse_up_at(2, 0), mouse_move_at(2, 0), mouse_auto_at(2, 0)] {
+            let mut cx = Cx::new();
+            {
+                let mut ctx = cx.ctx();
+                e.handle_event(&mut ev, &mut ctx);
+            }
+            assert!(!ev.is_nothing(), "stray {ev:?} falls through unconsumed");
+            assert!(e.track.is_none(), "no track armed by a stray event");
+        }
+    }
+
+    /// `MouseDown` on an editor without an id (uninserted): single-shot cursor
+    /// positioning, no track, no capture — the faithful fallback.
+    #[test]
+    fn track_mouse_down_without_id_single_shot() {
+        let mut e = ed();
+        insert(&mut e, "hello world");
+        // No id assigned.
+        let mut cx = Cx::new();
+        let mut ev = mouse_down_at(2, 0);
+        {
+            let mut ctx = cx.ctx();
+            e.handle_event(&mut ev, &mut ctx);
+        }
+        assert!(ev.is_nothing(), "MouseDown still consumed");
+        assert_eq!(e.cur_ptr, 2, "cursor positioned single-shot");
+        assert!(e.track.is_none(), "no track without an id");
+        assert!(
+            cx.deferred.is_empty(),
+            "no capture pushed for id-less editor"
+        );
+    }
+
+    /// The forwarded track events reach the inner Editor through a FileEditor
+    /// wrapper (the Deferred::MouseTrack apply calls the wrapper's
+    /// handle_event, which delegates to the editor — teditwnd hosting path).
+    ///
+    /// NOTE: this drives handle_event directly (handler-level), bypassing the
+    /// pump's Deferred::MouseTrack drain; the deferred-apply path
+    /// (group.find_mut + handle_event) is covered by the seam-level tests in
+    /// capture::tests and the scrollbar pump round-trip in program.rs.
+    #[test]
+    fn track_through_file_editor_delegation() {
+        let mut fe = FileEditor::new(Rect::new(0, 0, 40, 10), None, None, None, None);
+        fe.editor.insert_text_core(b"hello world", false);
+        fe.editor.set_cur_ptr(0, 0);
+        let id = ViewId::next();
+        fe.editor.state.id = Some(id);
+
+        let mut cx = Cx::new();
+        let mut ev = mouse_down_at(2, 0);
+        {
+            let mut ctx = cx.ctx();
+            View::handle_event(&mut fe, &mut ev, &mut ctx);
+        }
+        assert!(ev.is_nothing(), "MouseDown consumed through the wrapper");
+        assert!(fe.editor.track.is_some(), "inner editor armed");
+        let pushes: Vec<_> = cx
+            .deferred
+            .iter()
+            .filter_map(|d| match d {
+                Deferred::PushCapture(h) => Some(h.view()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(pushes, vec![Some(id)], "capture names the wrapper's id");
+
+        let mut ev = mouse_move_at(8, 0);
+        {
+            let mut ctx = cx.ctx();
+            View::handle_event(&mut fe, &mut ev, &mut ctx);
+        }
+        assert_eq!(
+            (fe.editor.sel_start, fe.editor.sel_end),
+            (2, 8),
+            "drag-select body ran on the inner editor via delegation"
+        );
     }
 }

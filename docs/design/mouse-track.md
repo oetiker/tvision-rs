@@ -85,8 +85,10 @@ capture is a **pure router, not a strategy**:
    straight off the queue, not through the view's `eventMask`.
 
 4. **Widget-facing API:** `Context::start_mouse_track(view, origin, mask)`
-   wraps `push_capture`; `Context::request_mouse_track` is `pub(crate)` (only
-   the capture posts it).
+   wraps `push_capture`; `Context::request_mouse_track` is `pub(crate)` — two
+   sanctioned posters: `MouseTrackCapture` (the router for all adopters) and
+   `Editor::handle_event`'s wheel-in-hold arm (the C++ `vScrollBar->handleEvent`
+   / `hScrollBar->handleEvent` forwarding, teditor1.cpp:574-579).
 
 **Why router-not-strategy (the decisive constraint).** Captures are `'static`
 and hold no view borrow, so the C++ loop *body* cannot live in the capture
