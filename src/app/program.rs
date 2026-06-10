@@ -524,7 +524,7 @@ impl Program {
             status_line,
             mouse_auto: MouseAutoState::default(),
             end_state: None,
-            command_set_changed: false,
+            command_set_changed: true, // first idle pump broadcasts cmCommandSetChanged so startup-disabled buttons self-gray
             pending_modal: None,
             app_commands: VecDeque::new(),
         }
@@ -1983,6 +1983,23 @@ impl Program {
                                         group.find_mut(id).and_then(crate::widgets::editor_mut)
                                 {
                                     ed.insert_text(t.as_bytes(), false, &mut ctx);
+                                }
+                            }
+                            // B3: clipboard paste into an InputLine
+                            // (tinputli.cpp cmPaste → TClipboard::requestText):
+                            // read the backend clipboard, downcast the view to
+                            // InputLine, and call paste_text — which inserts at
+                            // the cursor, replacing any selection and clamping to
+                            // max_len (same broker shape as EditorPaste).
+                            Deferred::InputLinePaste(id) => {
+                                let txt = renderer.backend_mut().get_clipboard();
+                                if let Some(t) = txt
+                                    && let Some(il) = group
+                                        .find_mut(id)
+                                        .and_then(|view| view.as_any_mut())
+                                        .and_then(|a| a.downcast_mut::<crate::widgets::InputLine>())
+                                {
+                                    il.paste_text(&t);
                                 }
                             }
                             // -- row 77: cmFileFocused payload broker -------
@@ -4457,6 +4474,10 @@ mod tests {
         }
 
         // Arm the timer by sending a broadcast the probe records and reacts to.
+        // Reset command_set_changed so the idle pump below only queues the timer
+        // event (not a spurious cmCommandSetChanged broadcast that would consume
+        // the routing pump slot and delay the timer delivery by one cycle).
+        program.command_set_changed = false;
         program.out_events.clear();
         program.out_events.push_back(Event::Broadcast {
             command: Command::SCROLL_BAR_CHANGED,
@@ -9037,6 +9058,145 @@ mod tests {
             assert_eq!(
                 text, "pasted",
                 "Shift+Insert inserts the seeded backend clipboard text"
+            );
+        }
+    }
+
+    // -- B1/B3: InputLine clipboard at pump level --------------------------------
+    //
+    // Proves that the Deferred::SetClipboard / Deferred::InputLinePaste brokers
+    // are applied by the pump — observable through HeadlessHandle::clipboard /
+    // set_clipboard (analogous to the editor clipboard_a6 suite above).
+    mod input_line_clipboard_b1_b3 {
+        use super::*;
+        use crate::dialog::Dialog;
+        use crate::event::{Key, KeyEvent, KeyModifiers};
+        use crate::widgets::{Button, ButtonFlags, InputLine};
+
+        /// Insert a Dialog containing one focused InputLine; return the program,
+        /// handle, and the InputLine's id. The dialog is focused via desktop_insert.
+        fn input_line_program() -> (Program, crate::backend::HeadlessHandle, ViewId) {
+            let (mut program, handle, _clock) = program_with_desktop(40, 12);
+            let mut dialog = Dialog::new(Rect::new(2, 1, 38, 11), Some("Test".into()));
+            let il_id =
+                dialog.insert_child(Box::new(InputLine::with_limit(Rect::new(2, 2, 28, 3), 64)));
+            program
+                .desktop_insert(Box::new(dialog))
+                .expect("dialog inserted");
+            program.out_events.clear();
+            (program, handle, il_id)
+        }
+
+        fn push_key(program: &mut Program, key: Key, modifiers: KeyModifiers) {
+            program
+                .out_events
+                .push_back(Event::KeyDown(KeyEvent::new(key, modifiers)));
+        }
+
+        /// B3 copy path: type text into the focused InputLine, select-all, then
+        /// send cmCopy — the Deferred::SetClipboard must land on the backend,
+        /// visible through HeadlessHandle::clipboard.
+        #[test]
+        fn b3_copy_reaches_backend_clipboard() {
+            let (mut program, handle, il_id) = input_line_program();
+
+            // Type "hello" into the focused InputLine.
+            for c in "hello".chars() {
+                push_key(&mut program, Key::Char(c), KeyModifiers::default());
+            }
+            for _ in 0..6 {
+                program.pump_once();
+            }
+
+            // Shift+Home selects all the typed text (the field is short enough).
+            push_key(
+                &mut program,
+                Key::Home,
+                KeyModifiers {
+                    shift: true,
+                    ..Default::default()
+                },
+            );
+            program.pump_once();
+
+            // Inject cmCopy directly (the InputLine handles evCommand).
+            program.out_events.push_back(Event::Command(Command::COPY));
+            assert_eq!(handle.clipboard(), None, "clipboard starts empty");
+            program.pump_once();
+
+            assert_eq!(
+                handle.clipboard().as_deref(),
+                Some("hello"),
+                "cmCopy must land the selection on the backend clipboard"
+            );
+            let _ = il_id; // keep id in scope
+        }
+
+        /// B3 paste path: seed the backend clipboard, inject cmPaste —
+        /// the Deferred::InputLinePaste broker must read it and insert into the
+        /// InputLine.
+        #[test]
+        fn b3_paste_from_backend_clipboard_into_input_line() {
+            let (mut program, handle, il_id) = input_line_program();
+
+            // Seed the clipboard BEFORE the pump applies the paste.
+            handle.set_clipboard("world");
+
+            // Inject cmPaste.
+            program.out_events.push_back(Event::Command(Command::PASTE));
+            for _ in 0..4 {
+                program.pump_once();
+            }
+
+            // Read the InputLine's data via its value().
+            let val = program
+                .group_mut()
+                .find_mut(il_id)
+                .and_then(|v| v.value())
+                .expect("InputLine found");
+            use crate::data::FieldValue;
+            assert_eq!(
+                val,
+                FieldValue::Text("world".into()),
+                "Deferred::InputLinePaste must insert clipboard text into the field"
+            );
+        }
+
+        /// B1 button graying at pump level: a button whose command is disabled via
+        /// `program.disable_command` transitions to `disabled = true` after the idle
+        /// pump broadcasts cmCommandSetChanged.
+        #[test]
+        fn b1_button_grays_after_disable_command_broadcast() {
+            let (mut program, _handle, _clock) = program_with_desktop(40, 12);
+            let mut dialog = Dialog::new(Rect::new(2, 1, 38, 11), Some("G".into()));
+            let btn_id = dialog.insert_child(Box::new(Button::new(
+                Rect::new(2, 4, 12, 6),
+                "OK",
+                Command::OK,
+                ButtonFlags::new(),
+            )));
+            program
+                .desktop_insert(Box::new(dialog))
+                .expect("dialog inserted");
+            program.out_events.clear();
+
+            // Disable cmOK: the next idle pump broadcasts cmCommandSetChanged.
+            program.disable_command(Command::OK);
+
+            // Run several pumps so the idle broadcast fires and the button reacts.
+            for _ in 0..8 {
+                program.pump_once();
+            }
+
+            let btn = program
+                .group_mut()
+                .find_mut(btn_id)
+                .and_then(|v| v.as_any_mut())
+                .and_then(|a| a.downcast_mut::<Button>())
+                .expect("button found");
+            assert!(
+                btn.state.state.disabled,
+                "button must be disabled after cmCommandSetChanged broadcast (B1)"
             );
         }
     }

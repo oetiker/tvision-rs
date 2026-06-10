@@ -313,6 +313,16 @@ pub enum Deferred {
     /// [`Editor`](crate::widgets::Editor), and inserts the text. Touches the
     /// **view-tree** family + the backend.
     EditorPaste(ViewId),
+    /// **Paste from the system clipboard into an `InputLine`** (B3 — the
+    /// `TInputLine::handleEvent cmPaste` arm → `TClipboard::requestText`).
+    /// The pump reads `renderer.backend_mut().get_clipboard()`, downcasts the
+    /// view named by `id` to [`InputLine`](crate::widgets::InputLine) via
+    /// `as_any_mut`, and calls
+    /// [`paste_text`](crate::widgets::InputLine::paste_text) — which inserts at
+    /// the cursor, replacing any selection and clamping to `max_len`. Touches
+    /// the **view-tree** family + the backend (same as
+    /// [`EditorPaste`](Self::EditorPaste)).
+    InputLinePaste(ViewId),
 
     // -- row 77: the payload-carrying-broadcast (cmFileFocused) broker (D3/D4) -
     /// **Resolve a `cmFileFocused` broadcast's `TSearchRec` payload** (the
@@ -1261,6 +1271,14 @@ impl<'a> Context<'a> {
     /// `TClipboard::requestText`; the pump reads the clipboard and inserts.
     pub fn editor_paste(&mut self, id: ViewId) {
         self.deferred.push(Deferred::EditorPaste(id));
+    }
+
+    /// Request the `InputLine` `id` paste the system-clipboard text — **deferred**
+    /// ([`Deferred::InputLinePaste`]). B3: `TInputLine::handleEvent cmPaste` →
+    /// `TClipboard::requestText`; the pump reads the clipboard and calls
+    /// [`InputLine::paste_text`](crate::widgets::InputLine::paste_text).
+    pub fn request_input_line_paste(&mut self, id: ViewId) {
+        self.deferred.push(Deferred::InputLinePaste(id));
     }
 
     /// Re-queue a **raw event** into the loop's event queue — the raw-event

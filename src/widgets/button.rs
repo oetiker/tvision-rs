@@ -83,15 +83,13 @@
 //!
 //! # Deferrals (documented TODOs, not built)
 //!
-//! 1. **Command-enabled graying.** The ctor's `if(!commandEnabled) state |=
-//!    sfDisabled` and the `cmCommandSetChanged → setState(sfDisabled,…)` handler
-//!    are not implemented. The blocking API gap is closed —
-//!    [`Context::command_enabled`](crate::view::Context::command_enabled) exists
-//!    (added with the A1 denylist flip) — but the graying itself is deferred as
-//!    **backlog row B1** (`docs/BACKLOG.md`). The button starts enabled;
-//!    functional correctness is preserved because the program filters disabled
-//!    `Event::Command` at its boundary. One cosmetic gap: a notionally-disabled
-//!    default button could still flash on `cmDefault`.
+//! 1. **Command-enabled graying** — **landed (B1)**. The `cmCommandSetChanged`
+//!    broadcast arm sets `state.disabled = !ctx.command_enabled(command)` (see
+//!    `handle_event`). The C++ ctor's `if(!commandEnabled) state |= sfDisabled`
+//!    is covered by the initial `COMMAND_SET_CHANGED` broadcast that fires on
+//!    the first idle pass when `initial_disabled_commands` is non-empty — no
+//!    separate ctor init needed. A disabled default button no longer flashes on
+//!    `cmDefault` (the `!self.state.state.disabled` guard was already there).
 //! 2. **Plain-letter (postProcess) accelerator** — landed with the A5 phase
 //!    signal (`ctx.phase()`, `tbutton.cpp:219`): see `handle_event`'s
 //!    `post_plain` leg. A focused input line that consumes the letter still
@@ -204,8 +202,10 @@ impl Button {
             post_process: true,
             ..Default::default()
         };
-        // TODO(B1 command graying): ctx.command_enabled is available (A1 denylist
-        // flip); port the C++ `if(!commandEnabled) state |= sfDisabled` here.
+        // B1 (landed): the C++ ctor's `if(!commandEnabled) state |= sfDisabled`
+        // is covered by the initial COMMAND_SET_CHANGED broadcast that fires on
+        // the first idle pass when initial_disabled_commands is non-empty. The
+        // ctor has no ctx (D3), so lazy init via the broadcast arm is correct.
         Button {
             state,
             title: title.to_string(),
@@ -508,7 +508,17 @@ impl View for Button {
                 cmd @ (Self::GRAB_DEFAULT | Self::RELEASE_DEFAULT) if self.flags.default => {
                     self.am_default = cmd == Self::RELEASE_DEFAULT;
                 }
-                // TODO(button: cmCommandSetChanged graying — see deferral 1)
+                // B1 — command graying (tbutton.cpp:169-175, cmCommandSetChanged arm):
+                // `setState(sfDisabled, !commandEnabled(command)); drawView()`.
+                // The C++ ctor also does `if(!commandEnabled) state |= sfDisabled`, but
+                // the ctor has no ctx (D3). The COMMAND_SET_CHANGED broadcast fires
+                // during the idle phase whenever the command set changes (including the
+                // initial pass via Program::initial_disabled_commands), so this arm also
+                // covers the initial disabled state — no separate ctor init needed.
+                // Whole-tree redraw (D8) replaces drawView().
+                Command::COMMAND_SET_CHANGED => {
+                    self.state.state.disabled = !ctx.command_enabled(self.command);
+                }
                 _ => {}
             },
 
@@ -1535,5 +1545,113 @@ mod tests {
         let mut b = Button::new(Rect::new(0, 0, 1, 2), "X", Command::OK, ButtonFlags::new());
         let snap = render(&mut b);
         assert!(!snap.is_empty(), "render completed without panic");
+    }
+
+    // -- B1: command graying via cmCommandSetChanged broadcast -----------------
+
+    /// `cmCommandSetChanged` with the button's command disabled: the button
+    /// transitions to `state.disabled = true` (faithful to tbutton.cpp:169-175).
+    #[test]
+    fn command_set_changed_grays_button_when_command_disabled() {
+        let mut b = Button::new(
+            Rect::new(0, 0, 10, 2),
+            "OK",
+            Command::OK,
+            ButtonFlags::new(),
+        );
+        assert!(!b.state.state.disabled, "starts enabled");
+        let mut timers = TimerQueue::new();
+
+        // Deliver a COMMAND_SET_CHANGED broadcast with OK in the disabled set.
+        let mut ev = Event::Broadcast {
+            command: Command::COMMAND_SET_CHANGED,
+            source: None,
+        };
+        let (_, _, ()) = with_ctx_d(&mut timers, 0, |ctx| {
+            // Seed the snapshot: OK is disabled.
+            let mut ds = crate::command::CommandSet::new();
+            ds.insert(Command::OK);
+            ctx.set_disabled_commands(ds);
+            b.handle_event(&mut ev, ctx)
+        });
+        assert!(
+            b.state.state.disabled,
+            "button must be disabled when its command is in the disabled set"
+        );
+        // The broadcast is NOT consumed (no clearEvent in the C++ arm either).
+        assert!(
+            !ev.is_nothing(),
+            "cmCommandSetChanged is not consumed by the button"
+        );
+    }
+
+    /// `cmCommandSetChanged` with the button's command re-enabled: the button
+    /// transitions back to `state.disabled = false` (the un-gray path).
+    #[test]
+    fn command_set_changed_ungrays_button_when_command_enabled() {
+        let mut b = Button::new(
+            Rect::new(0, 0, 10, 2),
+            "OK",
+            Command::OK,
+            ButtonFlags::new(),
+        );
+        // Start disabled.
+        b.state.state.disabled = true;
+        let mut timers = TimerQueue::new();
+
+        // COMMAND_SET_CHANGED with an empty disabled set: OK is enabled.
+        let mut ev = Event::Broadcast {
+            command: Command::COMMAND_SET_CHANGED,
+            source: None,
+        };
+        with_ctx(&mut timers, 0, |ctx| b.handle_event(&mut ev, ctx));
+        assert!(
+            !b.state.state.disabled,
+            "button must be re-enabled when its command is not in the disabled set"
+        );
+    }
+
+    /// A disabled button does not arm on `cmDefault` (the `!self.state.state.disabled`
+    /// guard is pre-existing; this test confirms graying + cmDefault interaction).
+    #[test]
+    fn grayed_default_button_ignores_cm_default() {
+        let mut b = Button::new(
+            Rect::new(0, 0, 10, 2),
+            "OK",
+            Command::OK,
+            ButtonFlags {
+                default: true,
+                ..Default::default()
+            },
+        );
+        let mut timers = TimerQueue::new();
+
+        // Gray the button via COMMAND_SET_CHANGED.
+        let mut ev = Event::Broadcast {
+            command: Command::COMMAND_SET_CHANGED,
+            source: None,
+        };
+        with_ctx_d(&mut timers, 0, |ctx| {
+            let mut ds = crate::command::CommandSet::new();
+            ds.insert(Command::OK);
+            ctx.set_disabled_commands(ds);
+            b.handle_event(&mut ev, ctx)
+        });
+        assert!(b.state.state.disabled);
+
+        // cmDefault must not arm the animation.
+        let mut ev = Event::Broadcast {
+            command: Command::DEFAULT,
+            source: None,
+        };
+        with_ctx(&mut timers, 0, |ctx| b.handle_event(&mut ev, ctx));
+        assert!(
+            !ev.is_nothing(),
+            "disabled default button leaves cmDefault live"
+        );
+        assert!(
+            b.animation_timer.is_none(),
+            "no animation on a disabled button"
+        );
     }
 }

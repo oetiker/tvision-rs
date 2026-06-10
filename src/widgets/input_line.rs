@@ -44,14 +44,15 @@
 //!
 //! # Deferrals (documented TODOs, not built)
 //!
-//! 1. **The `evCommand` clipboard block** (`cmCut`/`cmCopy`/`cmPaste`) — there is
-//!    no `Context`-level clipboard accessor yet. `TODO(clipboard)`.
-//! 2. **`updateCommands`/`canUpdateCommands`** (graying cmCut/Copy/Paste) — the
-//!    blocking API gap is closed (`Context::command_enabled` exists, added with
-//!    the A1 denylist flip); the graying itself is backlog row B1
-//!    (`docs/BACKLOG.md`), same as TButton.
-//!    `TODO(B1 command graying): ctx.command_enabled is available; port the C++
-//!    graying logic here.`
+//! 1. **The `evCommand` clipboard block** — **landed (B3)**. `cmCut`/`cmCopy`
+//!    use `ctx.set_clipboard`; `cmPaste` uses `ctx.request_input_line_paste`
+//!    → `Deferred::InputLinePaste` (the pump reads the backend clipboard and
+//!    inserts into the field, clamped to `max_len` and replacing any selection).
+//! 2. **`updateCommands`/`canUpdateCommands`** — **landed (B1)**. The
+//!    `can_update_commands` / `update_commands` helpers push deferred
+//!    enable/disable ops for `cmCut`/`cmCopy` (on selection change) and
+//!    `cmPaste` (always enabled when active+selected). Called from `set_state`,
+//!    `handle_event` (mouse/key tail + command arm).
 //! 3. **`valid()`'s `select()` side-effect** — focusing the bad field needs
 //!    `&mut Context`; `valid(&self)` returns the faithful boolean only.
 //!    `TODO(valid-select)`.
@@ -281,7 +282,9 @@ impl InputLine {
 
     /// `TInputLine::selectAll` — select all (or none) and optionally scroll the
     /// end into view. **Does not** draw (D8 whole-tree redraw) but does sync the
-    /// cursor (the C++ `drawView()` set it). `update_commands` deferred.
+    /// cursor (the C++ `drawView()` set it). Callers that have `ctx` and where
+    /// `canUpdateCommands()` may be true (set_state, handle_event) call
+    /// `update_commands` themselves after `select_all`.
     pub fn select_all(&mut self, enable: bool, scroll: bool) {
         self.sel_start = 0;
         if enable {
@@ -295,8 +298,30 @@ impl InputLine {
             self.first_pos = (self.displayed_pos(self.cur_pos) - self.state.size.x + 2).max(0);
         }
         self.sync_cursor();
-        // TODO(B1 command graying): ctx.command_enabled is available (A1 denylist
-        // flip); port the C++ updateCommands graying logic here.
+    }
+
+    /// `TInputLine::canUpdateCommands` — true when both `sfActive` and `sfSelected`
+    /// are set (C++: `(~state & (sfActive | sfSelected)) == 0`). Only when both
+    /// flags are set should `update_commands` push the enable/disable deferred ops.
+    fn can_update_commands(&self) -> bool {
+        self.state.state.active && self.state.state.selected
+    }
+
+    /// `TInputLine::updateCommands` — push enable/disable deferred ops for
+    /// cmCut/cmCopy (enabled when a selection exists) and cmPaste (always enabled
+    /// while this field is active+selected, faithful to `setCmdState(cmPaste, True)`).
+    /// Only called when `can_update_commands()`. Faithful to tinputli.cpp.
+    fn update_commands(&self, ctx: &mut Context) {
+        let has_selection = self.sel_start < self.sel_end;
+        if has_selection {
+            ctx.enable_command(Command::CUT);
+            ctx.enable_command(Command::COPY);
+        } else {
+            ctx.disable_command(Command::CUT);
+            ctx.disable_command(Command::COPY);
+        }
+        // cmPaste is always enabled when this field is active+selected.
+        ctx.enable_command(Command::PASTE);
     }
 
     // -- validator save/restore/check --------------------------------------
@@ -362,6 +387,66 @@ impl InputLine {
         }
     }
 
+    // -- clipboard paste (B3) ------------------------------------------------
+
+    /// Insert `text` from the clipboard at the current cursor position,
+    /// replacing any active selection and clamping the result to `max_len`.
+    /// Called by the pump's `Deferred::InputLinePaste` apply arm. Mirrors the
+    /// C++ `TClipboard::requestText()` completion path: insert the pasted bytes
+    /// at `curPos`, replacing the selection, clamped so the total byte length
+    /// does not exceed `maxLen`. Tabs/newlines are replaced with spaces
+    /// (faithful to the per-character insertion in the C++ keyboard path).
+    /// After insertion the cursor sits at the end of the pasted text and the
+    /// selection is cleared.
+    pub fn paste_text(&mut self, text: &str) {
+        self.save_state();
+        // Replace the selection (C++ tinputli.cpp paste lands after the cut/copy
+        // block; in the original C++ cmPaste → requestText → callback inserts).
+        self.delete_select();
+        // Replace tabs/newlines with spaces, insert character by character,
+        // stopping when max_len would be exceeded. For simplicity we insert the
+        // whole normalised string in one go after clamping.
+        let normalized: String = text
+            .chars()
+            .map(|c| {
+                if c == '\t' || c == '\r' || c == '\n' {
+                    ' '
+                } else {
+                    c
+                }
+            })
+            .collect();
+        // How many bytes we can still accept.
+        let room = (self.max_len - self.data.len() as i32).max(0) as usize;
+        // Clamp `normalized` to `room` bytes at a char boundary.
+        let clamped = if normalized.len() <= room {
+            &normalized[..]
+        } else {
+            let mut cut = room;
+            while cut > 0 && !normalized.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            &normalized[..cut]
+        };
+        if !clamped.is_empty() {
+            self.data.insert_str(self.cur_pos as usize, clamped);
+            self.cur_pos += clamped.len() as i32;
+        }
+        self.sel_start = 0;
+        self.sel_end = 0;
+        // firstPos scroll-follow (column arithmetic).
+        let cur_width = self.displayed_pos(self.cur_pos);
+        if self.first_pos > cur_width {
+            self.first_pos = cur_width;
+        }
+        let i = cur_width - self.state.size.x + 2;
+        if self.first_pos < i {
+            self.first_pos = i;
+        }
+        self.sync_cursor();
+        self.check_valid(true);
+    }
+
     // -- mouse helpers (used by the press-and-hold track arms) -------------
 
     /// `TInputLine::mousePos` — the byte offset under the mouse (view-local
@@ -424,6 +509,13 @@ impl View for InputLine {
 
     fn state_mut(&mut self) -> &mut ViewState {
         &mut self.state
+    }
+
+    /// Exposes the concrete `InputLine` so the pump's
+    /// [`InputLinePaste`](crate::view::Deferred::InputLinePaste) broker can
+    /// downcast and call [`paste_text`](InputLine::paste_text) (B3).
+    fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
+        Some(self)
     }
 
     /// `TInputLine::draw` — fill with the normal colour, draw the scrolled text,
@@ -757,18 +849,83 @@ impl View for InputLine {
                 ev.clear();
             }
 
-            // -- evCommand clipboard block: DEFERRED ----------------------
-            // TODO(clipboard): cmCut/cmCopy/cmPaste need a Context clipboard seam
-            // (backend has set/get_clipboard; not surfaced to views).
+            // -- evCommand clipboard block (B1+B3, tinputli.cpp:403-428) --------
+            // C++: `if ((state & sfSelected) != 0) … case evCommand: …`
+            // Faithful: only when selected (the outer guard at the top of
+            // handleEvent already returns if !selected, so this arm is always
+            // inside the selected block).
+            Event::Command(cmd) => {
+                match *cmd {
+                    // B3: cmCut — copy selection to clipboard, then delete it.
+                    // C++: `TStringView sel(data+selStart, selEnd-selStart);
+                    //        TClipboard::setText(sel); saveState();
+                    //        deleteSelect(); checkValid(True);
+                    //        selStart = selEnd = 0; drawView()`.
+                    // C++ always calls clearEvent regardless of whether a selection
+                    // exists; the clipboard operation is guarded by the selection test.
+                    Command::CUT => {
+                        if self.sel_start < self.sel_end {
+                            let sel = self.data[self.sel_start as usize..self.sel_end as usize]
+                                .to_string();
+                            ctx.set_clipboard(sel);
+                            self.save_state();
+                            self.delete_select();
+                            self.check_valid(true);
+                            self.sel_start = 0;
+                            self.sel_end = 0;
+                            self.sync_cursor();
+                        }
+                        ev.clear();
+                    }
+                    // B3: cmCopy — copy selection to clipboard, keep it.
+                    // C++: `TStringView sel(data+selStart, selEnd-selStart);
+                    //        TClipboard::setText(sel)`.
+                    // C++ always calls clearEvent regardless of whether a selection
+                    // exists; the clipboard operation is guarded by the selection test.
+                    Command::COPY => {
+                        if self.sel_start < self.sel_end {
+                            let sel = self.data[self.sel_start as usize..self.sel_end as usize]
+                                .to_string();
+                            ctx.set_clipboard(sel);
+                        }
+                        ev.clear();
+                    }
+                    // B3: cmPaste — request async paste via the broker
+                    // (Deferred::InputLinePaste, mirroring EditorPaste). The pump
+                    // reads the backend clipboard and inserts at the cursor,
+                    // replacing any selection and clamping to max_len.
+                    // C++: `TClipboard::requestText()`.
+                    Command::PASTE => {
+                        if let Some(id) = self.state.id() {
+                            ctx.request_input_line_paste(id);
+                        }
+                        ev.clear();
+                    }
+                    _ => {}
+                }
+            }
+
             _ => {}
+        }
+
+        // B1 — command graying: `if (canUpdateCommands()) updateCommands()`
+        // (tinputli.cpp:431-432). The early-return for unhandled KeyDown already
+        // exited above; this covers mouse, keyboard (handled), and command events.
+        if self.can_update_commands() {
+            self.update_commands(ctx);
         }
     }
 
     /// `TInputLine::setState` — base flag flip then, on `sfSelected` (or
-    /// `sfActive` while selected), `selectAll(enable, false)`. The
-    /// `updateCommands` half is deferred as backlog row B1
-    /// (`Context::command_enabled` now exists for it).
+    /// `sfActive` while selected), `selectAll(enable, false)`. B1: also pushes
+    /// command enable/disable deferred ops via `update_commands` when the
+    /// `canUpdateCommands` condition changes (active+selected transition).
     fn set_state(&mut self, flag: StateFlag, enable: bool, ctx: &mut Context) {
+        // B1 — command graying: sample canUpdate BEFORE the flag flip so we can
+        // detect the transition (faithful to C++ `updateBefore = canUpdateCommands()`
+        // at the start of TInputLine::setState, tinputli.cpp:292).
+        let update_before = self.can_update_commands();
+
         // Base behaviour (replicated from View::set_state — no `super`).
         self.state.set_flag(flag, enable);
         if flag == StateFlag::Focused {
@@ -785,8 +942,13 @@ impl View for InputLine {
         if flag == StateFlag::Selected || (flag == StateFlag::Active && self.state.state.selected) {
             self.select_all(enable, false);
         }
-        // TODO(B1 command graying): ctx.command_enabled is available (A1 denylist
-        // flip); port the C++ updateCommands graying logic here.
+        // B1 — command graying: faithful to tinputli.cpp TInputLine::setState:
+        // `if (updateBefore != updateAfter) updateCommands()`.
+        // If the canUpdate condition changed, push the enable/disable deferred ops.
+        let update_after = self.can_update_commands();
+        if update_before != update_after {
+            self.update_commands(ctx);
+        }
     }
 
     /// `TInputLine::valid` — with a validator: `cmValid` → status OK; any other
@@ -1742,5 +1904,245 @@ mod tests {
         );
         // Cursor should NOT have been moved (edge branch does not drag-select).
         assert!(!il.tracking_drag, "edge branch stays edge branch");
+    }
+
+    // -- B1: updateCommands / canUpdateCommands graying ----------------------
+
+    /// `canUpdateCommands()` is true only when both active AND selected.
+    #[test]
+    fn b1_can_update_commands_requires_active_and_selected() {
+        let mut il = field(12, "hello");
+        il.state.state.selected = true;
+        il.state.state.active = false;
+        assert!(
+            !il.can_update_commands(),
+            "selected but not active → canUpdate = false"
+        );
+        il.state.state.active = true;
+        assert!(
+            il.can_update_commands(),
+            "both active+selected → canUpdate = true"
+        );
+    }
+
+    /// When active+selected, a handled key event pushes deferred
+    /// Enable/Disable ops for cmCut/cmCopy based on whether a selection exists
+    /// (faithful to updateCommands tail at tinputli.cpp:431).
+    #[test]
+    fn b1_key_event_updates_commands_when_active_selected() {
+        let mut il = field(12, "hello");
+        il.state.state.active = true;
+        // Build a selection: sel_start=0, sel_end=3.
+        il.sel_start = 0;
+        il.sel_end = 3;
+
+        // A Home key: no selection change, but the tail always runs.
+        let mut ev = key(Key::Home);
+        let (_, deferred, ()) = with_ctx_d(|ctx| il.handle_event(&mut ev, ctx));
+        // After Home, sel cleared (not extend_block): sel_start=sel_end=0.
+        // So cmCut/cmCopy should be DISABLED.
+        let has_disable_cut = deferred
+            .iter()
+            .any(|d| matches!(d, Deferred::DisableCommand(Command::CUT)));
+        let has_disable_copy = deferred
+            .iter()
+            .any(|d| matches!(d, Deferred::DisableCommand(Command::COPY)));
+        let has_enable_paste = deferred
+            .iter()
+            .any(|d| matches!(d, Deferred::EnableCommand(Command::PASTE)));
+        assert!(has_disable_cut, "cmCut disabled when no selection");
+        assert!(has_disable_copy, "cmCopy disabled when no selection");
+        assert!(
+            has_enable_paste,
+            "cmPaste always enabled when active+selected"
+        );
+    }
+
+    /// Shift+Home extends the selection, so cmCut/cmCopy should be ENABLED.
+    #[test]
+    fn b1_extend_selection_enables_cut_copy() {
+        let mut il = field(12, "hello");
+        il.state.state.active = true;
+        il.cur_pos = 5; // at end
+        il.sel_start = 0;
+        il.sel_end = 0;
+
+        // Shift+Home: extends selection from end to start.
+        let mut ev = Event::KeyDown(KeyEvent::new(
+            Key::Home,
+            KeyModifiers {
+                shift: true,
+                ..Default::default()
+            },
+        ));
+        let (_, deferred, ()) = with_ctx_d(|ctx| il.handle_event(&mut ev, ctx));
+        // sel_start=0, sel_end=5 → selection exists → cmCut/cmCopy enabled.
+        let has_enable_cut = deferred
+            .iter()
+            .any(|d| matches!(d, Deferred::EnableCommand(Command::CUT)));
+        let has_enable_copy = deferred
+            .iter()
+            .any(|d| matches!(d, Deferred::EnableCommand(Command::COPY)));
+        assert!(has_enable_cut, "cmCut enabled with selection");
+        assert!(has_enable_copy, "cmCopy enabled with selection");
+    }
+
+    /// `set_state` with sfSelected (gaining focus) transitions canUpdate from
+    /// false→true, so update_commands is pushed (deferred ops for cmCut/cmCopy/
+    /// cmPaste appear).
+    #[test]
+    fn b1_set_state_selected_pushes_update_commands() {
+        let mut il = field(12, "");
+        il.state.state.active = true;
+        il.state.state.selected = false;
+
+        // set_state(Selected, true) → canUpdate transitions false→true.
+        let (_, deferred, ()) = with_ctx_d(|ctx| il.set_state(StateFlag::Selected, true, ctx));
+        let has_any_cmd = deferred
+            .iter()
+            .any(|d| matches!(d, Deferred::EnableCommand(_) | Deferred::DisableCommand(_)));
+        assert!(
+            has_any_cmd,
+            "set_state(Selected,true) must push command enable/disable ops (B1)"
+        );
+    }
+
+    // -- B3: clipboard cut/copy/paste ----------------------------------------
+
+    /// cmCut with a selection: copies to clipboard (SetClipboard deferred) and
+    /// deletes the selection from the field (faithful to tinputli.cpp:408-417).
+    #[test]
+    fn b3_cut_copies_to_clipboard_and_deletes_selection() {
+        let mut il = field(12, "hello world");
+        il.state.state.active = true;
+        il.sel_start = 6; // "world"
+        il.sel_end = 11;
+
+        let mut ev = Event::Command(Command::CUT);
+        let (_, deferred, ()) = with_ctx_d(|ctx| il.handle_event(&mut ev, ctx));
+        assert!(ev.is_nothing(), "cmCut is consumed");
+        // Selection text copied to clipboard via deferred SetClipboard.
+        let clipboard_text = deferred.iter().find_map(|d| {
+            if let Deferred::SetClipboard(s) = d {
+                Some(s.as_str())
+            } else {
+                None
+            }
+        });
+        assert_eq!(
+            clipboard_text,
+            Some("world"),
+            "SetClipboard must carry the selection text"
+        );
+        // The selection is deleted from the field.
+        assert_eq!(il.data, "hello ", "selection deleted after cut");
+        assert_eq!(il.sel_start, 0);
+        assert_eq!(il.sel_end, 0);
+    }
+
+    /// cmCopy with a selection: copies to clipboard, field unchanged.
+    #[test]
+    fn b3_copy_copies_to_clipboard_keeps_selection() {
+        let mut il = field(12, "hello world");
+        il.state.state.active = true;
+        il.sel_start = 0;
+        il.sel_end = 5;
+        let data_before = il.data.clone();
+
+        let mut ev = Event::Command(Command::COPY);
+        let (_, deferred, ()) = with_ctx_d(|ctx| il.handle_event(&mut ev, ctx));
+        assert!(ev.is_nothing(), "cmCopy is consumed");
+        let clipboard_text = deferred.iter().find_map(|d| {
+            if let Deferred::SetClipboard(s) = d {
+                Some(s.as_str())
+            } else {
+                None
+            }
+        });
+        assert_eq!(clipboard_text, Some("hello"));
+        assert_eq!(il.data, data_before, "copy does not modify the field");
+    }
+
+    /// cmPaste defers an InputLinePaste with the field's id.
+    #[test]
+    fn b3_paste_defers_input_line_paste_with_id() {
+        let (mut il, id) = field_with_id(20, "hello");
+        il.state.state.active = true;
+
+        let mut ev = Event::Command(Command::PASTE);
+        let (_, deferred, ()) = with_ctx_d(|ctx| il.handle_event(&mut ev, ctx));
+        assert!(ev.is_nothing(), "cmPaste is consumed");
+        let paste_id = deferred.iter().find_map(|d| {
+            if let Deferred::InputLinePaste(i) = d {
+                Some(*i)
+            } else {
+                None
+            }
+        });
+        assert_eq!(
+            paste_id,
+            Some(id),
+            "InputLinePaste deferred with the field's own id"
+        );
+    }
+
+    /// `paste_text` inserts at the cursor, replacing any selection, clamped to
+    /// max_len.
+    #[test]
+    fn b3_paste_text_inserts_at_cursor_replaces_selection_clamps() {
+        // Paste with no selection: inserts at cursor.
+        let mut il = field(20, "helo");
+        il.cur_pos = 3; // before 'o', position of missing 'l'
+        il.paste_text("l");
+        assert_eq!(il.data, "hello", "paste inserts at cursor");
+        assert_eq!(il.cur_pos, 4, "cursor advances past inserted text");
+
+        // Paste replacing a selection.
+        let mut il = field(20, "hello world");
+        il.sel_start = 6;
+        il.sel_end = 11;
+        il.paste_text("Rust");
+        assert_eq!(il.data, "hello Rust", "paste replaces selection");
+        assert_eq!(il.sel_start, 0);
+        assert_eq!(il.sel_end, 0);
+
+        // Paste clamped to max_len (limit=5 → max_len=4 bytes).
+        let mut il = InputLine::with_limit(Rect::new(0, 0, 20, 1), 5);
+        il.state.state.selected = true;
+        il.data = "abc".to_string();
+        il.cur_pos = 3;
+        il.paste_text("XXXX"); // 4 bytes, only 1 fits (max_len=4, 3 already used)
+        assert_eq!(
+            il.data, "abcX",
+            "paste clamped to max_len: only 1 char fits"
+        );
+        assert_eq!(il.cur_pos, 4);
+    }
+
+    /// cmCut without a selection is a no-op data-wise but the event IS consumed.
+    /// C++ always calls clearEvent for cmCut/cmCopy regardless of selection;
+    /// the clipboard operation is only performed when a selection exists.
+    #[test]
+    fn b3_cut_without_selection_consumes_event() {
+        let mut il = field(12, "hello");
+        il.state.state.active = true;
+        il.sel_start = 0;
+        il.sel_end = 0; // no selection
+
+        let data_before = il.data.clone();
+        let mut ev = Event::Command(Command::CUT);
+        let (_, deferred, ()) = with_ctx_d(|ctx| il.handle_event(&mut ev, ctx));
+        // C++ always clears the event for cmCut/cmCopy, even without a selection.
+        assert!(
+            ev.is_nothing(),
+            "cmCut always consumes the event (C++ clearEvent)"
+        );
+        assert_eq!(il.data, data_before, "no data change without selection");
+        assert!(
+            !deferred
+                .iter()
+                .any(|d| matches!(d, Deferred::SetClipboard(_))),
+            "no SetClipboard when no selection"
+        );
     }
 }
