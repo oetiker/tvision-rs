@@ -5,6 +5,47 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## Session — the D8 window-shadow pass lands (`d5d9354`)
+
+User report: **no shadows rendered** in `examples/hello.rs` — windows sat flat
+on the desktop. Diagnosis: the shadow plumbing was half-built since row 33.
+`Window::new` and `MenuBox` set `state.shadow` (sfShadow), the per-cell
+`Modifiers::no_shadow` marker (slNoShadow) existed in the cell format, and
+comments referenced "the D8 shadow pass" — but nothing ever *read* either flag.
+`Group::draw` carried `// TODO(row 33): shadow casting (no infra yet)`.
+
+**Port** (tview.cpp `shadowSize={2,1}`/`shadowAttr=0x08`, tvwrite.cpp
+`applyShadow`, modern non-Borland branch):
+
+- **`Role::Shadow`** (ROLE_COUNT 62→63) — the C++ global `shadowAttr` (a
+  file-scope constant there, not a palette entry; themed per D7).
+  `classic_blue`: darkgray on black.
+- **`DrawCtx::cast_shadow(area_local)`** + `SHADOW_SIZE` (`view/context.rs`):
+  region = `(area + shadowSize) \ area` — right strip 2 cols (top+1 to
+  bottom+1) + bottom strip 1 row (from left+2); clipped to the ctx clip.
+  Per-cell faithful `applyShadow`: glyph preserved, `no_shadow`-marked cells
+  skipped (no double-shadow), **reversed** shadow attr on black backgrounds
+  (incl. `Default` — `toBIOS(false)` maps it to 0; `bg_is_black` is a
+  documented D6 simplification, no quantization ladder), original modifiers
+  survive (`setStyle(attr, style|slNoShadow)`), `no_shadow` set.
+- **`Group::draw` hook**: after each visible sfShadow child, `cast_shadow` —
+  back-to-front painter's order makes higher siblings overwrite occluded
+  shadow cells (the D8 equivalent of the TVWrite occlusion walk). One hook
+  covers Window/Dialog/EditWindow/MenuBox (all draw through `Group::draw`;
+  Desktop/Window delegate `draw` to their inner Group). Buffer resets each
+  frame, so `no_shadow` never goes stale.
+
+**Verification:** 8 `cast_shadow` unit tests + a window-over-desktop snapshot
+(exact offset-L, glyphs preserved, `+no_shadow`). Zero existing snapshots
+changed — investigated, not assumed: every prior Window/MenuBox snapshot
+renders the caster as the **root** view (no owning Group → no shadow pass),
+faithfully so since the shadow composites over the *owner's* other subviews.
+Live tmux check of `hello.rs` shows the darkgray ░ strips beside/below each
+window. 985 lib tests green; clippy + fmt clean.
+
+Process: subagent-driven (Opus implementer → spec review → quality review →
+fix round: +zero-size-view no-op test, two style nits → re-approved).
+
 ## Session — inserted EditWindow opened keyboard-dead (focus-on-insert)
 
 Live testing of the editor wiring surfaced a third pump-only bug: **opening a

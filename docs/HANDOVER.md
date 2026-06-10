@@ -145,10 +145,13 @@
 ## Next — all 92 rows complete; backlog seams being cleared
 
 **All 92 PORT-ORDER rows are COMPLETE.** Post-completion work now clears the
-deferred backlog seams. **HEAD = `a947004`; 964 lib tests green; clippy + fmt
-clean.** Cleared this session: the **ModalFrame outside-click seam** (row 56/57),
-**`FileEditor::saveAs`** (rows 68/69 breadcrumb), and the **`hello.rs` demo
-app** now wires `EditWindow + FileDialog` end-to-end — see IMPLEMENTATION-LOG.
+deferred backlog seams. **HEAD = `d5d9354`; 985 lib tests green; clippy + fmt
+clean.** Cleared recently: the **D8 window-shadow pass** (the row-33 TODO —
+`Role::Shadow`, `DrawCtx::cast_shadow`, the `Group::draw` hook; windows/menu
+boxes now cast the classic offset-L drop shadow, verified live in `hello.rs`),
+the **ModalFrame outside-click seam** (row 56/57), **`FileEditor::saveAs`**
+(rows 68/69 breadcrumb), and the **`hello.rs` demo app** now wires
+`EditWindow + FileDialog` end-to-end — see IMPLEMENTATION-LOG.
 
 **Rows 91–92 (terminal family) are COMPLETE and on `main`.** `TextDevice` (trait)
 and `Terminal` (ring-buffer terminal view) live in `src/widgets/terminal.rs`.
