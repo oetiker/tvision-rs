@@ -7,347 +7,188 @@
 > Read this, then [CLAUDE.md](file:///home/oetiker/checkouts/rstv/CLAUDE.md)
 > (orientation / locked decisions / cross-cutting seams), then start.
 >
-> **Direction = [`docs/PORT-ORDER.md`](file:///home/oetiker/checkouts/rstv/docs/PORT-ORDER.md)** —
-> dependency-ordered; the **lowest-numbered incomplete row is the work** (✅ marks
-> done rows). "Parallelizable batches" are an efficiency, not a competing
-> direction. When a stage lands: add a section to the IMPLEMENTATION-LOG, tick the
-> PORT-ORDER row, and update this file's *Current state* / *Next*.
+> **Direction = [`docs/BACKLOG.md`](file:///home/oetiker/checkouts/rstv/docs/BACKLOG.md)**
+> (the PORT-ORDER successor). All 92 PORT-ORDER rows are ✅ — the post-port
+> **backlog run** is the work now: FOUNDATION seams (Phase A, done) →
+> mechanical fan-out (Phase B, nearly done) → Phase C backlogged features.
+> When a row lands: add an IMPLEMENTATION-LOG section, tick the BACKLOG row,
+> update this file.
 
-## Current state
+## Current state (2026-06-10, end of the backlog-run session)
 
-- **The outline family (rows 88–90) is COMPLETE and on `main`.** `Node` /
-  `OutlineViewer` (trait + free functions, like `TListViewer`) / `Outline` live in
-  `src/widgets/outline.rs`. **HEAD = `7472343`; 941 lib tests green; clippy + fmt
-  clean.** Reusable seams added: `Role::Outline{Normal,Focused,Selected,NotExpanded}`
-  (`ROLE_COUNT` 58→62), `Command::OUTLINE_ITEM_SELECTED`,
-  `Deferred::SyncOutlineViewerDelta` (+ `Context::request_sync_outline_viewer_delta`
-  + pump arm — the scrollbar→delta read-broker, mirrors `SyncScrollerDelta`).
-  **Known follow-ups (deferred, faithful):** mouse drag-loop / edge-scroll
-  (`TODO(row 31, D9)` — single-click positioning only, like every other widget);
-  `Outline` ctor does not call `update()` (no `Context`), consumers call `ov_update`
-  after insertion (documented, same as scroller/list-viewer); no runnable app wires
-  an `Outline` yet, so the scrollbar read-broker is exercised only by unit tests.
-- **The truecolor color-picker extension (tasks 0–9) is COMPLETE and on `main`.**
-  Rows 81–82 were reverted (`9aa8e12`); the picker is built in
-  `src/dialog/colorpick/` — `ColorModel` + `Hsv` + conversions, four surfaces
-  (`PresetsSurface`, `RgbSurface`, `PlaneSurface`, `Xterm256Surface`), the
-  `ColorPicker` view (tabs, info column, `color()`), and the mouse-drag broker
-  (`Deferred::ColorPickerDrag` + `ColorDragCapture` + pump arm).
-  **HEAD = `2b0751f` (mouse drag broker); 921 lib tests green; clippy + fmt
-  clean.**
-- **The picker is now fully complete** including `Program::color_dialog` (Task 10,
-  `5b1fabf`). HEAD = `5b1fabf`; 924 lib tests green; clippy + fmt clean.
-- **Direction change summary:** PORT-ORDER rows 81–87 (`colordlg`) are DROPPED —
-  the C++ `TColorDialog` family edits a flat BIOS `TPalette` rstv deleted under
-  D7 (palette → `Theme`; `Role` is a closed enum). The truecolor picker replaces
-  them (spec:
-  [`docs/superpowers/specs/2026-06-09-color-picker-design.md`](file:///home/oetiker/checkouts/rstv/docs/superpowers/specs/2026-06-09-color-picker-design.md),
-  plan:
-  [`docs/superpowers/plans/2026-06-09-color-picker.md`](file:///home/oetiker/checkouts/rstv/docs/superpowers/plans/2026-06-09-color-picker.md)).
-  A future **theme editor** will consume `color_dialog` (needs the D7 "Theme
-  extension point" first — a separate sub-project, not on the critical path).
-- **Key seams the picker adds (reusable):**
-  - **`Deferred::ColorPickerDrag` + pump arm** — the `window.rs DragCapture`
-    pattern reused for a non-window view: a `CaptureHandler` converts absolute
-    `MouseMove` → picker-local, posts the deferred, pump downcasts to
-    `ColorPicker::apply_drag`. Coordinate contract: ONE frame (picker-local)
-    everywhere; each surface subtracts `body.a` exactly once.
-  - **`ModalCompletion::ColorPick { picker, sink }`** (Task 10, not yet built):
-    on `cmOK`, downcasts the in-tree modal `ColorPicker` to read `color()` and
-    write into an `Rc<Cell<Option<Color>>>` — same shape as `HistoryPick`.
-    **No `FieldValue::Color`** (the spec's explicit non-goal; `color()` is the
-    contract). Do not edit `data.rs`.
-- **The makeDefault broker is now built** (FOUNDATION, row 80):
-  `Deferred::MakeButtonDefault { button, enable }` + `Context::make_button_default`
-  + a pump arm that downcasts `Button` and calls `make_default(enable, ctx)`.
-  `Button::make_default` is now `pub(crate)` and `Button::as_any_mut` returns
-  `Some(self)`. Reuse this for any future "a leaf view makes a sibling button the
-  default" need. The two row-75 `DirListBox` breadcrumbs are resolved (row 80 was
-  their only consumer): `select_item`→`ctx.post(cmChangeDir)` + the dialog reads
-  `focused_entry()`; `set_state`→the new broker.
-- **The payload-carrying-broadcast seam is now built** (FOUNDATION, row 77):
-  `Deferred::ResolveFocusedFile { subscriber, source }` + a defaulted
-  `ListViewer::on_focus_changed` hook (called at the `focus_item` tail — the
-  faithful virtual-`focusItem`). `FileList` broadcasts payload-less
-  `FILE_FOCUSED {source=self}` on every focus change; the pump resolves
-  `focused_rec()` and concrete-downcasts the subscriber (`FileInputLine` /
-  `FileInfoPane`). Reuse this for any future payload-carrying broadcast.
-- **The sorted-search seam** (`SortedSearch: ListViewer` sub-trait +
-  `sorted_handle_event`/`sorted_cursor` free fns in `list_viewer.rs`): both
-  `SortedListBox` and `FileList` are direct `ListViewer` impls implementing it.
-  Row 80's `TChDirDialog` uses `DirListBox` (a direct impl that does NOT need the
-  search machine).
-- **Cargo workspace** (`tvision` + `tvision-macros`) — use `--workspace` for
-  test/clippy/fmt. Artifacts land in
-  `CARGO_TARGET_DIR=/home/oetiker/scratch/cargo-target` (export it). `cargo build
-  --example hello` builds the drivable demo app.
-- **Done:** Phase 0 (primitives + INFRA), Phase 1 (`TView`/`TGroup`/`TFrame`/
-  `TProgram`/`TApplication`), Phase 2 (`TDeskTop`/`TWindow`/`TDialog`), Batch B
-  Phase-3 leaves, `TScroller`/`TListViewer`/`TListBox` (27/28/48), the whole
-  menu + status-line stack (46/49/50/51/52/47/53) **wired into `Program`**
-  (`examples/hello.rs` is a drivable TV app), `Desktop::tile`/`cascade` +
-  `cmTile`/`cmCascade`, the history cluster (54–57), **Phase 5 Batch C
-  validators 58–62** + a new **`RegexValidator`** extension, the **general
-  initial-modal-currency seam** (`View::reset_current`), and **all of row 63
-  (`messageBox`/`messageBoxRect`/`inputBox`/`inputBoxRect`)** — the latter via the
-  **single-input scatter/gather seam** (`exec_view_with_completion`'s `gather`
-  param), and **row 64 (`StringList`)** — a D12 minimal port (`BTreeMap<u16,String>`
-  wrapper in `src/text.rs`; the `TStreamable` resource-stream machinery dropped),
-  and **row 66 (`TEditor`) core** — gap-buffer editor, nav, edit, undo, selection,
-  draw, search, keyboard+clipboard; (find/replace dialogs + mouse-drag + context
-  menu + clipboard-editor deferred — see row-66 deferrals below),
-  and **row 67 (`TMemo`)** — a D2 embed-delegate wrapper over `Editor`
-  (`#[delegate(to = editor)]`, no skip — `as_any_mut` delegates so the editor's
-  pump brokers reach through a `Memo`); overrides Tab-swallow + D10
-  `value`/`set_value` (new inherent `Editor::set_text`); `dataSize`/`getPalette`
-  dropped (D10/D7). Fixed a latent row-66 editor bug along the way (Shift+Tab was
-  wrongly insertable — `kbShiftTab` charCode 0 must not insert),
-  and **row 68 (`TFileEditor`) core** — a D2 embed-delegate `FileEditor`; the inner
-  `Editor` gained a **flag-gated growable buffer** (`file_editor` flag,
-  `set_buf_size(&mut)` grow branch, `new_file_editor` ctor) — base/`Memo`
-  fixed-buffer behavior provably unchanged; `load_file`/`save_file`/`save` over real
-  `std::fs`, `handle_event` cmSave, `valid` cmValid (saveAs + error/confirm dialogs +
-  the modified-prompt forced-deferred on `TFileDialog`/async-modal-from-view),
-  and **row 69 (`TEditWindow`)** — a D2 embed-delegate `EditWindow` over `Window`
-  assembling hidden `ScrollBar`×2 + `Indicator` + a `FileEditor` (ViewId-at-insertion
-  wiring order; `ofTileable`; `size_limits` {24,6} with the mandatory `calc_bounds`
-  skip; hidden aux children excluded from `reset_current` so the editor is current).
-  **The `TEditor` family (66–69) is now complete** modulo the breadcrumbed
-  editor sub-features,
-  and **row 70 (`TSortedListBox`)** — a D2 embed-delegate `SortedListBox` over
-  `ListBox` with type-to-search incremental search over a case-insensitively-sorted
-  `Vec<String>` (no generic `TSortedCollection`; the `curString`-re-seed model +
-  delegate→reset→gate sequence ported faithfully),
-  and **rows 71–74 (file-dialog data classes)** — `DirEntry`/`SearchRec` structs,
-  `DirCollection = Vec<DirEntry>` alias, and `FileCollection` (`Vec<SearchRec>` +
-  verbatim `search_rec_compare` + sorted insert) in `src/dialog/filedlg.rs` (pure
-  data; collections→Vec; batched),
-  and **the async-modal-from-a-view seam** (FOUNDATION detour) — a downward-borrowed
-  `&mut View` can now request a modal `messageBox` from the pump and observe the
-  choice (`Deferred::OpenMessageBox` + `Context::request_message_box`,
-  `View::set_modal_answer`, `ModalCompletion::{RouteModalAnswer,Informational}`,
-  `apply_modal_completion`→`Option<Event>` re-injected into `out_events`, the inline
-  `validate_modal_close` drive for the event-gated modal-close path, and the
-  `View::valid(&mut self, cmd, ctx)` signature change). **Retired three consumer
-  clusters:** all 5 validator `error()` boxes, `FileEditor::valid`'s Yes/No/Cancel
-  modified-save prompt, and `FileEditor` save-error boxes (design note:
-  `docs/design/async-modal-from-view.md`),
-  and **row 75 (`TDirListBox`)** — `DirListBox`, a **direct `ListViewer` impl** over
-  `Vec<DirEntry>` (NOT a D2 delegate — a delegate would consult `ListBox`'s
-  `Vec<String>` `get_text`); introduced **deviation D14 (native Linux `/` paths)**:
-  `showDrives`/drive-letters/"Drives"/`\` dropped, `showDirs` → a pure
-  `build_tree` (root `/` + `/`-segment ancestors + sorted `read_dir` subdirs,
-  dotfiles skipped, symlinks followed) split from the FS read for
-  snapshot-testability, faithful unconditional last-entry glyph fix-up; `select_item`
-  payload-command + `set_state` `chDirButton` poke breadcrumbed → row 80. The
-  `#[delegate]` proc-macro is landed and adopted codebase-wide.
+**HEAD = `5757565`; 1104 lib tests green; clippy + fmt clean (run both
+default and `--no-default-features`); `cargo build --example hello` works.**
 
-## Next — all 92 rows complete; the backlog run
+The 92-class port is complete (PORT-ORDER all ✅; rows 81–87 dropped in favor
+of the truecolor color-picker extension, rows 91–92 terminal family done).
+This session ran the **backlog run** end to end:
 
-**All 92 PORT-ORDER rows are COMPLETE.** The work is now the **post-port
-backlog run** — direction lives in
-[`docs/BACKLOG.md`](file:///home/oetiker/checkouts/rstv/docs/BACKLOG.md)
-(audited 2026-06-10; FOUNDATION seams Phase A first, mechanical fan-out
-Phase B after, big features Phase C backlogged). Two standing user
-directives recorded there: **OS clipboard by default** (row A6) and **no
-hand-rolled terminal setup in app code** (row B7 — now DONE). **HEAD =
-`6a58919`; 1002 lib tests green; clippy + fmt clean.** Landed from the
-backlog run so far — **both 🔴 architecture items are closed**: **A1** (the
-CommandSet denylist flip — `Context::command_enabled` now exists for B1;
-`docs/design/command-enablement.md`), **A2** (the resetCurrent cascade —
-currency is a tree property: `currency_dirty` + post-order
-`settle_currency` + `set_visible_descendant` + remove parity; fixed the
-latent nested keyboard-dead-window gap), **A4** (the theme
-chain-verification pass — every `theme.rs` value chain-documented, cyan
-window scheme live, `ListRoles`/`list_roles()` seam), and **B7** (RAII
-terminal lifecycle in `CrosstermBackend` — fallible `new()`,
-Drop/panic-hook/signal-thread restore, `hello.rs` main is 3 lines).
-**Also landed: A6** (OS clipboard by default — the faithful `TClipboard`
-chain in `src/backend/clipboard.rs`: arboard native → OSC 52 → internal
-mirror; `os-clipboard` default-on feature; bracketed paste deferred to C9;
-`docs/design/os-clipboard.md`; HEAD `dfba123`, 1009 lib tests).
-**Also landed: A5+B4** (`43c9d30` — the `Phase` signal on Context +
-button/label/cluster plain-hotkey accelerators + ctrl_to_arrow) and **A3**
-(`f07d4e0` — the MouseAuto synthesizer (440/110 ms) + `MouseTrackCapture`
-router seam + button migrated as the template; recipe in
-`docs/design/mouse-track.md`). **PHASE A IS COMPLETE** — HEAD `f07d4e0`,
-1034 lib tests. **Remaining: the mechanical fan-out** — B2 (seven
-press-and-hold adoptions per the mouse-track.md recipe + the A3 design's
-consumer table: scrollbar, inputline, cluster, listviewer, outline,
-statusline, frame close-icon, editor-last), B1 (button/inputline graying
-via `ctx.command_enabled`), B3 (InputLine clipboard via the existing
-brokers), B5 (resize republish), B6 (FileDialog finishers), B8 (small
-singletons). Cleared recently: the **currency foundation fix** (`focus_child`
-self-heal + `Program::new` startup `reset_current`; the `insert_and_focus`
-DEVIATION workaround retired — pre-inserted desktop windows now start focused
-and the topmost is clickable), **button mouse hold-tracking** (the button deferral-3
-D9 capture: press-down, track, fire-on-release-inside) + the **gray dialog
-surface** (row-34 gray theming: `FrameGray*` roles, `Frame.palette` role-family
-selection, `Window::set_palette` propagation — cyan still blue-fallback) + the
-**ButtonShadow chain fix** (black-on-lightgray 0x70), the **D8 window-shadow
-pass** (the row-33 TODO — `Role::Shadow`, `DrawCtx::cast_shadow`, the
-`Group::draw` hook), the **ModalFrame outside-click seam** (row 56/57),
-**`FileEditor::saveAs`** (rows 68/69 breadcrumb), and the **`hello.rs` demo
-app** wiring `EditWindow + FileDialog` end-to-end — see IMPLEMENTATION-LOG.
+- **Phase A COMPLETE — all FOUNDATION seams**, two-stage reviewed each:
+  - **A1 🔴 CommandSet denylist flip** (`faabc78`) — faithful `initCommands`
+    semantics (everything enabled, 5-command seed); the allowlist + file-dialog
+    bandaid deleted; **`Context::command_enabled(cmd)`** per-pump snapshot
+    query. `docs/design/command-enablement.md`.
+  - **A2 🔴 resetCurrent cascade** (`6a58919`) — currency is a tree property:
+    `Group::currency_dirty` at insert → post-order `settle_currency` (eager in
+    `Program::new`, pump step 2b); `set_visible_descendant` (hide direction);
+    remove parity (tgroup.cpp:112). **Keystone:** `set_current` clears the
+    dirty flag FIRST, incl. its early-return leg — protects explicit focus.
+    Fixed the latent nested keyboard-dead-window gap.
+  - **A3 MouseAuto + MouseTrackCapture** (`f07d4e0`) — the pump synthesizes
+    `Event::MouseAuto` (440 ms delay / 110 ms cadence, tevent.cpp+hardwrvr.cpp
+    derivation); `MouseTrackCapture` is a pure router (`Deferred::MouseTrack`,
+    loop bodies stay in widgets). Recipe: `docs/design/mouse-track.md`.
+  - **A4 theme chain verification** (`66e7527`) — every `theme.rs` value
+    derived from the literal C++ palette chain and documented inline; cyan
+    window scheme (`FrameCyan*`); `ListRoles` + `ListViewer::list_roles()`
+    (the `THistoryViewer::getPalette` virtual successor).
+  - **A5+B4 phased key dispatch** (`43c9d30`) — `Phase` rides `Context` (the
+    `owner_size` pattern); button/label/cluster plain-hotkey accelerators +
+    `ctrl_to_arrow` landed with it. A focused view consuming a letter starves
+    the post-process loop (faithful — that's why dialogs use Alt).
+  - **A6 OS clipboard (user directive)** (`dfba123`) — the faithful
+    `TClipboard` chain in `src/backend/clipboard.rs`: arboard native → OSC 52
+    emit → internal mirror (last resort only); `os-clipboard` default-on
+    feature; NO OSC 52 read; `HeadlessHandle::clipboard()/set_clipboard()`
+    test accessors. `docs/design/os-clipboard.md`. **Bracketed paste is
+    deliberately deferred to C9** — do not enable `EnableBracketedPaste`
+    before consuming `Event::Paste`, or terminal-paste silently dies.
+  - **B7 RAII terminal lifecycle (user directive)** (`7827235`) —
+    `CrosstermBackend::new()/with_color_depth` are fallible and own raw
+    mode/alt screen/mouse capture; Drop + panic hook + unix signal thread
+    (`128+signum`) restore; at-most-one-live-instance contract documented;
+    `hello.rs` main is 3 lines.
+- **B2 COMPLETE — all 8 press-and-hold adoptions** on the A3 seam (the
+  `while(mouseEvent(...))` loops from the TODO audit): button, scrollbar
+  (arrow auto-repeat + thumb drag), inputline (edge scroll + drag-select),
+  cluster (press moved to release-over-same-item — the C++-correct
+  semantics), frame close icon (release-confirm), listviewer + outline
+  (skip-counters 4/3, `dragged<2` graph-toggle gate), statusline
+  (drag-highlight via the drawSelect matrix, post-on-release), editor
+  (drag-select with persisted `selectMode`, edge auto-scroll, in-hold wheel
+  forwarding to the bars, middle-button pan; bonus fix — untracked wheel no
+  longer positions the cursor, faithful to TEditor's eventMask).
+- **Pump-semantics change — know before touching `pump_once`** (`eb7648d`):
+  the deferred drain is **hoisted out of the `!ev.is_nothing()` dispatch
+  gate** — it runs for every picked `Some(ev)`, consumed-by-pre-route or not
+  (pre-route deferreds are first-class; the old LATENT COUPLING silent drop
+  is gone). `sync_gate_bounds` runs at the **top of the dispatch gate**
+  (covers same-pump resize relayout + all previous drains). Four old
+  "drain is gated on !ev.is_nothing()" comments were corrected — don't
+  reintroduce the assumption.
 
-**Rows 91–92 (terminal family) are COMPLETE and on `main`.** `TextDevice` (trait)
-and `Terminal` (ring-buffer terminal view) live in `src/widgets/terminal.rs`.
+## PAUSED in-flight work (user said stop; two worktrees left intact)
 
-Key design choices:
-- `TextDevice` is a plain trait (D11: `streambuf` dropped); users call `write_bytes`.
-- `Terminal` embeds a `Scroller` with `#[delegate(to = scroller)]` on the `View`
-  impl; `as_any_mut` auto-forwards to the inner `Scroller`, so the existing
-  `SyncScrollerDelta` pump arm works without a new `Deferred` variant.
-- Ctor takes no `Context`; consumer calls `Terminal::init(&mut self, ctx)` after
-  insertion (same pattern as `TOutline`).
-- `draw()`: faithful ring-buffer backward scan via `prev_lines`/`find_lf_backwards`
-  (from `ttprvlns.cpp`); UTF-8 boundary trimming via `str::from_utf8`.
+1. **`/scratch/oetiker/claude-worktrees/rstv-b1-b3-graying-clipboard`**
+   (branch `b1-b3-graying-clipboard`, base `5757565`) — **rows B1+B3:
+   implementation COMPLETE, gates green (1119 lib tests), NOT yet reviewed.**
+   Button graying on `cmCommandSetChanged`; InputLine cut/copy/paste
+   enablement (`can_update_commands`/`update_commands` per tinputli.cpp) +
+   clipboard arms + new `Deferred::InputLinePaste` broker + `paste_text`.
+   The spec review was killed mid-verdict. **Re-run the two-stage review
+   before integrating; the load-bearing open question:** the button's
+   *initial* gray state relies on `Program` firing a `COMMAND_SET_CHANGED`
+   broadcast on the first idle when the disabled seed is non-empty — verify
+   `Program::new` actually arms `command_set_changed` at startup (if it
+   seeds the field with the flag false, a button for a startup-disabled
+   command starts un-grayed until the first real transition; fix = one
+   faithful line in `Program::new`, or a lazy first-draw derive).
+2. **`/scratch/oetiker/claude-worktrees/rstv-b6-filedlg`** (branch
+   `b6-filedlg`, base `5757565`) — **row B6: INCOMPLETE** (implementer
+   killed mid-clippy-fix; `dialog.rs` + `filedlg.rs` modified, gates NOT
+   run to completion). Scope was: `wfGrow` for FileDialog/ChDirDialog, the
+   C++ "21st-century" screen-relative resize block (adapt to the
+   `reset_current` open hook — ctors have no ctx), real `std::fs` metadata
+   in `SearchRec`. Inspect the diff and resume, or reset the worktree and
+   redo the row.
 
-**The 92-class porting checklist is now fully complete.**
+## Next — the remaining backlog (small, all unblocked)
 
-**Entry point for `color_dialog`:** `Program::color_dialog(initial: Color) ->
-Option<Color>` at `src/app/program.rs`. Also re-exported as `tvision::ColorPicker`
-and `tvision::Tab`. A future **theme editor** will consume `color_dialog` — that
-needs the D7 "Theme extension point" (runtime `Role→Style` registration) first,
-a separate sub-project not on the critical path.
+- **Finish B1+B3 and B6** (the paused worktrees above).
+- **B5 — resize republish family:** `scroller.rs` + `list_viewer.rs`
+  `TODO(resize)` (re-emit scrollbar params on `change_bounds`),
+  `window.rs:371` (re-push `set_zoomed` on owner resize), keyboard resize
+  sub-mode (`window.rs` `TODO(33d-2)`).
+- **B8 — small singletons:** `max_len` clamp on `InputLine::set_value`
+  (note: the new `paste_text` DOES clamp; only the `set_value` flowback is
+  unclamped), `TODO(valid-select)` (likely unblocked — `valid` takes ctx),
+  timer payload (`program.rs`), `application.rs` init/doneHistory, help-ctx
+  propagation plumbing.
+- **Phase C stays backlogged (user decision):** editor find/replace dialogs,
+  right-click context menu, internal-clipboard editor, D10 dialog
+  gather/scatter group-walk, cmQuit-veto / saveAs-modified-close inline
+  drives, cmDosShell (needs a backend suspend seam + SIGTSTP), help-ctx
+  `OneOf` status line, theme editor (needs the D7 extension point;
+  `Program::color_dialog` is the ready entry point), C9 kbPaste/bracketed
+  paste.
 
-**`FileEditor::saveAs` is DONE** (view-triggered FileDialog seam): `cmSaveAs` /
-untitled `cmSave` open a `FileDialog` via `Deferred::OpenSaveAsDialog` →
-`ModalCompletion::SaveAsPick`; the completion sets `file_name` + re-injects `cmSave`,
-which saves and broadcasts `cmUpdateTitle` to refresh the `EditWindow` frame title
-(`Window::set_title`). See the IMPLEMENTATION-LOG entry. **Accept test is
-`!= CANCEL` (FD_OK_BUTTON ends with `cmFileOpen`, not `cmOK`).** New reusable hatch:
-`widgets::editor_mut(&mut dyn View) -> Option<&mut Editor>` peels a `FileEditor`
-(whose own `as_any_mut` now returns the `FileEditor`) or a plain `Editor`/`Memo` to
-the inner `Editor` — the editor brokers (`SyncEditorDelta`/`EditorPaste`) go through
-it.
+## Editor seam leftovers (still open, latent — unchanged this session)
 
-**Editor seam leftovers (still open, latent):**
-- **cmQuit veto.** `valid_end`'s app-quit path *vetoes* close of a modified
-  `FileEditor` **without a prompt** (the orphaned box is dropped, not leaked). C++
-  prompts on quit; doing so needs a **whole-tree inline drive** (every modified
-  editor prompts), not the single-id `validate_modal_close`. Deferred — **latent**
-  (no runnable app wires a `FileEditor` yet); the fix is a whole-tree analogue of
-  `validate_modal_close`. *(Cheap interim if a quit prompt is wanted sooner: gate
-  `FileEditor::valid`'s prompt to `cmd == cmClose` so cmQuit reverts to allow-close.)*
-- **saveAs modified-close path.** `valid()` (cmClose → Yes → untitled `save()`)
-  vetoes the close, then the saveAs dialog opens *separately* (the deferred fires
-  next pump). A full fix needs `validate_modal_close` to drive an
-  `OpenSaveAsDialog` inline (the §6 modal-close twin). Breadcrumbed in `save()`.
-- **Still breadcrumbed:** `edReadError` on **load** (the ctor has no `ctx`) remains.
-
-### Other non-gating seam
-- **The `ModalFrame` deliver-outside-to-modal seam** (row 56/57 — **DONE**, HEAD
-  `af109fc`/`95ba912`). Outside-bounds positional events are now delivered to the
-  active modal view (localized) instead of being swallowed. `HistoryWindow::handle_event`
-  part (C) is implemented: `!mouseInView → endModal(cmCancel)`. Plain `Dialog` ignores
-  outside clicks (no cancel override). Key seams added: `CaptureHandler::is_modal_gate()`
-  default false, `ModalFrame` overrides true; `CaptureStack::top_modal_view()`;
-  pump pre-dispatch redirect block (before `captures.dispatch`).
-
-**Row 66 deferred sub-features** (breadcrumbed TODOs in `editor.rs`; pick up when
-relevant prerequisites land):
-1. **Find/Replace dialogs** (`editorDialog`, `find()`/`replace()`/`efPromptOnReplace`)
-   — `search()` is live; `cmFind`/`cmReplace` are no-ops until the std dialog views exist.
-2. **Mouse drag-select/edge-scroll/wheel/middle-button pan** — single-click
-   positioning is live; the `while(mouseEvent)` drag loops need a `DragCapture`
-   handler (precedent: `window.rs DragCapture`; also deferred for scrollbar, `TODO(row 31)`).
-3. **Right-click context menu** (`initContextMenu` + `popupMenu`).
-4. **Internal-clipboard `TEditor` branch** (`insertFrom` from a sibling editor) —
-   STILL deferred (row 69 `EditWindow` landed but does **not** wire a clipboard
-   editor; that needs a dedicated clipboard `EditWindow` + the `insertFrom` branch).
-   `EditWindow::close`'s `isClipboard→hide` branch is breadcrumbed for it.
-5. `TStreamable` write/read/build (D12).
-
-After the color-picker extension, the faithful port resumes at **row 88**
-(`TNode` / the outline family) — the color cluster (81–87) is dropped (see
-*Current state*). `cmDosShell` is still deferred — needs a backend
-terminal-suspend seam + SIGTSTP.
-
-## What this session left available / changed
-
-- **The `transfer`/D10 hook is live** (`Validator::transfer_get`/`transfer_set`,
-  default `None`; `RangeValidator` is the first overrider, gated on
-  `transfer_enabled`). `InputLine::value`/`set_value` consult it before the text
-  fallback. A future typed-value validator just overrides those two methods.
-- **`RegexValidator` is an extension *beyond* the C++ port** (not a tvision
-  class) — when next editing `docs/PORTING-GUIDE.md`, add a short note that it
-  exists as an rstv-original (the picture-mask DSL `PXPictureValidator` is the
-  faithful port; `RegexValidator` is the modern alternative living alongside it).
-- **`PXPictureValidator::error` deviation watch:** `is_valid` does not replicate
-  the C++ 256-byte stack buffer (Vec grows); documented, not a divergence in
-  practice (inputs are maxLen-bounded).
-- **Non-Scroller D3 broker pattern established** (`SyncEditorDelta` +
-  `Editor::apply_scroll_delta`): a non-`Scroller` view that needs scrollbar
-  siblings adds a new `Deferred` variant with a concrete downcast in the
-  pump's deferred-apply loop. Future views follow the same pattern.
-- **`Deferred::IndicatorSetValue { indicator, location, modified }`** is live
-  — any editor-like view drives its `TIndicator` sibling through the pump via
-  this variant (downcast to `Indicator`, `set_value`).
-- **Clipboard broker** (`Deferred::SetClipboard(String)` + `Deferred::EditorPaste(ViewId)`)
-  is live — the deferred-apply scope in `program.rs` reaches
-  `renderer.backend_mut()` for clipboard I/O; paste re-queues scrollbar-param
-  ops that settle on the next pump (one-pass drain is expected).
-- **`Role::ScrollerSelected`** is now filled (the `theme.rs` breadcrumb is
-  cleared); editor normal text reuses `Role::ScrollerNormal`.
-- **Editor ctx-threading split** is a reusable pattern for ctor-state-heavy
-  widgets: keep core mutation methods `Context`-free (accumulate into flag fields);
-  let `&mut Context` thread only into the handful of entry points that actually need
-  it. Makes the whole widget unit-testable without a running pump.
+- **cmQuit veto:** `valid_end`'s app-quit path vetoes close of a modified
+  `FileEditor` without a prompt; fix = a whole-tree analogue of
+  `validate_modal_close`. *(Cheap interim: gate `FileEditor::valid`'s prompt
+  to `cmd == cmClose`.)*
+- **saveAs modified-close path:** `valid()` vetoes the close, then the
+  saveAs dialog opens separately (deferred fires next pump); full fix =
+  `validate_modal_close` drives `OpenSaveAsDialog` inline.
+- **`edReadError` on load** (ctor has no ctx) — breadcrumbed.
+- **`FileEditor::saveAs` itself is DONE** (`Deferred::OpenSaveAsDialog` →
+  `ModalCompletion::SaveAsPick`; accept test is `!= CANCEL` — FD_OK_BUTTON
+  ends with `cmFileOpen`, not `cmOK`). The `widgets::editor_mut` hatch peels
+  FileEditor/Memo to the inner `Editor` for the brokers.
 
 ## Non-obvious gotchas (read before starting)
 
 - **Worktrees** live under `/scratch/oetiker/claude-worktrees/<project>-<name>`.
-  A `WorktreeCreate` hook redirects `isolation:"worktree"` there, **but only
-  activates on a session restart** — until then, create the worktree manually at
-  the `/scratch` path + dispatch a non-isolated subagent. Parallel worktree agents
-  **share one cargo target dir** — their clippy/build "clean" is unreliable;
-  re-verify on the integrated tree.
-- **Commit completed rows before dispatching worktree subagents that build on
-  them** (a worktree branches from the last commit; uncommitted work is absent).
-- Verification is **snapshot tests** (D11, `insta`) for anything that draws;
-  validators/data render nothing → unit tests only. `cargo-insta` is **not
-  installed** — generate `.snap`s via `INSTA_UPDATE=always`, hand-verify, commit.
+  Create manually (`git worktree add <path> -b <branch>`) and dispatch
+  non-isolated subagents pointed at the path. **Give each parallel agent its
+  own `CARGO_TARGET_DIR`** (e.g. `/home/oetiker/scratch/cargo-target-<tag>`)
+  — a shared target dir makes their "clean" claims unreliable. ALWAYS
+  re-verify on the integrated tree with the canonical
+  `CARGO_TARGET_DIR=/home/oetiker/scratch/cargo-target`.
+- **Run `git merge` in `/home/oetiker/checkouts/rstv`**, never inside a
+  worktree — `cd <worktree> && git merge <branch>` merges the branch into
+  itself ("Already up to date") and the gates then run on the wrong tree.
+  (Bit this session repeatedly.)
+- **Commit completed rows before dispatching worktree subagents that build
+  on them** (a worktree branches from the last commit).
+- **Shared 128-core machine, max 4 cores for compile/test:** `-j 2` +
+  `--test-threads=2` per agent, at most two building agents in parallel.
+- Verification is **snapshot tests** (D11, `insta`) for anything that draws.
+  `cargo-insta` is **not installed** — generate via `INSTA_UPDATE=always`,
+  hand-verify, commit.
 
 ## Standing deferrals (still open — grep the TODOs)
 
-- **✅ RESOLVED (backlog A1, `faabc78`): `CommandSet` allowlist → denylist.**
-  Enablement is now the faithful `initCommands` denylist (everything enabled,
-  5-command seed); the bandaid is deleted; `Context::command_enabled` exists
-  for B1 graying. See `docs/design/command-enablement.md`.
-- **✅ RESOLVED (backlog A2, `6a58919`): the `show()→resetCurrent` cascade.**
-  Currency is now a tree property: `Group::currency_dirty` at insert +
-  post-order `settle_currency` (eager in `Program::new`, pump step 2b) +
-  `set_visible_descendant` (hide direction) + remove parity. The keystone is
-  the clear-on-`set_current` (incl. early return) — protects explicit focus.
-  Old text (for context): rstv's ctx-less insert skipped the C++ cascade, so
-  every focus-establishing path had to remember `reset_current`; compensations
-  existed in `exec_view` (kept — the faithful open hook),
-  `HistoryWindow::select_child` (retired), and `Desktop::insert_and_focus`
-  (retired); the `focus_child` self-heal stays (same-instant focus).
-- **idle→`statusLine->update()` help-ctx refresh** — inert under a single `All`
-  `StatusDef`; only worth doing when a context-split `OneOf` line lands (needs a
-  `View::get_help_ctx` + a `TopView` resolver).
-- **status-line press-and-hold drag-highlight** (`drawSelect(Some)` hover) —
-  `TODO(row 31, D9)`.
-- **`program_handle_event` modal-isolation** breadcrumb (suppress program-level
-  interception while a `MenuSession`/modal is active); the `ModalFrame`/
-  `DragCapture` "(0,0)-desktop absolute-coords" caveat (the bar shifts the desktop
-  down by 1 — re-examine when a dialog must position relative to the desktop).
-- **`max_len` clamp on `InputLine::set_value`** — C++ flowback is
-  `strnzcpy(data, s, maxLen+1)`; we assign unclamped (row-39 gap).
+- **idle→`statusLine->update()` help-ctx refresh** — inert under a single
+  `All` `StatusDef`; worth doing only when a context-split `OneOf` line
+  lands (needs `View::get_help_ctx` + a TopView resolver).
+- **`program_handle_event` modal-isolation** breadcrumb; the
+  `ModalFrame`/`DragCapture` "(0,0)-desktop absolute-coords" caveat (the bar
+  shifts the desktop down by 1).
+- **`max_len` clamp on `InputLine::set_value`** (row-39 gap; → B8).
+- **RESOLVED this session** (so stale memories don't resurrect them):
+  CommandSet allowlist (A1), resetCurrent cascade (A2), the theme
+  "provisional values" problem (A4 — trust the documented chains), the
+  status-line drag-highlight, ALL `TODO(row 31, D9)` hold loops, and the
+  editor mouse/wheel deferrals (B2).
 
 ## Standing process reminders
 
 - **Subagent-driven** (CLAUDE.md "How to run the port"): per row → fresh
-  implementer (Sonnet for MECHANICAL, Opus for FOUNDATION) → **two-stage review**
-  (fresh SPEC then QUALITY agents — do NOT self-review in the main thread) → fix →
-  integrate → commit. Briefs are **self-contained** (inline the C++ + D-rules +
-  existing types), never "go read the plan."
+  implementer (Sonnet for MECHANICAL, strongest model for FOUNDATION) →
+  **two-stage review** (fresh SPEC then QUALITY agents — never self-review
+  in the main thread) → fix (implementer for substantive findings,
+  orchestrator for one-liners) → integrate → commit. Briefs are
+  **self-contained** (inline the C++ + D-rules + existing types).
+- **FOUNDATION rows: read-only design investigation first** (a Plan agent
+  maps the constraint surface; the orchestrator decides the design; the
+  implementer gets the approved spec verbatim). This caught real gaps in
+  A2/A3/A5/A6 before any code existed.
 - **`git diff` the whole tree** after an implementer before integrating —
-  implementers do out-of-scope refactors scoped reviewers miss.
+  out-of-scope changes are a real failure mode (a B2 implementer modified
+  the pump unprompted; review caught it and the proper redesign landed).
 - When you add a `View` trait method, add a matching forwarder to
-  `tvision-macros/src/specs.rs` (the `delegate_view` spy test catches a forgotten
-  forwarder for existing methods, but a brand-new defaulted method silently
-  won't forward). **Validator-trait methods are NOT `View` methods** — no
-  forwarder (e.g. `transfer_get`/`transfer_set`).
+  `tvision-macros/src/specs.rs` (the `delegate_view` spy test catches
+  existing methods, not brand-new defaulted ones). A new `Deferred` variant
+  needs NO forwarder. Validator-trait methods are NOT `View` methods.
