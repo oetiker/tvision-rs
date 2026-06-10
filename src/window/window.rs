@@ -289,12 +289,12 @@ impl Window {
     }
 
     /// Make `id` the current (focused) child of the embedded group, so focused
-    /// (keyboard) events route to it. Promoted from a `#[cfg(test)]` hook to a
-    /// production seam by row 57: `HistoryWindow` calls it on first-event setup to
-    /// establish the popup's internal currency (see the faithfulness note there) —
-    /// the localized stand-in for the missing `insertView→show→resetCurrent`
-    /// initial-currency seam (the foundational follow-on breadcrumbed at
-    /// `Program::exec_view`).
+    /// (keyboard) events route to it. Test-only again: its one production caller
+    /// (`HistoryWindow`'s first-event currency workaround, row 57) was retired by
+    /// A2 — the `insertView→show→resetCurrent` cascade is now realized by
+    /// `exec_view`'s kept post-insert `reset_current` plus the pump's
+    /// `settle_currency` pass, so no per-site stand-in is needed.
+    #[cfg(test)]
     pub(crate) fn select_child(&mut self, id: ViewId, ctx: &mut Context) {
         self.group
             .set_current(Some(id), crate::view::SelectMode::Normal, ctx);

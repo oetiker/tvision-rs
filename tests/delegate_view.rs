@@ -97,6 +97,13 @@ impl View for Spy {
         self.mark("focus_descendant");
         false
     }
+    fn settle_currency(&mut self, _ctx: &mut Context) {
+        self.mark("settle_currency");
+    }
+    fn set_visible_descendant(&mut self, _id: ViewId, _visible: bool, _ctx: &mut Context) -> bool {
+        self.mark("set_visible_descendant");
+        false
+    }
     fn number(&self) -> Option<i16> {
         self.mark("number");
         None
@@ -238,6 +245,16 @@ fn delegate_forwards_every_known_view_method() {
         let _ = d.focus_descendant(id, &mut ctx);
     }
 
+    // -- settle_currency / set_visible_descendant -----------------------------
+    {
+        let mut out = VecDeque::new();
+        let mut timers = TimerQueue::new();
+        let mut deferred = Vec::new();
+        let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+        d.settle_currency(&mut ctx);
+        let _ = d.set_visible_descendant(id, false, &mut ctx);
+    }
+
     // -- number / grabs_focus_on_click --------------------------------------
     let _ = d.number();
     let _ = d.grabs_focus_on_click();
@@ -311,6 +328,8 @@ fn delegate_forwards_every_known_view_method() {
         "find_mut",
         "remove_descendant",
         "focus_descendant",
+        "settle_currency",
+        "set_visible_descendant",
         "number",
         "grabs_focus_on_click",
         "select_window_num",

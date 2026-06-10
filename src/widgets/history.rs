@@ -530,22 +530,15 @@ impl View for HistoryWindow {
             {
                 hv.setup(ctx);
             }
-            // Establish the popup's internal currency so the FIRST focused event
-            // (even an immediate Esc/Enter, with no prior nav) routes to the viewer
-            // → its endModal fires.
-            //
-            // Baseline → Deviation → Integration: C++ establishes a view's currency
-            // at OPEN, via `insertView → show → resetCurrent` (the inserted view's
-            // group selects its first selectable child). rstv's `Group::insert` takes
-            // no `Context` and so cannot run `reset_current` at open (the foundational
-            // initial-currency gap breadcrumbed at `Program::exec_view`). DEVIATION:
-            // we establish currency at FIRST-EVENT instead of open — the SAME
-            // already-accepted deviation class as the viewer's `setup()` running on
-            // first event (row 55/ListBox Context-free-ctor constraint). INTEGRATION:
-            // because this guard runs BEFORE delegating to `TWindow::handleEvent`, the
-            // window's `current` is set in time for this very event; `route_event`'s
-            // focused phase delivers to `current` by index with no focused-flag gate.
-            self.window.select_child(self.viewer_id, ctx);
+            // NOTE (A2): the popup's internal currency (viewer == current) is NOT
+            // established here anymore. `exec_view`'s kept post-insert
+            // `reset_current` (the faithful open hook) makes the viewer current AT
+            // OPEN — the viewer is the popup's first visible+selectable child
+            // (frame and scroll bars are non-selectable) — so even an immediate
+            // Esc/Enter with no prior nav routes to the viewer and its endModal
+            // fires. The first-event `select_child` workaround that used to live
+            // here compensated for the pre-A2 gap and was redundant since the
+            // exec_view hook landed (proven by the no_nav_first_event bite test).
             self.setup_done = true;
         }
         // (B) TWindow::handleEvent (faithful order: base first).

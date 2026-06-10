@@ -777,8 +777,42 @@ pub trait View {
     /// (otherwise the modal is keyboard-dead until a nav event — see the seam note in
     /// `exec_view`). Base: no-op (a leaf has no internal currency); `Group` overrides;
     /// `Window`/`Dialog` delegate.
-    fn reset_current(&mut self, ctx: &mut Context) {
-        let _ = ctx;
+    fn reset_current(&mut self, _ctx: &mut Context) {}
+
+    /// Run any pending insert-time `resetCurrent` cascades in this subtree (A2).
+    ///
+    /// Ports the deferred half of `TGroup::insertBefore` (tgroup.cpp:391):
+    /// `p->hide()` → `insertView` → `if (saveState & sfVisible) p->show()`, where
+    /// `show()` → `TView::setState(sfVisible)` runs `if (options & ofSelectable)
+    /// owner->resetCurrent()`. rstv's ctx-less `Group::insert` (D3) cannot run
+    /// that at insert; instead the insert marks the group `currency_dirty` and
+    /// the pump / `Program::new` settles it here, BEFORE the next event pick.
+    ///
+    /// Post-order (children first): a child group's currency exists before its
+    /// owner's focus cascade descends into it. Runs the INHERENT
+    /// `Group::reset_current` (not the virtual one) — embedders that key one-time
+    /// init off `reset_current` (`FileDialog`'s initial `readDirectory`) get it
+    /// from `exec_view`'s kept virtual call instead, never from the settle pass.
+    /// Base: no-op (a leaf has no children); `Group` overrides; embedders forward
+    /// via `#[delegate]` (the specs.rs forwarder).
+    fn settle_currency(&mut self, _ctx: &mut Context) {}
+
+    /// Tree-op: set the `visible` flag of the descendant named by `id` from its
+    /// OWNING group, running the owning group's currency tail (A2). Ports the
+    /// `TView::setState(sfVisible, enable)` tail `if (options & ofSelectable)
+    /// owner->resetCurrent()` (tview.cpp) — which C++ runs in BOTH directions
+    /// (show and hide). Returns `true` if `id` was found in this subtree.
+    ///
+    /// Symmetric with [`remove_descendant`](View::remove_descendant) /
+    /// [`focus_descendant`](View::focus_descendant): the flag write and the
+    /// `reset_current` happen in the *owning group* (a view cannot re-current its
+    /// owner — it doesn't know it, D3). Backs
+    /// [`Deferred::SetVisible`](crate::view::Deferred::SetVisible) (the
+    /// `TScroller::showSBar` → `show`/`hide` path). Base: `false` (a leaf owns
+    /// nothing).
+    fn set_visible_descendant(&mut self, id: ViewId, visible: bool, ctx: &mut Context) -> bool {
+        let _ = (id, visible, ctx);
+        false
     }
 
     /// `TView`/`TWindow::number` — the window number for Alt-N selection. Base

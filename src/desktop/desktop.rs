@@ -198,6 +198,13 @@ impl Desktop {
         self.group.insert(view)
     }
 
+    /// The embedded group's current (selected) child — test/inspection hook for
+    /// the A2 currency tests (the group field is module-private).
+    #[cfg(test)]
+    pub(crate) fn current_child(&self) -> Option<ViewId> {
+        self.group.current()
+    }
+
     /// Insert `view` into the desktop and immediately focus it — the runtime
     /// window-open seam used by `Program::desktop_insert`. Combines `insert_view`
     /// with a `focus_child` call so the new window receives keyboard input at once.
@@ -207,28 +214,17 @@ impl Desktop {
         ctx: &mut crate::view::Context,
     ) -> ViewId {
         let id = self.group.insert(view);
-        // Establish the inserted view's INTERNAL currency before focusing it.
-        // rstv's ctx-less Group::insert skips the C++ show()->resetCurrent cascade
-        // (TView::setState sfVisible -> owner->resetCurrent for ofSelectable views),
-        // so a freshly inserted window arrives with current == None. reset_current
-        // sets its current (selected, unfocused) so the subsequent set_current
-        // cascades focus into the first selectable child (e.g. an EditWindow's
-        // FileEditor). Mirrors exec_view's post-insert reset hook in program.rs.
-        // Without this an inserted EditWindow opens keyboard-dead (typing + Save
-        // route to the window's current, which would otherwise be None).
-        //
-        // focus_child == the faithful C++ focus()/select() path. It used to be a
-        // trap here: a freshly-inserted window is already at the top of the
-        // Z-order, so make_first -> put_in_front_of hit the already_in_place
-        // no-op and its resetCurrent tail (the only thing that established
-        // currency) never ran — this site worked around it with a direct
-        // set_current. That trap was fixed at the foundation in
-        // `Group::focus_child` (the self-heal: after make_first it re-asserts
-        // currency when the child is still not current), so the workaround is
-        // retired and the normal focus path applies.
-        if let Some(v) = self.group.find_mut(id) {
-            v.reset_current(ctx);
-        }
+        // focus_child == the faithful C++ focus()/select() path; it gives the
+        // window same-instant focus (the focus_child self-heal re-asserts
+        // currency when the freshly-inserted window is already topmost). The
+        // window's own INTERNAL currency (its first selectable child, e.g. an
+        // EditWindow's FileEditor) comes from the insert-time `currency_dirty`
+        // marker the `Group::insert` above set: the pump's settle_currency pass
+        // (A2) runs the pending reset_current BEFORE the next event pick, so
+        // typing routes into the new window's child exactly as after a C++
+        // insert-time show()->resetCurrent. (The explicit pre-focus
+        // reset_current that used to live here was that cascade's per-site
+        // compensation; retired by A2.)
         self.group.focus_child(id, ctx);
         id
     }
@@ -837,6 +833,50 @@ mod tests {
             desktop.group.current(),
             None,
             "reset_current ran on the owning desktop group"
+        );
+    }
+
+    /// A2 delegation: `settle_currency` forwards through the `#[delegate]`
+    /// chain Desktop → Window → inner group (the specs.rs forwarder). A missing
+    /// forwarder would leave an embedder on the no-op trait default and the
+    /// settle would silently never descend — this is the spy the CLAUDE.md
+    /// delegation convention demands for a new `View` method.
+    #[test]
+    fn settle_currency_descends_desktop_window_inner_group() {
+        use crate::widgets::{Button, ButtonFlags};
+
+        let mut window = Window::new(Rect::new(2, 1, 30, 12), Some("W".into()), 1);
+        // A selectable child in the WINDOW's inner group (buttons are selectable).
+        let child_id = window.insert_child(Box::new(Button::new(
+            Rect::new(2, 2, 12, 4),
+            "OK",
+            crate::command::Command::OK,
+            ButtonFlags::new(),
+        )));
+        let mut desktop = Desktop::new(Rect::new(0, 0, 80, 25), |_| None);
+        let window_id = desktop.group.insert(Box::new(window));
+
+        // Plain ctx-less inserts only — currency is fully unsettled.
+        assert_eq!(desktop.group.current(), None, "nothing settled yet");
+
+        with_ctx(|ctx| {
+            let v: &mut dyn View = &mut desktop;
+            v.settle_currency(ctx);
+        });
+
+        assert_eq!(
+            desktop.group.current(),
+            Some(window_id),
+            "the desktop group's own pending reset settled (window current)"
+        );
+        let child_selected = desktop
+            .find_mut(child_id)
+            .map(|v| v.state().state.selected)
+            .expect("child resolves");
+        assert!(
+            child_selected,
+            "the settle DESCENDED through Desktop → Window → inner group \
+             (the child was made current/selected by the window's settled reset)"
         );
     }
 }

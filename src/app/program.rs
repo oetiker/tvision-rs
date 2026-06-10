@@ -377,41 +377,36 @@ impl Program {
             }
         }
 
-        // Make the desktop current so focused (key/command) events route into it.
-        // `Group::insert` (row 26) deliberately never auto-selects, so we drive it
-        // here via a throwaway Context; the RECEIVED_FOCUS broadcast it queues
-        // sits in `out_events` and is processed on the first pump.
-        if let Some(id) = desktop {
+        // STARTUP CURRENCY (A2): one eager settle pass over the whole tree — the
+        // insert-time show()->resetCurrent cascade C++ runs inline at every
+        // insert of an ofSelectable view (`show() -> setState(sfVisible) ->
+        // owner->resetCurrent()`). The ctx-less inserts above (desktop / status
+        // line / menu bar, plus anything the factories pre-inserted, e.g. the
+        // examples/hello.rs window stack) each marked their owning group
+        // `currency_dirty`; settle_currency runs the pending reset_currents
+        // POST-ORDER (children first), so:
+        //   - every pre-inserted window's INTERNAL currency exists before the
+        //     desktop's reset descends into it (the formerly-latent nested gap —
+        //     a window's own children settle before the window is focused);
+        //   - the desktop's reset makes the topmost ofTopSelect window current;
+        //   - the root's reset makes the desktop current (firstMatch checks
+        //     children[0] == the desktop, which is selectable) and — the root
+        //     group is already sfFocused (the C++ ctor state bits above) — the
+        //     focus cascade descends desktop -> window -> child.
+        // With no selectable child anywhere this whole pass is a no-op.
+        //
+        // Side-effect bookkeeping (preserved from the pre-A2 explicit block): a
+        // window's set_state(Selected) queues Deferred::EnableCommand(NEXT/...)
+        // and the focus cascade queues RECEIVED_FOCUS broadcasts into
+        // out_events. The first pump pops one of those broadcasts (out_events is
+        // non-empty: the desktop-focus broadcast is unconditional), and its
+        // post-dispatch drain applies the whole deferred queue — so nothing is
+        // lost and no explicit apply step is needed here.
+        {
             let now = clock.now_ms();
             let mut ctx = Context::new(&mut out_events, &mut timers, now, &mut deferred);
-            group.set_current(Some(id), SelectMode::Normal, &mut ctx);
-
-            // STARTUP CURRENCY (the insert-time show()->resetCurrent cascade,
-            // collapsed to one call). In C++, every `insert` of an ofSelectable
-            // view runs `show() -> setState(sfVisible) -> owner->resetCurrent()`,
-            // so by `run()` time a desktop pre-populated with windows (the
-            // examples/hello.rs `init_desktop` shape) already has its topmost
-            // ofTopSelect window current+focused. rstv's ctx-less `Group::insert`
-            // (D3) deliberately never touches currency, so a factory-populated
-            // desktop would start with `current == None`: no window focused, and
-            // (before the focus_child self-heal) a click on the topmost window
-            // was a no-op. Establish the desktop's INTERNAL currency once here,
-            // AFTER the desktop itself was focused above, so set_current's
-            // focusView cascade reaches the chosen window — exactly the order a
-            // runtime C++ insert sees (desktop already focused). With no
-            // selectable child (an empty desktop) this is a no-op
-            // (set_current(None) early-returns on current == None).
-            //
-            // Side-effect bookkeeping: the window's set_state(Selected) queues
-            // Deferred::EnableCommand(NEXT/PREV/...) and the focus cascade queues
-            // RECEIVED_FOCUS broadcasts into out_events. The first pump pops one
-            // of those broadcasts (out_events is non-empty: the desktop-focus
-            // broadcast above is unconditional), and its post-dispatch drain
-            // applies the whole deferred queue — so nothing is lost and no
-            // explicit apply step is needed here.
-            if let Some(v) = group.find_mut(id) {
-                v.reset_current(&mut ctx);
-            }
+            ctx.set_disabled_commands(disabled_commands.clone());
+            group.settle_currency(&mut ctx);
         }
 
         Program {
@@ -1026,7 +1021,11 @@ impl Program {
         //      Dialog delegates `state`) + setState(sfModal, True) set directly (C++
         //      TGroup::setState propagates sfActive/sfDragging/sfFocused, NEVER sfModal,
         //      so a direct write is the faithful port). The saveOptions/restore is moot
-        //      — the view is dropped on remove (step 8).
+        //      — the view is dropped on remove (step 8). Clearing ofSelectable here
+        //      also means the step-8 `Group::remove` never fires the A2 stage-4
+        //      visible+selectable removal tail for the modal: its reset_current
+        //      runs through the `was_current` leg instead (the modal was
+        //      set_current'd in step 5), exactly the pre-stage-4 behavior.
         if let Some(v) = self.group.find_mut(id) {
             let st = v.state_mut();
             st.options.selectable = false;
@@ -1037,18 +1036,21 @@ impl Program {
         //    current (the desktop stays selected beneath). Build a throwaway
         //    Context over the disjoint fields (the pump's discipline).
         //
-        // INITIAL-CURRENCY SEAM (now BUILT — `View::reset_current` below). This
-        // selects the modal VIEW within the root group; but the modal's OWN internal
-        // currency (its first selectable child) must also be established. C++ gets
-        // that for free via `insertView → show → resetCurrent`; rstv's `Group::insert`
-        // takes no `Context`, so it cannot run `reset_current` at insert. Without the
-        // seam a modal opened here (e.g. a general `Dialog`) would have `current ==
-        // None` until a nav event — an immediate Esc/Enter would reach no child and
-        // the inner loop would spin. We close the gap by calling `reset_current` on
-        // the freshly-inserted modal here (the post-insert reset hook), BEFORE the
-        // `set_current(Enter)` focus below. Row 57's history popup keeps its LOCAL
-        // `Window::select_child` workaround (belt-and-suspenders; out of scope to
-        // remove).
+        // 5a. THE FAITHFUL OPEN HOOK (kept under A2 — not a compensation). This
+        // VIRTUAL `reset_current` on the freshly-inserted modal is the C++
+        // open-time `insertView → show → resetCurrent` for the modal itself, and
+        // it must stay even though the pump's settle_currency pass (A2) now
+        // covers plain inserts, because:
+        //   - it carries the VIRTUAL overrides' one-time init —
+        //     `FileDialog::reset_current`'s initial `readDirectory` (filedlg.rs)
+        //     and `ChDirDialog`'s `setUpDialog` — which the settle pass cannot
+        //     reach (settle runs the INHERENT `Group::reset_current` by design);
+        //   - it must run BEFORE the `set_current(Enter)` focus below (so focus
+        //     cascades into the modal's first selectable child) and before
+        //     `initial_focus`, i.e. earlier than the next pump's settle;
+        //   - it clears the modal group's `currency_dirty` flag (reset_current →
+        //     set_current), so the settle pass never double-runs on this modal
+        //     and cannot clobber the `initial_focus` applied below.
         {
             let now = self.clock.now_ms();
             let mut ctx = Context::new(
@@ -1057,14 +1059,11 @@ impl Program {
                 now,
                 &mut self.deferred,
             );
-            // Establish the modal's INTERNAL currency (the show()→resetCurrent
-            // cascade that rstv's ctx-less Group::insert skips — see
-            // View::reset_current). MUST precede the focus below: this sets the
-            // modal's `current` (selected, unfocused) so that when
-            // set_current(Enter) focuses the modal, focus cascades into its first
-            // selectable child. Without this the modal opens keyboard-dead (an
-            // immediate Esc/Enter reaches no child and the inner loop spins — the gap
-            // formerly worked around locally by HistoryWindow::select_child).
+            // Establish the modal's INTERNAL currency (selected, unfocused) so
+            // that when set_current(Enter) focuses the modal, focus cascades
+            // into its first selectable child. Without this the modal opens
+            // keyboard-dead until the next pump's settle (an immediate Esc/Enter
+            // queued before the open would reach no child).
             if let Some(v) = self.group.find_mut(id) {
                 v.reset_current(&mut ctx);
             }
@@ -1327,6 +1326,19 @@ impl Program {
 
         // 2. Sample the clock once for this pass.
         let now = clock.now_ms();
+
+        // 2b. Settle pending insert-time currency cascades (A2) BEFORE the event
+        //     pick, so the dispatched event sees C++-equivalent currency: in C++
+        //     every insert of a visible+selectable view ran show()->resetCurrent
+        //     inline, so the very next event already routed to the new currency.
+        //     A group whose `currency_dirty` was set by a ctx-less insert (and
+        //     not superseded by an explicit set_current since) reset-currents
+        //     here; everywhere else this walk is a no-op.
+        {
+            let mut ctx = Context::new(out_events, timers, now, deferred);
+            ctx.set_disabled_commands(disabled_commands.clone());
+            group.settle_currency(&mut ctx);
+        }
 
         // 3. Pick the next event: drain the internal queue first, else poll.
         let timeout = event_wait_timeout(timers, now);
@@ -1644,12 +1656,16 @@ impl Program {
                                     }
                                 }
                                 // Visibility direction (TScroller::showSBar →
-                                // show/hide): set visible directly (no propagating
-                                // StateFlag::Visible; the painter skips !visible).
+                                // show/hide): write the flag in the OWNING group
+                                // (no propagating StateFlag::Visible; the painter
+                                // skips !visible) and run the C++
+                                // setState(sfVisible) currency tail — if the flag
+                                // really changed and the child is selectable, the
+                                // owning group resetCurrents, BOTH directions (A2).
+                                // Today's consumers (scrollbars / indicators) are
+                                // non-selectable, so the tail is a no-op for them.
                                 Deferred::SetVisible(id, visible) => {
-                                    if let Some(view) = group.find_mut(id) {
-                                        view.state_mut().state.visible = visible;
-                                    }
+                                    group.set_visible_descendant(id, visible, &mut ctx);
                                 }
                                 // -- row 28: TListViewer read-sync broker -------
                                 //
@@ -2560,7 +2576,7 @@ mod tests {
 
         // Select window #1 through the *production* path: inject Alt+'1' and pump.
         // At construction the desktop is root-current with its own `current` on the
-        // topmost window #n (Program::new's startup reset_current — the C++
+        // topmost window #n (Program::new's startup settle_currency — the C++
         // insert-time invariant); window valid(cmReleasedFocus) (canMoveFocus) is
         // true by default and the Alt-N walk selects window 1. The pump then drains
         // `deferred`, so the
@@ -3000,7 +3016,7 @@ mod tests {
                 let mut desktop = Desktop::new(r, |r2| Some(Desktop::init_background(r2)));
                 // okButton: bfDefault (the initial default). chDirButton: bfNormal.
                 // Insert chdir FIRST so the bfDefault okButton is topmost: startup
-                // currency (Program::new's reset_current, the C++ insert-time
+                // currency (Program::new's settle_currency, the C++ insert-time
                 // show()->resetCurrent invariant) focuses the topmost selectable
                 // child, and a focused NON-default button would grab the default
                 // (TButton::setState sfFocused -> makeDefault) before the test's
@@ -3532,8 +3548,8 @@ mod tests {
     /// The examples/hello.rs shape: a desktop pre-populated with staggered
     /// windows via the ctx-less `Desktop::insert_view`. C++'s insert-time
     /// `show()->resetCurrent()` cascade guarantees the topmost ofTopSelect
-    /// window is current by `run()` time; rstv collapses that into the single
-    /// `reset_current` at the end of `Program::new`. Bite (the fixed bug):
+    /// window is current by `run()` time; rstv collapses that into the eager
+    /// `settle_currency` pass at the end of `Program::new`. Bite (the fixed bug):
     /// without it NO window was focused at startup, and a click on the topmost
     /// window was a complete no-op (focus_child -> make_first hit
     /// put_in_front_of's already-in-place no-op, so set_current never ran).
@@ -3614,6 +3630,192 @@ mod tests {
         assert!(
             !win_selected(&mut program, w3),
             "w3 deselected after the click"
+        );
+    }
+
+    // -- A2: the settle_currency cascade (insert-time show()->resetCurrent) ---
+
+    /// Downcast the program's desktop child to the concrete [`Desktop`] (the
+    /// `as_any_mut` hatch) — the A2 tests' route to `current_child` /
+    /// `insert_view`.
+    fn desktop_concrete(program: &mut Program) -> &mut Desktop {
+        let id = program.desktop().expect("a desktop exists");
+        program
+            .group_mut()
+            .find_mut(id)
+            .and_then(|v| v.as_any_mut())
+            .and_then(|a| a.downcast_mut::<Desktop>())
+            .expect("the desktop child downcasts to Desktop")
+    }
+
+    /// NESTED-GAP BITE (A2). C++ runs `insertView → show() →
+    /// setState(sfVisible) → owner->resetCurrent()` at EVERY level, so a
+    /// ctor-built desktop holding a window that itself holds a selectable child
+    /// has the full currency chain (desktop→window→child) before the first
+    /// event. rstv's ctx-less inserts defer that to `Program::new`'s eager
+    /// `settle_currency` pass, which runs POST-ORDER (children first) so the
+    /// window's INTERNAL currency exists before the desktop's focus cascade
+    /// descends into it. Before A2 (base d4358bf) `Program::new` reset only the
+    /// DESKTOP's currency: the window became current+focused but its own
+    /// `current` stayed `None` — the child unfocused, typing lost (this test
+    /// fails there on every assertion past the first).
+    #[test]
+    fn startup_settles_nested_preinserted_window_currency() {
+        let (backend, _handle) = HeadlessBackend::new(80, 25);
+        let theme = Theme::classic_blue();
+        let clock = Rc::new(ManualClock::new(0));
+        let log: Rc<RefCell<Vec<Event>>> = Rc::new(RefCell::new(Vec::new()));
+        let ids: Rc<RefCell<Vec<crate::view::ViewId>>> = Rc::new(RefCell::new(Vec::new()));
+        let (log_cap, ids_cap) = (log.clone(), ids.clone());
+        let mut program = Program::new(
+            Box::new(backend),
+            Box::new(clock),
+            theme,
+            move |r| {
+                let mut desktop = Desktop::new(r, |r2| Some(Desktop::init_background(r2)));
+                let mut win = Window::new(Rect::new(4, 2, 40, 14), Some("W".into()), 1);
+                // A selectable, event-logging child INSIDE the window's group.
+                let child =
+                    win.insert_child(Box::new(Probe::new(Rect::new(2, 2, 20, 6), 'P', log_cap)));
+                let win_id = desktop.insert_view(Box::new(win));
+                ids_cap.borrow_mut().extend([win_id, child]);
+                Some(Box::new(desktop))
+            },
+            |_r| None,
+            |_r| None,
+        );
+        let (win_id, child_id) = {
+            let b = ids.borrow();
+            (b[0], b[1])
+        };
+
+        // After Program::new ALONE (no pump): the whole chain is settled.
+        assert_eq!(
+            desktop_concrete(&mut program).current_child(),
+            Some(win_id),
+            "desktop current = the pre-inserted window"
+        );
+        let (sel, foc) = program
+            .group_mut()
+            .find_mut(child_id)
+            .map(|v| (v.state().state.selected, v.state().state.focused))
+            .expect("child resolves");
+        assert!(
+            sel,
+            "window current = child (selected by the window's settled reset_current — \
+             the formerly-latent nested gap)"
+        );
+        assert!(
+            foc,
+            "child focused (the focus cascade descended desktop→window→child)"
+        );
+
+        // A typed key reaches the child.
+        program.out_events.clear(); // drop the startup focus broadcasts
+        program.out_events.push_back(key(Key::Char('x')));
+        program.pump_once();
+        assert!(
+            log.borrow()
+                .iter()
+                .any(|e| matches!(e, Event::KeyDown(k) if k.key == Key::Char('x'))),
+            "a typed key routes desktop→window→child"
+        );
+    }
+
+    /// SETTLE-BEFORE-DISPATCH (A2). A plain ctx-less insert between pumps (the
+    /// bare `Desktop::insert_view` seam — no focus_child, no reset_current
+    /// anywhere) must be keyboard-live by the very next event: `pump_once`
+    /// settles pending currency (step 2b) BEFORE the event pick, exactly as the
+    /// C++ insert-time cascade completed before any subsequent event.
+    #[test]
+    fn plain_insert_between_pumps_routes_next_key_into_new_window() {
+        let (mut program, _handle, _clock) = program_with_desktop(80, 25);
+        program.pump_once(); // steady state
+        program.out_events.clear();
+
+        let log: Rc<RefCell<Vec<Event>>> = Rc::new(RefCell::new(Vec::new()));
+        let mut win = Window::new(Rect::new(4, 2, 40, 14), Some("W".into()), 1);
+        let _child = win.insert_child(Box::new(Probe::new(
+            Rect::new(2, 2, 20, 6),
+            'K',
+            log.clone(),
+        )));
+        desktop_concrete(&mut program).insert_view(Box::new(win)); // plain insert
+
+        // ONE pump: settle runs before the event pick → the key lands in the child.
+        program.out_events.push_back(key(Key::Char('k')));
+        program.pump_once();
+        assert!(
+            log.borrow()
+                .iter()
+                .any(|e| matches!(e, Event::KeyDown(k) if k.key == Key::Char('k'))),
+            "the first key after a plain insert reaches the new window's child"
+        );
+    }
+
+    /// HIDE/SHOW CURRENCY (A2 stage 3). The C++ `TView::setState(sfVisible)`
+    /// tail `if (options & ofSelectable) owner->resetCurrent()` runs in BOTH
+    /// directions (show and hide). `Deferred::SetVisible` routes through
+    /// `set_visible_descendant`, which runs that tail in the OWNING group; a
+    /// non-selectable child's visibility never moves currency.
+    #[test]
+    fn set_visible_deferred_moves_currency_both_directions() {
+        let (mut program, _handle, _clock) = program_with_desktop(80, 25);
+        let log: Rc<RefCell<Vec<Event>>> = Rc::new(RefCell::new(Vec::new()));
+        let mut win = Window::new(Rect::new(4, 2, 40, 14), Some("W".into()), 1);
+        // B below A (A topmost) so firstMatch lands on A; C is a non-selectable
+        // topmost sibling.
+        let b = win.insert_child(Box::new(Probe::new(
+            Rect::new(2, 2, 10, 4),
+            'B',
+            log.clone(),
+        )));
+        let a = win.insert_child(Box::new(Probe::new(
+            Rect::new(12, 2, 20, 4),
+            'A',
+            log.clone(),
+        )));
+        let mut c_probe = Probe::new(Rect::new(22, 2, 30, 4), 'C', log.clone());
+        c_probe.st.options.selectable = false;
+        let c = win.insert_child(Box::new(c_probe));
+        desktop_concrete(&mut program).insert_view(Box::new(win));
+        program.pump_once(); // settle: window current = A (topmost selectable)
+        program.out_events.clear();
+
+        let focused = |program: &mut Program, id| {
+            program
+                .group_mut()
+                .find_mut(id)
+                .map(|v| v.state().state.focused)
+                .expect("probe resolves")
+        };
+        assert!(focused(&mut program, a), "A current+focused after settle");
+
+        // Hide A: the owning group's reset_current snaps currency to B.
+        // (The drain only runs after a dispatched event, so push a benign key.)
+        program.deferred.push(Deferred::SetVisible(a, false));
+        program.out_events.push_back(key(Key::Char('.')));
+        program.pump_once();
+        assert!(!focused(&mut program, a), "hidden A lost focus");
+        assert!(focused(&mut program, b), "hide direction: current == B");
+
+        // Show A: the reset RE-RAN (A is the topmost selectable again).
+        program.deferred.push(Deferred::SetVisible(a, true));
+        program.out_events.push_back(key(Key::Char('.')));
+        program.pump_once();
+        assert!(
+            focused(&mut program, a),
+            "show direction: reset re-ran, currency back on A"
+        );
+        assert!(!focused(&mut program, b), "B released focus");
+
+        // Hiding the NON-selectable C does not move currency.
+        program.deferred.push(Deferred::SetVisible(c, false));
+        program.out_events.push_back(key(Key::Char('.')));
+        program.pump_once();
+        assert!(
+            focused(&mut program, a),
+            "hiding a non-selectable child leaves currency untouched"
         );
     }
 
@@ -7354,13 +7556,17 @@ mod tests {
             );
         }
 
-        // BITE for the first-event currency fix (HistoryWindow setup guard calls
-        // window.select_child). A freshly-opened HistoryWindow must dismiss on the
-        // FIRST focused event with NO prior nav: bare exec_view + [Esc] → CANCEL,
-        // + [Enter] → OK. Before the fix the window's internal `current` is None on
-        // open (Group::insert has no ctx → no reset_current), so Esc/Enter reach no
-        // child, never set end_state, and the inner exec_view spins forever (headless
-        // never blocks). VERIFIED: reverting the select_child call makes this hang.
+        // BITE for the open-time currency seam. A freshly-opened HistoryWindow must
+        // dismiss on the FIRST focused event with NO prior nav: bare exec_view +
+        // [Esc] → CANCEL, + [Enter] → OK. Without open-time currency the window's
+        // internal `current` is None on open (Group::insert has no ctx), so
+        // Esc/Enter reach no child, never set end_state, and the inner exec_view
+        // spins forever (headless never blocks). The currency is established by
+        // exec_view's kept post-insert virtual `reset_current` (the faithful open
+        // hook) — the viewer is the popup's first visible+selectable child. The
+        // first-event `select_child` workaround that used to live in
+        // HistoryWindow::handle_event was redundant with that hook (this test
+        // stays green with it retired — A2) and has been removed.
         #[test]
         fn no_nav_first_event_dismisses_popup_bite() {
             clear_history();
@@ -7663,6 +7869,68 @@ mod tests {
                 result,
                 Command::OK,
                 "direct cmOK ends the message box with OK"
+            );
+        }
+
+        /// CLOBBER GUARD (A2 keystone). `exec_view`'s `initial_focus` (C++
+        /// messageBox's `selectNext(False)`) must SURVIVE the pump's
+        /// `settle_currency` pass: every explicit `set_current` clears the
+        /// owning group's pending `currency_dirty` (including on the
+        /// `current == p` early-return leg — see
+        /// `group::tests::set_current_early_return_still_clears_pending_insert_reset`
+        /// for the direct pin), so the settle never re-runs `reset_current`
+        /// over a deliberately-chosen focus. A regression here would snap the
+        /// focused Yes button back to firstMatch (Cancel) on the first pump.
+        #[test]
+        fn settle_does_not_clobber_msgbox_initial_focus() {
+            use crate::dialog::build_message_box;
+            use crate::view::SelectMode;
+
+            let (mut program, _handle, _clock) = program_with_desktop(80, 25);
+            let (d, first_btn) = build_message_box(
+                crate::view::Rect::new(10, 5, 50, 14),
+                "Delete everything?",
+                MessageBoxKind::Confirmation,
+                MessageBoxButtons::yes_no_cancel(),
+            );
+            let first_btn = first_btn.expect("yes_no_cancel has an enabled first button");
+
+            // Replicate exec_view's open steps (sans the blocking loop) — the
+            // focused_space test's established pattern.
+            let id = program.group_mut().insert(Box::new(d));
+            if let Some(v) = program.group_mut().find_mut(id) {
+                v.state_mut().options.selectable = false;
+                v.state_mut().state.modal = true;
+            }
+            program.with_ctx(|g, ctx| {
+                if let Some(v) = g.find_mut(id) {
+                    v.reset_current(ctx); // step 5a: the faithful open hook
+                }
+                g.set_current(Some(id), SelectMode::Enter, ctx);
+                if let Some(v) = g.find_mut(id) {
+                    v.focus_descendant(first_btn, ctx); // initial_focus
+                }
+            });
+            program.out_events.clear();
+
+            let yes_focused = |program: &mut Program| {
+                program
+                    .group_mut()
+                    .find_mut(first_btn)
+                    .map(|v| v.state().state.focused)
+                    .expect("first button resolves")
+            };
+            assert!(
+                yes_focused(&mut program),
+                "initial_focus focused the first (Yes) button"
+            );
+
+            // Pump once: the settle pass (step 2b) runs and must be a NO-OP —
+            // every insert-time flag was superseded by the explicit currency ops.
+            program.pump_once();
+            assert!(
+                yes_focused(&mut program),
+                "settle did not clobber initial_focus back to firstMatch (Cancel)"
             );
         }
 

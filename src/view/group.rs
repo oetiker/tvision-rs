@@ -89,6 +89,11 @@ pub struct Group {
     children: Vec<Child>,
     /// The current (selected) child — C++ `current`, as a [`ViewId`] (D3).
     current: Option<ViewId>,
+    /// A visible+selectable child was inserted since the last `set_current` —
+    /// the pending C++ insert-time `show()`→`resetCurrent` cascade (A2).
+    /// Settled by [`View::settle_currency`]; cleared by any explicit
+    /// [`set_current`](Group::set_current).
+    currency_dirty: bool,
 }
 
 impl Group {
@@ -109,6 +114,7 @@ impl Group {
             st,
             children: Vec::new(),
             current: None,
+            currency_dirty: false,
         }
     }
 
@@ -200,6 +206,14 @@ impl Group {
     /// as-is). Centering is therefore the only observable effect here. It does
     /// **not** auto-set `current` — `insert` alone never focuses; callers use
     /// [`set_current`](Self::set_current)/[`reset_current`](Self::reset_current).
+    ///
+    /// **Insert-time currency (A2):** inserting a visible+selectable child marks
+    /// `currency_dirty` — the deferred stand-in for the C++ `insertBefore` tail
+    /// `if (saveState & sfVisible) p->show()` → `TView::setState(sfVisible)` →
+    /// `if (options & ofSelectable) owner->resetCurrent()` (tgroup.cpp:391 /
+    /// tview.cpp). The flag is settled by [`View::settle_currency`] (the pump /
+    /// `Program::new`), which runs the inherent `reset_current`; any explicit
+    /// `set_current` in between supersedes it (clears the flag).
     pub fn insert(&mut self, mut view: Box<dyn View>) -> ViewId {
         // ofCenterX/ofCenterY centering (insertBefore).
         let opts = view.state().options;
@@ -219,6 +233,12 @@ impl Group {
 
         let id = ViewId::next();
         view.state_mut().id = Some(id); // stamp the view's own handle (self-id)
+        // A2: pending insert-time show()->resetCurrent, gated exactly like the
+        // C++ (sfVisible + ofSelectable); settled by settle_currency.
+        let s = view.state();
+        if s.options.selectable && s.state.visible {
+            self.currency_dirty = true;
+        }
         self.children.push(Child { id, view });
         id
     }
@@ -257,20 +277,35 @@ impl Group {
         }
 
         view.state_mut().id = Some(id); // stamp the caller-supplied handle
+        // A2: same pending insert-time show()->resetCurrent marker as `insert`
+        // (a menu box is non-selectable, so this is a no-op on the menu path).
+        let s = view.state();
+        if s.options.selectable && s.state.visible {
+            self.currency_dirty = true;
+        }
         self.children.push(Child { id, view });
     }
 
     /// Remove the child named by `id` (no-op if it is not a child). Ports
-    /// `TGroup::remove` → `removeView`: if the removed child was `current`, the
-    /// group resets `current` to another selectable child afterward.
+    /// `TGroup::remove` (tgroup.cpp:112): `p->hide()` → `removeView`. The
+    /// `hide()` runs `TView::setState(sfVisible, false)`, whose tail
+    /// `if (options & ofSelectable) owner->resetCurrent()` fires for ANY
+    /// visible+selectable child — so C++ resets currency on removal of a
+    /// visible+selectable child whether or not it was `current` (A2 stage 4).
+    /// A removed `current` additionally vacates the slot first.
     pub fn remove(&mut self, id: ViewId, ctx: &mut Context) {
         let Some(i) = self.index_of(id) else {
             return;
         };
         let was_current = self.current == Some(id);
+        // The remove→hide tail's gate, read BEFORE the child is dropped.
+        let s = self.children[i].view.state();
+        let needs_reset = was_current || (s.state.visible && s.options.selectable);
         self.children.remove(i);
         if was_current {
             self.current = None;
+        }
+        if needs_reset {
             self.reset_current(ctx);
         }
     }
@@ -282,6 +317,14 @@ impl Group {
     /// `focusView`/`selectView` (`tgroup.cpp`), with the D8 `lock`/`unlock`
     /// redraw bracket dropped.
     pub fn set_current(&mut self, p: Option<ViewId>, mode: SelectMode, ctx: &mut Context) {
+        // A2 KEYSTONE — DO NOT MOVE BELOW THE EARLY RETURN. Any explicit currency
+        // op supersedes the pending insert-time reset: clearing `currency_dirty`
+        // here (including on the `current == p` early-return leg) is the ENTIRE
+        // defense against the settle pass clobbering explicit focus afterwards
+        // (exec_view's initial_focus / set_current(Enter), any focus_child).
+        // Without it, settle_currency would re-run reset_current after the caller
+        // deliberately chose a different child, snapping focus back to firstMatch.
+        self.currency_dirty = false;
         if self.current == p {
             return;
         }
@@ -345,10 +388,14 @@ impl Group {
     /// tail is skipped by the already-in-place no-op, which is safe in C++ only
     /// because insert-time `show()`→`resetCurrent()` keeps the topmost
     /// `ofTopSelect` window current (an already-top window is already current).
-    /// rstv's ctx-less `Group::insert` (D3) can break that invariant — a freshly
-    /// inserted window is topmost but `current == None` — and a click on it
-    /// would then be a complete no-op. When the invariant holds, the self-heal
-    /// is itself a no-op (`set_current` early-returns on `current == p`).
+    /// rstv's ctx-less `Group::insert` (D3) defers that cascade to the pump's
+    /// `settle_currency` pass (A2), so the invariant now self-restores between
+    /// events — but the self-heal **remains load-bearing for same-instant focus
+    /// within one call sequence** (the e8d82f2 bite): `Desktop::insert_and_focus`
+    /// calls `focus_child` on a just-inserted, not-yet-settled topmost window,
+    /// where `current` is still `None`/stale. When the invariant holds, the
+    /// self-heal is itself a no-op (`set_current` early-returns on
+    /// `current == p`).
     ///
     /// **`ofSelectable` gate:** the real C++ `TView::select()` has an outer guard
     /// `if( (options & ofSelectable) != 0 && owner != 0 )`. That gate is enforced
@@ -376,11 +423,13 @@ impl Group {
             // which the already_in_place no-op skips. That is safe in C++ only
             // because insert-time show()->resetCurrent() keeps the topmost
             // ofTopSelect window current (so an already-top window is already
-            // current). rstv's ctx-less Group::insert (D3) can break that
-            // invariant -- a freshly inserted window is topmost but current ==
-            // None -- and a click on it would then be a complete no-op. Re-assert
-            // currency explicitly; when the invariant holds this is a no-op
-            // (set_current early-returns on current == p).
+            // current). rstv defers that cascade to the pump's settle_currency
+            // pass (A2), so between events the invariant holds — but it REMAINS
+            // LOAD-BEARING for same-instant focus within one call sequence (the
+            // e8d82f2 bite): insert_and_focus calls focus_child on a just-
+            // inserted, not-yet-settled topmost window (current still None).
+            // Re-assert currency explicitly; when the invariant holds this is a
+            // no-op (set_current early-returns on current == p).
             if self.current != Some(id) {
                 self.set_current(Some(id), SelectMode::Normal, ctx);
             }
@@ -853,6 +902,34 @@ impl View for Group {
         false
     }
 
+    /// `Group`'s [`View::set_visible_descendant`] — write the flag in the OWNING
+    /// group and run the C++ `setState(sfVisible)` currency tail: if the flag
+    /// actually changed and the child is selectable, `resetCurrent()` — in BOTH
+    /// directions (show and hide), faithful to `tview.cpp`. A no-change write
+    /// runs no tail (C++ `setState` flips the bit unconditionally but show/hide
+    /// guard on the current state, so an idempotent call has no cascade).
+    /// Recurses like [`find_mut`](Self::find_mut) when `id` is not a direct child.
+    fn set_visible_descendant(&mut self, id: ViewId, visible: bool, ctx: &mut Context) -> bool {
+        if let Some(i) = self.index_of(id) {
+            let st = self.children[i].view.state_mut();
+            if st.state.visible != visible {
+                st.state.visible = visible;
+                if st.options.selectable {
+                    // The setState(sfVisible) tail: owner->resetCurrent()
+                    // (inherent — the owning group's own currency).
+                    Group::reset_current(self, ctx);
+                }
+            }
+            return true; // found (changed or not) — stop walking.
+        }
+        for child in self.children.iter_mut() {
+            if child.view.set_visible_descendant(id, visible, ctx) {
+                return true;
+            }
+        }
+        false
+    }
+
     /// `TGroup::resetCurrent` via the `View` trait — establishes the group's
     /// internal currency (first visible+selectable child). Delegates to the
     /// inherent [`Group::reset_current`](Group::reset_current) (the
@@ -861,6 +938,22 @@ impl View for Group {
     /// below is NOT recursion — it dispatches to the inherent fn, not back here.
     fn reset_current(&mut self, ctx: &mut Context) {
         Group::reset_current(self, ctx)
+    }
+
+    /// `Group`'s [`View::settle_currency`] — run pending insert-time
+    /// `resetCurrent` cascades, POST-ORDER (children first, so a child group's
+    /// currency exists before this group's focus cascade descends into it).
+    /// Runs the INHERENT [`Group::reset_current`] (not the virtual trait one) —
+    /// see the trait doc for why (FileDialog's one-time init must stay on the
+    /// `exec_view` virtual-call path).
+    fn settle_currency(&mut self, ctx: &mut Context) {
+        for i in 0..self.children.len() {
+            self.children[i].view.settle_currency(ctx);
+        }
+        if self.currency_dirty {
+            self.currency_dirty = false;
+            Group::reset_current(self, ctx);
+        }
     }
 
     /// `TGroup::valid` — for `cmReleasedFocus`, defer to the current child iff it
@@ -2056,6 +2149,9 @@ mod tests {
 
         // Two selectable + top_select "windows"; B inserted last == topmost.
         // The ctx-less insert leaves current == None (the broken invariant).
+        // B gets its OWN log so the key-routing assertion below proves the key
+        // reached B specifically (not just "some probe").
+        let log_b = Rc::new(RefCell::new(Vec::new()));
         let mut group = Group::new(Rect::new(0, 0, 20, 10));
         group.st.state.focused = true; // focused group: currency also focuses
         let (ida, idb) = with_ctx(&mut out, &mut timers, |_ctx| {
@@ -2063,7 +2159,7 @@ mod tests {
             a.st.options.selectable = true;
             a.st.options.top_select = true;
             let ida = group.insert(Box::new(a));
-            let mut b = Probe::new(Rect::new(6, 2, 18, 10), 'B', log.clone());
+            let mut b = Probe::new(Rect::new(6, 2, 18, 10), 'B', log_b.clone());
             b.st.options.selectable = true;
             b.st.options.top_select = true;
             let idb = group.insert(Box::new(b));
@@ -2085,6 +2181,24 @@ mod tests {
         // Z-order untouched (A bottom, B top — make_first's no-op stays a no-op).
         let order: Vec<_> = (0..group.len()).map(|i| group.children[i].id).collect();
         assert_eq!(order, vec![ida, idb], "no reorder for an already-top child");
+
+        // End-to-end dispatch after the self-heal: a focused-class event (key)
+        // routes through the three-phase router to the healed `current` — and
+        // is consumed there. Without the self-heal current would still be None
+        // and the key would fall through unrouted (the click-then-type no-op).
+        let mut ev = key(Key::Char('z'));
+        with_ctx(&mut out, &mut timers, |ctx| {
+            group.handle_event(&mut ev, ctx)
+        });
+        assert!(
+            log_b
+                .borrow()
+                .iter()
+                .any(|e| matches!(e, Event::KeyDown(k) if k.key == Key::Char('z'))),
+            "a key typed after the self-heal reaches the healed current (B)"
+        );
+        assert!(log.borrow().is_empty(), "A (not current) saw nothing");
+        assert!(ev.is_nothing(), "the key was consumed by the focused child");
     }
 
     /// Companion: `focus_child` on an already-current topmost child stays a
@@ -2266,13 +2380,16 @@ mod tests {
         let ida = with_ctx(&mut out, &mut timers, |_ctx| {
             let mut a = Probe::new(Rect::new(0, 0, 5, 5), 'A', log.clone());
             a.st.options.selectable = true;
-            // insert (ctx-less, D3) does NOT focus — current stays None.
+            // insert (ctx-less, D3) does NOT focus — current stays None. Since A2
+            // it instead marks `currency_dirty` (the pending insert-time
+            // show()->resetCurrent), settled later by settle_currency — insert
+            // itself still never touches `current`.
             group.insert(Box::new(a))
         });
         assert_eq!(
             group.current(),
             None,
-            "ctx-less insert leaves current == None (the gap exec_view must close)"
+            "ctx-less insert leaves current == None (insert sets a flag, never current)"
         );
 
         // Establish internal currency via the TRAIT method on &mut dyn View — the
@@ -2287,6 +2404,59 @@ mod tests {
             Some(ida),
             "reset_current via the trait sets current to the first selectable child"
         );
+    }
+
+    /// A2 keystone, EARLY-RETURN leg: `set_current` with `current == p`
+    /// early-returns, but MUST still clear `currency_dirty` — an explicit
+    /// currency op supersedes the pending insert-time reset even when it is a
+    /// no-op for `current` itself. A regression (clearing below the early
+    /// return) would leave the flag set and the next `settle_currency` would
+    /// snap currency to firstMatch, clobbering the explicit choice.
+    #[test]
+    fn set_current_early_return_still_clears_pending_insert_reset() {
+        let mut out = VecDeque::new();
+        let mut timers = TimerQueue::new();
+        let log = Rc::new(RefCell::new(Vec::new()));
+
+        let mut group = Group::new(Rect::new(0, 0, 40, 10));
+        // Non-selectable backstop at the bottom so firstMatch never lands on
+        // children[0] (it must discriminate against the explicit choice below).
+        let mut backstop = Probe::new(Rect::new(0, 0, 5, 5), 'N', log.clone());
+        backstop.st.options.selectable = false;
+        group.insert(Box::new(backstop));
+        let mut b = Probe::new(Rect::new(6, 0, 11, 5), 'B', log.clone());
+        b.st.options.selectable = true;
+        let idb = group.insert(Box::new(b));
+
+        // Explicitly choose B (clears the insert-time flags so far).
+        with_ctx(&mut out, &mut timers, |ctx| {
+            group.set_current(Some(idb), SelectMode::Normal, ctx)
+        });
+
+        // A new selectable topmost child marks the group dirty; firstMatch is
+        // now C (topmost selectable), NOT the current B.
+        let mut c = Probe::new(Rect::new(12, 0, 17, 5), 'C', log.clone());
+        c.st.options.selectable = true;
+        let idc = group.insert(Box::new(c));
+
+        // Re-assert the SAME current — the early-return leg. The flag must
+        // clear even though `current` does not change.
+        with_ctx(&mut out, &mut timers, |ctx| {
+            group.set_current(Some(idb), SelectMode::Normal, ctx)
+        });
+
+        // Settle: with the flag cleared this is a no-op; a regression would
+        // reset_current to firstMatch == C.
+        with_ctx(&mut out, &mut timers, |ctx| {
+            let v: &mut dyn View = &mut group;
+            v.settle_currency(ctx);
+        });
+        assert_eq!(
+            group.current(),
+            Some(idb),
+            "early-return set_current cleared the pending flag — settle stayed a no-op"
+        );
+        let _ = idc;
     }
 
     #[test]
@@ -2328,6 +2498,62 @@ mod tests {
             group.current(),
             Some(idb),
             "reset_current selected the remaining child"
+        );
+    }
+
+    /// A2 stage 4 — remove parity with C++ `TGroup::remove` (tgroup.cpp:112):
+    /// `p->hide()` → `removeView`, where `hide()`'s `setState(sfVisible, false)`
+    /// tail runs `owner->resetCurrent()` for ANY visible+selectable child. So
+    /// removing a NON-current visible+selectable child must still snap `current`
+    /// to firstMatch — not leave it where it was.
+    #[test]
+    fn remove_of_noncurrent_visible_selectable_child_resets_current() {
+        let mut out = VecDeque::new();
+        let mut timers = TimerQueue::new();
+        let log = Rc::new(RefCell::new(Vec::new()));
+
+        // A (bottom), B, C (top) — all visible+selectable; current = C.
+        let mut group = Group::new(Rect::new(0, 0, 40, 10));
+        let mk = |ch: char, x: i32, log: &Rc<RefCell<Vec<Event>>>| {
+            let mut p = Probe::new(Rect::new(x, 0, x + 5, 5), ch, log.clone());
+            p.st.options.selectable = true;
+            Box::new(p)
+        };
+        let ida = group.insert(mk('A', 0, &log));
+        let idb = group.insert(mk('B', 6, &log));
+        let idc = group.insert(mk('C', 12, &log));
+        with_ctx(&mut out, &mut timers, |ctx| {
+            group.set_current(Some(idc), SelectMode::Normal, ctx)
+        });
+        assert_eq!(group.current(), Some(idc), "C explicitly current");
+
+        // Remove B — NOT current, but visible+selectable: the remove→hide tail
+        // resets currency to firstMatch (A == children[0], checked first,
+        // faithful to C++ starting at `last`). Pre-stage-4, current stayed C.
+        with_ctx(&mut out, &mut timers, |ctx| group.remove(idb, ctx));
+        assert!(group.find_mut(idb).is_none(), "B gone");
+        assert_eq!(
+            group.current(),
+            Some(ida),
+            "removal of a non-current visible+selectable child re-ran resetCurrent \
+             (current snapped to firstMatch)"
+        );
+
+        // Counter-case: removing a HIDDEN child runs no tail (the C++ hide()
+        // gate `if (state & sfVisible)` means an already-hidden child's removal
+        // never reaches the setState tail).
+        let mut hidden = Probe::new(Rect::new(18, 0, 23, 5), 'H', log.clone());
+        hidden.st.options.selectable = true;
+        hidden.st.state.visible = false;
+        let idh = group.insert(Box::new(hidden));
+        with_ctx(&mut out, &mut timers, |ctx| {
+            group.set_current(Some(idc), SelectMode::Normal, ctx)
+        });
+        with_ctx(&mut out, &mut timers, |ctx| group.remove(idh, ctx));
+        assert_eq!(
+            group.current(),
+            Some(idc),
+            "removing a hidden child runs no reset (current unchanged)"
         );
     }
 
