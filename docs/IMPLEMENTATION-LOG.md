@@ -5,6 +5,24 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## Session addendum — B5 COMPLETE (2026-06-10)
+
+**`c917b4b`** — **B5: resize republish family + keyboard resize sub-mode.**
+
+*View::on_bounds_changed* — new default-no-op trait hook (`view.rs`). Called by the pump immediately after `Deferred::ChangeBounds` is applied. Faithful to the C++ pattern where `TScroller::changeBounds` / `TListViewer::changeBounds` both call a state-republish method *after* `setBounds`. Forwarder added to `tvision-macros/src/specs.rs` so `#[delegate(to = ...)]` sites forward it automatically.
+
+*Scroller::on_bounds_changed* — calls `set_limit(stored_limit, ctx)` with the unchanged `limit.x` / `limit.y`. Faithful to `TScroller::changeBounds` (tscrolle.cpp): the effect is to re-publish the scrollbar page-step (which depends on the new `size`) without changing the content limit.
+
+*list_viewer::on_bounds_changed* — free fn in `widgets/list_viewer.rs`; republishes each scrollbar's `pgStep` via `ctx.request_scroll_bar_params` with `None` for preserved fields. **Resize formula** (tlstview.cpp:68–75): `vbar pgStep = size.y` (plain height, not `size.y - 1` as the ctor uses), `hbar pgStep = size.x / numCols`. Adopted by ListBox, SortedListBox, HistoryViewer, FileList, DirListBox.
+
+*Outline::on_bounds_changed* — uses the Scroller formula (`ov_mut().set_limit(x, y, ctx)`). TOutlineViewer inherits TScroller, so this is correct.
+
+*Window::locate re-push set_zoomed* — after `group.change_bounds(bounds)`, immediately re-pushes `frame.set_zoomed(size == max)` through the downcast seam (D3). Resolves TODO(33d): the pushed bool previously went stale on owner resize; now mirrors C++'s per-draw recompute.
+
+*KeyboardResizeCapture* — full D9 implementation of `TView::dragView`'s keyboard `else`-branch (tview.cpp:294–356). Pushed on `cmResize`; state captured at push time: `save_bounds`, `limits` (owner extent), `min`/`max` from `sizeLimits()`, `mode` (limit bits + wfMove/wfGrow), `origin`, `size`. Arrow keys → `apply_delta(±1)`, Ctrl variants → `±8`/`±4` (faithful C++ kbCtrl* constants); Home/End set `origin.x` to `limits.a.x`/`limits.b.x - size.x`; PgUp/PgDn set `origin.y` similarly; Enter accepts (`sfDragging = false`, pop); Esc restores `save_bounds` then clears and pops. `cmResize` is now enabled in `Window::set_state` when `sfSelected && (wfMove || wfGrow)`.
+
+Total: **1127 lib tests green; clippy + fmt clean.**
+
 ## Session addendum — B1+B3+B6 COMPLETE (2026-06-10)
 
 **`680aabc`** — **B1 + B3: button graying + InputLine clipboard.**

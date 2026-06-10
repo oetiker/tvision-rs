@@ -14,26 +14,15 @@
 > When a row lands: add an IMPLEMENTATION-LOG section, tick the BACKLOG row,
 > update this file.
 
-## Current state (2026-06-10, B5 session — mid-stream)
+## Current state (2026-06-10, B5 committed)
 
-**HEAD = `5612938` (docs commit after B1+B3+B6); 1127 lib tests green on working tree; clippy + fmt clean. B5 is implemented but NOT yet committed — quality review was in-progress when session ended.**
+**HEAD = `c917b4b`; 1127 lib tests green; clippy + fmt clean.**
 
 ### What is on `main` (committed):
 - **B1 ✅ (`680aabc`)** — button `cmCommandSetChanged` graying; `Program::new` seeds `command_set_changed: true` for initial broadcast. InputLine `can_update_commands`/`update_commands` from `handle_event` + `set_state`.
 - **B3 ✅ (`680aabc`)** — InputLine cmCut/cmCopy/cmPaste; `Deferred::InputLinePaste` broker; `paste_text` (save_state + max_len clamp + check_valid).
 - **B6 ✅ (`6ae0222`)** — FileDialog/ChDirDialog `wfGrow`; screen-relative resize deferred to first `handle_event`; `SearchRec` attr/size/time from `std::fs` + `pack_dos_time`.
-
-### B5 — UNCOMMITTED, working tree only (1127 tests, clippy/fmt clean):
-Spec review **passed** (all checks). Quality review was running when session ended — re-run before integrating.
-
-B5 changes span 10 files:
-- **`View::on_bounds_changed` trait hook** (`src/view/view.rs`, `tvision-macros/src/specs.rs`) — default no-op called by the pump after `Deferred::ChangeBounds` (program.rs pump arm updated).
-- **`Scroller::on_bounds_changed`** — calls `set_limit(stored_limit, ctx)` (faithful to `TScroller::changeBounds`).
-- **ListViewer resize-step republish** — free fn `list_viewer::on_bounds_changed` (resize formula: `vbar pgStep = size.y`, not `size.y-1`; preserve arStep); added to `ListBox`, `SortedListBox`, `HistoryViewer`, `FileList`, `DirListBox`. Outline uses Scroller formula (TOutlineViewer inherits TScroller — correct).
-- **`Window::locate` re-push `set_zoomed`** — after `group.change_bounds`, re-pushes `frame.set_zoomed(size == max)`; resolves TODO(33d).
-- **`KeyboardResizeCapture`** — full keyboard resize sub-mode (`cmResize` → arrows until Enter/Esc, Ctrl variants ±8/±4, Home/End/PgUp/PgDn). `cmResize` enabled in `set_state` when `sfSelected && (wfMove || wfGrow)`.
-
-**To integrate B5:** run quality review (see the dispatched agent result or re-dispatch), fix any Important findings, then `git add` the 10 changed files and commit with the B5 message.
+- **B5 ✅ (`c917b4b`)** — `View::on_bounds_changed` hook; `Scroller::on_bounds_changed`; `list_viewer::on_bounds_changed` free fn (resize formula) adopted by all 5 ListViewer concrete types; Outline uses Scroller formula; `Window::locate` re-pushes `set_zoomed`; `KeyboardResizeCapture` (full keyboard resize: arrows/Ctrl/Home/End/PgUp/PgDn/Enter/Esc); `cmResize` enabled when `sfSelected && (wfMove || wfGrow)`. Resolves TODO(33d).
 
 ## Previous state (2026-06-10, end of the backlog-run session)
 
@@ -104,7 +93,6 @@ This session ran the **backlog run** end to end:
 
 ## Next — the remaining backlog (small, all unblocked)
 
-- **B5 — finish integration** (see "Current state" above): quality review the uncommitted working-tree changes, fix any Important findings, commit, tick BACKLOG + add IMPLEMENTATION-LOG entry.
 - **B8 — small singletons:** `max_len` clamp on `InputLine::set_value`
   (note: the new `paste_text` DOES clamp; only the `set_value` flowback is
   unclamped), `TODO(valid-select)` (likely unblocked — `valid` takes ctx),
