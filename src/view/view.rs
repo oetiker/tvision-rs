@@ -149,6 +149,35 @@ impl Options {
     }
 }
 
+/// Focused-event dispatch phase — ports `TView::phaseType` (`views.h`).
+///
+/// During a focused-class dispatch (`KeyDown`/`Command`) a group walks its
+/// children three times (`tgroup.cpp:362-371`): the `ofPreProcess` children,
+/// then the current child, then the `ofPostProcess` children. The phase names
+/// which leg the receiving child is being visited on:
+///
+/// * [`PreProcess`](Phase::PreProcess) — C++ `phPreProcess`.
+/// * [`Focused`](Phase::Focused) — C++ `phFocused`; the default (`TGroup`'s
+///   ctor inits `phase( phFocused )`, `tgroup.cpp:28`) and the value used for
+///   broadcast/positional dispatch.
+/// * [`PostProcess`](Phase::PostProcess) — C++ `phPostProcess`; the leg the
+///   plain-letter hotkey accelerators key off (`tbutton.cpp:219`,
+///   `tcluster.cpp:263`, `tlabel.cpp:94` — the only three readers in C++).
+///
+/// C++ exposes this as a field read through `owner->phase`; rstv has no
+/// up-pointer (D3), so the phase rides the [`Context`](super::Context) as
+/// transient routing state (see [`Context::phase`](super::Context::phase)).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Phase {
+    /// `phPreProcess` — the pre-process walk before the focused delivery.
+    PreProcess,
+    /// `phFocused` — the focused/current delivery (and the resting default).
+    #[default]
+    Focused,
+    /// `phPostProcess` — the post-process walk after the focused delivery.
+    PostProcess,
+}
+
 /// Grow-mode flags — ports the `gf*` family (`views.h`). Controls how each edge
 /// of the view tracks its owner when the owner is resized.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]

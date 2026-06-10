@@ -63,21 +63,20 @@
 //! 1. **Mouse drag-cursor tracking loop** (`do { … } while(mouseEvent(…))`): the
 //!    synchronous inner pump the scrollbar also deferred. `// TODO(row 31, D9)`.
 //!    Single-shot fallback only (see [`Cluster::handle_event`]).
-//! 2. **`ctrlToArrow` WordStar Ctrl-letter nav aliases**: not ported (shared
-//!    helper, port centrally later). Only literal arrow keys + Space are handled.
-//! 3. **Alt-hotkey / focused-letter accelerator scan** (`hotKey`/`getAltCode`):
-//!    `// TODO(row 41, accelerators)` — accelerators land with `TLabel`/menus.
-//!    Only the focused-Space → press survives.
-//! 4. **`getData`/`setData`/`dataSize`** (D10) → row 39.
-//! 5. **`showMarkers` specialChars block** in `drawMultiBox`: **dropped**
+//! 2. **`getData`/`setData`/`dataSize`** (D10) → row 39.
+//! 3. **`showMarkers` specialChars block** in `drawMultiBox`: **dropped**
 //!    (`showMarkers` removed at row 23).
-//! 6. **`getHelpCtx`'s `helpCtx + sel`** integer offset does not map onto the
+//! 4. **`getHelpCtx`'s `helpCtx + sel`** integer offset does not map onto the
 //!    string-identity [`HelpCtx`](crate::help::HelpCtx) newtype; it is dropped
 //!    here (consistent with the project's `HelpCtx` treatment).
+//!
+//! (`ctrlToArrow` aliasing and the Alt-hotkey / plain-letter accelerator scan —
+//! formerly deferred here — landed with the A5 phase signal: see
+//! [`Cluster::handle_event`].)
 
-use crate::event::{Event, Key};
+use crate::event::{Event, Key, ctrl_to_arrow, hot_key, is_alt_hotkey, is_plain_hotkey};
 use crate::theme::Role;
-use crate::view::{Context, DrawCtx, Options, Point, Rect, View, ViewState};
+use crate::view::{Context, DrawCtx, Options, Phase, Point, Rect, View, ViewState};
 
 // ---------------------------------------------------------------------------
 // ClusterKind — the data-driven polymorphism (D1 closed enum)
@@ -488,11 +487,10 @@ impl View for Cluster {
     /// relocated to `Group` (D4), so this body starts at the `ofSelectable`
     /// guard. On `evMouseDown`: single-shot select+press (the drag-cursor
     /// `do/while` loop is **deferred** — `// TODO(row 31, D9)`). On `evKeyDown`:
-    /// the four arrow navigators (focused-only) + focused-Space → press
-    /// (`ctrlToArrow` aliases and the Alt-hotkey/letter accelerator scan are
-    /// **deferred**).
+    /// `ctrlToArrow` aliasing, the four arrow navigators (focused-only), the
+    /// Alt-hotkey / plain-letter accelerator scan (`tcluster.cpp:280-291`), then
+    /// focused-Space → press.
     fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
-        let _ = ctx;
         if !self.state.options.selectable {
             return;
         }
@@ -526,15 +524,13 @@ impl View for Cluster {
             }
 
             // ---------------------------------------------------------------
-            // evKeyDown — arrow nav (focused) + focused-Space → press.
-            //
-            // TODO(ctrlToArrow): the C++ wraps keyCode through ctrlToArrow()
-            // (WordStar Ctrl-letter aliases). Not ported — only literal arrows.
-            // TODO(row 41, accelerators): the `default:` Alt-hotkey / focused-
-            // letter accelerator scan (hotKey/getAltCode) is dropped; only the
-            // focused-Space press survives.
+            // evKeyDown — ctrlToArrow + arrow nav (focused) + the accelerator
+            // scan + focused-Space → press (`tcluster.cpp:190-291`).
             // ---------------------------------------------------------------
             Event::KeyDown(ke) => {
+                // `switch (ctrlToArrow(event.keyDown.keyCode))` (tcluster.cpp:192)
+                // — WordStar Ctrl-letter aliases (Ctrl+E→Up, Ctrl+X→Down, …).
+                let ke = ctrl_to_arrow(ke);
                 let focused = self.state.state.focused;
                 let count = self.count();
                 let size_y = self.size_y();
@@ -611,11 +607,50 @@ impl View for Cluster {
                         self.move_sel(i, s);
                         ev.clear();
                     }
-                    Key::Char(' ') if focused => {
-                        self.press(self.sel);
-                        ev.clear();
+                    // The C++ `default:` — the hotkey accelerator scan, then
+                    // the focused-Space press (`tcluster.cpp:280-291`; the
+                    // scan runs FIRST, faithful to the C++ ordering).
+                    _ => {
+                        // Accelerator scan: Alt+hotkey from anywhere, or the
+                        // plain letter when focused or on the post-process
+                        // walk (`owner->phase == phPostProcess` → `ctx.phase()`,
+                        // the A5 phase signal).
+                        for i in 0..count {
+                            let Some(c) = hot_key(&self.strings[i as usize]) else {
+                                continue;
+                            };
+                            if is_alt_hotkey(&ke, c)
+                                || ((ctx.phase() == Phase::PostProcess || focused)
+                                    && is_plain_hotkey(&ke, c))
+                            {
+                                if self.button_state(i) {
+                                    // KNOWN DEVIATION: the C++ gates the press on
+                                    // `focus()` succeeding synchronously
+                                    // (`tcluster.cpp:283`); rstv's `request_focus`
+                                    // is deferred with no success return (same
+                                    // class as the deferred-focus notes at
+                                    // group.rs `focus_child`), so we press
+                                    // immediately and queue the focus.
+                                    if let Some(id) = self.state.id() {
+                                        ctx.request_focus(id);
+                                    }
+                                    self.sel = i;
+                                    self.moved_to(self.sel);
+                                    self.press(self.sel);
+                                    ev.clear();
+                                }
+                                // C++ `return`s after ANY hotkey match — even a
+                                // disabled item stops the scan (and skips the
+                                // Space arm); only an enabled match acts/clears.
+                                return;
+                            }
+                        }
+                        // Focused-Space → press (after the scan, as in C++).
+                        if ke.key == Key::Char(' ') && focused {
+                            self.press(self.sel);
+                            ev.clear();
+                        }
                     }
-                    _ => {}
                 }
             }
 
@@ -752,6 +787,39 @@ mod tests {
 
     fn key_ev(key: Key) -> Event {
         Event::KeyDown(KeyEvent::from(key))
+    }
+
+    /// Like [`with_ctx`] but returns the deferred vec, for asserting on the
+    /// accelerator scan's `Deferred::FocusById`.
+    fn with_ctx_d<R>(f: impl FnOnce(&mut Context) -> R) -> (Vec<crate::view::Deferred>, R) {
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<crate::view::Deferred> = vec![];
+        let r = {
+            let mut ctx = Context::new(&mut out, &mut timers, 0, &mut deferred);
+            f(&mut ctx)
+        };
+        (deferred, r)
+    }
+
+    fn alt_key_ev(c: char) -> Event {
+        Event::KeyDown(KeyEvent::new(
+            Key::Char(c),
+            crate::event::KeyModifiers {
+                alt: true,
+                ..Default::default()
+            },
+        ))
+    }
+
+    fn ctrl_key_ev(c: char) -> Event {
+        Event::KeyDown(KeyEvent::new(
+            Key::Char(c),
+            crate::event::KeyModifiers {
+                ctrl: true,
+                ..Default::default()
+            },
+        ))
     }
 
     fn mouse_down_at(x: i32, y: i32) -> Event {
@@ -963,6 +1031,114 @@ mod tests {
         assert_eq!(c.cluster.multi_mark(1), 0);
         // Item 0 (fhi 0) untouched throughout.
         assert_eq!(c.cluster.multi_mark(0), 0);
+    }
+
+    // -- Accelerator scan (tcluster.cpp:280-291, A5 phase signal) ------------
+
+    /// Alt+hotkey selects + presses the item from anywhere (no focus/phase
+    /// gate) and queues the deferred focus request.
+    #[test]
+    fn alt_hotkey_selects_and_presses() {
+        let mut c = CheckBoxes::new(
+            Rect::new(0, 0, 20, 3),
+            strs(&["~A~one", "~B~two", "~C~tri"]),
+        );
+        let id = crate::view::ViewId::next();
+        c.cluster.state.id = Some(id);
+        c.cluster.sel = 0;
+        let mut ev = alt_key_ev('b');
+        let (deferred, ()) = with_ctx_d(|ctx| c.handle_event(&mut ev, ctx));
+        assert!(ev.is_nothing(), "Alt+hotkey is consumed");
+        assert_eq!(c.cluster.sel, 1, "sel moves to the hot item");
+        assert_eq!(c.cluster.value, 0b10, "press toggled item 1's bit");
+        assert_eq!(deferred.len(), 1);
+        assert!(
+            matches!(deferred[0], crate::view::Deferred::FocusById(d) if d == id),
+            "the deferred focus request targets the cluster (deviation: queued, not synchronous focus())"
+        );
+    }
+
+    /// The plain hotkey letter presses when the cluster is FOCUSED (the
+    /// `(state & sfFocused)` leg of `tcluster.cpp:263-264`).
+    #[test]
+    fn plain_hotkey_presses_when_focused() {
+        let mut c = CheckBoxes::new(
+            Rect::new(0, 0, 20, 3),
+            strs(&["~A~one", "~B~two", "~C~tri"]),
+        );
+        c.cluster.state.state.focused = true;
+        c.cluster.sel = 0;
+        let mut ev = key_ev(Key::Char('c'));
+        with_ctx(|ctx| c.handle_event(&mut ev, ctx));
+        assert!(ev.is_nothing(), "focused plain hotkey is consumed");
+        assert_eq!(c.cluster.sel, 2);
+        assert_eq!(c.cluster.value, 0b100, "press toggled item 2's bit");
+    }
+
+    /// The plain hotkey letter presses UNFOCUSED on the post-process walk (the
+    /// `owner->phase == phPostProcess` leg), and is ignored unfocused at the
+    /// default (Focused) phase.
+    #[test]
+    fn plain_hotkey_unfocused_post_process_only() {
+        let mut c = CheckBoxes::new(
+            Rect::new(0, 0, 20, 3),
+            strs(&["~A~one", "~B~two", "~C~tri"]),
+        );
+        c.cluster.sel = 0;
+
+        // Default phase, unfocused → ignored.
+        let mut ev = key_ev(Key::Char('b'));
+        with_ctx(|ctx| c.handle_event(&mut ev, ctx));
+        assert!(
+            !ev.is_nothing(),
+            "unfocused plain letter at phFocused is left live"
+        );
+        assert_eq!(c.cluster.value, 0, "no press");
+
+        // Post-process walk, unfocused → presses.
+        let mut ev = key_ev(Key::Char('b'));
+        with_ctx(|ctx| {
+            ctx.set_phase(Phase::PostProcess);
+            c.handle_event(&mut ev, ctx)
+        });
+        assert!(ev.is_nothing(), "postProcess plain letter is consumed");
+        assert_eq!(c.cluster.sel, 1);
+        assert_eq!(c.cluster.value, 0b10, "press toggled item 1's bit");
+    }
+
+    /// A hotkey match on a DISABLED item neither presses nor clears the event,
+    /// and STOPS the scan — a later enabled item with the same hotkey letter
+    /// must not press (the C++ `return` fires on any match, `tcluster.cpp:289`).
+    #[test]
+    fn disabled_hotkey_match_stops_scan_without_press() {
+        let mut c = CheckBoxes::new(
+            Rect::new(0, 0, 20, 3),
+            strs(&["~X~one", "~X~two", "~C~tri"]),
+        );
+        // Disable item 0 (the first '~X~' match).
+        c.cluster.set_button_state(0b001, false);
+        c.cluster.sel = 2;
+        let mut ev = alt_key_ev('x');
+        let (deferred, ()) = with_ctx_d(|ctx| c.handle_event(&mut ev, ctx));
+        assert!(
+            !ev.is_nothing(),
+            "a disabled-item match does NOT clear the event (clearEvent is inside buttonState)"
+        );
+        assert_eq!(c.cluster.value, 0, "no press — not even item 1 ('~X~two')");
+        assert_eq!(c.cluster.sel, 2, "sel unchanged");
+        assert!(deferred.is_empty(), "no focus request");
+    }
+
+    /// `ctrlToArrow`: Ctrl+E is the WordStar alias for Up (`tcluster.cpp:192`).
+    #[test]
+    fn ctrl_e_aliases_up() {
+        let mut c = RadioButtons::new(Rect::new(0, 0, 20, 3), strs(&["a", "b", "c"]));
+        c.cluster.state.state.focused = true;
+        c.cluster.sel = 1;
+        let mut ev = ctrl_key_ev('e');
+        with_ctx(|ctx| c.handle_event(&mut ev, ctx));
+        assert!(ev.is_nothing(), "Ctrl+E is consumed like Up");
+        assert_eq!(c.cluster.sel, 0, "moved up");
     }
 
     // -- Mouse single-shot select + press -----------------------------------

@@ -29,10 +29,10 @@
 //!   through non-ASCII runs.
 
 use crate::command::Command;
-use crate::event::{Event, hot_key, is_alt_hotkey};
+use crate::event::{Event, hot_key, is_alt_hotkey, is_plain_hotkey};
 use crate::text;
 use crate::theme::Role;
-use crate::view::{Context, DrawCtx, GrowMode, Options, Rect, View, ViewId, ViewState};
+use crate::view::{Context, DrawCtx, GrowMode, Options, Phase, Rect, View, ViewId, ViewState};
 
 // ---------------------------------------------------------------------------
 // StaticText
@@ -378,13 +378,11 @@ impl View for ParamText {}
 ///
 /// # Deferrals (documented, not built)
 ///
-/// 1. **Plain-letter (postProcess) accelerator.** The C++ `owner->phase ==
-///    phPostProcess && c == toupper(charScan.charCode)` plain-letter branch needs
-///    a phase signal on [`Context`] that does not exist (shipping it ungated would
-///    steal plain letters). Only Alt+hotkey is honored — same deferral as
-///    `TButton`'s deferral #2.
-/// 2. **`showMarkers` / `specialChars` markers** dropped (always the no-markers
+/// 1. **`showMarkers` / `specialChars` markers** dropped (always the no-markers
 ///    branch), as in `TStaticText`/`TButton`/cluster.
+///
+/// (The plain-letter postProcess accelerator — formerly deferred here — landed
+/// with the A5 phase signal: see `handle_event`.)
 pub struct Label {
     /// The delegated [`StaticText`] — its `state: ViewState` is the one true home
     /// for all view metadata.
@@ -508,7 +506,7 @@ impl View for Label {
     /// has no `handleEvent`), so it is omitted. Branches:
     /// * **MouseDown** → `focusLink` (focus the link, consume).
     /// * **KeyDown** → if it is the Alt+hotkey accelerator → `focusLink`. (The C++
-    ///   plain-letter postProcess branch is deferred — see the type docs.)
+    ///   plain-letter branch fires only at `Phase::PostProcess`.)
     /// * **Broadcast** `cmReceivedFocus`/`cmReleasedFocus` whose `source` is our
     ///   link → update `light`; **not consumed** (other views may also react).
     fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
@@ -518,11 +516,13 @@ impl View for Label {
             }
 
             Event::KeyDown(ke) => {
-                // Alt+hotkey accelerator (the C++ `getAltCode(c) == keyCode` arm).
-                // TODO(label/button: plain-hotkey postProcess accelerator — needs a
-                // phase signal on Context, same as Button deferral #2).
+                // Alt+hotkey accelerator (the C++ `getAltCode(c) == keyCode` arm),
+                // OR — on the post-process walk only (`owner->phase ==
+                // TGroup::phPostProcess` → `ctx.phase()`, the A5 phase signal) —
+                // the plain hotkey letter (`tlabel.cpp:91-99`).
                 if let Some(c) = hot_key(self.inner.text())
-                    && is_alt_hotkey(ke, c)
+                    && (is_alt_hotkey(ke, c)
+                        || (ctx.phase() == Phase::PostProcess && is_plain_hotkey(ke, c)))
                 {
                     self.focus_link(ev, ctx);
                 }
@@ -1166,11 +1166,28 @@ mod tests {
         assert!(deferred.is_empty(), "no focus request");
     }
 
-    /// A plain (no-Alt) hotkey letter is NOT honored — the plain-letter
-    /// postProcess accelerator is deferred (no phase signal). Bites if someone
-    /// ungates `is_plain_hotkey`.
+    /// A plain (no-Alt) hotkey letter IS honored on the post-process walk —
+    /// the `owner->phase == phPostProcess` plain-letter arm (`tlabel.cpp:94`),
+    /// via the A5 phase signal on Context.
     #[test]
-    fn label_plain_hotkey_is_not_honored_deferred() {
+    fn label_plain_hotkey_focuses_link_at_post_process() {
+        let link = ViewId::next();
+        let mut lbl = Label::new(Rect::new(0, 0, 12, 1), "~N~ame", Some(link));
+        let mut timers = TimerQueue::new();
+        let mut ev = Event::KeyDown(KeyEvent::new(Key::Char('n'), KeyModifiers::default()));
+        let (_out, deferred, ()) = with_label_ctx(&mut timers, |ctx| {
+            ctx.set_phase(Phase::PostProcess);
+            lbl.handle_event(&mut ev, ctx)
+        });
+        assert!(ev.is_nothing(), "the postProcess plain letter is consumed");
+        assert_eq!(deferred.len(), 1);
+        assert!(matches!(deferred[0], Deferred::FocusById(id) if id == link));
+    }
+
+    /// The same plain letter at the default (Focused) phase is NOT honored —
+    /// the plain-letter arm is gated on phPostProcess (`tlabel.cpp:94`).
+    #[test]
+    fn label_plain_hotkey_ignored_outside_post_process() {
         let link = ViewId::next();
         let mut lbl = Label::new(Rect::new(0, 0, 12, 1), "~N~ame", Some(link));
         let mut timers = TimerQueue::new();
@@ -1179,9 +1196,12 @@ mod tests {
             with_label_ctx(&mut timers, |ctx| lbl.handle_event(&mut ev, ctx));
         assert!(
             !ev.is_nothing(),
-            "a plain letter is left live (postProcess deferred)"
+            "a plain letter outside phPostProcess is left live"
         );
-        assert!(deferred.is_empty(), "no focus request on a plain letter");
+        assert!(
+            deferred.is_empty(),
+            "no focus request outside phPostProcess"
+        );
     }
 
     // -- 4. highlight (Broadcast{source}) ------------------------------------

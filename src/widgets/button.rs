@@ -91,19 +91,22 @@
 //!    functional correctness is preserved because the program filters disabled
 //!    `Event::Command` at its boundary. One cosmetic gap: a notionally-disabled
 //!    default button could still flash on `cmDefault`.
-//! 2. **Plain-letter (postProcess) accelerator.** Only Alt+hotkey + focused-Space
-//!    are honored; the C++ `phPostProcess` plain-letter branch needs a phase
-//!    signal on [`Context`] that does not exist (and shipping it ungated would
-//!    steal plain letters from a focused input line).
+//! 2. **Plain-letter (postProcess) accelerator** — landed with the A5 phase
+//!    signal (`ctx.phase()`, `tbutton.cpp:219`): see `handle_event`'s
+//!    `post_plain` leg. A focused input line that consumes the letter still
+//!    starves the post-loop, so plain letters are only stolen when the
+//!    focused view leaves them live (faithful TV behavior).
 //! 3. **`showMarkers` / `specialChars` / `markers`** dropped (always the
 //!    no-markers branch).
 
 use crate::capture::{CaptureFlow, CaptureHandler};
 use crate::command::Command;
-use crate::event::{Event, Key, hot_key, is_alt_hotkey};
+use crate::event::{Event, Key, hot_key, is_alt_hotkey, is_plain_hotkey};
 use crate::theme::Role;
 use crate::timer::TimerId;
-use crate::view::{Context, DrawCtx, Options, Point, Rect, StateFlag, View, ViewId, ViewState};
+use crate::view::{
+    Context, DrawCtx, Options, Phase, Point, Rect, StateFlag, View, ViewId, ViewState,
+};
 use std::time::Duration;
 
 /// `animationDurationMs` — the press-flash duration before the command fires.
@@ -441,14 +444,18 @@ impl View for Button {
             }
 
             Event::KeyDown(ke) => {
-                // Alt+hotkey, OR focused + Space. The Space branch is independent of
-                // whether the title has a hotkey (a hotkey-less button still acts on
-                // Space when focused).
+                // Alt+hotkey, OR postProcess + plain hotkey letter, OR focused +
+                // Space (`tbutton.cpp:216-228`). The Space branch is independent
+                // of whether the title has a hotkey (a hotkey-less button still
+                // acts on Space when focused). The plain-letter leg fires only
+                // on the post-process walk (`owner->phase == phPostProcess` →
+                // `ctx.phase()`, the A5 phase signal): an unfocused button picks
+                // up letters the focused view left unconsumed.
                 let alt_hot = c.map(|c| is_alt_hotkey(ke, c)).unwrap_or(false);
+                let post_plain = ctx.phase() == Phase::PostProcess
+                    && c.map(|c| is_plain_hotkey(ke, c)).unwrap_or(false);
                 let focused_space = self.state.state.focused && ke.key == Key::Char(' ');
-                // TODO(button/cluster: plain-hotkey postProcess accelerator — needs a
-                // phase signal on Context)
-                if alt_hot || focused_space {
+                if alt_hot || post_plain || focused_space {
                     self.start_animation(ctx);
                     ev.clear();
                 }
@@ -872,6 +879,50 @@ mod tests {
             }
         );
         assert_eq!(out[1], Event::Command(Command::OK));
+    }
+
+    /// The plain hotkey letter arms the press on the post-process walk —
+    /// `owner->phase == phPostProcess && c == toupper(charCode)`
+    /// (`tbutton.cpp:219-221`), via the A5 phase signal.
+    #[test]
+    fn plain_hotkey_arms_at_post_process() {
+        let mut b = Button::new(
+            Rect::new(0, 0, 10, 2),
+            "~O~k",
+            Command::OK,
+            ButtonFlags::new(),
+        );
+        let mut timers = TimerQueue::new();
+        // Unfocused, plain 'o', delivered on the post-process leg.
+        let mut ev = key(Key::Char('o'));
+        with_ctx(&mut timers, 0, |ctx| {
+            ctx.set_phase(Phase::PostProcess);
+            b.handle_event(&mut ev, ctx)
+        });
+        assert!(ev.is_nothing(), "the postProcess plain letter is consumed");
+        assert!(b.down, "pressed look armed");
+        assert!(b.animation_timer.is_some(), "animation timer armed");
+    }
+
+    /// The same plain letter at the default (Focused) phase, unfocused, is
+    /// ignored — the plain-letter leg is gated on phPostProcess.
+    #[test]
+    fn plain_hotkey_ignored_outside_post_process() {
+        let mut b = Button::new(
+            Rect::new(0, 0, 10, 2),
+            "~O~k",
+            Command::OK,
+            ButtonFlags::new(),
+        );
+        let mut timers = TimerQueue::new();
+        let mut ev = key(Key::Char('o'));
+        with_ctx(&mut timers, 0, |ctx| b.handle_event(&mut ev, ctx));
+        assert!(
+            !ev.is_nothing(),
+            "a plain letter outside phPostProcess is left live"
+        );
+        assert!(!b.down, "not pressed");
+        assert!(b.animation_timer.is_none(), "no timer armed");
     }
 
     /// A `bfBroadcast` button fires its command as a broadcast carrying its own id.

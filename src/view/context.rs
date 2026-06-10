@@ -23,7 +23,7 @@ use crate::theme::{Glyphs, Role, Theme};
 use crate::timer::{TimerId, TimerQueue};
 use crate::view::geometry::{Point, Rect};
 use crate::view::id::ViewId;
-use crate::view::view::StateFlag;
+use crate::view::view::{Phase, StateFlag};
 use std::collections::VecDeque;
 use std::time::Duration;
 use unicode_width::UnicodeWidthChar;
@@ -831,6 +831,17 @@ pub struct Context<'a> {
     /// capture its limits at *push time* (inside the window's `handle_event`, where
     /// `owner_size` is correctly set), never read them at drag time.
     owner_size: Point,
+    /// The focused-dispatch phase for the view currently being routed to —
+    /// the downward realization of the C++ `owner->phase` read
+    /// (`TGroup::phase`, set in `tgroup.cpp:362-371`; read by the plain-letter
+    /// accelerators in `tbutton.cpp:219` / `tcluster.cpp:263` /
+    /// `tlabel.cpp:94`). C++ exposes `owner->phase`; rstv has no up-pointer
+    /// (D3), so the phase rides the `Context` like [`owner_size`](Self::owner_size):
+    /// **transient routing state**, set/restored by `Group::route_event` around
+    /// each leg of the focused-events walk, valid only during group-routed
+    /// dispatch. Defaults to [`Phase::Focused`] (the `TGroup` ctor init,
+    /// `tgroup.cpp:28`).
+    phase: Phase,
     /// An owned **snapshot** of the program's disabled-command set (denylist,
     /// D1), backing [`command_enabled`](Self::command_enabled) — the read-only
     /// `TView::commandEnabled` for views, which hold no `&Program`. Owned (a
@@ -859,6 +870,7 @@ impl<'a> Context<'a> {
             now_ms,
             deferred,
             owner_size: Point::default(),
+            phase: Phase::Focused,
             disabled_commands: CommandSet::new(),
         }
     }
@@ -1266,6 +1278,23 @@ impl<'a> Context<'a> {
     /// (set to the group's own size) and to restore it on exit.
     pub fn set_owner_size(&mut self, size: Point) {
         self.owner_size = size;
+    }
+
+    /// The focused-dispatch phase for the view currently being routed to —
+    /// the C++ `owner->phase` read (D3: no up-pointer, so the phase rides the
+    /// `Context`; see the [`phase`](Self::phase) field docs). Defaults to
+    /// [`Phase::Focused`] outside a focused-events walk.
+    pub fn phase(&self) -> Phase {
+        self.phase
+    }
+
+    /// Set the dispatch phase for the routed view — called by
+    /// `Group::route_event` before each leg of the focused-events walk
+    /// (pre-process / focused / post-process, `tgroup.cpp:362-371`) and to
+    /// restore the saved value on exit. Leaf views never call this — routing
+    /// infrastructure only, hence `pub(crate)`.
+    pub(crate) fn set_phase(&mut self, phase: Phase) {
+        self.phase = phase;
     }
 }
 
@@ -1778,5 +1807,20 @@ mod tests {
         // The setter round-trips.
         ctx.set_owner_size(Point::new(80, 25));
         assert_eq!(ctx.owner_size(), Point::new(80, 25));
+    }
+
+    #[test]
+    fn context_phase_defaults_focused_and_round_trips() {
+        let mut out = VecDeque::new();
+        let mut timers = TimerQueue::new();
+        let mut deferred: Vec<Deferred> = Vec::new();
+        let mut ctx = Context::new(&mut out, &mut timers, 0, &mut deferred);
+        // Context::new defaults phase to Focused (TGroup ctor, tgroup.cpp:28).
+        assert_eq!(ctx.phase(), Phase::Focused);
+        // The setter round-trips.
+        ctx.set_phase(Phase::PostProcess);
+        assert_eq!(ctx.phase(), Phase::PostProcess);
+        ctx.set_phase(Phase::PreProcess);
+        assert_eq!(ctx.phase(), Phase::PreProcess);
     }
 }

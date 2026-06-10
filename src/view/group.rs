@@ -53,7 +53,7 @@ use crate::event::Event;
 use crate::view::context::{Context, DrawCtx};
 use crate::view::geometry::{Point, Rect};
 use crate::view::id::ViewId;
-use crate::view::view::{StateFlag, View, ViewState};
+use crate::view::view::{Phase, StateFlag, View, ViewState};
 
 /// Which side effects `set_current` applies when changing the current view —
 /// ports the `selectMode` enum (`views.h`: `normalSelect`/`enterSelect`/
@@ -1028,28 +1028,48 @@ impl Group {
         let n = self.children.len();
         match ev {
             // -- focusedEvents: pre-process → focused → post-process ----------
+            //
+            // The phase bracket ports the C++ `phase = ph…` writes around each
+            // leg (`tgroup.cpp:362-371`); a child reads it via `ctx.phase()`
+            // (the `owner->phase` successor, D3). Save/restore makes one shared
+            // Context field behave like the per-group C++ field under nesting:
+            // a nested Group's own bracket restores to ITS saved value — which
+            // is exactly the phase the OUTER group set for the section this
+            // nested group is being delivered in — so "a child reads its
+            // immediate owner's phase" holds. Leaf views never write the field.
             Event::KeyDown(_) | Event::Command(_) => {
+                let saved_phase = ctx.phase();
                 // phPreProcess: forEach top→bottom, ofPreProcess children only.
+                ctx.set_phase(Phase::PreProcess);
                 for i in (0..n).rev() {
                     if self.children[i].view.state().options.pre_process {
                         self.deliver(i, ev, ctx);
                     }
                 }
                 // phFocused: the current child only (no phase-option gate).
+                ctx.set_phase(Phase::Focused);
                 if let Some(i) = self.current.and_then(|id| self.index_of(id)) {
                     self.deliver(i, ev, ctx);
                 }
                 // phPostProcess: forEach top→bottom, ofPostProcess children only.
+                ctx.set_phase(Phase::PostProcess);
                 for i in (0..n).rev() {
                     if self.children[i].view.state().options.post_process {
                         self.deliver(i, ev, ctx);
                     }
                 }
+                ctx.set_phase(saved_phase);
             }
             // -- broadcast: phFocused, every child (incl. disabled) -----------
             // Also carries timer-expiry (`Event::Timer`), which is broadcast-class
             // (the `evBroadcast cmTimerExpired` successor) and so delivers to every
             // child identically.
+            //
+            // No `set_phase` here (nor in the positional arm below): the C++
+            // sets `phase = phFocused` for both (`tgroup.cpp:373-376`), but rstv
+            // broadcasts are re-dispatched by the pump on a fresh `Context`
+            // already defaulting to `Focused`, and the focused-events bracket
+            // above restores on exit — so the field is always `Focused` here.
             Event::Broadcast { .. } | Event::Timer(_) => {
                 for i in (0..n).rev() {
                     self.deliver(i, ev, ctx);
@@ -1497,32 +1517,33 @@ mod tests {
 
     // -- 5. three-phase focused dispatch -------------------------------------
 
+    /// Order/phase probe for the three-phase dispatch tests: records its tag +
+    /// the [`Phase`] the routing group set for the delivery (`ctx.phase()`,
+    /// the `owner->phase` successor). Does NOT consume, so all legs run.
+    struct Tagged {
+        st: ViewState,
+        tag: char,
+        order: Rc<RefCell<Vec<(char, Phase)>>>,
+    }
+    impl View for Tagged {
+        fn state(&self) -> &ViewState {
+            &self.st
+        }
+        fn state_mut(&mut self) -> &mut ViewState {
+            &mut self.st
+        }
+        fn draw(&mut self, _ctx: &mut DrawCtx) {}
+        fn handle_event(&mut self, _ev: &mut Event, ctx: &mut Context) {
+            self.order.borrow_mut().push((self.tag, ctx.phase()));
+        }
+    }
+
     #[test]
     fn focused_dispatch_visits_pre_then_current_then_post() {
         let mut out = VecDeque::new();
         let mut timers = TimerQueue::new();
         // Shared order log: each probe pushes a tagged event so we read order.
         let order = Rc::new(RefCell::new(Vec::new()));
-
-        // distinct logs to identify which child saw it via the recorded char-key
-        struct Tagged {
-            st: ViewState,
-            tag: char,
-            order: Rc<RefCell<Vec<char>>>,
-        }
-        impl View for Tagged {
-            fn state(&self) -> &ViewState {
-                &self.st
-            }
-            fn state_mut(&mut self) -> &mut ViewState {
-                &mut self.st
-            }
-            fn draw(&mut self, _ctx: &mut DrawCtx) {}
-            fn handle_event(&mut self, _ev: &mut Event, _ctx: &mut Context) {
-                self.order.borrow_mut().push(self.tag);
-                // does NOT consume — so all phases get a chance to run
-            }
-        }
 
         let mut group = Group::new(Rect::new(0, 0, 20, 10));
         let cur_id = with_ctx(&mut out, &mut timers, |_ctx| {
@@ -1574,8 +1595,66 @@ mod tests {
         });
         assert_eq!(
             *order.borrow(),
-            vec!['P', 'C', 'O'],
-            "pre-process, then current, then post-process; plain child skipped"
+            vec![
+                ('P', Phase::PreProcess),
+                ('C', Phase::Focused),
+                ('O', Phase::PostProcess),
+            ],
+            "pre-process, then current, then post-process; plain child skipped; \
+             each delivery sees its leg's phase (tgroup.cpp:362-371)"
+        );
+    }
+
+    /// Nesting: a nested group runs its OWN three-phase bracket and restores
+    /// the phase the outer group set for the section it was delivered in.
+    /// The nested group is an `ofPreProcess` child of the outer, so its inner
+    /// post-process probe sees `PostProcess` (the inner group's own leg) while
+    /// the outer pre-loop sibling delivered AFTER it sees `PreProcess` again
+    /// (the restore).
+    #[test]
+    fn nested_group_restores_outer_sections_phase() {
+        let mut out = VecDeque::new();
+        let mut timers = TimerQueue::new();
+        let order = Rc::new(RefCell::new(Vec::new()));
+
+        let mut group = Group::new(Rect::new(0, 0, 20, 10));
+        with_ctx(&mut out, &mut timers, |_ctx| {
+            // Outer pre-process probe, inserted FIRST (index 0) so the rev
+            // pre-loop visits it AFTER the nested group (index 1).
+            let mut p2 = Tagged {
+                st: ViewState::new(Rect::new(0, 6, 5, 9)),
+                tag: 'Q',
+                order: order.clone(),
+            };
+            p2.st.options.pre_process = true;
+            group.insert(Box::new(p2));
+
+            // The nested group, an ofPreProcess child of the outer; it holds
+            // one ofPostProcess probe of its own.
+            let mut inner = Group::new(Rect::new(0, 0, 10, 5));
+            let mut inner_post = Tagged {
+                st: ViewState::new(Rect::new(0, 0, 5, 2)),
+                tag: 'I',
+                order: order.clone(),
+            };
+            inner_post.st.options.post_process = true;
+            inner.insert(Box::new(inner_post));
+            inner.state_mut().options.pre_process = true;
+            group.insert(Box::new(inner));
+        });
+
+        let mut ev = key(Key::Char('z'));
+        with_ctx(&mut out, &mut timers, |ctx| {
+            group.handle_event(&mut ev, ctx);
+            // The outer bracket restored to the resting default on exit.
+            assert_eq!(ctx.phase(), Phase::Focused, "outer bracket restores");
+        });
+        assert_eq!(
+            *order.borrow(),
+            vec![('I', Phase::PostProcess), ('Q', Phase::PreProcess)],
+            "the inner probe sees the inner group's own post-process leg; the \
+             outer sibling delivered after the nested group sees the OUTER \
+             section's phase again (the save/restore nesting argument)"
         );
     }
 

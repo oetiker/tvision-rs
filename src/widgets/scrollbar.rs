@@ -41,17 +41,13 @@
 //! consumed. See the `// TODO(row 31, D9)` comment in [`ScrollBar::handle_event`]
 //! for the exact deferred code paths.
 //!
-//! ## Additional deferrals
-//!
-//! - **`ctrlToArrow` / WordStar Ctrl-letter navigation**: The C++ passes every
-//!   key through `ctrlToArrow(keyCode)` before the switch, so the scrollbar also
-//!   accepts Ctrl+S/D/E/X/R/C/A/F etc. as navigation keys. This shared helper is
-//!   not yet ported; only literal arrow/nav keys are handled. See the
-//!   `TODO/NOTE(ctrlToArrow)` in [`ScrollBar::handle_event`].
+//! (`ctrlToArrow` / WordStar Ctrl-letter navigation — formerly deferred here —
+//! landed with the A5 phase-signal row: [`ScrollBar::handle_event`] passes the
+//! key through `ctrl_to_arrow` before the nav switch, faithful to the C++.)
 
 use crate::command::Command;
 use crate::data::FieldValue;
-use crate::event::{Event, Key, MouseWheel};
+use crate::event::{Event, Key, MouseWheel, ctrl_to_arrow};
 use crate::theme::Role;
 use crate::view::{Context, DrawCtx, GrowMode, Options, Rect, View, ViewState};
 
@@ -571,13 +567,12 @@ impl View for ScrollBar {
             // Key down (evKeyDown) — only when visible (sfVisible check)
             // ------------------------------------------------------------------
             Event::KeyDown(ke) if visible => {
-                // TODO/NOTE(ctrlToArrow): WordStar Ctrl-letter navigation
-                // (Ctrl+S→Left, Ctrl+D→Right, Ctrl+E→Up, Ctrl+X→Down,
-                // Ctrl+R→PgUp, Ctrl+C→PgDn, Ctrl+A→Home, Ctrl+F→End, etc.)
-                // is not yet accepted — only literal arrow/nav keys are handled.
-                // The C++ wraps every `keyCode` through `ctrlToArrow(keyCode)`
-                // before the switch. Port the shared `ctrlToArrow` helper
-                // centrally when first needed by another widget.
+                // `switch (ctrlToArrow(event.keyDown.keyCode))` — WordStar
+                // Ctrl-letter nav aliases (Ctrl+S→Left, Ctrl+E→Up, …). The
+                // helper only maps Ctrl+letter (modifiers cleared on a match);
+                // Ctrl+arrow combos pass through unchanged, so the `ctrl`
+                // reads below still see them.
+                let ke = ctrl_to_arrow(ke);
                 let key = ke.key;
                 let ctrl = ke.modifiers.ctrl;
 
@@ -1001,6 +996,31 @@ mod tests {
         }
         assert!(ev.is_nothing());
         assert_eq!(sb.value, 12, "arrow_step 2 → value incremented by 2");
+    }
+
+    /// `ctrlToArrow`: Ctrl+S is the WordStar alias for Left (`tscrlbar.cpp`
+    /// wraps the keyCode through `ctrlToArrow` before the switch).
+    #[test]
+    fn ctrl_s_aliases_left_on_horizontal_bar() {
+        let mut sb = ScrollBar::new(Rect::new(0, 0, 20, 1)); // horizontal
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<crate::view::Deferred> = vec![];
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            sb.set_params(10, 0, 100, 5, 2, &mut ctx);
+        }
+        out.clear();
+
+        // Ctrl+S → Left (the helper clears the ctrl modifier on the match,
+        // so this is LeftArrow, not Ctrl+Left = PageLeft).
+        let mut ev = ctrl_key_ev(Key::Char('s'));
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            sb.handle_event(&mut ev, &mut ctx);
+        }
+        assert!(ev.is_nothing(), "Ctrl+S is consumed like Left");
+        assert_eq!(sb.value, 8, "arrow_step 2 → value decremented by 2");
     }
 
     // -----------------------------------------------------------------------

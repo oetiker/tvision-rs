@@ -119,7 +119,7 @@ pub use validate::{
     RegexValidator, StringLookupValidator, Validator,
 };
 pub use view::{
-    Context, DragMode, DrawCtx, Group, GrowMode, Options, Point, Rect, SelectMode, State,
+    Context, DragMode, DrawCtx, Group, GrowMode, Options, Phase, Point, Rect, SelectMode, State,
     StateFlag, View, ViewId, ViewState,
 };
 pub use widgets::{

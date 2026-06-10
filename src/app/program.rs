@@ -4800,6 +4800,123 @@ mod tests {
         assert_eq!(program.capture_len(), 0, "ModalFrame popped");
     }
 
+    /// A5 phase signal, end-to-end leg 1: a FOCUSED view that CONSUMES the
+    /// letter starves the post-process accelerator. Dialog = InputLine
+    /// (current, eats letters) + a "~K~ick" button (ofPostProcess). Typing 'k'
+    /// lands in the input line (proof: its text becomes "k"), so the post-loop
+    /// never sees a live event and the button must NOT press — exactly the
+    /// C++ contract (the focused leg runs before phPostProcess and a cleared
+    /// event stops the walk).
+    #[test]
+    fn plain_hotkey_consumed_by_focused_field_starves_post_process() {
+        use crate::data::FieldValue;
+        use crate::widgets::{Button, ButtonFlags, InputLine, LimitMode};
+
+        let (mut program, _screen, _clock) = program_with_desktop(40, 12);
+
+        let mut dialog = Dialog::new(Rect::new(2, 1, 38, 11), Some("D".into()));
+        let btn_id = dialog.insert_child(Box::new(Button::new(
+            Rect::new(2, 4, 12, 6),
+            "~K~ick",
+            Command::custom("test.kick"),
+            ButtonFlags::new(),
+        )));
+        // Inserted LAST → topmost, so the insert-time reset_current (C++
+        // firstMatch = topmost visible+selectable) makes it the dialog's
+        // current (focused) child.
+        let il_id = dialog.insert_child(Box::new(InputLine::new(
+            Rect::new(2, 2, 20, 3),
+            40,
+            None,
+            LimitMode::MaxBytes,
+        )));
+        program
+            .desktop_insert(Box::new(dialog))
+            .expect("dialog inserted into the desktop");
+        // Drop the insert/focus broadcasts so the next pumped event IS the key
+        // (pump_once processes exactly one queued event per call).
+        program.out_events.clear();
+
+        // Type the button's hot letter — the focused input line eats it.
+        program.out_events.push_back(key(Key::Char('k')));
+        program.pump_once();
+
+        // Proof the key was routed: the input line holds the character.
+        let il_value = program
+            .group_mut()
+            .find_mut(il_id)
+            .and_then(|v| v.value())
+            .expect("input line found with a value");
+        assert_eq!(
+            il_value,
+            FieldValue::Text("k".into()),
+            "the focused input line consumed the letter"
+        );
+
+        let btn = program
+            .group_mut()
+            .find_mut(btn_id)
+            .and_then(|v| v.as_any_mut())
+            .and_then(|a| a.downcast_mut::<Button>())
+            .expect("button found");
+        assert!(!btn.down, "consumed letter must NOT press the button");
+        assert!(btn.animation_timer.is_none(), "no press animation armed");
+    }
+
+    /// A5 phase signal, end-to-end leg 2: when the FOCUSED view does NOT
+    /// consume the letter, the post-process walk delivers it and the plain
+    /// hotkey presses the (unfocused) button. Dialog = two buttons: "~K~ick"
+    /// and "~M~ore" (inserted last → topmost → current; ignores a plain 'k'
+    /// on its Focused leg). Typing 'k' falls through to phPostProcess where
+    /// the unfocused "~K~ick" arms its press.
+    #[test]
+    fn plain_hotkey_presses_unfocused_button_via_post_process() {
+        use crate::widgets::{Button, ButtonFlags};
+
+        let (mut program, _screen, _clock) = program_with_desktop(40, 12);
+
+        let mut dialog = Dialog::new(Rect::new(2, 1, 38, 11), Some("D".into()));
+        let kick_id = dialog.insert_child(Box::new(Button::new(
+            Rect::new(2, 5, 12, 7),
+            "~K~ick",
+            Command::custom("test.kick"),
+            ButtonFlags::new(),
+        )));
+        // Inserted LAST → topmost → the dialog's current (focused) child.
+        let more_id = dialog.insert_child(Box::new(Button::new(
+            Rect::new(2, 2, 12, 4),
+            "~M~ore",
+            Command::custom("test.more"),
+            ButtonFlags::new(),
+        )));
+        program
+            .desktop_insert(Box::new(dialog))
+            .expect("dialog inserted into the desktop");
+        // Drop the insert/focus broadcasts (one pumped event per pump_once).
+        program.out_events.clear();
+
+        program.out_events.push_back(key(Key::Char('k')));
+        program.pump_once();
+
+        {
+            let kick = program
+                .group_mut()
+                .find_mut(kick_id)
+                .and_then(|v| v.as_any_mut())
+                .and_then(|a| a.downcast_mut::<Button>())
+                .expect("kick button found");
+            assert!(kick.down, "the postProcess plain hotkey pressed '~K~ick'");
+            assert!(kick.animation_timer.is_some(), "press animation armed");
+        }
+        let more = program
+            .group_mut()
+            .find_mut(more_id)
+            .and_then(|v| v.as_any_mut())
+            .and_then(|a| a.downcast_mut::<Button>())
+            .expect("more button found");
+        assert!(!more.down, "the focused '~M~ore' button ignored the letter");
+    }
+
     /// `cmQuit` during a modal (the non-obvious edge). Inside the modal,
     /// `Event::Command(Command::QUIT)` is caught by `program_handle_event` ->
     /// `end_state = Some(QUIT)`. The inner loop exits, `valid_end(QUIT)` ->
