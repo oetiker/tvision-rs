@@ -5,6 +5,25 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## Session addendum — RAII terminal lifecycle (B7)
+
+**`7827235`** — **row B7** (subagent-built, two-stage reviewed): the terminal
+lifecycle moved from `examples/hello.rs` into `CrosstermBackend`, honoring
+the user directive that a TV program must not hand-roll terminal setup (C++
+`TApplication`/`TScreen` precedent). `new()`/`with_color_depth` are now
+fallible (`io::Result`) and do raw-mode + alt-screen + mouse-capture with
+exhaustive reverse-order rollback (a quality-review catch: the first failure
+path left the alt screen entered on the WinAPI fallback); `Drop` restores
+via the idempotent `restore_terminal()`; a `Once`-guarded panic hook
+restores before chaining; a unix signal thread (signal-hook, now a
+`cfg(unix)` dependency) restores on SIGINT/SIGTERM/SIGHUP and exits
+`128+signum` (a spec-review catch — the old hello.rs hard-coded 130 for all
+three; the success-only `Mutex` latch retries a failed spawn instead of
+silently latching). Constructor docs carry the at-most-one-live-instance
+contract; the unused fallible `Default` was removed. `hello.rs` main is now
+the 3-line C++-TV shape (~60 lifecycle lines gone). tmux smoke-verified all
+three exit paths. 995 lib tests; clippy + fmt clean.
+
 ## Session addendum — the CommandSet denylist flip (A1)
 
 **`faabc78`** — **row A1** (subagent-built, two-stage reviewed): command

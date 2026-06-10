@@ -150,12 +150,17 @@ backlog run** — direction lives in
 (audited 2026-06-10; FOUNDATION seams Phase A first, mechanical fan-out
 Phase B after, big features Phase C backlogged). Two standing user
 directives recorded there: **OS clipboard by default** (row A6) and **no
-hand-rolled terminal setup in app code** (row B7). **HEAD = `faabc78`; 995
-lib tests green; clippy + fmt clean.** Landed from the backlog run so far:
-**A1** (the CommandSet denylist flip — `Context::command_enabled` now exists
-for B1; `docs/design/command-enablement.md`) and **A4** (the theme
-chain-verification pass — every `theme.rs` value chain-documented, cyan
-window scheme live, `ListRoles`/`list_roles()` seam). Cleared recently: the **currency foundation fix** (`focus_child`
+hand-rolled terminal setup in app code** (row B7 — now DONE). **HEAD =
+`7827235`; 995 lib tests green; clippy + fmt clean.** Landed from the
+backlog run so far: **A1** (the CommandSet denylist flip —
+`Context::command_enabled` now exists for B1;
+`docs/design/command-enablement.md`), **A4** (the theme chain-verification
+pass — every `theme.rs` value chain-documented, cyan window scheme live,
+`ListRoles`/`list_roles()` seam), and **B7** (RAII terminal lifecycle in
+`CrosstermBackend` — fallible `new()`, Drop/panic-hook/signal-thread
+restore, `hello.rs` main is 3 lines). **A2 (resetCurrent cascade) is
+in flight** — design approved (pending-currency flag + pump settle pass;
+see the a2-currency worktree if interrupted mid-run). Cleared recently: the **currency foundation fix** (`focus_child`
 self-heal + `Program::new` startup `reset_current`; the `insert_and_focus`
 DEVIATION workaround retired — pre-inserted desktop windows now start focused
 and the topmost is clickable), **button mouse hold-tracking** (the button deferral-3
