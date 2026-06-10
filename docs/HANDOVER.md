@@ -142,11 +142,15 @@
   payload-command + `set_state` `chDirButton` poke breadcrumbed → row 80. The
   `#[delegate]` proc-macro is landed and adopted codebase-wide.
 
-## Next — all 92 rows complete
+## Next — all 92 rows complete; backlog seams being cleared
+
+**All 92 PORT-ORDER rows are COMPLETE.** Post-completion work now clears the
+deferred backlog seams. **HEAD = `c8e3d93`; 964 lib tests green; clippy + fmt
+clean.** Cleared this session: the **ModalFrame outside-click seam** (row 56/57)
+and **`FileEditor::saveAs`** (rows 68/69 breadcrumb) — see below + IMPLEMENTATION-LOG.
 
 **Rows 91–92 (terminal family) are COMPLETE and on `main`.** `TextDevice` (trait)
 and `Terminal` (ring-buffer terminal view) live in `src/widgets/terminal.rs`.
-**HEAD = `62625e8`; 953 lib tests green; clippy + fmt clean.**
 
 Key design choices:
 - `TextDevice` is a plain trait (D11: `streambuf` dropped); users call `write_bytes`.
@@ -191,17 +195,14 @@ it.
   `OpenSaveAsDialog` inline (the §6 modal-close twin). Breadcrumbed in `save()`.
 - **Still breadcrumbed:** `edReadError` on **load** (the ctor has no `ctx`) remains.
 
-### Other non-gating seam still open (independent of the above)
-- **The `ModalFrame` deliver-outside-to-modal seam** (row 56/57 deferred — STILL
-  OPEN). Un-defers the `HistoryWindow` outside-click `endModal(cmCancel)`. **NOT a
-  `ModalFrame` return-value tweak:** `ModalFrame::handle` has no `group`, and
-  `program_handle_event` routes outside positional events **positionally to the
-  desktop**. The fix is a **delivery-path change in `program_handle_event`**:
-  while a `ModalFrame` is the top capture, deliver positional events to the modal
-  view by id (makeLocal to its bounds) so the modal's own routing + the
-  `HistoryWindow` `mouseInView`-cancel override decide. Verify a plain `Dialog`
-  still IGNORES an outside click under that delivery (C++ does). Breadcrumb in
-  place: `HistoryWindow::handle_event` `TODO(row 57 modal-loop seam)`.
+### Other non-gating seam
+- **The `ModalFrame` deliver-outside-to-modal seam** (row 56/57 — **DONE**, HEAD
+  `af109fc`/`95ba912`). Outside-bounds positional events are now delivered to the
+  active modal view (localized) instead of being swallowed. `HistoryWindow::handle_event`
+  part (C) is implemented: `!mouseInView → endModal(cmCancel)`. Plain `Dialog` ignores
+  outside clicks (no cancel override). Key seams added: `CaptureHandler::is_modal_gate()`
+  default false, `ModalFrame` overrides true; `CaptureStack::top_modal_view()`;
+  pump pre-dispatch redirect block (before `captures.dispatch`).
 
 **Row 66 deferred sub-features** (breadcrumbed TODOs in `editor.rs`; pick up when
 relevant prerequisites land):

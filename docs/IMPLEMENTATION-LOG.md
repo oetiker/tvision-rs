@@ -70,6 +70,45 @@ modal-close twin of this seam). No consumer exercises the untitled-close+Yes pat
 
 ---
 
+## Session — ModalFrame outside-click delivery seam (row 56/57)
+
+Cleared the long-standing **row 57 modal-loop breadcrumb**: outside-bounds
+positional events were swallowed by `ModalFrame` before reaching the modal view,
+so `THistoryWindow`'s `evMouseDown && !mouseInView → endModal(cmCancel)`
+(`thistwin.cpp`) could never fire. Commits `af109fc` (feature) + `95ba912`
+(review fixes).
+
+### The seam
+
+- **`CaptureHandler::is_modal_gate()`** (`capture.rs`, default `false`;
+  `ModalFrame` overrides `true`): distinguishes a true modal-bounds gate from drag
+  / menu-box handlers that also carry a `view()`. **`CaptureStack::top_modal_view()`**
+  returns the top handler's `ViewId` only when it is a modal gate.
+- **Pump pre-dispatch redirect** (`program.rs` `pump_once`, before
+  `captures.dispatch`): when the top capture is a `ModalFrame` and the event is a
+  positional event outside the modal's bounds, the pump **localizes** it
+  (`position -= modal_bounds.a`, the makeLocal) and delivers it directly to the
+  modal view — skipping `captures.dispatch` + `program_handle_event`. The root
+  group sits at `(0,0)`, so `modal_bounds.a` is the absolute origin (same
+  coordinate contract as the existing `ModalFrame` gate).
+- **`HistoryWindow::handle_event` part (C)** now implements the C++ check: after
+  the base `TWindow::handleEvent`, an uncleared `MouseDown` whose (localized)
+  position is outside `get_extent()` → `ctx.end_modal(cmCancel)` + clear. A plain
+  `Dialog` has no such override, so it **ignores** outside clicks (faithful — C++
+  `TDialog` does not cancel on outside click).
+
+### Tests
+
+4 new (953 → 957): `outside_modal_click_delivered_to_modal_view`,
+`inside_modal_click_uses_normal_dispatch`, `plain_dialog_modal_ignores_outside_click`
+(program.rs); `history_window_cancels_on_outside_click` (history.rs). The existing
+`modal_frame_gates_events` test was updated to the new "deliver, don't swallow"
+contract. Review fix `95ba912` removed an unused `CaptureStack::top_view()`
+(dangerous API surface — `top_modal_view()` is the only correct entry point) and
+added the plain-Dialog regression guard.
+
+---
+
 ## Session — terminal family (rows 91–92)
 
 Ported **`TTextDevice`** (row 91) and **`TTerminal`** (row 92) from
