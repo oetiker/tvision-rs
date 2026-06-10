@@ -962,9 +962,10 @@ impl View for InputLine {
                 // validator.validate pops the validator's `error()` box (via
                 // ctx.request_message_box) on the way to returning false — faithful
                 // to TInputLine::valid calling validator->valid() which pops error().
-                // TODO(valid-select): C++ valid() calls select() on the bad field
-                // before returning false; needs request_focus. The error box +
-                // return value are faithful; the focus side-effect is deferred.
+                // C++ `valid()`: `select(); return False` — focus the bad field.
+                if let Some(id) = self.state.id() {
+                    ctx.request_focus(id);
+                }
                 return false;
             }
         }
@@ -1004,10 +1005,17 @@ impl View for InputLine {
         // rightly drops; this is intentional under D10, not an oversight.
         #[allow(irrefutable_let_patterns)]
         if let FieldValue::Text(s) = v {
-            // TODO(max_len clamp on set_value): C++ flowback is `strnzcpy(data, s,
-            // maxLen+1)` — truncates to maxLen. We assign unclamped (pre-existing
-            // row-39 gap; row 57's THistory flowback is the first heavy consumer).
-            self.data = s;
+            // C++ `setData`: `memcpy(data, rec, dataSize()-1)` — truncates to maxLen.
+            let limit = self.max_len as usize;
+            self.data = if s.len() <= limit {
+                s
+            } else {
+                let mut cut = limit;
+                while cut > 0 && !s.is_char_boundary(cut) {
+                    cut -= 1;
+                }
+                s[..cut].to_string()
+            };
             self.select_all(true, true);
         }
     }
