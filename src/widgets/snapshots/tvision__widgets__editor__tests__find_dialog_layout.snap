@@ -1,0 +1,42 @@
+---
+source: src/widgets/editor.rs
+expression: screen.snapshot()
+---
+size: 38x12
+cursor: hidden
+text:
+|┌─────────────── Find ───────────────┐|
+|│                                    │|
+|│  Text to find                      │|
+|│   hello                       ▐↓▌  │|
+|│                                    │|
+|│   [X] Case sensitive               │|
+|│   [ ] Whole words only             │|
+|│                                    │|
+|│                                    │|
+|│                 OK   ▄    Cancel ▄ │|
+|│               ▀▀▀▀▀▀▀▀    ▀▀▀▀▀▀▀▀ │|
+|└────────────────────────────────────┘|
+attr:
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|aaabaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|aaacccccccccccccccccccccccccccccdedaaa|
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|aaafffffgffffffffffffffffffffffffffaaa|
+|aaafffffgffffffffffffffffffffffffffaaa|
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|aaaaaaaaaaaaaaaeeeeheeeaaaaeeeeeeeeaaa|
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+legend:
+  . default
+  a fg=BIOS(0) bg=BIOS(7)
+  b fg=BIOS(14) bg=BIOS(7)
+  c fg=BIOS(15) bg=BIOS(1)
+  d fg=BIOS(2) bg=BIOS(7)
+  e fg=BIOS(0) bg=BIOS(2)
+  f fg=BIOS(0) bg=BIOS(3)
+  g fg=BIOS(14) bg=BIOS(3)
+  h fg=BIOS(14) bg=BIOS(2)

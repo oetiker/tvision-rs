@@ -401,6 +401,29 @@ enum ModalCompletion {
     /// `FileDialog`'s FD_OK_BUTTON ends the modal with `cmFileOpen`, not `cmOK`
     /// (faithful to C++ `saveAs`'s `editorDialog(edSaveAs, …) != cmCancel`).
     SaveAsPick { editor_id: ViewId },
+
+    /// `edFind` result (C1): on non-cancel, read `find_str` + options from the
+    /// in-tree Find dialog, update the editor, and re-inject `cmSearchAgain`.
+    FindPick {
+        editor_id: ViewId,
+        /// `ViewId` of the "Text to find" `InputLine` child.
+        find_id: ViewId,
+        /// `ViewId` of the `CheckBoxes` child (case/words options).
+        opts_id: ViewId,
+    },
+
+    /// `edReplace` result (C1): on non-cancel, read find+replace strings + options
+    /// from the in-tree Replace dialog, set `EF_DO_REPLACE`, and re-inject
+    /// `cmSearchAgain`.
+    ReplacePick {
+        editor_id: ViewId,
+        /// `ViewId` of the "Text to find" `InputLine` child.
+        find_id: ViewId,
+        /// `ViewId` of the "New text" `InputLine` child.
+        replace_id: ViewId,
+        /// `ViewId` of the `CheckBoxes` child (case/words/prompt/all options).
+        opts_id: ViewId,
+    },
 }
 
 impl Program {
@@ -2177,6 +2200,213 @@ impl Program {
                                     None,
                                 ));
                             }
+
+                            // -- find dialog (edFind) seam -------------------
+                            //
+                            // An Editor requested cmFind. Build a 38×12 "Find"
+                            // dialog (faithful to C++ tvedit2.cpp::createFindDialog),
+                            // pre-fill from editor state, and stash into
+                            // pending_modal with FindPick.
+                            Deferred::OpenFindDialog { editor_id } => {
+                                use crate::data::FieldValue;
+                                use crate::dialog::Dialog;
+                                use crate::view::Rect;
+                                use crate::widgets::{
+                                    Button, ButtonFlags, CheckBoxes, InputLine, Label, LimitMode,
+                                    THistory,
+                                };
+
+                                // Read current editor search state.
+                                let (find_str, editor_flags) = group
+                                    .find_mut(editor_id)
+                                    .and_then(|v| v.as_any_mut())
+                                    .and_then(|a| a.downcast_mut::<crate::widgets::Editor>())
+                                    .map(|e| (e.find_str().to_owned(), e.editor_flags()))
+                                    .unwrap_or_default();
+
+                                // Build dialog (0,0,38,12), centered, title "Find".
+                                let mut d =
+                                    Dialog::new(Rect::new(0, 0, 38, 12), Some("Find".into()));
+                                {
+                                    let opts = &mut d.state_mut().options;
+                                    opts.center_x = true;
+                                    opts.center_y = true;
+                                }
+
+                                // InputLine: rect (3,3,32,4), max_len 80 bytes.
+                                let mut il = InputLine::new(
+                                    Rect::new(3, 3, 32, 4),
+                                    81, // MaxBytes: max_len = limit-1 = 80
+                                    None,
+                                    LimitMode::MaxBytes,
+                                );
+                                il.set_value(FieldValue::Text(find_str));
+                                let find_id = d.insert_child(Box::new(il));
+
+                                // Label: linked to find InputLine.
+                                d.insert_child(Box::new(Label::new(
+                                    Rect::new(2, 2, 15, 3),
+                                    "~T~ext to find",
+                                    Some(find_id),
+                                )));
+                                // History button (C++ tvedit2: THistory(32,3,35,4), id=10).
+                                d.insert_child(Box::new(THistory::new(
+                                    Rect::new(32, 3, 35, 4),
+                                    find_id,
+                                    10,
+                                )));
+
+                                // CheckBoxes: rect (3,5,35,7), 2 items.
+                                let mut cb = CheckBoxes::new(
+                                    Rect::new(3, 5, 35, 7),
+                                    vec!["~C~ase sensitive".into(), "~W~hole words only".into()],
+                                );
+                                // Pre-fill bits 0-1 from editor_flags.
+                                cb.cluster.value = (editor_flags & 0x0003) as u32;
+                                let opts_id = d.insert_child(Box::new(cb));
+
+                                // OK (default) + Cancel buttons.
+                                d.insert_child(Box::new(Button::new(
+                                    Rect::new(14, 9, 24, 11),
+                                    "O~K~",
+                                    Command::OK,
+                                    ButtonFlags {
+                                        default: true,
+                                        ..Default::default()
+                                    },
+                                )));
+                                d.insert_child(Box::new(Button::new(
+                                    Rect::new(26, 9, 36, 11),
+                                    "Cancel",
+                                    Command::CANCEL,
+                                    ButtonFlags::new(),
+                                )));
+
+                                *pending_modal = Some((
+                                    Box::new(d),
+                                    ModalCompletion::FindPick {
+                                        editor_id,
+                                        find_id,
+                                        opts_id,
+                                    },
+                                    Some(find_id),
+                                ));
+                            }
+
+                            // -- replace dialog (edReplace) seam -------------
+                            Deferred::OpenReplaceDialog { editor_id } => {
+                                use crate::data::FieldValue;
+                                use crate::dialog::Dialog;
+                                use crate::view::Rect;
+                                use crate::widgets::{
+                                    Button, ButtonFlags, CheckBoxes, InputLine, Label, LimitMode,
+                                    THistory,
+                                };
+
+                                let (find_str, replace_str, editor_flags) = group
+                                    .find_mut(editor_id)
+                                    .and_then(|v| v.as_any_mut())
+                                    .and_then(|a| a.downcast_mut::<crate::widgets::Editor>())
+                                    .map(|e| {
+                                        (
+                                            e.find_str().to_owned(),
+                                            e.replace_str().to_owned(),
+                                            e.editor_flags(),
+                                        )
+                                    })
+                                    .unwrap_or_default();
+
+                                // Build dialog (0,0,40,16), centered, title "Replace".
+                                let mut d =
+                                    Dialog::new(Rect::new(0, 0, 40, 16), Some("Replace".into()));
+                                {
+                                    let opts = &mut d.state_mut().options;
+                                    opts.center_x = true;
+                                    opts.center_y = true;
+                                }
+
+                                // "Text to find" InputLine at (3,3,34,4).
+                                let mut il1 = InputLine::new(
+                                    Rect::new(3, 3, 34, 4),
+                                    81,
+                                    None,
+                                    LimitMode::MaxBytes,
+                                );
+                                il1.set_value(FieldValue::Text(find_str));
+                                let find_id = d.insert_child(Box::new(il1));
+                                d.insert_child(Box::new(Label::new(
+                                    Rect::new(2, 2, 15, 3),
+                                    "~T~ext to find",
+                                    Some(find_id),
+                                )));
+                                // History (C++ tvedit2: THistory(34,3,37,4), id=10).
+                                d.insert_child(Box::new(THistory::new(
+                                    Rect::new(34, 3, 37, 4),
+                                    find_id,
+                                    10,
+                                )));
+
+                                // "New text" InputLine at (3,6,34,7).
+                                let mut il2 = InputLine::new(
+                                    Rect::new(3, 6, 34, 7),
+                                    81,
+                                    None,
+                                    LimitMode::MaxBytes,
+                                );
+                                il2.set_value(FieldValue::Text(replace_str));
+                                let replace_id = d.insert_child(Box::new(il2));
+                                d.insert_child(Box::new(Label::new(
+                                    Rect::new(2, 5, 12, 6),
+                                    "~N~ew text",
+                                    Some(replace_id),
+                                )));
+                                // History (C++ tvedit2: THistory(34,6,37,7), id=11).
+                                d.insert_child(Box::new(THistory::new(
+                                    Rect::new(34, 6, 37, 7),
+                                    replace_id,
+                                    11,
+                                )));
+
+                                // CheckBoxes (3,8,37,12), 4 items.
+                                let mut cb = CheckBoxes::new(
+                                    Rect::new(3, 8, 37, 12),
+                                    vec![
+                                        "~C~ase sensitive".into(),
+                                        "~W~hole words only".into(),
+                                        "~P~rompt on replace".into(),
+                                        "~R~eplace all".into(),
+                                    ],
+                                );
+                                cb.cluster.value = (editor_flags & 0x000F) as u32;
+                                let opts_id = d.insert_child(Box::new(cb));
+
+                                d.insert_child(Box::new(Button::new(
+                                    Rect::new(17, 13, 27, 15),
+                                    "O~K~",
+                                    Command::OK,
+                                    ButtonFlags {
+                                        default: true,
+                                        ..Default::default()
+                                    },
+                                )));
+                                d.insert_child(Box::new(Button::new(
+                                    Rect::new(28, 13, 38, 15),
+                                    "Cancel",
+                                    Command::CANCEL,
+                                    ButtonFlags::new(),
+                                )));
+
+                                *pending_modal = Some((
+                                    Box::new(d),
+                                    ModalCompletion::ReplacePick {
+                                        editor_id,
+                                        find_id,
+                                        replace_id,
+                                        opts_id,
+                                    },
+                                    Some(find_id),
+                                ));
+                            }
                         }
                     }
                 }
@@ -2376,6 +2606,85 @@ fn apply_modal_completion(
             }
             None
         }
+        // FindPick: on non-cancel, read the find string + options from the
+        // in-tree Find dialog, update the editor (clear EF_DO_REPLACE), and
+        // re-inject cmSearchAgain so do_search_replace runs on the editor.
+        ModalCompletion::FindPick {
+            editor_id,
+            find_id,
+            opts_id,
+        } => {
+            if result == Command::CANCEL {
+                return None;
+            }
+            // Read find string from the InputLine.
+            let find_str = group
+                .find_mut(find_id)
+                .and_then(|v| v.value())
+                .and_then(field_text)
+                .unwrap_or_default();
+            // Read options from CheckBoxes via downcast (cluster.value).
+            let opts = group
+                .find_mut(opts_id)
+                .and_then(|v| v.as_any_mut())
+                .and_then(|a| a.downcast_mut::<crate::widgets::CheckBoxes>())
+                .map(|cb| cb.cluster.value as u16)
+                .unwrap_or(0)
+                & 0x0003; // bits 0-1: case sensitive, whole words
+            // Update editor: set find_str + flags (without EF_DO_REPLACE).
+            if let Some(ed) = group
+                .find_mut(editor_id)
+                .and_then(|v| v.as_any_mut())
+                .and_then(|a| a.downcast_mut::<crate::widgets::Editor>())
+            {
+                ed.set_find_str(find_str);
+                ed.set_editor_flags(opts);
+            }
+            // Re-inject cmSearchAgain to run do_search_replace on the editor.
+            Some(Event::Command(Command::SEARCH_AGAIN))
+        }
+
+        // ReplacePick: on non-cancel, read find+replace strings + options,
+        // set EF_DO_REPLACE, and re-inject cmSearchAgain.
+        ModalCompletion::ReplacePick {
+            editor_id,
+            find_id,
+            replace_id,
+            opts_id,
+        } => {
+            if result == Command::CANCEL {
+                return None;
+            }
+            let find_str = group
+                .find_mut(find_id)
+                .and_then(|v| v.value())
+                .and_then(field_text)
+                .unwrap_or_default();
+            let replace_str = group
+                .find_mut(replace_id)
+                .and_then(|v| v.value())
+                .and_then(field_text)
+                .unwrap_or_default();
+            let opts = group
+                .find_mut(opts_id)
+                .and_then(|v| v.as_any_mut())
+                .and_then(|a| a.downcast_mut::<crate::widgets::CheckBoxes>())
+                .map(|cb| cb.cluster.value as u16)
+                .unwrap_or(0)
+                & 0x000F; // bits 0-3: case, whole-words, prompt, replace-all
+            if let Some(ed) = group
+                .find_mut(editor_id)
+                .and_then(|v| v.as_any_mut())
+                .and_then(|a| a.downcast_mut::<crate::widgets::Editor>())
+            {
+                ed.set_find_str(find_str);
+                ed.set_replace_str(replace_str);
+                // EF_DO_REPLACE (0x0010) is set unconditionally for replace.
+                ed.set_editor_flags(opts | crate::widgets::EF_DO_REPLACE);
+            }
+            Some(Event::Command(Command::SEARCH_AGAIN))
+        }
+
         // saveAs result: read the picked filename from the in-tree FileDialog,
         // set it on the editor, flag the title update, and re-inject cmSave so the
         // normal save path runs save_file(ctx). The accept test is `!= CANCEL`

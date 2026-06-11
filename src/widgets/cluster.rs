@@ -771,8 +771,14 @@ pub struct CheckBoxes {
     pub cluster: Cluster,
 }
 
-#[crate::delegate(to = cluster, skip(apply_list_scroll, as_any_mut, focus_descendant, grabs_focus_on_click, set_value, value))]
-impl View for CheckBoxes {}
+#[crate::delegate(to = cluster, skip(apply_list_scroll, focus_descendant, grabs_focus_on_click, set_value, value))]
+impl View for CheckBoxes {
+    /// Downcast hook: allows `apply_modal_completion` (FindPick/ReplacePick) to
+    /// read `cluster.value` directly from the in-tree CheckBoxes widget.
+    fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
+        Some(self)
+    }
+}
 
 /// `TRadioButtons` — a column of mutually-exclusive buttons; `value` is the
 /// selected index. D2 wrapper with [`ClusterKind::RadioButtons`].

@@ -1,0 +1,50 @@
+---
+source: src/widgets/editor.rs
+expression: screen.snapshot()
+---
+size: 40x16
+cursor: hidden
+text:
+|┌────────────── Replace ───────────────┐|
+|│                                      │|
+|│  Text to find                        │|
+|│   foo                           ▐↓▌  │|
+|│                                      │|
+|│  New text                            │|
+|│   bar                           ▐↓▌  │|
+|│                                      │|
+|│   [X] Case sensitive                 │|
+|│   [ ] Whole words only               │|
+|│   [X] Prompt on replace              │|
+|│   [ ] Replace all                    │|
+|│                                      │|
+|│                    OK   ▄   Cancel ▄ │|
+|│                  ▀▀▀▀▀▀▀▀   ▀▀▀▀▀▀▀▀ │|
+|└──────────────────────────────────────┘|
+attr:
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|aaabaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|aaacccccccccccccccccccccccccccccccdedaaa|
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|aaabaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|aaacccccccccccccccccccccccccccccccdedaaa|
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|aaafffffgffffffffffffffffffffffffffffaaa|
+|aaafffffgffffffffffffffffffffffffffffaaa|
+|aaafffffgffffffffffffffffffffffffffffaaa|
+|aaafffffgffffffffffffffffffffffffffffaaa|
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|aaaaaaaaaaaaaaaaaaeeeeheeeaaaeeeeeeeeaaa|
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+legend:
+  . default
+  a fg=BIOS(0) bg=BIOS(7)
+  b fg=BIOS(14) bg=BIOS(7)
+  c fg=BIOS(15) bg=BIOS(1)
+  d fg=BIOS(2) bg=BIOS(7)
+  e fg=BIOS(0) bg=BIOS(2)
+  f fg=BIOS(0) bg=BIOS(3)
+  g fg=BIOS(14) bg=BIOS(3)
+  h fg=BIOS(14) bg=BIOS(2)

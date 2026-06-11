@@ -99,17 +99,12 @@ const SM_TRIPLE: u8 = 0x04;
 pub(crate) const EF_CASE_SENSITIVE: u16 = 0x0001;
 /// `efWholeWordsOnly` — `search` rejects matches inside a larger word.
 pub(crate) const EF_WHOLE_WORDS_ONLY: u16 = 0x0002;
-// The remaining `ef*` flags drive the find/replace DIALOGS, which are deferred
-// (row 66 find/replace dialog). Kept as the faithful constant family for the
-// future consumer; `#[allow(dead_code)]` until then.
-/// `efPromptOnReplace` — replace prompts before each substitution (dialog; deferred).
-#[allow(dead_code)]
+// The `ef*` flags that drive the find/replace dialogs (C1).
+/// `efPromptOnReplace` — replace prompts before each substitution.
 pub(crate) const EF_PROMPT_ON_REPLACE: u16 = 0x0004;
-/// `efReplaceAll` — replace every match (dialog; deferred).
-#[allow(dead_code)]
+/// `efReplaceAll` — replace every match.
 pub(crate) const EF_REPLACE_ALL: u16 = 0x0008;
-/// `efDoReplace` — the operation is a replace, not a find (dialog; deferred).
-#[allow(dead_code)]
+/// `efDoReplace` — the operation is a replace, not a find.
 pub(crate) const EF_DO_REPLACE: u16 = 0x0010;
 /// `efBackupFiles` — write a backup file on save (file editor; deferred).
 #[allow(dead_code)]
@@ -426,9 +421,6 @@ pub struct Editor {
     /// find/replace dialogs (deferred) need otherwise.
     find_str: String,
     /// `replaceStr` — last replacement string (per-instance; see [`find_str`]).
-    /// Read only by the deferred find/replace dialog path (`doSearchReplace`'s
-    /// `insertText(replaceStr, …)`), so unused until then.
-    #[allow(dead_code)]
     replace_str: String,
     /// `editorFlags` — the `ef*` search options (per-instance; see [`find_str`]).
     editor_flags: u16,
@@ -440,6 +432,12 @@ pub struct Editor {
     /// [`EditorTrack`]). Guards the tracked `MouseMove`/`MouseAuto`/wheel/
     /// `MouseUp` arms against stray events.
     track: Option<EditorTrack>,
+    /// Cached answer from the "Replace this occurrence?" prompt
+    /// ([`Context::request_message_box`] with `yes_no_cancel`). Set via
+    /// [`View::set_modal_answer`]; consumed by [`do_search_replace`] on the
+    /// next `cmSearchAgain` dispatch to act on the user's choice before
+    /// searching for the next match.
+    pending_replace_answer: Option<crate::command::Command>,
 }
 
 impl Editor {
@@ -505,6 +503,7 @@ impl Editor {
             editor_flags: 0,
             abs_origin: Point::new(0, 0),
             track: None,
+            pending_replace_answer: None,
         };
         // setBufLen(0) — flag-set only (no flush; ctor has no Context).
         ed.set_buf_len(0);
@@ -1510,15 +1509,131 @@ impl Editor {
         }
     }
 
-    // -- find/replace dialogs (DEFERRED) ------------------------------------
+    // -- find/replace accessor methods (C1 seam) ----------------------------
 
-    /// `doSearchReplace()` — repeated find/replace. The dialog-driven prompt is
-    /// stubbed (no `editorDialog`); with an empty `find_str` this is inert.
-    fn do_search_replace(&mut self) {
-        // TODO(row 66 find/replace dialog): needs editorDialog + std find/replace
-        // dialogs. The replace loop + efPromptOnReplace prompt are deferred; with
-        // an empty find_str, search returns false and this is a no-op.
-        let _ = self.search(&self.find_str.clone(), self.editor_flags);
+    /// Read the find string — for the drain-handler pre-fill.
+    pub(crate) fn find_str(&self) -> &str {
+        &self.find_str
+    }
+
+    /// Read the replace string — for the drain-handler pre-fill.
+    pub(crate) fn replace_str(&self) -> &str {
+        &self.replace_str
+    }
+
+    /// Read `editor_flags` — for the drain-handler pre-fill.
+    pub(crate) fn editor_flags(&self) -> u16 {
+        self.editor_flags
+    }
+
+    /// Set `find_str` — called from `FindPick`/`ReplacePick` completion.
+    pub(crate) fn set_find_str(&mut self, s: String) {
+        self.find_str = s;
+    }
+
+    /// Set `replace_str` — called from `ReplacePick` completion.
+    pub(crate) fn set_replace_str(&mut self, s: String) {
+        self.replace_str = s;
+    }
+
+    /// Set `editor_flags` — called from `FindPick`/`ReplacePick` completion.
+    pub(crate) fn set_editor_flags(&mut self, f: u16) {
+        self.editor_flags = f;
+    }
+
+    // -- find/replace dialogs -----------------------------------------------
+
+    /// `doSearchReplace()` — one pass of the search/replace loop.
+    ///
+    /// Faithful to C++ `TEditor::doSearchReplace` except: the PromptOnReplace
+    /// dialog goes via the async `request_message_box` seam (not a synchronous
+    /// `editorDialog` call); `pending_replace_answer` stores the user's choice
+    /// between pump iterations.
+    fn do_search_replace(&mut self, ctx: &mut Context) {
+        use crate::command::Command;
+        use crate::dialog::{MessageBoxButtons, MessageBoxKind};
+
+        let opts = self.editor_flags;
+        let do_replace = (opts & EF_DO_REPLACE) != 0;
+        let replace_all = (opts & EF_REPLACE_ALL) != 0;
+        let prompt = (opts & EF_PROMPT_ON_REPLACE) != 0;
+
+        // `search`/`insert_text` need `&mut self`, so the find/replace strings
+        // can't be borrowed across those calls — clone once up front rather than
+        // per loop iteration.
+        let find = self.find_str.clone();
+        let replacement = self.replace_str.clone();
+
+        // If there is a pending answer from a previous replace-prompt dialog,
+        // act on it before searching for the next occurrence.
+        if let Some(answer) = self.pending_replace_answer.take() {
+            match answer {
+                Command::YES => {
+                    // Replace the current selection (still set from the last search).
+                    self.insert_text(replacement.as_bytes(), false, ctx);
+                    if !replace_all {
+                        return;
+                    }
+                    // Fall through to search for the next occurrence.
+                }
+                Command::CANCEL => {
+                    return; // user cancelled the replace loop
+                }
+                _ => {
+                    // cmNo: C++ loop condition is `while (i != cmCancel && efReplaceAll)`,
+                    // so when efReplaceAll is NOT set the loop exits on cmNo too.
+                    if !replace_all {
+                        return;
+                    }
+                    // efReplaceAll: fall through to search next (curPtr is at selEnd).
+                }
+            }
+        }
+
+        // Main search/replace loop (runs at least once; loops only on replace_all
+        // without a prompt since the prompt path returns above).
+        loop {
+            if !self.search(&find, opts) {
+                // Search string not found. C++ only shows the dialog when NOT
+                // (replace_all && do_replace).
+                if !(replace_all && do_replace) {
+                    ctx.request_message_box(
+                        "Search string not found.".into(),
+                        MessageBoxKind::Error,
+                        MessageBoxButtons::ok(),
+                        None,
+                        None,
+                    );
+                }
+                return;
+            }
+
+            if do_replace {
+                if prompt {
+                    // Ask user — deferred async message box; answer routes back
+                    // via set_modal_answer + SEARCH_AGAIN re-inject.
+                    if let Some(id) = self.state.id() {
+                        ctx.request_message_box(
+                            "Replace this occurrence?".into(),
+                            MessageBoxKind::Information,
+                            MessageBoxButtons::yes_no_cancel(),
+                            Some(id),                    // answer_to = this editor
+                            Some(Command::SEARCH_AGAIN), // re-run after answer
+                        );
+                    }
+                    return; // wait for answer
+                } else {
+                    // No prompt: replace immediately.
+                    self.insert_text(replacement.as_bytes(), false, ctx);
+                    if !replace_all {
+                        return;
+                    }
+                    // Continue loop for replace_all (no prompt).
+                }
+            } else {
+                return; // found, no replace
+            }
+        }
     }
 
     // -- formatLine / draw (edits.cpp / teditor1.cpp) -----------------------
@@ -1883,15 +1998,19 @@ impl View for Editor {
             Event::Command(cmd) => {
                 let cmd = *cmd;
                 match cmd {
-                    Command::FIND | Command::REPLACE | Command::SEARCH_AGAIN => {
-                        // TODO(row 66 find/replace dialog): needs editorDialog + std
-                        // find/replace dialogs. cmSearchAgain runs doSearchReplace
-                        // (inert with empty find_str); cmFind/cmReplace need dialogs.
-                        if cmd == Command::SEARCH_AGAIN {
-                            self.do_search_replace();
-                            self.flush_if_unlocked(ctx);
+                    Command::FIND => {
+                        if let Some(id) = self.state.id() {
+                            ctx.open_find_dialog(id);
                         }
-                        // cmFind / cmReplace: no-op (dialogs deferred).
+                    }
+                    Command::REPLACE => {
+                        if let Some(id) = self.state.id() {
+                            ctx.open_replace_dialog(id);
+                        }
+                    }
+                    Command::SEARCH_AGAIN => {
+                        self.do_search_replace(ctx);
+                        self.flush_if_unlocked(ctx);
                     }
                     Command::ENCODING => {
                         self.toggle_encoding();
@@ -1981,9 +2100,17 @@ impl View for Editor {
     }
 
     /// Concrete-reach hatch: the pump downcasts to `&mut Editor` for the
-    /// `SyncEditorDelta` / `EditorPaste` brokers.
+    /// `SyncEditorDelta` / `EditorPaste` brokers, and for the `FindPick` /
+    /// `ReplacePick` completion to set search state.
     fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
         Some(self)
+    }
+
+    /// Cache the user's answer to the "Replace this occurrence?" prompt
+    /// (the `answer_to` / `RouteModalAnswer` round-trip). Consumed by
+    /// [`do_search_replace`] on the next `cmSearchAgain` dispatch.
+    fn set_modal_answer(&mut self, cmd: crate::command::Command) {
+        self.pending_replace_answer = Some(cmd);
     }
 }
 
@@ -4528,5 +4655,162 @@ mod tests {
             (2, 8),
             "drag-select body ran on the inner editor via delegation"
         );
+    }
+
+    // -- C1 find/replace dialog layout snapshots ----------------------------
+
+    /// Render the Find dialog to verify its layout (C1 edFind seam).
+    #[test]
+    fn find_dialog_layout() {
+        use crate::backend::{HeadlessBackend, Renderer};
+        use crate::data::FieldValue;
+        use crate::dialog::Dialog;
+        use crate::screen::Buffer;
+        use crate::theme::Theme;
+        use crate::view::{DrawCtx, Rect, View};
+        use crate::widgets::{
+            Button, ButtonFlags, CheckBoxes, InputLine, Label, LimitMode, THistory,
+        };
+
+        let mut d = Dialog::new(Rect::new(0, 0, 38, 12), Some("Find".into()));
+        {
+            let opts = &mut d.state_mut().options;
+            opts.center_x = true;
+            opts.center_y = true;
+        }
+
+        let mut il = InputLine::new(Rect::new(3, 3, 32, 4), 81, None, LimitMode::MaxBytes);
+        il.set_value(FieldValue::Text("hello".into()));
+        let find_id = d.insert_child(Box::new(il));
+        d.insert_child(Box::new(Label::new(
+            Rect::new(2, 2, 15, 3),
+            "~T~ext to find",
+            Some(find_id),
+        )));
+        d.insert_child(Box::new(THistory::new(
+            Rect::new(32, 3, 35, 4),
+            find_id,
+            10,
+        )));
+
+        let mut cb = CheckBoxes::new(
+            Rect::new(3, 5, 35, 7),
+            vec!["~C~ase sensitive".into(), "~W~hole words only".into()],
+        );
+        cb.cluster.value = 0x0001; // case sensitive pre-selected
+        d.insert_child(Box::new(cb));
+
+        d.insert_child(Box::new(Button::new(
+            Rect::new(14, 9, 24, 11),
+            "O~K~",
+            crate::command::Command::OK,
+            ButtonFlags {
+                default: true,
+                ..Default::default()
+            },
+        )));
+        d.insert_child(Box::new(Button::new(
+            Rect::new(26, 9, 36, 11),
+            "Cancel",
+            crate::command::Command::CANCEL,
+            ButtonFlags::new(),
+        )));
+
+        let theme = Theme::classic_blue();
+        let (backend, screen) = HeadlessBackend::new(38, 12);
+        let mut r = Renderer::new(Box::new(backend));
+        r.render(|buf: &mut Buffer| {
+            let bounds = d.state().get_bounds();
+            let mut dc = DrawCtx::new(buf, &theme, bounds, bounds.a);
+            d.draw(&mut dc);
+        });
+        insta::assert_snapshot!(screen.snapshot());
+    }
+
+    /// Render the Replace dialog to verify its layout (C1 edReplace seam).
+    #[test]
+    fn replace_dialog_layout() {
+        use crate::backend::{HeadlessBackend, Renderer};
+        use crate::data::FieldValue;
+        use crate::dialog::Dialog;
+        use crate::screen::Buffer;
+        use crate::theme::Theme;
+        use crate::view::{DrawCtx, Rect, View};
+        use crate::widgets::{
+            Button, ButtonFlags, CheckBoxes, InputLine, Label, LimitMode, THistory,
+        };
+
+        let mut d = Dialog::new(Rect::new(0, 0, 40, 16), Some("Replace".into()));
+        {
+            let opts = &mut d.state_mut().options;
+            opts.center_x = true;
+            opts.center_y = true;
+        }
+
+        let mut il1 = InputLine::new(Rect::new(3, 3, 34, 4), 81, None, LimitMode::MaxBytes);
+        il1.set_value(FieldValue::Text("foo".into()));
+        let find_id = d.insert_child(Box::new(il1));
+        d.insert_child(Box::new(Label::new(
+            Rect::new(2, 2, 15, 3),
+            "~T~ext to find",
+            Some(find_id),
+        )));
+        d.insert_child(Box::new(THistory::new(
+            Rect::new(34, 3, 37, 4),
+            find_id,
+            10,
+        )));
+
+        let mut il2 = InputLine::new(Rect::new(3, 6, 34, 7), 81, None, LimitMode::MaxBytes);
+        il2.set_value(FieldValue::Text("bar".into()));
+        let replace_id = d.insert_child(Box::new(il2));
+        d.insert_child(Box::new(Label::new(
+            Rect::new(2, 5, 12, 6),
+            "~N~ew text",
+            Some(replace_id),
+        )));
+        d.insert_child(Box::new(THistory::new(
+            Rect::new(34, 6, 37, 7),
+            replace_id,
+            11,
+        )));
+
+        let mut cb = CheckBoxes::new(
+            Rect::new(3, 8, 37, 12),
+            vec![
+                "~C~ase sensitive".into(),
+                "~W~hole words only".into(),
+                "~P~rompt on replace".into(),
+                "~R~eplace all".into(),
+            ],
+        );
+        cb.cluster.value = 0x0005; // case + prompt pre-selected
+        d.insert_child(Box::new(cb));
+
+        d.insert_child(Box::new(Button::new(
+            Rect::new(17, 13, 27, 15),
+            "O~K~",
+            crate::command::Command::OK,
+            ButtonFlags {
+                default: true,
+                ..Default::default()
+            },
+        )));
+        d.insert_child(Box::new(Button::new(
+            Rect::new(28, 13, 38, 15),
+            "Cancel",
+            crate::command::Command::CANCEL,
+            ButtonFlags::new(),
+        )));
+
+        let theme = Theme::classic_blue();
+        let (backend, screen) = HeadlessBackend::new(40, 16);
+        let mut r = Renderer::new(Box::new(backend));
+        r.render(|buf: &mut Buffer| {
+            let bounds = d.state().get_bounds();
+            let mut dc = DrawCtx::new(buf, &theme, bounds, bounds.a);
+            d.draw(&mut dc);
+        });
+        insta::assert_snapshot!(screen.snapshot());
     }
 }

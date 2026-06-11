@@ -445,6 +445,28 @@ pub enum Deferred {
         editor_id: ViewId,
     },
 
+    // -- find/replace dialogs (C1 edFind/edReplace seam) ---------------------
+    /// Request the pump to open the Find dialog (edFind) for the given editor.
+    /// An [`Editor`](crate::widgets::Editor) leaf holds only `&mut Context`, so
+    /// it cannot exec the dialog inline; it requests it here. The pump builds
+    /// the dialog and stashes it into `Program::pending_modal` with a
+    /// `FindPick { editor_id }` completion, which the outer `pump_and_drive`
+    /// runs at top level. On accept the completion reads back the search string
+    /// + options and re-injects `cmSearchAgain`.
+    OpenFindDialog {
+        /// The [`Editor`](crate::widgets::Editor) to update.
+        editor_id: ViewId,
+    },
+
+    /// Request the pump to open the Replace dialog (edReplace) for the given
+    /// editor. Mirror of [`OpenFindDialog`](Self::OpenFindDialog) but for the
+    /// find+replace variant. On accept the completion sets `EF_DO_REPLACE` and
+    /// re-injects `cmSearchAgain`.
+    OpenReplaceDialog {
+        /// The [`Editor`](crate::widgets::Editor) to update.
+        editor_id: ViewId,
+    },
+
     // -- A3: the mouse hold-tracking router (D9 MouseTrackCapture seam) -------
     /// **Deliver a localized mouse event to the tracked view** while a mouse
     /// button is held. Posted only by
@@ -1232,6 +1254,19 @@ impl<'a> Context<'a> {
     /// `cmSave`.
     pub fn request_save_as_dialog(&mut self, editor_id: ViewId) {
         self.deferred.push(Deferred::OpenSaveAsDialog { editor_id });
+    }
+
+    /// Request the Find dialog be opened for `editor_id` — deferred
+    /// ([`Deferred::OpenFindDialog`]).
+    pub fn open_find_dialog(&mut self, editor_id: ViewId) {
+        self.deferred.push(Deferred::OpenFindDialog { editor_id });
+    }
+
+    /// Request the Replace dialog be opened for `editor_id` — deferred
+    /// ([`Deferred::OpenReplaceDialog`]).
+    pub fn open_replace_dialog(&mut self, editor_id: ViewId) {
+        self.deferred
+            .push(Deferred::OpenReplaceDialog { editor_id });
     }
 
     /// Request the `TEditor` `editor` re-read its scrollbars' values and update its

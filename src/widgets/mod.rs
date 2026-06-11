@@ -24,6 +24,7 @@ pub mod terminal;
 
 pub use button::{Button, ButtonFlags};
 pub use cluster::{CheckBoxes, Cluster, ClusterKind, MultiCheckBoxes, RadioButtons};
+pub(crate) use editor::EF_DO_REPLACE;
 pub(crate) use editor::editor_mut;
 pub use editor::{EditWindow, Editor, Encoding, FileEditor, LineEnding, Memo};
 pub use history::{
