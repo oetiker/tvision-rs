@@ -14,12 +14,12 @@
 > When a row lands: add an IMPLEMENTATION-LOG section, tick the BACKLOG row,
 > update this file.
 
-## Current state (2026-06-11, C6 committed)
+## Current state (2026-06-11, C7 committed)
 
-**HEAD = `f3e4ba2`; 1144 lib tests green; clippy + fmt clean.**
+**HEAD = `20871fd`; 1145 lib tests green; clippy + fmt clean.**
 
 Phase A + Phase B are fully complete (all rows ✅). **Phase C is in
-progress** — C1, C2, C3, C4, C5, and C6 are done.
+progress** — C1, C2, C3, C4, C5, C6, and C7 are done.
 
 ### Phase C progress
 - **C1 ✅ (`b388492`)** — editor find/replace dialogs + `do_search_replace`. The
@@ -63,8 +63,17 @@ progress** — C1, C2, C3, C4, C5, and C6 are done.
   `program_handle_event` threaded with `renderer`; `Command::DOS_SHELL` arm:
   suspend → writeShellMsg → `raise(SIGTSTP, cfg(all(unix,not(test))))` → resume →
   invalidate_all. `libc` dep added. Two-stage reviewed.
+- **C7 ✅ (`8c9bf85` + `20871fd`)** — help-ctx refresh / OneOf status line.
+  `View::get_help_ctx()` trait method (default: delegates to
+  `ViewState::get_help_ctx()`); forwarder in `tvision-macros/src/specs.rs`;
+  `delegate_view` spy updated (27 methods). `Program::pump_once` idle arm wires
+  `TStatusLine::update()`: reads `captures.top_modal_view()` as rstv's
+  `TheTopView` equivalent, calls `v.get_help_ctx()`, then `sl.set_help_ctx(top_ctx)`
+  (which is now idempotent — early-return guard mirrors C++'s `if(helpCtx!=h)`).
+  OneOf status defs switch automatically when a modal dialog with a matching
+  `helpCtx` is the top view. Two-stage reviewed.
 
-**Next Phase C row = C7 (help-ctx refresh / OneOf status line).** Walk BACKLOG.md Phase C in order.
+**Next Phase C row = C8 (theme editor).** Walk BACKLOG.md Phase C in order.
 
 ### What is on `main` from the Phase A/B backlog run (committed):
 - **B1 ✅ (`680aabc`)** — button `cmCommandSetChanged` graying; `Program::new` seeds `command_set_changed: true` for initial broadcast. InputLine `can_update_commands`/`update_commands` from `handle_event` + `set_state`.
@@ -140,21 +149,17 @@ This session ran the **backlog run** end to end:
 
 *(none — all paused worktrees integrated this session)*
 
-## Next — Phase C in progress (C1–C5 done)
+## Next — Phase C in progress (C1–C7 done)
 
-**Phase A + B fully ✅; Phase C in progress (C1, C2, C3, C4, C5 ✅).** Walk BACKLOG.md
+**Phase A + B fully ✅; Phase C in progress (C1–C7 ✅).** Walk BACKLOG.md
 Phase C in order. Remaining rows:
-- **C6** cmDosShell (needs a backend suspend seam + SIGTSTP)
-- **C7** help-ctx refresh / `OneOf` status line (needs `View::get_help_ctx` +
-  TopView resolver) — subsumes the `init/doneHistory` + help-ctx standing
-  deferrals
 - **C8** theme editor (needs the D7 extension point; `Program::color_dialog` is
   the ready entry point)
 - **C9** kbPaste / bracketed-paste multi-char insert (`editor.rs` paste branch +
   the backend paste event; B7 landed the event, this is the editor consumer)
 
-**Standing deferrals** (fold into C7 / the history-subsystem port):
-`init/doneHistory`, help-ctx `OneOf` propagation.
+**Standing deferrals** (fold into history-subsystem port):
+`init/doneHistory`.
 
 **C1 reuse note for later rows:** the find/replace prompt reused the
 `request_message_box` async-modal seam (`answer_to` + `then_command`) and the

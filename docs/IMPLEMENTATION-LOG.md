@@ -5,6 +5,38 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## C7 COMPLETE (2026-06-11)
+
+**`8c9bf85` / `20871fd`** — **C7: help-ctx refresh / OneOf status line.**
+
+Ports `TStatusLine::update()` (`tstatusl.cpp:209`) — the idle-cycle mechanism
+that automatically switches the status line's item set when the modal top view's
+help context changes (enabling context-split `OneOf` status defs).
+
+**Seam additions:**
+- `View::get_help_ctx() -> HelpCtx` trait method (default: `self.state().get_help_ctx()`).
+  Faithful to `TView::getHelpCtx`: returns `HelpCtx::DRAGGING` while dragging,
+  else the view's own `help_ctx`. Forwarder added to `tvision-macros/src/specs.rs`;
+  `delegate_view` spy updated (26 → 27 forwarded methods).
+- `StatusLine::set_help_ctx` made **idempotent**: early-return when `self.help_ctx == ctx`,
+  mirroring C++'s `if(helpCtx != h)` guard so `find_items()` never rescans on an unchanged
+  context.
+
+**`Program::pump_once` idle arm:** The OMITTED-UNTIL-CONSUMER placeholder is replaced
+with the live `TStatusLine::update()` equivalent. "TheTopView" in rstv =
+`captures.top_modal_view()`: the modal pushed by `exec_view_with_completion`, or `None`
+when no modal is running (→ `HelpCtx::NO_CONTEXT`, faithful to C++ `(p != 0) ? p->getHelpCtx() : hcNoContext`).
+Sequential `find_mut` calls on distinct ids avoid aliasing issues.
+No explicit redraw needed — D8 whole-tree redraw picks up the state change on the next cycle.
+
+**Test:** Integration test in `program.rs` (`status_line_switches_def_for_modal_help_ctx`) verifies
+that the `All` def is selected when no modal is active, and the `OneOf("app.find")` def
+is selected after pushing a `ModalFrame` whose view has `help_ctx = "app.find"`.
+
+1145 lib tests green. Two-stage reviewed.
+
+---
+
 ## C6 COMPLETE (2026-06-11)
 
 **`386eb84` / `f3e4ba2`** — **C6: cmDosShell — backend terminal suspend/resume + SIGTSTP.**
