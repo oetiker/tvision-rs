@@ -2675,11 +2675,8 @@ impl FileEditor {
     /// `SaveAsPick` completion sets `file_name` + re-injects `cmSave`, which re-runs
     /// `save()` — now with a non-empty `file_name` → `save_file`.
     ///
-    /// LIMITATION: the `valid()` modified-close path (cmClose → Yes → `save()` here)
-    /// returns this `false` and so VETOES the close, then the dialog opens
-    /// separately; a full fix requires `validate_modal_close` to drive an
-    /// `OpenSaveAsDialog` request inline (the §6 modal-close twin of this seam).
-    /// Breadcrumbed; no consumer exercises the untitled close+Yes path yet.
+    /// For the modal-close path, `validate_modal_close` drives the `OpenSaveAsDialog`
+    /// inline and calls `pump_once` to service the re-injected `cmSave` (C5).
     pub fn save(&mut self, ctx: &mut Context) -> bool {
         if self.file_name.is_some() {
             self.save_file(ctx)

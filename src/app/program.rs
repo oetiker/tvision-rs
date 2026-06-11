@@ -738,45 +738,117 @@ impl Program {
         }
     }
 
-    /// `TGroup::execute`'s outer `while( !valid(endState) )` for the **app run
-    /// loop** ([`run`](Self::run)) — the app only ends if the WHOLE root-group tree
-    /// validates the end command (`cmQuit`). Takes `&mut self` (the async-modal
-    /// `valid` seam threads `&mut Context`); builds a throwaway `Context` over the
-    /// disjoint loop-owned fields, as the pump does.
+    /// `TGroup::execute`'s outer `while( !valid(endState) )` for the **app run loop**
+    /// ([`run`](Self::run)) — the app only ends if the whole root-group tree validates
+    /// the end command.
     ///
-    /// **DEFERRED — quit-prompt-on-unsaved is NOT wired here (out of scope for the
-    /// async-modal-from-a-view seam).** Because this validates the ENTIRE root group
-    /// (`group.valid` walks every descendant), a modified [`FileEditor`] or an
-    /// invalid `ofValidate` field *does* request an `OpenMessageBox` here (same code
-    /// path as the window-close prompt) and return false. But this is a fourth
-    /// `valid()` site — distinct from the three the seam targets (focus-leave,
-    /// window-close, modal-close) — and driving its box correctly needs a
-    /// **whole-tree** inline drive (not the single-`id`
-    /// [`validate_modal_close`](Self::validate_modal_close), which validates one
-    /// modal view). So we DISCARD any box `group.valid` queued here (clearing it so
-    /// it does not leak into the next pump) and return the bool. Effect: a `cmQuit`
-    /// with an unsaved editor / invalid field is **vetoed** (the run loop re-spins),
-    /// rather than prompting — the faithful "Save before exit?" walk
-    /// (`TApplication::cascade`/`closeAll` valid-walk) is a follow-up. Pre-seam this
-    /// path returned `true` unconditionally for `FileEditor`; the veto is the
-    /// behaviour change the signature ripple introduced.
+    /// When a [`FileEditor`](crate::widgets::FileEditor) has unsaved changes,
+    /// `group.valid(cmd, ctx)` queues [`Deferred::OpenMessageBox`] and returns `false`.
+    /// We drive the box **inline** (we hold `&mut self` between pump iterations) via
+    /// [`exec_view_with_completion`](Self::exec_view_with_completion), route the answer
+    /// through [`View::set_modal_answer`], and re-validate in a loop. When the user
+    /// answers "Yes" to an untitled editor, `save()` queues
+    /// [`Deferred::OpenSaveAsDialog`]; that is also driven inline in the same pass,
+    /// followed by a `pump_once` to service the re-injected `cmSave`.
+    ///
+    /// Anything else in `self.deferred` after the walk is put back for the next pump.
+    ///
+    /// Mirrors [`validate_modal_close`](Self::validate_modal_close) (the single-view
+    /// modal-close twin) but operates on the whole root group.
     fn valid_end(&mut self, cmd: Command) -> bool {
-        let valid = {
-            let now = self.clock.now_ms();
-            let mut ctx = Context::new(
-                &mut self.out_events,
-                &mut self.timers,
-                now,
-                &mut self.deferred,
-            );
-            self.group.valid(cmd, &mut ctx)
-        };
-        // Drop any OpenMessageBox the tree-walk queued — we cannot drive it here
-        // (whole-tree, not single-id) and must not leak it to the next pump. See
-        // the DEFERRED note above.
-        self.deferred
-            .retain(|d| !matches!(d, Deferred::OpenMessageBox { .. }));
-        valid
+        loop {
+            // 1. Walk the whole root group.
+            let valid = {
+                let now = self.clock.now_ms();
+                let mut ctx = Context::new(
+                    &mut self.out_events,
+                    &mut self.timers,
+                    now,
+                    &mut self.deferred,
+                );
+                self.group.valid(cmd, &mut ctx)
+            };
+
+            // 2. Partition out OpenMessageBox and OpenSaveAsDialog requests queued by valid().
+            //    Anything else is unexpected here — put back for the next real pump.
+            let drained = std::mem::take(&mut self.deferred);
+            let mut requests: Vec<Deferred> = Vec::new();
+            for d in drained {
+                match d {
+                    req @ Deferred::OpenMessageBox { .. } => requests.push(req),
+                    req @ Deferred::OpenSaveAsDialog { .. } => requests.push(req),
+                    other => self.deferred.push(other),
+                }
+            }
+            if requests.is_empty() {
+                return valid;
+            }
+
+            // 3. Drive each request INLINE (we hold &mut self). Re-loop only if an
+            //    answer was routed (i.e. re-validation is needed).
+            let mut revalidate = false;
+            for req in requests {
+                match req {
+                    Deferred::OpenMessageBox {
+                        text,
+                        kind,
+                        buttons,
+                        answer_to,
+                        then_command: _, // ignored here — we re-loop inline
+                    } => {
+                        let r = self.centered_msgbox_rect(&text);
+                        let (d, first) = crate::dialog::build_message_box(r, &text, kind, buttons);
+                        let (answer, _) =
+                            self.exec_view_with_completion(Box::new(d), None, first, None, false);
+                        if let Some(target) = answer_to {
+                            if let Some(v) = self.group.find_mut(target) {
+                                v.set_modal_answer(answer);
+                            }
+                            revalidate = true;
+                        }
+                    }
+                    Deferred::OpenSaveAsDialog { editor_id } => {
+                        use crate::dialog::{FD_OK_BUTTON, FileDialog};
+                        let initial = self
+                            .group
+                            .find_mut(editor_id)
+                            .and_then(|v| v.as_any_mut())
+                            .and_then(|a| a.downcast_mut::<crate::widgets::FileEditor>())
+                            .and_then(|fe| {
+                                fe.file_name
+                                    .as_ref()
+                                    .map(|p| p.to_string_lossy().into_owned())
+                            });
+                        let mut fd =
+                            FileDialog::new("*.*", "Save file as", "~N~ame", FD_OK_BUTTON, 101);
+                        if let Some(name) = initial {
+                            crate::view::View::set_value(
+                                &mut fd,
+                                crate::data::FieldValue::Text(name),
+                            );
+                        }
+                        let (result, _) = self.exec_view_with_completion(
+                            Box::new(fd),
+                            Some(ModalCompletion::SaveAsPick { editor_id }),
+                            None,
+                            None,
+                            false,
+                        );
+                        if result != Command::CANCEL {
+                            // SaveAsPick sets file_name and re-injects cmSave into
+                            // out_events. Drain it now so save_file runs before the
+                            // re-validate pass sees modified=false.
+                            self.pump_once();
+                            revalidate = true;
+                        }
+                    }
+                    _ => unreachable!("partitioned to OpenMessageBox / OpenSaveAsDialog only"),
+                }
+            }
+            if !revalidate {
+                return valid;
+            }
+        }
     }
 
     // -- exec_view: the blocking modal wrapper (row 34, D9) -----------------
@@ -1352,7 +1424,10 @@ impl Program {
     /// re-entrant [`exec_view_with_completion`](Self::exec_view_with_completion)),
     /// routes the answer through [`View::set_modal_answer`], and re-validates in a
     /// loop. The `then_command` carried by the request is IGNORED here (we re-loop
-    /// inline instead of re-posting it — the whole two-path asymmetry).
+    /// inline instead of re-posting it — the whole two-path asymmetry). When `save()`
+    /// queues a [`Deferred::OpenSaveAsDialog`] (untitled file), the FileDialog is
+    /// driven inline with [`ModalCompletion::SaveAsPick`], followed by a `pump_once`
+    /// to service the re-injected `cmSave`.
     fn validate_modal_close(&mut self, id: ViewId, es: Command) -> bool {
         loop {
             // 1. Run the modal view's own valid (carries &mut Context for any request).
@@ -1370,14 +1445,15 @@ impl Program {
                     .unwrap_or(true)
             };
 
-            // 2. Partition out any OpenMessageBox requests valid() queued. Anything
-            //    else in `deferred` here is unexpected (no event drove it) — keep it
-            //    by re-pushing so the next real pump drains it.
+            // 2. Partition out any OpenMessageBox and OpenSaveAsDialog requests valid()
+            //    queued. Anything else in `deferred` here is unexpected (no event drove
+            //    it) — keep it by re-pushing so the next real pump drains it.
             let drained = std::mem::take(&mut self.deferred);
             let mut requests: Vec<Deferred> = Vec::new();
             for d in drained {
                 match d {
                     req @ Deferred::OpenMessageBox { .. } => requests.push(req),
+                    req @ Deferred::OpenSaveAsDialog { .. } => requests.push(req),
                     other => self.deferred.push(other),
                 }
             }
@@ -1391,25 +1467,61 @@ impl Program {
             //    the current — false — valid).
             let mut revalidate = false;
             for req in requests {
-                let Deferred::OpenMessageBox {
-                    text,
-                    kind,
-                    buttons,
-                    answer_to,
-                    then_command: _,
-                } = req
-                else {
-                    unreachable!("partitioned to OpenMessageBox only");
-                };
-                let r = self.centered_msgbox_rect(&text);
-                let (d, first) = crate::dialog::build_message_box(r, &text, kind, buttons);
-                let (answer, _) =
-                    self.exec_view_with_completion(Box::new(d), None, first, None, false);
-                if let Some(target) = answer_to {
-                    if let Some(v) = self.group.find_mut(target) {
-                        v.set_modal_answer(answer);
+                match req {
+                    Deferred::OpenMessageBox {
+                        text,
+                        kind,
+                        buttons,
+                        answer_to,
+                        then_command: _,
+                    } => {
+                        let r = self.centered_msgbox_rect(&text);
+                        let (d, first) = crate::dialog::build_message_box(r, &text, kind, buttons);
+                        let (answer, _) =
+                            self.exec_view_with_completion(Box::new(d), None, first, None, false);
+                        if let Some(target) = answer_to {
+                            if let Some(v) = self.group.find_mut(target) {
+                                v.set_modal_answer(answer);
+                            }
+                            revalidate = true;
+                        }
                     }
-                    revalidate = true;
+                    Deferred::OpenSaveAsDialog { editor_id } => {
+                        use crate::dialog::{FD_OK_BUTTON, FileDialog};
+                        let initial = self
+                            .group
+                            .find_mut(editor_id)
+                            .and_then(|v| v.as_any_mut())
+                            .and_then(|a| a.downcast_mut::<crate::widgets::FileEditor>())
+                            .and_then(|fe| {
+                                fe.file_name
+                                    .as_ref()
+                                    .map(|p| p.to_string_lossy().into_owned())
+                            });
+                        let mut fd =
+                            FileDialog::new("*.*", "Save file as", "~N~ame", FD_OK_BUTTON, 101);
+                        if let Some(name) = initial {
+                            crate::view::View::set_value(
+                                &mut fd,
+                                crate::data::FieldValue::Text(name),
+                            );
+                        }
+                        let (result, _) = self.exec_view_with_completion(
+                            Box::new(fd),
+                            Some(ModalCompletion::SaveAsPick { editor_id }),
+                            None,
+                            None,
+                            false,
+                        );
+                        if result != Command::CANCEL {
+                            // SaveAsPick sets file_name and re-injects cmSave into
+                            // out_events. Drain it now so save_file runs before the
+                            // re-validate pass sees modified=false.
+                            self.pump_once();
+                            revalidate = true;
+                        }
+                    }
+                    _ => unreachable!("partitioned to OpenMessageBox / OpenSaveAsDialog only"),
                 }
             }
             if !revalidate {
@@ -9971,25 +10083,60 @@ mod tests {
             );
         }
 
-        /// Breadcrumb guard: `valid_end` (the app-run-loop quit gate) is the FOURTH
-        /// valid() site dragged in by the signature change — quit-prompt-on-unsaved
-        /// is deliberately NOT wired (it needs a whole-tree inline drive). A modified
-        /// FileEditor VETOES the quit (returns false) AND `valid_end` must DISCARD the
-        /// box it queued (no leak into the next pump). Pins the documented deferral.
+        /// valid_end drives "Save?" inline and returns true when user picks No (discard).
         #[test]
-        fn valid_end_quit_vetoes_modified_editor_without_leaking_box() {
+        fn valid_end_quit_no_discards_and_allows_quit() {
             let (mut program, _h, _c) = program_with_desktop(80, 25);
-            let (_win_id, _ed) = modified_edit_window(&mut program, Some(tmp("quit")));
+            let (_win_id, _ed) = modified_edit_window(&mut program, Some(tmp("quit_no")));
 
+            // Pre-queue cmNo — the inline message box will consume it.
+            program.out_events.push_back(Event::Command(Command::NO));
             let valid = program.valid_end(Command::QUIT);
-            assert!(!valid, "a modified editor vetoes cmQuit (prompt deferred)");
+            assert!(valid, "No → discard changes → allow quit");
             assert!(
                 !program
                     .deferred
                     .iter()
                     .any(|d| matches!(d, Deferred::OpenMessageBox { .. })),
-                "valid_end discards the orphaned box (no leak to the next pump)"
+                "no OpenMessageBox leaks after inline drive"
             );
+        }
+
+        /// valid_end drives "Save?" inline and returns false when user picks Cancel.
+        #[test]
+        fn valid_end_quit_cancel_vetoes_quit() {
+            let (mut program, _h, _c) = program_with_desktop(80, 25);
+            let (_win_id, _ed) = modified_edit_window(&mut program, Some(tmp("quit_cancel")));
+
+            // Pre-queue cmCancel — the inline message box will consume it.
+            program
+                .out_events
+                .push_back(Event::Command(Command::CANCEL));
+            let valid = program.valid_end(Command::QUIT);
+            assert!(!valid, "Cancel → veto quit");
+            assert!(
+                !program
+                    .deferred
+                    .iter()
+                    .any(|d| matches!(d, Deferred::OpenMessageBox { .. })),
+                "no OpenMessageBox leaks after inline drive"
+            );
+        }
+
+        /// valid_end drives "Save?" inline and returns true when user picks Yes (named file saves).
+        #[test]
+        fn valid_end_quit_yes_saves_and_allows_quit() {
+            let (mut program, _h, _c) = program_with_desktop(80, 25);
+            let path = tmp("quit_yes");
+            let _ = std::fs::remove_file(&path);
+            let (_win_id, _ed) = modified_edit_window(&mut program, Some(path.clone()));
+
+            // Pre-queue cmYes — the inline message box will consume it.
+            program.out_events.push_back(Event::Command(Command::YES));
+            let valid = program.valid_end(Command::QUIT);
+            assert!(valid, "Yes → save succeeds → allow quit");
+            assert!(path.exists(), "Yes → file written to disk");
+            let _ = std::fs::remove_file(&path);
         }
     }
 }
