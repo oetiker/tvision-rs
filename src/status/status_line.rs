@@ -49,11 +49,9 @@
 //!   `statusLine->handleEvent` *before* normal dispatch: **DONE** (in
 //!   [`Program::pump_once`](crate::app::Program::pump_once)). `TProgram::idle`'s
 //!   `statusLine->update()` (help-ctx refresh from `TopView::getHelpCtx`) is
-//!   **omit-until-consumer**: with the universal `TStatusDef(0, 0xFFFF)` (`All`)
-//!   def every real app uses, `find_items` is invariant — it selects the same def
-//!   regardless of the top view's help context, so `update()` is observably inert.
-//!   No `View::get_help_ctx`/`TopView` resolver exists yet and no consumer needs
-//!   one; revisit when a context-split (`OneOf`) status line lands.
+//!   **DONE (C7)**: the idle arm of `Program::pump_once` reads `captures.top_modal_view()`
+//!   (rstv's `TheTopView` equivalent), calls `v.get_help_ctx()`, and forwards it
+//!   to [`set_help_ctx`](StatusLine::set_help_ctx) when changed.
 //! - **The keyDown arm of `handleEvent`** — the global accelerator (match
 //!   `event.keyDown == item.key_code && commandEnabled` over **all** items incl.
 //!   `text == None`, then transform the event into `evCommand` **in place and
@@ -63,13 +61,8 @@
 //!   the `Program`-wiring step; it is **not** ported as `ctx.post` + `clear` (that
 //!   double-handles).
 //! - **`update()` / help-ctx refresh from `TopView`** (`tstatusl.cpp:209`):
-//!   `update()` reads the modal top view's `getHelpCtx()` and re-runs
-//!   [`find_items`](StatusLine::find_items) + redraw. The `TopView` plumbing is
-//!   `Program`-level → lands with the wiring step.
-//!   [`find_items`](StatusLine::find_items) itself **is**
-//!   ported (call [`set_help_ctx`](StatusLine::set_help_ctx) to drive it
-//!   directly). `TODO(status update(): help-ctx refresh from TopView::getHelpCtx
-//!   — lands with TProgram wiring)`.
+//!   **DONE (C7)** — `Program::pump_once` idle arm reads `captures.top_modal_view()`
+//!   and calls [`set_help_ctx`](StatusLine::set_help_ctx) when the context changes.
 //! - **`drawSelect(selected)` hover highlighting + press-and-hold drag-highlight
 //!   loop**: **DONE** (B2 batch, A3 seam) — see the "Mouse press-and-hold"
 //!   section above.

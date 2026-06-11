@@ -83,6 +83,8 @@ fn view(f: &Ident, k: &TokenStream) -> Vec<(&'static str, TokenStream)> {
          quote! { fn update_menu_commands(&mut self, cs: &#k::CommandSet) { self.#f.update_menu_commands(cs) } }),
         ("set_menu_current",
          quote! { fn set_menu_current(&mut self, current: ::core::option::Option<usize>) { self.#f.set_menu_current(current) } }),
+        ("get_help_ctx",
+         quote! { fn get_help_ctx(&self) -> #k::HelpCtx { self.#f.get_help_ctx() } }),
         ("as_any_mut",
          quote! { fn as_any_mut(&mut self) -> ::core::option::Option<&mut dyn ::core::any::Any> { self.#f.as_any_mut() } }),
         ("descendant_global_bounds",

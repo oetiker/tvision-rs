@@ -1623,15 +1623,36 @@ impl Program {
                 for id in timers.collect_expired(now) {
                     out_events.push_back(Event::Timer(id));
                 }
-                // TProgram::idle's statusLine->update() (re-run findItems against
-                // the top view's getHelpCtx + redraw) is OMITTED-UNTIL-CONSUMER: with
-                // the universal TStatusDef(0, 0xFFFF) (`All`) def every real app + our
-                // demo uses, find_items is INVARIANT — it selects the same def for any
-                // help context, so update() is observably inert. Adding it would force
-                // a View::get_help_ctx method + a TopView resolver with no consumer
-                // (the row-34 omit-until-consumer rule). Revisit when a context-split
-                // (`OneOf`) status line lands and the selected def actually depends on
-                // the focused view's help context.
+                // TProgram::idle's statusLine->update() (tstatusl.cpp:209):
+                // re-run find_items against the top view's help context + redraw.
+                //
+                // "TheTopView" in rstv = captures.top_modal_view(): the modal pushed
+                // by exec_view_with_completion, or None when no modal is running. When
+                // None, the C++ `TProgram::idle` would get hcNoContext (TopView() == 0)
+                // — faithful: All-range defs match hcNoContext, so the default
+                // status line is shown. This enables context-split (OneOf) status
+                // lines: when a modal opens with a specific helpCtx, the status line
+                // switches to the matching def automatically.
+                //
+                // No explicit redraw is needed — D8 whole-tree redraw runs every
+                // pump cycle after this arm, so set_help_ctx's internal state
+                // update is picked up on the next render.
+                if let Some(sl_id) = *status_line {
+                    // Step 1: read top modal's help ctx (immutable borrow via find_mut).
+                    let top_ctx = captures
+                        .top_modal_view()
+                        .and_then(|modal_id| group.find_mut(modal_id).map(|v| v.get_help_ctx()))
+                        .unwrap_or(crate::help::HelpCtx::NO_CONTEXT);
+                    // Step 2: update status line (separate find_mut borrow).
+                    use crate::status::StatusLine;
+                    if let Some(sl) = group
+                        .find_mut(sl_id)
+                        .and_then(|v| v.as_any_mut())
+                        .and_then(|a| a.downcast_mut::<StatusLine>())
+                    {
+                        sl.set_help_ctx(top_ctx);
+                    }
+                }
             }
             // 5. Event present -> dispatch.
             Some(mut ev) => {
@@ -8624,6 +8645,132 @@ mod tests {
             assert!(
                 line.disabled_cmds().is_none(),
                 "an unseeded line has no cache (the startup gap Program::new closes by seeding)"
+            );
+        }
+
+        // -- 7. OneOf status line switches def when a modal's help ctx matches --
+
+        /// A status line with a `OneOf([specific])` def first, then an `All` def
+        /// second — the same layout a "Find" dialog would use to show different
+        /// status items while the dialog is open.
+        fn oneof_status(ctx: crate::help::HelpCtx) -> Vec<StatusDef> {
+            use crate::event::Key;
+            StatusDef::list()
+                .def_one_of(vec![ctx], |d| {
+                    d.item("~F3~ Find", KeyEvent::from(Key::F(3)), Command::FIND)
+                })
+                .def_all(|d| d.item("~F1~ Help", KeyEvent::from(Key::F(1)), Command::HELP))
+                .build()
+        }
+
+        /// Program factory that uses `oneof_status` instead of the default one.
+        fn program_oneof(
+            w: u16,
+            h: u16,
+            ctx: crate::help::HelpCtx,
+        ) -> (Program, HeadlessHandle, ViewId) {
+            let (backend, handle) = HeadlessBackend::new(w, h);
+            let theme = Theme::classic_blue();
+            let clock = Rc::new(ManualClock::new(0));
+            let program = Program::new(
+                Box::new(backend),
+                Box::new(clock),
+                theme,
+                |r| {
+                    let mut r = r;
+                    r.a.y += 1;
+                    r.b.y -= 1;
+                    Some(Box::new(Desktop::new(r, |br| {
+                        Some(Desktop::init_background(br))
+                    })))
+                },
+                |r| {
+                    let mut r = r;
+                    r.a.y = r.b.y - 1;
+                    Some(Box::new(StatusLine::new(r, oneof_status(ctx))))
+                },
+                |_r| None, // no menu bar
+            );
+            let mut program = program;
+            program.out_events.clear();
+            let sl = program.status_line().expect("status line created");
+            (program, handle, sl)
+        }
+
+        #[test]
+        fn status_line_switches_def_for_modal_help_ctx() {
+            // A status line with two defs:
+            // - OneOf([HelpCtx::custom("app.find")]) → item: "~F3~ Find"
+            // - All → item: "~F1~ Help"
+            //
+            // Baseline (no modal): idle arm calls set_help_ctx(NO_CONTEXT) → All
+            // def selected (index 1 = second def).
+            //
+            // After pushing a ModalFrame whose view has helpCtx = "app.find":
+            // the idle arm reads the modal's get_help_ctx() and calls
+            // set_help_ctx("app.find") → OneOf def selected (index 0 = first def).
+            let find_ctx = crate::help::HelpCtx::custom("app.find");
+            let (mut program, _handle, sl) = program_oneof(40, 10, find_ctx);
+
+            // Pump with no modal — idle arm sets NO_CONTEXT → All def (index 1).
+            program.pump_once();
+            let def_no_modal = program
+                .group_mut()
+                .find_mut(sl)
+                .and_then(|v| v.as_any_mut())
+                .and_then(|a| a.downcast_ref::<StatusLine>())
+                .expect("status line found")
+                .selected_def();
+            assert_eq!(
+                def_no_modal,
+                Some(1),
+                "no modal → NO_CONTEXT → All def is index 1"
+            );
+
+            // Push a ModalFrame whose associated ViewId has helpCtx = "app.find".
+            // We insert a view with that help_ctx into the group, then push the
+            // ModalFrame pointing at it, so find_mut succeeds and returns the ctx.
+            use crate::view::Rect;
+            let bounds = Rect::new(5, 3, 35, 8);
+
+            // Build a minimal view with the matching help_ctx.
+            struct HelpView {
+                st: crate::view::ViewState,
+            }
+            impl crate::view::View for HelpView {
+                fn state(&self) -> &crate::view::ViewState {
+                    &self.st
+                }
+                fn state_mut(&mut self) -> &mut crate::view::ViewState {
+                    &mut self.st
+                }
+                fn draw(&mut self, _ctx: &mut DrawCtx) {}
+            }
+            let mut hv = HelpView {
+                st: crate::view::ViewState::new(bounds),
+            };
+            hv.st.help_ctx = find_ctx;
+            let modal_id = program.group_mut().insert(Box::new(hv));
+            program.out_events.clear(); // discard focus broadcast
+
+            program
+                .captures
+                .push(Box::new(ModalFrame::new(modal_id, bounds)));
+
+            // Pump again — no events → idle arm reads modal's get_help_ctx()
+            // = "app.find" → set_help_ctx("app.find") → OneOf def selected (index 0).
+            program.pump_once();
+            let def_with_modal = program
+                .group_mut()
+                .find_mut(sl)
+                .and_then(|v| v.as_any_mut())
+                .and_then(|a| a.downcast_ref::<StatusLine>())
+                .expect("status line found")
+                .selected_def();
+            assert_eq!(
+                def_with_modal,
+                Some(0),
+                "modal with app.find helpCtx → OneOf def is index 0"
             );
         }
     }

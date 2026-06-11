@@ -2,7 +2,7 @@
 //! currently-known `View` method.
 //!
 //! The empty `impl View for D {}` compiling at all proves every one of the
-//! 26 generated signatures matches the trait exactly. The behavioral assertions
+//! 27 generated signatures matches the trait exactly. The behavioral assertions
 //! prove completeness: no forwarder silently missing.
 
 use std::cell::RefCell;
@@ -15,8 +15,8 @@ use tvision::theme::Theme;
 use tvision::timer::TimerQueue;
 use tvision::view::Deferred;
 use tvision::{
-    Command, CommandSet, Context, DrawCtx, Event, FieldValue, Point, Rect, StateFlag, View, ViewId,
-    ViewState,
+    Command, CommandSet, Context, DrawCtx, Event, FieldValue, HelpCtx, Point, Rect, StateFlag,
+    View, ViewId, ViewState,
 };
 
 // ---------------------------------------------------------------------------
@@ -131,6 +131,10 @@ impl View for Spy {
     fn set_menu_current(&mut self, _current: Option<usize>) {
         self.mark("set_menu_current");
     }
+    fn get_help_ctx(&self) -> HelpCtx {
+        self.mark("get_help_ctx");
+        HelpCtx::NO_CONTEXT
+    }
     fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
         self.mark("as_any_mut");
         None
@@ -142,7 +146,7 @@ impl View for Spy {
 }
 
 // ---------------------------------------------------------------------------
-// D — pure delegator: empty impl, macro injects ALL 26 forwarders.
+// D — pure delegator: empty impl, macro injects ALL 27 forwarders.
 // ---------------------------------------------------------------------------
 
 struct D {
@@ -287,6 +291,9 @@ fn delegate_forwards_every_known_view_method() {
     // -- set_menu_current ---------------------------------------------------
     d.set_menu_current(Some(0));
 
+    // -- get_help_ctx -------------------------------------------------------
+    let _ = d.get_help_ctx();
+
     // -- as_any_mut ---------------------------------------------------------
     let _ = d.as_any_mut();
 
@@ -338,6 +345,7 @@ fn delegate_forwards_every_known_view_method() {
         "apply_list_scroll",
         "update_menu_commands",
         "set_menu_current",
+        "get_help_ctx",
         "as_any_mut",
         "descendant_global_bounds",
     ];

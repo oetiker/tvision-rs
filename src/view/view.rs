@@ -960,6 +960,14 @@ pub trait View {
     /// [`update_menu_commands`](View::update_menu_commands).
     fn set_menu_current(&mut self, _current: Option<usize>) {}
 
+    /// `TView::getHelpCtx` — the focused view's help context for status-line
+    /// switching. Returns [`HelpCtx::DRAGGING`] while dragging, else the view's
+    /// own [`ViewState::help_ctx`]. Delegating types forward automatically via the
+    /// macro; override only if the type aggregates children's contexts (like Group).
+    fn get_help_ctx(&self) -> HelpCtx {
+        self.state().get_help_ctx()
+    }
+
     /// Downcast hook for the rare owner→child push that needs the concrete type
     /// (e.g. `TWindow::zoom` pushing `set_zoomed` to its `TFrame`). Base returns
     /// `None`; only views that must be reached concretely override it. (`Any`
