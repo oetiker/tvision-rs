@@ -252,7 +252,14 @@ impl StatusLine {
     /// the unit-testable / future-wiring entry point. The *automatic* `update()`
     /// trigger (reading `TopView::getHelpCtx`) is deferred to the `Program`-wiring
     /// step (see the module docs).
+    ///
+    /// Idempotent guard: mirrors the C++ `TStatusLine::update()` check
+    /// `if (helpCtx != h)` (`tstatusl.cpp:209`) — if the context hasn't changed
+    /// we skip the `find_items` rescan entirely.
     pub fn set_help_ctx(&mut self, ctx: HelpCtx) {
+        if self.help_ctx == ctx {
+            return;
+        }
         self.help_ctx = ctx;
         self.find_items();
     }
