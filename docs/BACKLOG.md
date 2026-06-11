@@ -46,7 +46,7 @@
 
 | row | item | notes |
 |---|---|---|
-| C1 | Find/Replace dialogs | `editorDialog` + std dialog views; `editor.rs:1452,1655`; `search()` itself is live |
+| C1 ✅ | Find/Replace dialogs | **COMPLETE (`b388492`):** `Deferred::OpenFindDialog`/`OpenReplaceDialog` + `Context::open_*_dialog` (the OpenSaveAsDialog seam); pump drain builds the `tvedit2.cpp` dialogs verbatim (Find 38×12, Replace 40×16, both with `THistory` arrows + `CheckBoxes` options, pre-filled); `ModalCompletion::FindPick`/`ReplacePick` read text via `field_text` + options via `CheckBoxes` downcast, write back (FindPick clears, ReplacePick sets `EF_DO_REPLACE`), re-inject `cmSearchAgain`. `Editor::do_search_replace(ctx)` is faithful `doSearchReplace` with the prompt-on-replace dialog routed through `request_message_box` (answer stored in `pending_replace_answer` via `set_modal_answer`, consumed on the re-run). `CheckBoxes::as_any_mut` off the delegate skip list. |
 | C2 | Editor right-click context menu | `initContextMenu` + `popupMenu` machinery; `editor.rs:1585` |
 | C3 | Internal-clipboard editor | `insertFrom` branch + clipboard `EditWindow`; `editor.rs:1418,1440`; `EditWindow::close` hide-branch breadcrumb |
 | C4 | D10 dialog gather/scatter group-walk | `list_box.rs:30,159`; deferred to its first multi-field consumer |

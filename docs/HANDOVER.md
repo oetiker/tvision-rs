@@ -14,11 +14,29 @@
 > When a row lands: add an IMPLEMENTATION-LOG section, tick the BACKLOG row,
 > update this file.
 
-## Current state (2026-06-10, B5+B8 committed)
+## Current state (2026-06-11, C1 committed)
 
-**HEAD = `dae38c1`; 1127 lib tests green; clippy + fmt clean.**
+**HEAD = `b388492`; 1129 lib tests green; clippy + fmt clean.**
 
-### What is on `main` (committed):
+Phase A + Phase B are fully complete (all rows ✅). **Phase C is now in
+progress** — the user lifted the backlog freeze and directed the run to start at
+C1 and walk the rows in order.
+
+### Phase C progress
+- **C1 ✅ (`b388492`)** — editor find/replace dialogs + `do_search_replace`. The
+  view-triggered async-modal seam (`Deferred::OpenFindDialog`/`OpenReplaceDialog`
+  → `pending_modal` → `ModalCompletion::FindPick`/`ReplacePick`), built like
+  `OpenSaveAsDialog`. Dialogs ported verbatim from `tvedit2.cpp` (with `THistory`
+  arrows + `CheckBoxes` options). The `efPromptOnReplace` prompt is routed through
+  the existing `request_message_box` seam (`answer_to = self` + `then_command =
+  cmSearchAgain`); the answer is stored in `Editor::pending_replace_answer` (via a
+  `set_modal_answer` override) and consumed on the `cmSearchAgain` re-run.
+  Two-stage reviewed. See IMPLEMENTATION-LOG.
+
+**Next Phase C row = C2 (editor right-click context menu).** Walk BACKLOG.md
+Phase C in order.
+
+### What is on `main` from the Phase A/B backlog run (committed):
 - **B1 ✅ (`680aabc`)** — button `cmCommandSetChanged` graying; `Program::new` seeds `command_set_changed: true` for initial broadcast. InputLine `can_update_commands`/`update_commands` from `handle_event` + `set_state`.
 - **B3 ✅ (`680aabc`)** — InputLine cmCut/cmCopy/cmPaste; `Deferred::InputLinePaste` broker; `paste_text` (save_state + max_len clamp + check_valid).
 - **B6 ✅ (`6ae0222`)** — FileDialog/ChDirDialog `wfGrow`; screen-relative resize deferred to first `handle_event`; `SearchRec` attr/size/time from `std::fs` + `pack_dos_time`.
@@ -92,17 +110,34 @@ This session ran the **backlog run** end to end:
 
 *(none — all paused worktrees integrated this session)*
 
-## Next — Phase B complete; Phase C backlogged
+## Next — Phase C in progress (C1 done, C2 next)
 
-**All Phase B rows are ✅.** The remaining open work is:
-- **Standing deferrals** (not Phase C): `init/doneHistory` (needs history subsystem port), help-ctx `OneOf` propagation (needs `View::get_help_ctx` + TopView resolver + context-split status line).
-- **Phase C stays backlogged (user decision):** editor find/replace dialogs,
-  right-click context menu, internal-clipboard editor, D10 dialog
-  gather/scatter group-walk, cmQuit-veto / saveAs-modified-close inline
-  drives, cmDosShell (needs a backend suspend seam + SIGTSTP), help-ctx
-  `OneOf` status line, theme editor (needs the D7 extension point;
-  `Program::color_dialog` is the ready entry point), C9 kbPaste/bracketed
-  paste.
+**Phase A + B fully ✅; Phase C started this session (C1 ✅).** Walk BACKLOG.md
+Phase C in order. Remaining rows:
+- **C2** editor right-click context menu (`initContextMenu` + `popupMenu`;
+  `editor.rs` has the breadcrumb in the `MouseDown` arm)
+- **C3** internal-clipboard editor (`insertFrom` branch + clipboard `EditWindow`)
+- **C4** D10 dialog gather/scatter group-walk (deferred to its first multi-field
+  consumer — the find/replace completions deliberately do **not** use it; they
+  read children by id, so C4 is still open)
+- **C5** cmQuit-veto / saveAs-modified-close inline drives (the whole-tree
+  `validate_modal_close` analogue — see "Editor seam leftovers" below)
+- **C6** cmDosShell (needs a backend suspend seam + SIGTSTP)
+- **C7** help-ctx refresh / `OneOf` status line (needs `View::get_help_ctx` +
+  TopView resolver) — subsumes the `init/doneHistory` + help-ctx standing
+  deferrals
+- **C8** theme editor (needs the D7 extension point; `Program::color_dialog` is
+  the ready entry point)
+- **C9** kbPaste / bracketed-paste multi-char insert (`editor.rs` paste branch +
+  the backend paste event; B7 landed the event, this is the editor consumer)
+
+**Standing deferrals** (fold into C7 / the history-subsystem port):
+`init/doneHistory`, help-ctx `OneOf` propagation.
+
+**C1 reuse note for later rows:** the find/replace prompt reused the
+`request_message_box` async-modal seam (`answer_to` + `then_command`) and the
+`Deferred::OpenXxxDialog` → `pending_modal` → `ModalCompletion::XxxPick` pattern.
+C2/C5/C9 dialogs should follow the same shape rather than inventing new seams.
 
 ## Editor seam leftovers (still open, latent — unchanged this session)
 

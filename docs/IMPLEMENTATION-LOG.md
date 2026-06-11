@@ -5,6 +5,56 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## Session addendum — C1 COMPLETE (2026-06-11)
+
+**`b388492`** — **C1: editor find/replace dialogs + `doSearchReplace`.** First
+Phase C row. The port left find/replace **dialogs** stubbed at row 66
+(`Editor::search` was already live + unit-tested); this wires them through the
+established view-triggered async-modal seam.
+
+*The seam* — two new `Deferred` variants (`OpenFindDialog` / `OpenReplaceDialog`)
++ `Context::open_find_dialog` / `open_replace_dialog`, identical in shape to
+`OpenSaveAsDialog`: an `Editor` leaf holds only `&mut Context` and can't exec a
+nested modal inline, so it requests one; the pump builds the dialog + stashes it
+into `pending_modal` with a completion.
+
+*Dialog construction* (program.rs drain arms) — ports `tvedit2.cpp`'s
+`createFindDialog` / `createReplaceDialog` verbatim. **Find** (38×12, centered):
+text `InputLine` (3,3,32,4) + history arrow (32,3,35,4 id 10) + `Label` +
+2-box `CheckBoxes` (3,5,35,7: case/whole-words) + OK(default)/Cancel. **Replace**
+(40×16, centered): find input + new-text input (3,6,34,7), two history arrows
+(id 10 / 11), 4-box `CheckBoxes` (3,8,37,12: case/whole-words/prompt/replace-all),
+OK/Cancel. Both pre-filled from editor state (`find_str`/`replace_str`/
+`editor_flags`).
+
+*Completions* — `ModalCompletion::FindPick` / `ReplacePick` read the dialog's
+input text (via the existing `field_text` helper) + the option bits (downcast the
+in-tree `CheckBoxes`, read `cluster.value`), write them back to the editor
+(**FindPick** stores `flags & ~EF_DO_REPLACE`; **ReplacePick** stores
+`flags | EF_DO_REPLACE`), and re-inject `cmSearchAgain` so the editor's own
+`do_search_replace` runs with a full `ctx`.
+
+*`do_search_replace(ctx)`* (editor.rs) — faithful `TEditor::doSearchReplace`. The
+one deviation: the `efPromptOnReplace` "Replace this occurrence?" dialog can't be
+a synchronous `editorDialog` call, so it goes through `request_message_box`
+(`answer_to = self`, `then_command = cmSearchAgain`). The Yes/No/Cancel answer is
+stored in a new `pending_replace_answer` field via a `set_modal_answer` override
+and consumed (`.take()`) at the top of the next `do_search_replace` run. The C++
+`do { … } while (i != cmCancel && efReplaceAll)` loop is reproduced exactly —
+including the subtle case that a `cmNo` answer with `efReplaceAll` **unset** stops
+the loop (caught in spec review). The find/replace strings are cloned once up
+front (not per loop iteration) since `search`/`insert_text` need `&mut self`.
+
+*Plumbing* — `CheckBoxes::as_any_mut` taken off the `#[delegate]` skip list (manual
+`Some(self)`) so the completion can downcast it; `EF_DO_REPLACE` re-exported
+`pub(crate)` from `widgets`. Two layout snapshot tests (find/replace dialog).
+
+**Two-stage reviewed** (spec → quality). Spec review caught the `cmNo`/`!replace_all`
+loop-exit bug + the missing `THistory` arrows (both fixed before quality review);
+quality review hoisted the per-iteration clones, renamed the `*_ref` getters to the
+idiomatic field-name form, and deduped the `FieldValue::Text` extraction via
+`field_text`. **1129 lib tests green; clippy + fmt clean.**
+
 ## Session addendum — B8 COMPLETE (2026-06-10)
 
 **`dae38c1`** — **B8: InputLine max_len clamp on set_value + valid-select focus.**
