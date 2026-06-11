@@ -2536,8 +2536,7 @@ impl View for Memo {
 /// `Deferred::OpenSaveAsDialog` → `ModalCompletion::SaveAsPick`): the pump builds +
 /// runs the dialog, the completion sets `file_name` + [`pending_title_update`] and
 /// re-injects `cmSave`, which then `save_file`s and broadcasts `cmUpdateTitle`
-/// (refreshing the hosting [`EditWindow`]'s frame title). See `save()` for the
-/// modified-close LIMITATION.
+/// (refreshing the hosting [`EditWindow`]'s frame title).
 ///
 /// Deferred (forced by not-yet-ported substrate):
 /// * `edReadError` on **load** — `load_file` is only called from the ctor, which
