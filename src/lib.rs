@@ -98,7 +98,10 @@ pub use command::{Command, CommandSet};
 pub use data::FieldValue;
 pub use desktop::{Background, Desktop};
 pub use dialog::{
-    ColorPicker, Dialog, FD_OPEN_BUTTON, FileDialog, MessageBoxButtons, MessageBoxKind, Tab,
+    CD_HELP_BUTTON, CD_NO_LOAD_DIR, CD_NORMAL, ChDirDialog, ColorPicker, Dialog, DirCollection,
+    DirEntry, DirListBox, FA_DIREC, FD_CLEAR_BUTTON, FD_HELP_BUTTON, FD_NO_LOAD_DIR, FD_OK_BUTTON,
+    FD_OPEN_BUTTON, FD_REPLACE_BUTTON, FileCollection, FileDialog, FileInfoPane, FileInputLine,
+    FileList, MessageBoxButtons, MessageBoxKind, SearchRec, Tab, search_rec_compare,
 };
 pub use event::{
     Event, EventMask, Key, KeyEvent, KeyModifiers, MouseButtons, MouseEvent, MouseEventFlags,
@@ -122,13 +125,16 @@ pub use view::{
     Context, DragMode, DrawCtx, Group, GrowMode, Options, Phase, Point, Rect, SelectMode, State,
     StateFlag, View, ViewId, ViewState,
 };
-pub use widgets::{
-    EditWindow, Editor, FileEditor, InputLine, ListBox, ListRoles, ListViewer, ListViewerState,
-    ScrollBar, Scroller,
-};
+pub use widgets::{Button, ButtonFlags};
+pub use widgets::{CheckBoxes, Cluster, ClusterKind, MultiCheckBoxes, RadioButtons};
+pub use widgets::{Encoding, FileEditor, LineEnding, Memo};
+pub use widgets::{EditWindow, Editor, InputLine, LimitMode, ListBox, ListRoles, ListViewer,
+    ListViewerState, ScrollBar, Scroller, SortedListBox};
 pub use widgets::{
     HistoryViewer, HistoryWindow, THistory, clear_history, history_add, history_count, history_str,
 };
-pub use widgets::{Node, Outline, OutlineViewer, OutlineViewerState};
+pub use widgets::Indicator;
+pub use widgets::{Label, ParamText, StaticText};
+pub use widgets::{Node, Outline, OutlineViewer, OutlineViewerState, ov_update};
 pub use widgets::{Terminal, TextDevice};
 pub use window::{ScrollBarOptions, Window, WindowFlags, WindowPalette};

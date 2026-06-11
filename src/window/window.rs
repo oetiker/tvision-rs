@@ -273,9 +273,12 @@ impl Window {
     ///
     /// First production consumer: `THistoryWindow` (row 56), which inserts the
     /// `HistoryViewer` after the scroll bars.  Also used by `Dialog` (row 34)
-    /// and the row-63 msgbox. Previously `#[cfg(test)]`; promoted to
-    /// `pub(crate)` when `THistoryWindow` became the first non-test caller.
-    pub(crate) fn insert_child(&mut self, view: Box<dyn View>) -> ViewId {
+    /// and the row-63 msgbox.
+    ///
+    /// Exposed publicly so that example/application code can build custom windows
+    /// with child views (the C++ equivalent is calling `insert()` from a
+    /// `TWindow` subclass constructor).
+    pub fn insert_child(&mut self, view: Box<dyn View>) -> ViewId {
         self.group.insert(view)
     }
 
@@ -284,7 +287,7 @@ impl Window {
     /// Used by `THistoryWindow` to run the viewer's post-insert `setup` and to
     /// read `getSelection` via `as_any_mut` + downcast. Mirrors
     /// `Group::child_mut` without exposing the group itself.
-    pub(crate) fn child_mut(&mut self, id: ViewId) -> Option<&mut dyn View> {
+    pub fn child_mut(&mut self, id: ViewId) -> Option<&mut dyn View> {
         self.group.child_mut(id)
     }
 

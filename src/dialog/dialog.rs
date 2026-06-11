@@ -58,12 +58,10 @@ impl Dialog {
 
     /// Insert a child view into the dialog's embedded window/group.
     ///
-    /// Mirrors [`Window::insert_child`]; used by the row-34 `exec_view` veto
-    /// test and by the row-63 msgbox (first intended production consumer).
-    /// Previously `#[cfg(test)]`; promoted to `pub(crate)` for symmetry with
-    /// `Window::insert_child` and to unblock msgbox 63.
-    #[allow(dead_code)] // production consumer: msgbox 63 (not yet ported)
-    pub(crate) fn insert_child(&mut self, view: Box<dyn View>) -> ViewId {
+    /// Exposed publicly so that example/application code can assemble custom
+    /// dialogs with child views — the C++ equivalent is calling `insert()` from
+    /// a `TDialog` subclass or directly passing children to `execDialog`.
+    pub fn insert_child(&mut self, view: Box<dyn View>) -> ViewId {
         self.window.insert_child(view)
     }
 
@@ -72,7 +70,7 @@ impl Dialog {
     /// Mirrors [`Window::child_mut`]; used by `FileDialog` (row 79) to run a
     /// child's post-insert, ctx-bearing init (e.g. `FileList::read_directory`)
     /// and to read it back via `as_any_mut` + downcast.
-    pub(crate) fn child_mut(&mut self, id: ViewId) -> Option<&mut dyn View> {
+    pub fn child_mut(&mut self, id: ViewId) -> Option<&mut dyn View> {
         self.window.child_mut(id)
     }
 
