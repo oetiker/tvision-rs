@@ -3020,8 +3020,10 @@ fn program_handle_event(
         #[cfg(all(unix, not(test)))]
         {
             extern crate libc;
-            // SAFETY: raise() is async-signal-safe; call suspends this process until
-            // SIGCONT (user 'fg').
+            // SAFETY: FFI call with no memory-safety preconditions. `libc::SIGTSTP`
+            // is a valid signal constant on all unix targets. The process stops here
+            // and is resumed by SIGCONT ('fg'); no Rust invariants are violated
+            // across the pause.
             unsafe {
                 libc::raise(libc::SIGTSTP);
             }
