@@ -18,7 +18,7 @@ reference. Other pages cite an entry by its stable anchor (for example
 
 Porting contributors: see the project repository.
 
-### Names & namespacing {#d1}
+### D1 · Names & namespacing {#d1}
 
 *chosen.* The `T` prefix is dropped and every type lives under the `tv::`
 namespace (`TButton` → `tv::Button`); methods become `snake_case`. The
@@ -27,7 +27,7 @@ newtypes ([`Command`](../api/tvision/command/struct.Command.html),
 [`HelpCtx`](../api/tvision/help/struct.HelpCtx.html)) so apps can mint their own
 values. → [Constant families](../port/constants.md)
 
-### Inheritance → trait + composition {#d2}
+### D2 · Inheritance → trait + composition {#d2}
 
 *forced.* The class tree becomes a
 [`View`](../api/tvision/view/trait.View.html) trait with default methods plus a
@@ -36,14 +36,14 @@ composition; "subclass `TWindow`" becomes embed-and-delegate — hold a
 [`Window`](../api/tvision/window/struct.Window.html), forward the methods you
 don't change. → [Inheritance](../port/inheritance.md)
 
-### Pointers → handles + downward context {#d3}
+### D3 · Pointers → handles + downward context {#d3}
 
 *forced.* Raw `TView*` pointers become process-global
 [`ViewId`](../api/tvision/view/struct.ViewId.html) handles plus a downward-passed
 [`Context`](../api/tvision/view/struct.Context.html); up/sideways links resolve
 by tree-walk, never by reference. → [Pointers & infoPtr → handles](../port/handles.md)
 
-### Events → enum + match {#d4}
+### D4 · Events → enum + match {#d4}
 
 *chosen.* `TEvent`'s tagged union and bitmasks become an
 [`Event`](../api/tvision/event/enum.Event.html) enum that is matched, not masked;
@@ -51,46 +51,46 @@ by tree-walk, never by reference. → [Pointers & infoPtr → handles](../port/h
 become a closed [`Key`](../api/tvision/event/enum.Key.html) enum plus
 [`KeyModifiers`](../api/tvision/event/struct.KeyModifiers.html). → [Events](../port/events.md)
 
-### Flag words → struct-of-bools {#d5}
+### D5 · Flag words → struct-of-bools {#d5}
 
 *chosen.* The `ushort` flag words (`state`, `options`, `growMode`, `dragMode`)
 become `#[derive(Default)]` structs of bools, with a verb-enum `set_state` over
 them ([`StateFlag`](../api/tvision/view/enum.StateFlag.html),
 [`Options`](../api/tvision/view/struct.Options.html)). → [Flag words](../port/flags.md)
 
-### Attribute bytes → typed Color/Style {#d6}
+### D6 · Attribute bytes → typed Color/Style {#d6}
 
 *chosen.* Packed `TColorAttr`/`TColorDesired` bytes become a typed four-variant
 [`Color`](../api/tvision/color/enum.Color.html) enum plus
 [`Style`](../api/tvision/color/struct.Style.html); the per-cell retain-`0`
 overloads are dropped. → [The draw model](../port/draw.md)
 
-### Palettes & glyphs → Theme {#d7}
+### D7 · Palettes & glyphs → Theme {#d7}
 
 *chosen.* Palette chains and scattered glyph literals become a
 [`Theme`](../api/tvision/theme/struct.Theme.html) owning a state→`Role` style map
 and a `Glyphs` set; `getColor`/`getPalette` become
 `ctx.theme.style(`[`Role`](../api/tvision/theme/enum.Role.html)`::…)`. → [Palettes & glyphs → Theme](../port/theme.md)
 
-### Whole-tree redraw + diff {#d8}
+### D8 · Whole-tree redraw + diff {#d8}
 
 *chosen.* Per-write occlusion and damage tracking become a whole-tree redraw into
 a back buffer plus a diff-bounded terminal flush; occlusion becomes the painter's
 algorithm, and shadows are cast during the draw. → [The draw model](../port/draw.md)
 
-### Modal loops → one loop + capture stack {#d9}
+### D9 · Modal loops → one loop + capture stack {#d9}
 
 *forced.* Nested blocking modal loops (`execView`, `dragView`) become **one**
 non-recursive event loop plus a LIFO capture stack; modality, drag, and
 press-tracking are handlers, not loops. → [Modal execView](../port/modal.md)
 
-### Data transfer → typed value protocol {#d10}
+### D10 · Data transfer → typed value protocol {#d10}
 
 *forced.* Flat-record `memcpy` data transfer (`getData`/`setData`/`dataSize`)
 becomes a typed `value()`/`set_value()` protocol over a
 [`FieldValue`](../api/tvision/data/enum.FieldValue.html). → [Dialogs & data](../apps/dialogs.md)
 
-### Platform layer → Backend trait {#d11}
+### D11 · Platform layer → Backend trait {#d11}
 
 *chosen.* The platform layer (`THardwareInfo`, ncurses/win32 strategies) becomes
 a small object-safe [`Backend`](../api/tvision/backend/trait.Backend.html) trait,
@@ -99,24 +99,24 @@ with a production
 test [`HeadlessBackend`](../api/tvision/backend/struct.HeadlessBackend.html) that
 unlocks snapshot testing. → [Drawing & backends](../internals/drawing.md)
 
-### Persistence → dropped {#d12}
+### D12 · Persistence → dropped {#d12}
 
 *chosen.* `TStreamable` persistence and resource files are dropped; reach for
 `serde` if persistence is ever wanted. → [Dropped & changed](../port/dropped.md)
 
-### Text → Unicode grapheme model {#d13}
+### D13 · Text → Unicode grapheme model {#d13}
 
 *minor.* Per-`char`, CP437 text becomes a Unicode grapheme model
 (`unicode-width` + `unicode-segmentation`) that clusters combining marks into one
 cell; unprintables render as `�`. → [Dropped & changed](../port/dropped.md)
 
-### DOS drives & paths → native Linux filesystem {#d14}
+### D14 · DOS drives & paths → native Linux filesystem {#d14}
 
 *moderate.* The file dialog's DOS drives and `\` paths become a native Linux `/`
 filesystem: no drive letters, the root is `/`, and subdirectories are listed via
 `std::fs::read_dir`. → [Dropped & changed](../port/dropped.md)
 
-### DOS timestamps → `std::fs` mtime, UTC {#d15}
+### D15 · DOS timestamps → `std::fs` mtime, UTC {#d15}
 
 *minor.* DOS `findfirst` local-time stamps become `std::fs` mtime computed in
 UTC, packed into the same DOS `ftime` word so the file-info-pane unpack ports
