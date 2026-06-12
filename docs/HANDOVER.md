@@ -211,17 +211,30 @@ This session ran the **backlog run** end to end:
 
 *(none — all paused worktrees integrated this session)*
 
-## Next — Plan 2: developer-documentation content
+## Next — Plan 2: developer-documentation content (IN PROGRESS)
 
-**The immediate next session is Plan 2 (docs content authoring)** on the
-docs-tooling machine that just landed. It is enumerated at the tail of
-`docs/superpowers/plans/2026-06-12-developer-documentation-tooling.md`:
-the Part I–V page prose; completing `src/theme/` rustdoc to parity + promoting
-reference examples to doctests; growing `xtask/src/screens.rs` `SCREENS` (with
-`keys` to drive interactive states) for per-page screenshots; vendoring the real
-mermaid runtime (deferred Task 7); and adding `mdbook test` + `cargo test --doc`
-as CI gates once content exists. Brainstorm/spec for Plan 2 first if scope is
-unclear, then drive it subagent-style like Plan 1.
+**Plan 2 (docs content authoring) is underway.** Tasks enumerated at the tail of
+`docs/superpowers/plans/2026-06-12-developer-documentation-tooling.md`.
+
+**Done — Part I (Getting Started) vertical slice** (2026-06-12, this session):
+authored `README.md` + the 3 `getting-started/` pages with embedded screenshot,
+`{{#rustdoc_include}}` code from `examples/hello.rs`, and working guide→API
+links. Proved the full author→`cargo xtask docs`→link-check pipeline. Also fixed
+the screenshot-clobber bug (blank tmux capture used to overwrite committed HTML —
+now guarded by `looks_blank()` in `xtask/src/screens.rs`). See IMPLEMENTATION-LOG.
+
+**Remaining Plan 2 work:**
+- **Part II–V page prose** (~28 stub pages) — fan out subagent-style with
+  two-stage review. The Part I pages are the tone/structure template; the
+  per-page outline is design spec
+  `docs/superpowers/specs/2026-06-12-developer-documentation-design.md` §6.
+- Complete `src/theme/` rustdoc to parity + `#![doc(html_logo_url/favicon)]`.
+- Promote reference examples to doctests; add outbound guide links in module
+  `//!` docs; grow `xtask/src/screens.rs` `SCREENS` (with `keys`) for per-page
+  shots; vendor the real mermaid runtime (deferred Task 7).
+- **Then** add `mdbook test` + `cargo test --doc` CI gates. **Gotcha:** the Part I
+  guide snippets are `rust,ignore` excerpts — switch them to whole-program anchors
+  before the `mdbook test` gate, or it fails on the partial includes.
 
 **Porting backlog:** Phase A + B + C fully ✅; latent edge notes resolved (see
 above). The porting backlog is exhausted — a new *feature* phase would need its

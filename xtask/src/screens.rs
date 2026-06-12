@@ -87,7 +87,41 @@ fn drive_and_capture(s: &Screen, session: &str) -> Result<String> {
         tmux(&["capture-pane", "-t", session, "-e", "-p"]).context("capture-pane failed")?;
     let ansi = String::from_utf8_lossy(&captured.stdout).into_owned();
 
+    // A flaky capture (the app had not painted yet, or it died on launch) comes
+    // back as a blank pane. Writing that would clobber the committed screenshot,
+    // so treat it as an error — the caller keeps the committed file.
+    anyhow::ensure!(
+        !looks_blank(&ansi),
+        "screen '{}' captured blank — the terminal was not painted (try a longer settle_ms)",
+        s.name
+    );
+
     Ok(ansi_to_html(&ansi))
+}
+
+/// True when a capture has no visible content — only whitespace and SGR escape
+/// sequences, no glyphs. Used to reject flaky blank captures before they
+/// overwrite a committed screenshot.
+fn looks_blank(ansi: &str) -> bool {
+    let mut chars = ansi.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            // Skip a CSI escape sequence: ESC '[' … <final byte 0x40..=0x7e>.
+            if chars.peek() == Some(&'[') {
+                chars.next();
+                for e in chars.by_ref() {
+                    if ('\x40'..='\x7e').contains(&e) {
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+        if !c.is_whitespace() {
+            return false;
+        }
+    }
+    true
 }
 
 /// Regenerate every screen's HTML under `docs/book/src/screens/`.
@@ -127,6 +161,16 @@ mod tests {
             assert!(!s.example.is_empty());
             assert!(s.cols >= 20 && s.rows >= 5);
         }
+    }
+
+    #[test]
+    fn blank_capture_is_detected() {
+        // Spaces, newlines, and bare SGR escapes only → blank.
+        assert!(looks_blank("   \n   \n"));
+        assert!(looks_blank("\x1b[0m\n\x1b[44m   \x1b[0m\n"));
+        // Any glyph (e.g. a box-drawing char or text) → not blank.
+        assert!(!looks_blank("\x1b[31m┌─┐\x1b[0m"));
+        assert!(!looks_blank("   x   "));
     }
 
     #[test]

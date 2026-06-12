@@ -152,6 +152,7 @@ impl HelloApp {
 
     /// `TApplication::run` — spin the real event loop until a `cmQuit` ends it.
     /// Handles application-level commands (the `TApplication::handleEvent` slot).
+    // ANCHOR: run
     fn run(&mut self) -> Command {
         let mut next_num: i16 = 4; // demo windows 1-3 are pre-inserted; start at 4
         self.program.run_app(move |prog, cmd| {
@@ -175,6 +176,7 @@ impl HelloApp {
             }
         })
     }
+    // ANCHOR_END: run
 }
 
 /// `Alt-F3` — the classic "close window" accelerator (`kbAltF3`).

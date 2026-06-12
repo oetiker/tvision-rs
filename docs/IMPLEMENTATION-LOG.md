@@ -5,6 +5,43 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## Plan 2 — docs content: Part I vertical slice + screenshot-clobber fix (2026-06-12)
+
+First content slice on the Plan 1 docs-tooling machine. Rather than fan out all
+32 pages, authored **Part I (Getting Started) end-to-end** to prove the
+author→build→deploy pipeline before expanding (user directive: vertical slice
+first).
+
+**Authored** (4 stub pages → real prose): `README.md` (intro + `tv::` house-style
+mapping + Guide⇄API model), `getting-started/installation.md` (dep + `tv` alias +
+`os-clipboard` feature/clipboard chain), `getting-started/first-app.md` (the
+`hello` walkthrough: embedded colored screenshot + `{{#rustdoc_include}}` code
+from `examples/hello.rs` + deep links into rustdoc), `getting-started/skeleton.md`
+(`Program` vs `Application`, the three init factories, the run loop). Added a
+comment-only `// ANCHOR: run` to `examples/hello.rs` for the skeleton page.
+
+**Guide→API link paths:** re-exported types resolve to their **defining-module**
+rustdoc path, not the crate root (no `tvision/struct.X.html` is emitted for a
+crate-root `pub use`). So links target e.g. `api/tvision/app/struct.Program.html`,
+`api/tvision/menu/menu_bar/struct.MenuBar.html`. The owned link checker caught all
+22 first-draft links; fixed.
+
+**Root-caused the blank-`hello.html` bug:** `cargo xtask docs` regenerates
+screenshots first and **overwrites** the committed HTML; `capture_one` silently
+wrote a *blank* capture when tmux returned an unpainted pane (how the committed
+screenshot got clobbered). Added `looks_blank()` in `xtask/src/screens.rs` (strips
+SGR escapes, checks for any glyph) — a blank capture now errors, so `docs::build`
+warns and keeps the committed screenshot instead of clobbering it. + unit test.
+
+**Caveat for the expansion phase:** guide snippets are `rust,ignore` excerpts
+(zero-drift via `rustdoc_include` at build time, but not standalone-compilable).
+When the deferred `mdbook test` CI gate lands, whole-program anchors are needed.
+
+Verified: `cargo xtask docs` → `OK: integrated site`, link check clean; rendered
+HTML embeds the screenshot + expands all anchors; `fmt`/`clippy --all-targets`
+clean; 15 xtask tests green (+`blank_capture_is_detected`); `hello` builds.
+**Next:** fan out Parts II–V subagent-style with two-stage review.
+
 ## Fix tvdemo file viewer scrolling + `ScrollBar::with_keyboard` (2026-06-12)
 
 Pre-existing bug (not keymap-related): tvdemo's read-only file viewer wouldn't
