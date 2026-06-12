@@ -77,6 +77,7 @@ pub mod dialog;
 pub mod event;
 pub mod frame;
 pub mod help;
+pub mod keymap;
 pub mod menu;
 pub mod screen;
 pub mod status;
