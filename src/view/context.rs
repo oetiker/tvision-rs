@@ -536,7 +536,7 @@ pub enum Deferred {
     /// [`MouseTrackCapture`](crate::capture::MouseTrackCapture) — the D9
     /// successor of the C++ `do { … } while (mouseEvent(event, mask))` blocking
     /// hold-loop (`tview.cpp:636-643`) — for each masked `MouseMove` /
-    /// `MouseAuto` / wheel pseudo-down and for the terminating `MouseUp`. The
+    /// `MouseAuto` / `evMouseWheel` event and for the terminating `MouseUp`. The
     /// pump resolves `view` via `group.find_mut` and calls
     /// `handle_event(&mut event, …)` directly (the apply-time analogue of the
     /// outside-modal redirect): the widget's `MouseMove`/`MouseAuto`/`MouseUp`
@@ -1339,7 +1339,7 @@ impl<'a> Context<'a> {
     /// with a [`MouseTrackCapture`](crate::capture::MouseTrackCapture): from the
     /// *next* pump on (the deferred-push latency, the `compose_full_protocol`
     /// invariant — matching the C++ `do{}while` running the body once before the
-    /// first wait), every masked `MouseMove`/`MouseAuto`/wheel pseudo-down — and
+    /// first wait), every masked `MouseMove`/`MouseAuto`/`evMouseWheel` event — and
     /// the terminating `MouseUp` — is localized against `origin` and delivered
     /// straight back to `view`'s `handle_event` via [`Deferred::MouseTrack`];
     /// everything else is swallowed (the hold is modal). The widget's own
@@ -1369,7 +1369,7 @@ impl<'a> Context<'a> {
     /// ([`Deferred::MouseTrack`]). `pub(crate)`: two posters only —
     /// [`MouseTrackCapture`](crate::capture::MouseTrackCapture) (the router), and
     /// `Editor::handle_event`'s wheel-in-hold arm, which uses the same direct
-    /// find_mut+handle_event delivery to forward a wheel pseudo-down to its
+    /// find_mut+handle_event delivery to forward an `evMouseWheel` event to its
     /// sibling scrollbars (the C++ `vScrollBar->handleEvent(event)` /
     /// `hScrollBar->handleEvent(event)`, teditor1.cpp:574-579). Widgets enter
     /// tracking via [`start_mouse_track`](Self::start_mouse_track).

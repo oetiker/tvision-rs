@@ -605,25 +605,25 @@ fn translate_mouse(m: crossterm::event::MouseEvent) -> Option<Event> {
             },
             ..Default::default()
         })),
-        MouseEventKind::ScrollUp => Some(Event::MouseDown(MouseEvent {
+        MouseEventKind::ScrollUp => Some(Event::MouseWheel(MouseEvent {
             position,
             modifiers,
             wheel: MouseWheel::Up,
             ..Default::default()
         })),
-        MouseEventKind::ScrollDown => Some(Event::MouseDown(MouseEvent {
+        MouseEventKind::ScrollDown => Some(Event::MouseWheel(MouseEvent {
             position,
             modifiers,
             wheel: MouseWheel::Down,
             ..Default::default()
         })),
-        MouseEventKind::ScrollLeft => Some(Event::MouseDown(MouseEvent {
+        MouseEventKind::ScrollLeft => Some(Event::MouseWheel(MouseEvent {
             position,
             modifiers,
             wheel: MouseWheel::Left,
             ..Default::default()
         })),
-        MouseEventKind::ScrollRight => Some(Event::MouseDown(MouseEvent {
+        MouseEventKind::ScrollRight => Some(Event::MouseWheel(MouseEvent {
             position,
             modifiers,
             wheel: MouseWheel::Right,

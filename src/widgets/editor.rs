@@ -47,7 +47,7 @@
 //! The two `evMouseDown` hold loops (teditor1.cpp:539-583) are ported as
 //! tracked event arms (`docs/design/mouse-track.md`): the `MouseDown` arm runs
 //! the first loop iteration and arms the capture; the `MouseMove`/`MouseAuto`/
-//! wheel-pseudo-down arms are the loop bodies; `MouseUp` clears. Which loop is
+//! `MouseWheel` arms are the loop bodies; `MouseUp` clears. Which loop is
 //! in flight lives in [`EditorTrack`] (`Select` carries the live C++ loop-local
 //! `selectMode`; `Pan` carries `lastMouse`) — both loop masks cover
 //! move+auto+wheel, so the kind discriminates the *body*, not the event class.
@@ -1826,65 +1826,62 @@ impl View for Editor {
         self.convert_event(ev);
 
         match ev {
+            // -- evMouseWheel (the distinct wheel event class) ----------------
+            // During a hold the capture forwards it under `mask.wheel` (the
+            // evMouseWheel slice of both loop masks, teditor1.cpp:551/:583).
+            // Outside a hold the C++ editor never receives evMouseWheel —
+            // absent from TEditor's eventMask (teditor1.cpp:195) — so an
+            // untracked wheel falls through unconsumed.
+            Event::MouseWheel(m) => {
+                let m = *m;
+                match self.track {
+                    // The wheel iteration of the drag-select loop
+                    // (teditor1.cpp:574-579): `vScrollBar->handleEvent(ev);
+                    // hScrollBar->handleEvent(ev);` then the unconditional
+                    // body (:580-581). The bars are siblings (D3): deliver
+                    // via Deferred::MouseTrack (find_mut + handle_event —
+                    // exactly the C++ direct call, one pump later). The C++
+                    // bar answers with a *synchronous* cmScrollBarChanged
+                    // message() that bypasses the hold loop; rstv's
+                    // queue-borne broadcast would be swallowed by the modal
+                    // capture, so the editor posts the SyncEditorDelta
+                    // broker itself. Both land next pump (the seam's
+                    // accepted one-pump latency), so this iteration's
+                    // setCurPtr still sees the pre-scroll `delta`; the next
+                    // tick corrects it.
+                    Some(EditorTrack::Select { select_mode: sm }) => {
+                        self.lock();
+                        if let Some(v) = self.v_scroll_bar {
+                            ctx.request_mouse_track(v, Event::MouseWheel(m));
+                        }
+                        if let Some(h) = self.h_scroll_bar {
+                            ctx.request_mouse_track(h, Event::MouseWheel(m));
+                        }
+                        if let Some(id) = self.state.id() {
+                            ctx.request_sync_editor_delta(id, self.h_scroll_bar, self.v_scroll_bar);
+                        }
+                        // :580-581 — setCurPtr(getMousePtr(where),
+                        // selectMode); selectMode |= smExtend.
+                        let ptr = self.get_mouse_ptr(m.position);
+                        self.set_cur_ptr(ptr, sm);
+                        self.track = Some(EditorTrack::Select {
+                            select_mode: sm | SM_EXTEND,
+                        });
+                        self.unlock(ctx);
+                    }
+                    // The pan loop's mask is evMouse (teditor1.cpp:542),
+                    // which includes evMouseWheel: a wheel tick runs the
+                    // same scroll-by-mouse-delta body (:543-548).
+                    Some(EditorTrack::Pan { last }) => {
+                        self.pan_tick(last, m.position, ctx);
+                    }
+                    None => return, // untracked wheel — fall through
+                }
+                ev.clear();
+                return;
+            }
             Event::MouseDown(m) => {
                 let m = *m;
-                // -- wheel pseudo-down (the evMouseWheel event class) ---------
-                // During a hold the capture forwards it under `mask.wheel` (the
-                // evMouseWheel slice of both loop masks, teditor1.cpp:551/:583).
-                // Outside a hold the C++ editor never receives evMouseWheel —
-                // absent from TEditor's eventMask (teditor1.cpp:195) — so an
-                // untracked wheel falls through unconsumed.
-                if m.wheel != crate::event::MouseWheel::None {
-                    match self.track {
-                        // The wheel iteration of the drag-select loop
-                        // (teditor1.cpp:574-579): `vScrollBar->handleEvent(ev);
-                        // hScrollBar->handleEvent(ev);` then the unconditional
-                        // body (:580-581). The bars are siblings (D3): deliver
-                        // via Deferred::MouseTrack (find_mut + handle_event —
-                        // exactly the C++ direct call, one pump later). The C++
-                        // bar answers with a *synchronous* cmScrollBarChanged
-                        // message() that bypasses the hold loop; rstv's
-                        // queue-borne broadcast would be swallowed by the modal
-                        // capture, so the editor posts the SyncEditorDelta
-                        // broker itself. Both land next pump (the seam's
-                        // accepted one-pump latency), so this iteration's
-                        // setCurPtr still sees the pre-scroll `delta`; the next
-                        // tick corrects it.
-                        Some(EditorTrack::Select { select_mode: sm }) => {
-                            self.lock();
-                            if let Some(v) = self.v_scroll_bar {
-                                ctx.request_mouse_track(v, Event::MouseDown(m));
-                            }
-                            if let Some(h) = self.h_scroll_bar {
-                                ctx.request_mouse_track(h, Event::MouseDown(m));
-                            }
-                            if let Some(id) = self.state.id() {
-                                ctx.request_sync_editor_delta(
-                                    id,
-                                    self.h_scroll_bar,
-                                    self.v_scroll_bar,
-                                );
-                            }
-                            // :580-581 — setCurPtr(getMousePtr(where),
-                            // selectMode); selectMode |= smExtend.
-                            let ptr = self.get_mouse_ptr(m.position);
-                            self.set_cur_ptr(ptr, sm);
-                            self.track = Some(EditorTrack::Select {
-                                select_mode: sm | SM_EXTEND,
-                            });
-                            self.unlock(ctx);
-                        }
-                        // The pan loop's mask is evMouse (teditor1.cpp:542),
-                        // which includes evMouseWheel: a wheel tick runs the
-                        // same scroll-by-mouse-delta body (:543-548).
-                        Some(EditorTrack::Pan { last }) => {
-                            self.pan_tick(last, m.position, ctx);
-                        }
-                        None => return, // untracked wheel — fall through
-                    }
-                    ev.clear();
-                    return;
-                }
                 if m.buttons.right {
                     use crate::event::{Key, KeyEvent, KeyModifiers};
                     use crate::menu::{Menu, popup_menu};
@@ -4469,10 +4466,9 @@ mod tests {
         })
     }
 
-    /// A wheel pseudo-down (crossterm ScrollUp/Down → `MouseDown` with `wheel`
-    /// set and NO buttons).
+    /// An `evMouseWheel` event (crossterm ScrollUp/Down → `Event::MouseWheel`).
     fn wheel_down_at(x: i32, y: i32, wheel: MouseWheel) -> Event {
-        Event::MouseDown(MouseEvent {
+        Event::MouseWheel(MouseEvent {
             position: Point::new(x, y),
             wheel,
             ..Default::default()
@@ -4660,7 +4656,7 @@ mod tests {
         );
     }
 
-    /// A wheel pseudo-down during the drag-select hold forwards to BOTH
+    /// An `evMouseWheel` event during the drag-select hold forwards to BOTH
     /// scrollbars (teditor1.cpp:574-579 — `vScrollBar->handleEvent(ev);
     /// hScrollBar->handleEvent(ev)`) via `Deferred::MouseTrack`, self-posts the
     /// `SyncEditorDelta` broker (the C++ cmScrollBarChanged answer is a direct
@@ -4696,7 +4692,7 @@ mod tests {
             .filter_map(|d| match d {
                 Deferred::MouseTrack {
                     view,
-                    event: Event::MouseDown(m),
+                    event: Event::MouseWheel(m),
                 } if m.wheel == MouseWheel::Down => Some(*view),
                 _ => None,
             })
@@ -4714,7 +4710,7 @@ mod tests {
         assert_eq!((e.sel_start, e.sel_end), (2, 8), "setCurPtr tail ran");
     }
 
-    /// A wheel pseudo-down with NO hold in flight falls through unconsumed —
+    /// An `evMouseWheel` event with NO hold in flight falls through unconsumed —
     /// C++ TEditor's eventMask excludes evMouseWheel (teditor1.cpp:195).
     #[test]
     fn track_wheel_outside_hold_falls_through() {
@@ -4805,7 +4801,7 @@ mod tests {
         assert!(!e.has_selection(), "pan never selects");
     }
 
-    /// A wheel pseudo-down during the pan hold runs the same pan body (the
+    /// An `evMouseWheel` event during the pan hold runs the same pan body (the
     /// loop mask is evMouse, teditor1.cpp:542) — no scrollbar forwarding.
     #[test]
     fn track_pan_wheel_tick_pans() {

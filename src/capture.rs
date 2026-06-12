@@ -15,7 +15,7 @@
 //! the protocol composes (the capture analogue of the row-19 end-to-end snapshot
 //! gate).
 
-use crate::event::{Event, MouseWheel};
+use crate::event::Event;
 use crate::view::{Context, Point, Rect, ViewId};
 
 /// What a capture handler did with an event it was offered.
@@ -84,7 +84,7 @@ pub trait CaptureHandler {
 ///
 /// The C++ callers pass `evMouseMove` (button, cluster, list viewer, …),
 /// `evMouseMove | evMouseAuto` (scrollbar, editor, menu), or `evMouse` (frame —
-/// every mouse class including the wheel pseudo-downs). The struct-of-bools is
+/// every mouse class including evMouseWheel). The struct-of-bools is
 /// the D5 form of that mask slice.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TrackMask {
@@ -92,7 +92,7 @@ pub struct TrackMask {
     pub mouse_move: bool,
     /// Forward `evMouseAuto` (auto-repeat while held; `mask & evMouseAuto`).
     pub mouse_auto: bool,
-    /// Forward wheel pseudo-downs (`MouseDown` with `wheel != None`; the
+    /// Forward `evMouseWheel` events (`Event::MouseWheel`; the
     /// `evMouseWheel` slice of an `evMouse` mask).
     pub wheel: bool,
 }
@@ -155,11 +155,10 @@ impl CaptureHandler for MouseTrackCapture {
                 ctx.request_mouse_track(self.view, Event::MouseAuto(localize(m, self.origin)));
                 CaptureFlow::Consumed
             }
-            // Wheel pseudo-downs (a `MouseDown` with `wheel != None` and no
-            // buttons, see `crossterm_backend`) — the `evMouseWheel` slice of an
-            // `evMouse` mask (the frame's hold loop).
-            Event::MouseDown(m) if self.mask.wheel && m.wheel != MouseWheel::None => {
-                ctx.request_mouse_track(self.view, Event::MouseDown(localize(m, self.origin)));
+            // Mouse-wheel events (`evMouseWheel`, see `crossterm_backend`) — the
+            // `evMouseWheel` slice of an `evMouse` mask (the frame's hold loop).
+            Event::MouseWheel(m) if self.mask.wheel => {
+                ctx.request_mouse_track(self.view, Event::MouseWheel(localize(m, self.origin)));
                 CaptureFlow::Consumed
             }
             // `mouseEvent` always returns on `evMouseUp` (the `mask | evMouseUp`
@@ -568,7 +567,7 @@ mod tests {
 
     // -- MouseTrackCapture (the A3 hold-tracking router) ----------------------
 
-    use crate::event::{MouseButtons, MouseEvent};
+    use crate::event::{MouseButtons, MouseEvent, MouseWheel};
     use crate::view::Deferred;
 
     /// Origin used by all router tests: view-local (0,0) sits at abs (5,3).
@@ -665,16 +664,16 @@ mod tests {
         assert_eq!(stack.len(), 1);
     }
 
-    /// A wheel pseudo-down (`MouseDown` with `wheel != None`) forwards only
-    /// under `mask.wheel`; a real-button `MouseDown` is swallowed regardless.
+    /// An `evMouseWheel` event forwards only under `mask.wheel`; a real-button
+    /// `MouseDown` is swallowed regardless.
     #[test]
-    fn track_wheel_pseudo_down_respects_wheel_mask() {
+    fn track_wheel_event_respects_wheel_mask() {
         // wheel-masked: forwarded localized.
         let (mut stack, id) = track_stack(TrackMask {
             wheel: true,
             ..Default::default()
         });
-        let wheel_down = Event::MouseDown(MouseEvent {
+        let wheel_down = Event::MouseWheel(MouseEvent {
             position: Point::new(7, 5),
             wheel: MouseWheel::Up,
             ..Default::default()
@@ -685,23 +684,23 @@ mod tests {
         match &deferred[0] {
             Deferred::MouseTrack {
                 view,
-                event: Event::MouseDown(m),
+                event: Event::MouseWheel(m),
             } => {
                 assert_eq!(*view, id);
                 assert_eq!(m.position, Point::new(2, 2));
                 assert_eq!(m.wheel, MouseWheel::Up);
             }
-            _ => panic!("expected a localized MouseTrack wheel down"),
+            _ => panic!("expected a localized MouseTrack wheel event"),
         }
 
-        // A real-button down (wheel == None) is swallowed even with mask.wheel.
+        // A real-button down is swallowed even with mask.wheel.
         let (consumed, deferred) = play(&mut stack, Event::MouseDown(mouse_record(7, 5)));
         assert!(consumed);
         assert!(deferred.is_empty(), "buttoned down is not a wheel event");
 
-        // Without mask.wheel the pseudo-down is swallowed too.
+        // Without mask.wheel the wheel is swallowed too.
         let (mut stack, _id) = track_stack(TrackMask::default());
-        let wheel_down = Event::MouseDown(MouseEvent {
+        let wheel_down = Event::MouseWheel(MouseEvent {
             wheel: MouseWheel::Down,
             ..Default::default()
         });

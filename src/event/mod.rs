@@ -35,9 +35,10 @@ use crate::view::{Point, ViewId};
 ///
 /// The `ev*` event classes map onto the variants directly. `evNothing` and any
 /// *consumed* event are both [`Event::Nothing`] (see [`Event::clear`], the
-/// `clearEvent` equivalent). The `evMouseWheel` class has no variant here:
-/// wheel direction rides on the [`MouseEvent::wheel`] field of the mouse
-/// variants, faithful to the C++ `MouseEventType::wheel`.
+/// `clearEvent` equivalent). The `evMouseWheel` class is its own variant
+/// [`Event::MouseWheel`] (distinct from `evMouseDown`, faithful to
+/// `views.h`); wheel direction rides on the [`MouseEvent::wheel`] field,
+/// faithful to the C++ `MouseEventType::wheel`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
     /// `evMouseDown` — a mouse button was pressed.
@@ -49,6 +50,15 @@ pub enum Event {
     /// `evMouseAuto` — auto-repeat while a button is held (opt-in; see
     /// [`EventMask::mouse_auto`]).
     MouseAuto(MouseEvent),
+    /// `evMouseWheel` — the mouse wheel was rotated. A **distinct event class**
+    /// from `evMouseDown` (faithful to `views.h:199`,
+    /// `positionalEvents = evMouse & ~evMouseWheel`): the wheel is **not**
+    /// positional and **not** focused, so a [`crate::view::Group`] broadcasts it
+    /// to every child (`forEach`/`TGroup::handleEvent` `else` branch) until one
+    /// consumes it — the active window's scrollbar gets it regardless of cursor
+    /// position. Carries a [`MouseEvent`] whose [`MouseEvent::wheel`] is
+    /// `Up`/`Down`/`Left`/`Right`.
+    MouseWheel(MouseEvent),
     /// `evKeyDown` — a key was pressed. Reuses [`key::KeyEvent`].
     KeyDown(KeyEvent),
     /// `evCommand` — a command targeted at a specific receiver.
@@ -267,10 +277,10 @@ mod tests {
             wheel: MouseWheel::Up,
             ..Default::default()
         };
-        let ev = Event::MouseDown(m);
+        let ev = Event::MouseWheel(m);
         match ev {
-            Event::MouseDown(me) => assert_eq!(me.wheel, MouseWheel::Up),
-            _ => panic!("expected MouseDown"),
+            Event::MouseWheel(me) => assert_eq!(me.wheel, MouseWheel::Up),
+            _ => panic!("expected MouseWheel"),
         }
     }
 }

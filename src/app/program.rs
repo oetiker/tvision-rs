@@ -131,10 +131,10 @@ impl MouseAutoState {
         match ev {
             // A press with a REAL button arms (re-arms) the delay —
             // `autoTicks = downTicks = ev.what; autoDelay = repeatDelay`
-            // (tevent.cpp:167-168). Wheel pseudo-downs (crossterm_backend
-            // ScrollUp/Down → MouseDown with `wheel` set and NO buttons) must
-            // NOT arm: C++ returns on the wheel arm before reaching the
-            // press/auto bookkeeping (tevent.cpp:176-186).
+            // (tevent.cpp:167-168). Wheel events (`Event::MouseWheel`) must NOT
+            // arm auto-repeat: they never reach this `MouseDown` arm, and C++
+            // returns on the wheel arm before reaching the press/auto
+            // bookkeeping (tevent.cpp:176-186).
             Event::MouseDown(m) if m.buttons.left || m.buttons.right || m.buttons.middle => {
                 let mut held = *m;
                 held.flags = crate::event::MouseEventFlags::default();
@@ -4734,13 +4734,13 @@ mod tests {
         );
     }
 
-    /// A wheel pseudo-down (crossterm ScrollUp/Down → `MouseDown` with `wheel`
-    /// set and NO buttons) must never arm the synthesizer.
+    /// An `Event::MouseWheel` event (crossterm ScrollUp/Down) must never arm
+    /// the synthesizer.
     #[test]
     fn mouse_auto_wheel_pseudo_down_never_arms() {
         let (mut program, handle, clock, log) = auto_probe_program(true);
 
-        handle.push_event(Event::MouseDown(MouseEvent {
+        handle.push_event(Event::MouseWheel(MouseEvent {
             position: Point::new(2, 1),
             wheel: crate::event::MouseWheel::Up,
             ..Default::default()

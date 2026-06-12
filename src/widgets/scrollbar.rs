@@ -479,7 +479,7 @@ impl View for ScrollBar {
             // ------------------------------------------------------------------
             // Mouse wheel (evMouseWheel) — visible check matches C++ `sfVisible`
             // ------------------------------------------------------------------
-            Event::MouseDown(me) if me.wheel != MouseWheel::None && visible => {
+            Event::MouseWheel(me) if visible => {
                 let step = if self.vertical {
                     match me.wheel {
                         MouseWheel::Up => -self.arrow_step,

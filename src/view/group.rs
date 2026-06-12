@@ -679,6 +679,9 @@ impl Group {
         match ev {
             Event::MouseMove(_) => s.event_mask.mouse_move,
             Event::MouseAuto(_) => s.event_mask.mouse_auto,
+            // `MouseWheel` falls through to `true`: delivered unconditionally,
+            // with no eventMask gate (like `MouseDown`). Behavior-neutral vs the
+            // C++ eventMask gate — in rstv only the two opt-in classes are gated.
             _ => true,
         }
     }
@@ -734,9 +737,11 @@ impl Group {
 /// child's frame before delivery).
 fn mouse_pos_mut(ev: &mut Event) -> Option<&mut Point> {
     match ev {
-        Event::MouseDown(m) | Event::MouseUp(m) | Event::MouseMove(m) | Event::MouseAuto(m) => {
-            Some(&mut m.position)
-        }
+        Event::MouseDown(m)
+        | Event::MouseUp(m)
+        | Event::MouseMove(m)
+        | Event::MouseAuto(m)
+        | Event::MouseWheel(m) => Some(&mut m.position),
         _ => None,
     }
 }
@@ -1106,6 +1111,18 @@ impl Group {
                     self.deliver(i, ev, ctx);
                 }
             }
+            // -- evMouseWheel: non-positional, non-focused → forEach every child
+            // until consumed. Faithful to `views.h:199`
+            // (`positionalEvents = evMouse & ~evMouseWheel`) and
+            // `TGroup::handleEvent`'s `else`/`forEach(doHandleEvent)` branch:
+            // the wheel broadcasts to every child top→bottom, and `deliver`
+            // early-returns once a child has consumed it (`clearEvent`), so the
+            // active window's scrollbar gets it regardless of cursor position.
+            Event::MouseWheel(_) => {
+                for i in (0..n).rev() {
+                    self.deliver(i, ev, ctx);
+                }
+            }
             // -- positionalEvents: the topmost visible child under the cursor --
             Event::MouseDown(_) | Event::MouseUp(_) | Event::MouseMove(_) | Event::MouseAuto(_) => {
                 let Some(pos) = mouse_pos(ev) else {
@@ -1189,6 +1206,76 @@ mod tests {
             },
             ..Default::default()
         })
+    }
+
+    /// Regression: the mouse wheel is `evMouseWheel`, a non-positional event
+    /// class that a group broadcasts to every child until consumed — NOT a
+    /// positional `evMouseDown` hit-tested under the cursor (`views.h:199`,
+    /// `positionalEvents = evMouse & ~evMouseWheel`; `TGroup::handleEvent`'s
+    /// `forEach` else-branch). A wheel over empty content must still reach the
+    /// active window's scrollbar, while a real click there must not.
+    #[test]
+    fn wheel_broadcasts_to_scrollbar_off_the_bar() {
+        use crate::event::MouseWheel;
+        use crate::widgets::ScrollBar;
+
+        // A wide group with a 1-col vertical scrollbar pinned to the right edge.
+        let mut group = Group::new(Rect::new(0, 0, 20, 10));
+        let bar_id = {
+            let mut bar = ScrollBar::new(Rect::new(19, 0, 20, 10)); // vertical (width 1)
+            let mut out = VecDeque::new();
+            let mut timers = TimerQueue::new();
+            with_ctx(&mut out, &mut timers, |ctx| {
+                bar.set_params(50, 0, 100, 10, 1, ctx);
+            });
+            group.insert(Box::new(bar))
+        };
+
+        let bar_value = |g: &mut Group| {
+            g.find_mut(bar_id)
+                .and_then(|v| v.as_any_mut())
+                .and_then(|a| a.downcast_mut::<ScrollBar>())
+                .map(|b| b.value)
+                .unwrap()
+        };
+        assert_eq!(bar_value(&mut group), 50, "initial value");
+
+        // A wheel-down at (2, 5) — NOT over the bar (which is column 19).
+        let mut out = VecDeque::new();
+        let mut timers = TimerQueue::new();
+        let off_bar = Point::new(2, 5);
+        with_ctx(&mut out, &mut timers, |ctx| {
+            let mut ev = Event::MouseWheel(MouseEvent {
+                position: off_bar,
+                wheel: MouseWheel::Down,
+                ..Default::default()
+            });
+            group.handle_event(&mut ev, ctx);
+            assert!(
+                ev.is_nothing(),
+                "wheel consumed by the scrollbar via broadcast"
+            );
+        });
+        // Down wheel: set_value(value + 3 * arrow_step) = 50 + 3 = 53.
+        assert_eq!(
+            bar_value(&mut group),
+            53,
+            "wheel reached the bar via broadcast, off the bar's column"
+        );
+
+        // A real left-click at the SAME off-bar position must NOT reach the bar
+        // (positional routing still hit-tests; the bar is in column 19).
+        let mut out = VecDeque::new();
+        let mut timers = TimerQueue::new();
+        with_ctx(&mut out, &mut timers, |ctx| {
+            let mut ev = mouse_down_at(off_bar.x, off_bar.y);
+            group.handle_event(&mut ev, ctx);
+        });
+        assert_eq!(
+            bar_value(&mut group),
+            53,
+            "a positional click off the bar must not reach it"
+        );
     }
 
     /// A probe view: fills its extent with `ch` and records every event it is
