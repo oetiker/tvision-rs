@@ -1,6 +1,6 @@
 # Text editing
 
-tvision ships a full multi-line text editor and a scrolling terminal view, both
+rstv ships a full multi-line text editor and a scrolling terminal view, both
 ported faithfully from Turbo Vision. They build on one engine,
 [`Editor`](../api/tvision/widgets/struct.Editor.html) (`TEditor`): a gap-buffer
 text editor with a cursor, a selection, single-level undo, word-by-word
@@ -39,11 +39,11 @@ the constructor when you pass a path; a `None` path is an *untitled* buffer. It
 handles `Command::SAVE` itself, opens a Save-as file dialog for an untitled
 buffer or `Command::SAVE_AS`, and — through its `valid` check — puts up the
 classic *"… has been modified. Save?"* Yes/No/Cancel prompt before a dirty
-buffer is closed. All of that runs through tvision's deferred message-box and
+buffer is closed. All of that runs through rstv's deferred message-box and
 file-dialog seams, so a single editor view can drive a modal dialog without
 owning the event loop (see [Deferred effects](../internals/deferred.md)).
 
-Backup files are off by default; when enabled, tvision appends `~` to the
+Backup files are off by default; when enabled, rstv appends `~` to the
 filename (`foo.txt` → `foo.txt~`), following Unix convention rather than the DOS
 `.bak` rename.
 
@@ -53,7 +53,7 @@ Two settings control how text is stored and stepped over:
 
 - [`LineEnding`](../api/tvision/widgets/enum.LineEnding.html) — `Lf`, `CrLf`, or
   `Cr`, deciding the byte sequence written for each line break when text is
-  inserted. tvision defaults to `Lf` (the modern-host default; DOS Turbo Vision
+  inserted. rstv defaults to `Lf` (the modern-host default; DOS Turbo Vision
   defaulted to `CrLf`).
 - [`Encoding`](../api/tvision/widgets/enum.Encoding.html) — `Default` steps over
   characters using width-aware (grapheme) logic, so multi-byte UTF-8 and wide

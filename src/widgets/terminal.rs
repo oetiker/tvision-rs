@@ -1,33 +1,25 @@
-//! `TTextDevice` / `TTerminal` — faithful Rust port of `textview.cpp` /
-//! `ttprvlns.cpp` (rows 91–92, MECHANICAL).
+//! A scrolling text terminal: [`TextDevice`] (the output trait) and [`Terminal`]
+//! (a ring-buffer view that shows the most recent lines).
 //!
-//! ## Deviations from C++ (pre-decided D-rules)
+//! `Terminal` embeds a [`Scroller`] and delegates the un-overridden `View`
+//! methods to it; the ring buffer stores raw bytes and the draw decodes them
+//! UTF-8-width-aware. Users write to it through
+//! [`write_bytes`](TextDevice::write_bytes); there is no stream wrapper.
 //!
-//! - **D1:** `TTextDevice` → `TextDevice` (trait), `TTerminal` → `Terminal`
-//!   (struct), all methods `snake_case`.
-//! - **D2:** `Terminal` embeds a [`Scroller`] and uses `#[delegate(to = scroller)]`
-//!   for all `View` methods not overridden. The `#[delegate]` macro auto-forwards
-//!   `as_any_mut` to `self.scroller.as_any_mut()`, which returns
-//!   `Some(&mut self.scroller as &mut dyn Any)`, letting the existing
-//!   `Deferred::SyncScrollerDelta` pump arm downcast to `Scroller` and call
-//!   `apply_delta`. **No new `Deferred` variant is needed.**
-//! - **D5:** `growMode = gfGrowHiX + gfGrowHiY` →
-//!   `GrowMode { hi_x: true, hi_y: true, ..Default::default() }`.
-//! - **D7:** `mapColor(1)` → `ctx.style(Role::ScrollerNormal)`.
-//! - **D8:** `drawView()` / `drawLock++/--` / `setCursor(-1,-1)` dropped (whole-tree
-//!   redraw every pump pass).
-//! - **D11:** `streambuf` inheritance and `otstream` wrapper dropped entirely.
-//!   Users call `write_bytes` directly.
-//! - **D12:** `TStreamable` boilerplate dropped.
-//! - **D13:** Ring buffer stores raw bytes; draw uses `put_str` (UTF-8-width-aware)
-//!   rather than byte-by-byte; UTF-8 boundary trimming via `str::from_utf8`.
+//! # Construction
 //!
-//! ## Constructor / init pattern
+//! Building a terminal does not set its scroll limit, cursor, or visibility,
+//! because those need a [`Context`] not available at construction. The consumer
+//! calls [`Terminal::init`] once after inserting the terminal into a group (the
+//! same pattern as the outline viewer).
 //!
-//! The C++ ctor calls `setLimit(0,1)`, `setCursor(0,0)`, and `showCursor()`, which
-//! all need a `Context`. Following the `TOutline` pattern (rows 88–90), the ctor
-//! takes no `Context`; the consumer calls [`Terminal::init`] once after inserting
-//! the terminal into a group.
+//! # Turbo Vision heritage
+//!
+//! Ports `TTextDevice` (`textview.cpp`) and `TTerminal` (`ttprvlns.cpp`). C++
+//! inheritance becomes a trait plus an embed-and-delegate wrapper over `Scroller`
+//! (deviation D2); the `streambuf`/`otstream` stream plumbing and `TStreamable`
+//! are dropped (deviations D11, D12); `mapColor` becomes a [`Role`]; and the byte
+//! buffer is decoded with UTF-8-aware width (deviation D13).
 
 use crate::theme::Role;
 use crate::view::{Context, DrawCtx, GrowMode, Point, Rect, View, ViewId};
@@ -35,27 +27,32 @@ use crate::widgets::Scroller;
 use tvision_macros::delegate;
 
 // ---------------------------------------------------------------------------
-// TextDevice (row 91) — the abstract output trait
+// TextDevice — the abstract output trait
 // ---------------------------------------------------------------------------
 
-/// `TTextDevice` — the abstract text-output device (row 91).
+/// The abstract text-output device. Users of the terminal call
+/// [`write_bytes`](Self::write_bytes) directly.
 ///
-/// The `streambuf` base and `otstream` wrapper are dropped (D11/D12). Users of the
-/// terminal call [`write_bytes`](Self::write_bytes) directly.
+/// # Turbo Vision heritage
+///
+/// Ports `TTextDevice` (`textview.cpp`); the `streambuf` base and `otstream`
+/// wrapper are dropped.
 pub trait TextDevice {
-    /// `TTextDevice::do_sputn` — write `data` bytes into the device and return
-    /// the number of bytes accepted (always `data.len()` for `Terminal`).
+    /// Write `data` bytes into the device and return the number of bytes accepted
+    /// (always `data.len()` for `Terminal`).
     fn write_bytes(&mut self, data: &[u8], ctx: &mut Context) -> usize;
 }
 
 // ---------------------------------------------------------------------------
-// Terminal (row 92) — the ring-buffer terminal view
+// Terminal — the ring-buffer terminal view
 // ---------------------------------------------------------------------------
 
-/// `TTerminal` — a ring-buffer terminal view (row 92).
+/// A ring-buffer terminal view. Stores incoming text in a fixed-size ring buffer
+/// and draws the most-recent `size.y` lines.
 ///
-/// Extends `TTextDevice` (which extends `TScroller`). Stores incoming text in a
-/// fixed-size ring buffer and draws the most-recent `size.y` lines.
+/// # Turbo Vision heritage
+///
+/// Ports `TTerminal` (`ttprvlns.cpp`).
 pub struct Terminal {
     /// The embedded scroller — handles scrollbar sync, geometry, and all the
     /// `View` methods we do not override.
@@ -255,11 +252,8 @@ impl Terminal {
 // ---------------------------------------------------------------------------
 
 impl TextDevice for Terminal {
-    /// `TTerminal::do_sputn` — write `data` into the ring buffer, evicting old
-    /// lines as needed, then update the scrollbar limits.
-    ///
-    /// Faithful port. Key deviations: D8 (`drawLock++/--` and `drawView()` dropped);
-    /// usize arithmetic (no signed-vs-unsigned landmines).
+    /// Write `data` into the ring buffer, evicting old lines as needed, then
+    /// update the scrollbar limits. Uses `usize` arithmetic throughout.
     fn write_bytes(&mut self, mut data: &[u8], ctx: &mut Context) -> usize {
         let original_len = data.len();
 
@@ -303,7 +297,7 @@ impl TextDevice for Terminal {
             self.que_front += count;
         }
 
-        // Publish new scrollbar limits and scroll position (D8: drawLock dropped).
+        // Publish new scrollbar limits and scroll position.
         self.scroller
             .set_limit(self.scroller.limit().x, screen_lines, ctx);
         self.scroller.scroll_to(0, screen_lines + 1, ctx);
@@ -318,12 +312,8 @@ impl TextDevice for Terminal {
 
 #[delegate(to = scroller)]
 impl View for Terminal {
-    /// `TTerminal::draw` — render the ring-buffer contents from newest to oldest.
-    ///
-    /// Faithful port with D7/D8/D13 applied:
-    /// - `mapColor(1)` → `ctx.style(Role::ScrollerNormal)` (D7)
-    /// - `setCursor(-1,-1)` dropped (D8 — no cursor hiding needed with whole-tree redraw)
-    /// - `writeBuf` → `put_str` + `fill` (D13 — use UTF-8-aware rendering)
+    /// Render the ring-buffer contents from newest to oldest. Colors come from
+    /// [`Role::ScrollerNormal`] and text is rendered UTF-8-width-aware.
     fn draw(&mut self, ctx: &mut DrawCtx) {
         let color = ctx.style(Role::ScrollerNormal);
         let size = self.scroller.state().size;
@@ -448,8 +438,8 @@ impl View for Terminal {
     }
 
     /// Returns `Some(&mut self.scroller)` via the inner `Scroller::as_any_mut`.
-    /// This lets the `Deferred::SyncScrollerDelta` pump arm downcast to `Scroller`
-    /// and call `apply_delta` without a new Deferred variant (D3).
+    /// This lets the `Deferred::SyncScrollerDelta` apply arm downcast to
+    /// `Scroller` and call `apply_delta` without a new Deferred variant.
     fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
         self.scroller.as_any_mut()
     }

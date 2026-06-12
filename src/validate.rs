@@ -1,30 +1,38 @@
-//! Input validators — `TValidator` ported per deviation **D2** (row 35).
+//! Input validators that gate what an [`InputLine`](crate::widgets::InputLine)
+//! accepts.
 //!
-//! In C++ Turbo Vision, `TValidator` is an *abstract* base class whose concrete
-//! subclasses (`TPXPictureValidator`, `TFilterValidator`, `TRangeValidator`,
-//! `TLookupValidator`, …) gate what a `TInputLine` accepts. Per D2 inheritance
-//! becomes a **trait**: [`Validator`] is the trait an input line holds as
-//! `Option<Box<dyn Validator>>`. The concrete validators are later rows
-//! (`TFilterValidator`/`TRangeValidator` etc.); only the abstract base lands
-//! here, so every default method simply accepts.
+//! [`Validator`] is a trait; an input line holds an
+//! `Option<Box<dyn Validator>>` and, with no validator, accepts every input.
+//! The crate ships several concrete validators: [`FilterValidator`] (an allowed
+//! character set), [`RangeValidator`] (a numeric range),
+//! [`LookupValidator`] / [`StringLookupValidator`] (membership in a set),
+//! [`PXPictureValidator`] (a Paradox picture mask), and the Rust-native
+//! [`RegexValidator`].
 //!
 //! ## Object safety
 //!
-//! A `TInputLine` stores its validator as a boxed trait object
-//! (`Option<Box<dyn Validator>>`), so [`Validator`] must be **object-safe**:
-//! every method takes `&self`, no generics, no `Self` return. `validate` is
-//! non-virtual in C++ (it calls the virtual `isValid`/`error`), so it stays a
-//! provided method here.
+//! Because the validator is stored as a boxed trait object, [`Validator`] is
+//! **object-safe**: every method takes `&self`, no generics, no `Self` return.
+//! `validate` is a provided method that dispatches through the overridable
+//! `is_valid`/`error`.
 //!
-//! ## Deviations from PORT-ORDER row 35's note
+//! ## Typed value transfer
 //!
-//! PORT-ORDER lists a `transfer(void*, TVTransfer)` hook. It has **no overrider
-//! until `TRangeValidator` (row 59)** and **no caller** until then (its only
-//! callers are `TInputLine::dataSize`/`getData`/`setData`, which under D10 become
-//! the typed [`value`](crate::view::View::value)/[`set_value`](crate::view::View::set_value)
-//! protocol — see `src/data.rs`). Building `transfer` now would be a dead stub,
-//! so it is **deliberately omitted**; it lands with its first overrider/consumer
-//! (row 59). The slot-in point is breadcrumbed in `InputLine::value`/`set_value`.
+//! A validator can also convert between the field's text and a typed
+//! [`FieldValue`] — [`Validator::transfer_get`] reports the field's value to a
+//! dialog gather, and [`Validator::transfer_set`] formats a value back into the
+//! field. Only validators with transfer enabled override these (for example
+//! [`RangeValidator`] transfers an [`FieldValue::Int`]); the base returns
+//! `None`, leaving the input line to use its plain text value.
+//!
+//! # Turbo Vision heritage
+//!
+//! Ports `TValidator` and its subclasses (`tvalidator.cpp` etc.). C++
+//! `TValidator` is an abstract base class whose concrete subclasses gate a
+//! `TInputLine`; inheritance becomes this trait (deviation D2). The old
+//! untyped `transfer(void*, TVTransfer)` hook becomes the typed
+//! `transfer_get`/`transfer_set` pair (deviation D10), and the streaming
+//! machinery (`read`/`write`/`name`) is dropped (deviation D12).
 
 use crate::data::FieldValue;
 use crate::view::Context;
@@ -34,12 +42,16 @@ use regex_automata::{
     util::start::Config as StartConfig,
 };
 
-/// An input validator — `TValidator` (D2: abstract base → trait).
+/// An input validator.
 ///
-/// A [`TInputLine`](crate::widgets::InputLine) holds an
+/// An [`InputLine`](crate::widgets::InputLine) holds an
 /// `Option<Box<dyn Validator>>`; with no validator every input is accepted. The
-/// default methods all accept (faithful to the abstract base, which returns
-/// `True`/`vsOk`); concrete validators (later rows) override them.
+/// default methods all accept; concrete validators override them.
+///
+/// # Turbo Vision heritage
+///
+/// Ports the abstract `TValidator` base class; inheritance becomes this trait
+/// (deviation D2).
 pub trait Validator {
     /// `TValidator::isValidInput` — check (and optionally auto-fill/modify) `s`
     /// *as it is being typed*. May mutate `s` in place (e.g. a picture validator
@@ -61,7 +73,7 @@ pub trait Validator {
     /// ([`Context::request_message_box`], `answer_to`/`then_command` both `None` —
     /// informational, OK-only); the abstract base is a no-op.
     ///
-    /// **NOT a `View` method** — no `tvision-macros/src/specs.rs` forwarder.
+    /// This is a [`Validator`] method, not a [`View`](crate::view::View) method.
     fn error(&self, _ctx: &mut Context) {}
 
     /// `TValidator::validate` — **non-virtual in C++**: report the error and fail
@@ -79,57 +91,50 @@ pub trait Validator {
 
     /// Whether the validator's status is `vsOk` (`TValidator::status == vsOk`) —
     /// consulted by `TInputLine::valid(cmValid)`. The abstract base never sets a
-    /// non-OK status, so the default is `true`; `TPXPictureValidator` (row 62)
+    /// non-OK status, so the default is `true`; `TPXPictureValidator`
     /// overrides to report a syntax error (`vsSyntax`).
     fn is_status_ok(&self) -> bool {
         true
     }
 
-    /// `TValidator::transfer(…, vtGetData)` under **D10**. `Some(typed value)`
-    /// only when the validator has transfer enabled (C++ `options & voTransfer`);
-    /// `None` means "I don't transfer — the input line keeps its text value".
-    /// Base: `None`. (`vtDataSize` is moot under D10 — the typed value carries its
-    /// own size.)
+    /// Report the field's value as a typed [`FieldValue`] (the successor to
+    /// `TValidator::transfer(…, vtGetData)`). `Some(typed value)` only when the
+    /// validator has transfer enabled (C++ `options & voTransfer`); `None` means
+    /// "I don't transfer — the input line keeps its text value". Base: `None`.
     ///
-    /// NOTE: this is a [`Validator`]-trait method, **not** a `View`-trait method —
-    /// there is deliberately no `tvision-macros/src/specs.rs` forwarder and no
-    /// `delegate_view` spy entry for it.
+    /// This is a [`Validator`]-trait method, not a
+    /// [`View`](crate::view::View)-trait method.
     fn transfer_get(&self, _s: &str) -> Option<FieldValue> {
         None
     }
 
-    /// `TValidator::transfer(…, vtSetData)` under **D10** — format a typed value
-    /// back to the field's text. `Some(text)` only when transfer-enabled AND `v`
-    /// is the type this validator handles; `None` → the input line falls back to
-    /// its Text path. Base: `None`.
+    /// Format a typed value back to the field's text (the successor to
+    /// `TValidator::transfer(…, vtSetData)`). `Some(text)` only when
+    /// transfer-enabled AND `v` is the type this validator handles; `None` → the
+    /// input line falls back to its Text path. Base: `None`.
     ///
-    /// NOTE: like [`transfer_get`](Validator::transfer_get), this is a
-    /// [`Validator`]-trait method, **not** a `View`-trait method — no `specs.rs`
-    /// forwarder / `delegate_view` spy entry exists for it.
+    /// Like [`transfer_get`](Validator::transfer_get), this is a
+    /// [`Validator`]-trait method, not a [`View`](crate::view::View)-trait method.
     fn transfer_set(&self, _v: &FieldValue) -> Option<String> {
         None
     }
 }
 
-// ── Concrete validators (rows 58, 60, 61) ────────────────────────────────────
+// ── Concrete validators ──────────────────────────────────────────────────────
 
-/// `TFilterValidator` (row 58) — accepts only characters from an allowed set.
+/// Accepts only characters drawn from an allowed set: every character of the
+/// input must be a member of `valid_chars`. Empty input passes.
 ///
-/// C++ origin: `TFilterValidator::isValid` / `isValidInput` both use
-/// `strspn(s, validChars) == strlen(s)`, i.e. **every character of `s` must
-/// be a member of `validChars`**. Empty input passes (both spans are 0).
+/// Membership is tested **per Unicode `char`** (`valid_chars.contains(c)`). On
+/// an invalid final value, `error` pops up an OK-only error message box.
 ///
-/// ## Deviations
-/// - `validChars` (`char*`) → owned `String` (D1 naming + Rust ownership).
-/// - Membership is tested **per Unicode `char`** (`valid_chars.contains(c)`),
-///   where C++ `strspn` tests **per byte**. For the realistic ASCII charsets a
-///   filter validator carries these are identical; they would only diverge if
-///   `valid_chars` itself held multibyte characters (then the C++ matches
-///   individual UTF-8 bytes, we match whole chars) — not a case any caller hits.
-/// - Streaming (`read`/`write`/`name`) dropped project-wide (D12).
-/// - Destructor (`delete[] validChars`) moot — Rust drop handles it.
-/// - `error()` is live: `messageBox(mfError|mfOKButton, …)` via the
-///   async-modal-from-a-view seam (`ctx.request_message_box`, informational, OK-only).
+/// # Turbo Vision heritage
+///
+/// Ports `TFilterValidator`, whose `isValid`/`isValidInput` use
+/// `strspn(s, validChars) == strlen(s)` — a per-byte test where rstv tests per
+/// Unicode `char` (identical for the ASCII charsets these validators carry).
+/// `validChars` becomes an owned `String`, and the streaming machinery is
+/// dropped (deviation D12).
 pub struct FilterValidator {
     valid_chars: String,
 }
@@ -169,20 +174,17 @@ impl Validator for FilterValidator {
     }
 }
 
-/// `TLookupValidator` (row 60) — the realized abstract base for lookup-style
-/// validators.
+/// The accept-all base for lookup-style validators — it accepts every input.
+/// [`StringLookupValidator`] is the concrete variant that checks membership in
+/// a list.
 ///
-/// In C++, `TLookupValidator` is an abstract intermediate class whose sole
-/// purpose is to route `isValid` through a virtual `lookup(s)`. Its own
-/// `lookup` returns `True` (accept-all). Per **D2** (inheritance →
-/// trait/composition), this virtual indirection **collapses**: each concrete
-/// lookup validator folds `lookup()` directly into its `is_valid`. This
-/// unit-struct therefore realises the *abstract base's own behavior* —
-/// accept-all — and nothing else. `TStringLookupValidator` (row 61) is the
-/// concrete override.
+/// # Turbo Vision heritage
 ///
-/// ## Object safety
-/// Stored as `Box<dyn Validator>` alongside other validators.
+/// Ports `TLookupValidator`, an abstract intermediate class that routes
+/// `isValid` through a virtual `lookup(s)` (its own `lookup` accepts all). That
+/// virtual indirection collapses here: each concrete lookup validator folds
+/// `lookup()` directly into its `is_valid` (deviation D2), so this type realises
+/// only the base's own accept-all behavior.
 pub struct LookupValidator;
 
 impl LookupValidator {
@@ -201,21 +203,16 @@ impl Default for LookupValidator {
 /// Accept-all: all default methods from the base `Validator` trait suffice.
 impl Validator for LookupValidator {}
 
-/// `TStringLookupValidator` (row 61) — valid iff the input exactly matches
-/// one entry in an owned list of strings.
+/// Valid iff the input exactly matches one entry in an owned list of strings.
+/// On an invalid final value, `error` pops up an OK-only error message box.
 ///
-/// C++ `lookup(s)` used `TStringCollection::firstThat(stringMatch, …)` where
-/// `stringMatch` is `strcmp == 0`. Per **D2**, the virtual `lookup()` collapses
-/// into `is_valid`; the `TStringCollection*` becomes an owned `Vec<String>`.
-/// `newStringList` replaces the list; C++ `destroy(strings)` cleanup is moot
-/// under Rust ownership.
+/// # Turbo Vision heritage
 ///
-/// ## Deviations
-/// - `TStringCollection*` → `Vec<String>` (owned, no heap-manual management).
-/// - `lookup()` virtual collapse into `is_valid` (D2).
-/// - Streaming dropped (D12). Destructor moot.
-/// - `error()` is live: `messageBox(mfError|mfOKButton, …)` via the
-///   async-modal-from-a-view seam (`ctx.request_message_box`, informational, OK-only).
+/// Ports `TStringLookupValidator`, whose `lookup(s)` used
+/// `TStringCollection::firstThat(stringMatch, …)` (`strcmp == 0`). The virtual
+/// `lookup()` collapses into `is_valid` (deviation D2), the `TStringCollection*`
+/// becomes an owned `Vec<String>`, and the streaming machinery is dropped
+/// (deviation D12).
 pub struct StringLookupValidator {
     strings: Vec<String>,
 }
@@ -235,7 +232,7 @@ impl StringLookupValidator {
 }
 
 impl Validator for StringLookupValidator {
-    /// `TStringLookupValidator::lookup` (collapsed into `is_valid` per D2) —
+    /// `TStringLookupValidator::lookup` (collapsed into `is_valid`) —
     /// accepts `s` iff it exactly matches (`strcmp == 0`) some entry in the list.
     fn is_valid(&self, s: &str) -> bool {
         self.strings.iter().any(|x| x == s)
@@ -254,39 +251,29 @@ impl Validator for StringLookupValidator {
     }
 }
 
-/// `TRangeValidator` (row 59) — `TRangeValidator : public TFilterValidator`.
+/// A numeric validator: it gates input through a digit charset filter (an
+/// embedded [`FilterValidator`]), then on the final check parses the text and
+/// requires it to fall within `[min, max]`.
 ///
-/// A numeric validator: gates input through a digit charset filter (embedded
-/// [`FilterValidator`], D2 "Range IS-A Filter"), then on the final check parses
-/// the text and requires it to fall within `[min, max]`.
+/// Whether the field also transfers its value as an [`FieldValue::Int`] is
+/// off by default — enable it with [`set_transfer`](RangeValidator::set_transfer).
+/// `min`/`max` are `i32`. On an out-of-range final value, `error` pops up an
+/// OK-only message box naming the range.
 ///
-/// ## C++ origin
-/// `TRangeValidator(aMin, aMax)` selects its charset by sign of `aMin`:
-/// `validUnsignedChars = "+0123456789"` when `aMin >= 0`, else
-/// `validSignedChars = "+-0123456789"`. `isValid` overrides `TFilterValidator`'s
-/// (charset gate, then `sscanf("%ld")`, then range); `isValidInput` is **not**
-/// overridden — it is inherited from `TFilterValidator` (charset-only while
-/// typing, **no** range check). `transfer` does typed get/set of a `long` when
-/// `options & voTransfer` is set.
+/// # Turbo Vision heritage
 ///
-/// ## Deviations
-/// - Inheritance → embed-and-delegate (**D2**): a `FilterValidator` field, built
-///   from the sign-selected charset; `is_valid_input` forwards to it.
-/// - The `options & voTransfer` bit → a single `transfer_enabled: bool` (C++
-///   `options` defaults to 0, so transfer is **OFF** by default). No general
-///   `options` bitfield / `voFill` / `voReserved` is built — Range uses only this.
-/// - `transfer` (`TVTransfer`) → the typed **D10** [`transfer_get`] /
-///   [`transfer_set`] pair over [`FieldValue::Int`]. `vtDataSize` is moot (D10).
-/// - `min`/`max` are `i32` (C++ `int32_t`); C++'s `value` is `long` but `isValid`
-///   bounds it into `[min, max] ⊆ i32`, so [`FieldValue::Int`] is faithful.
-/// - Streaming (`read`/`write`/`name`) dropped project-wide (D12); destructor moot.
-/// - `error()` is live: `messageBox(mfError|mfOKButton, …)` via the
-///   async-modal-from-a-view seam (`ctx.request_message_box`, informational, OK-only).
-///
-/// [`transfer_get`]: Validator::transfer_get
-/// [`transfer_set`]: Validator::transfer_set
+/// Ports `TRangeValidator : public TFilterValidator`. The charset is selected
+/// by the sign of `min` (`"+0123456789"` unsigned, `"+-0123456789"` signed).
+/// `isValid` overrides the filter's (charset gate, then `sscanf("%ld")`, then
+/// range), while `isValidInput` is inherited unchanged (charset-only while
+/// typing — a partial out-of-range number is accepted as input). Inheritance
+/// becomes embed-and-delegate composition over a `FilterValidator` field
+/// (deviation D2); the untyped `transfer` becomes the typed
+/// `transfer_get`/`transfer_set` pair over [`FieldValue::Int`] (deviation D10);
+/// and the streaming machinery is dropped (deviation D12). The
+/// `options & voTransfer` bit becomes a single `transfer_enabled` bool.
 pub struct RangeValidator {
-    /// Embedded filter (D2: Range IS-A Filter) — the sign-selected digit charset.
+    /// Embedded filter — the sign-selected digit charset.
     filter: FilterValidator,
     min: i32,
     max: i32,
@@ -294,10 +281,10 @@ pub struct RangeValidator {
     transfer_enabled: bool,
 }
 
-/// Parse the leading numeric value of a range-validator field — the **D10**
-/// successor to C++ `sscanf(s, "%ld")`.
+/// Parse the leading numeric value of a range-validator field — the successor
+/// to C++ `sscanf(s, "%ld")`.
 ///
-/// ## Deliberate deviation (sscanf vs `str::parse`)
+/// ## sscanf vs `str::parse`
 /// C++ `sscanf("%ld")` parses a *leading* optional-sign+digits run and **ignores
 /// trailing junk** (`"12+3"` → `12`). Rust `str::parse::<i32>()` is **stricter**:
 /// it rejects trailing junk and a lone `"+"`/`"-"`. Because the charset filter
@@ -351,7 +338,7 @@ impl Validator for RangeValidator {
         self.filter.is_valid_input(s, suppress_fill)
     }
 
-    /// `TRangeValidator::transfer(…, vtGetData)` (D10) — when transfer is enabled,
+    /// `TRangeValidator::transfer(…, vtGetData)` — when transfer is enabled,
     /// the field text as [`FieldValue::Int`]. A failed parse falls back to
     /// `Int(0)`: C++ leaves `value` uninitialized on a failed `sscanf`, but
     /// transfer only runs on already-valid data, so this is unreachable-but-safe.
@@ -360,7 +347,7 @@ impl Validator for RangeValidator {
             .then(|| FieldValue::Int(parse_long(s).unwrap_or(0)))
     }
 
-    /// `TRangeValidator::transfer(…, vtSetData)` (D10) — format an [`Int`] back to
+    /// `TRangeValidator::transfer(…, vtSetData)` — format an [`Int`] back to
     /// text (`sprintf("%ld")`). `None` when transfer is disabled or `v` is not an
     /// `Int` (the input line then takes its Text path).
     ///
@@ -389,7 +376,7 @@ impl Validator for RangeValidator {
     }
 }
 
-// ── TPXPictureValidator (row 62) ─────────────────────────────────────────────
+// ── PXPictureValidator ───────────────────────────────────────────────────────
 
 /// `TPicResult` — the result of running a Paradox picture mask against an input.
 ///
@@ -894,33 +881,29 @@ impl<'a> Picture<'a> {
     }
 }
 
-/// `TPXPictureValidator` (row 62) — the Paradox picture-mask validator.
+/// The Paradox picture-mask validator.
 ///
 /// Validates and auto-fills input against a Paradox "picture" mask: `#` digit,
 /// `?` letter, `&` letter→uppercase, `!` any→uppercase, `@` any, `*` repeat,
 /// `{}`/`[]` required/optional groups, `,` alternatives, `;` literal-escape, and
-/// any other character is a literal. The matching engine is a recursive state
-/// machine ported verbatim from `tvalidat.cpp`.
+/// any other character is a literal. On an invalid final value, `error` pops up
+/// an OK-only message box.
 ///
-/// ## Design (the idiomatic-Rust crux)
-/// C++ keeps the scan cursors `index`/`jndex` as member variables purely to
-/// thread them through the mutually-recursive helpers; they are reset per
-/// `picture()` call, i.e. they are **per-call scratch**, not validator state.
-/// Our [`Validator`] methods are `&self` (object-safe — stored as
-/// `Box<dyn Validator>`), so the scanning state lives in a transient
-/// [`Picture`] created fresh per call. Operation is byte-level, faithful to the
-/// C++ `char*` machine (see [`Picture`]).
+/// The matching engine is a recursive state machine. C++ keeps the scan cursors
+/// `index`/`jndex` as member variables purely to thread them through the
+/// mutually-recursive helpers — per-call scratch, not validator state. Because
+/// the [`Validator`] methods are `&self` (object-safe), rstv keeps that scratch
+/// in a transient [`Picture`] created fresh per call. Operation is byte-level.
 ///
-/// ## Deviations / drops
-/// - Streaming (`read`/`write`/`build`/`name`, D12) and the destructor
-///   (`delete[] pic`) dropped.
-/// - C++ `isValid` copies `s` into a 256-byte stack buffer; we do **not**
-///   replicate the 256 cap (the `Vec` grows). Real inputs are maxLen-bounded, so
-///   this is a safe, documented deviation.
-/// - C++ guards `(pic == 0)`; our `pic` is always a (possibly empty) `String`,
-///   never null — an empty/invalid mask yields `Syntax`/`Empty` and the same
-///   booleans fall out, so no null check is needed.
-/// - `error()` is a row-63 `messageBox` breadcrumb (message preserved below).
+/// # Turbo Vision heritage
+///
+/// Ports `TPXPictureValidator`, with the matching engine taken verbatim from
+/// `tvalidat.cpp`. The streaming machinery is dropped (deviation D12). C++
+/// `isValid` copies the input into a 256-byte stack buffer; rstv lets the
+/// backing `String` grow instead (real inputs are length-bounded by the field).
+/// C++ guards a null `pic`; here `pic` is always a (possibly empty) `String`,
+/// and an empty or invalid mask yields the same `Syntax`/`Empty` results, so no
+/// null check is needed.
 pub struct PXPictureValidator {
     /// The mask (C++ `pic`, owned).
     pic: String,
@@ -1205,7 +1188,7 @@ mod tests {
         assert!(!vd(&*v, "no"));
     }
 
-    // ── FilterValidator (row 58) ──────────────────────────────────────────────
+    // ── FilterValidator ───────────────────────────────────────────────────────
 
     #[test]
     fn filter_accepts_all_valid_chars() {
@@ -1256,7 +1239,7 @@ mod tests {
         assert!(!v.is_valid("az"));
     }
 
-    // ── LookupValidator (row 60) ──────────────────────────────────────────────
+    // ── LookupValidator ───────────────────────────────────────────────────────
 
     #[test]
     fn lookup_validator_accepts_anything() {
@@ -1281,7 +1264,7 @@ mod tests {
         assert!(vd(&*v, "foo"));
     }
 
-    // ── StringLookupValidator (row 61) ────────────────────────────────────────
+    // ── StringLookupValidator ─────────────────────────────────────────────────
 
     #[test]
     fn string_lookup_accepts_exact_member() {
@@ -1336,7 +1319,7 @@ mod tests {
         assert!(!v.is_valid("y"));
     }
 
-    // ── RangeValidator (row 59) ───────────────────────────────────────────────
+    // ── RangeValidator ────────────────────────────────────────────────────────
 
     #[test]
     fn range_is_valid_in_range_accepts() {
@@ -1442,7 +1425,7 @@ mod tests {
         assert!(!v.is_valid("11"));
     }
 
-    // ── PXPictureValidator (row 62) ───────────────────────────────────────────
+    // ── PXPictureValidator ────────────────────────────────────────────────────
     //
     // Golden vectors hand-traced against `tvalidat.cpp`. If a port disagrees with
     // one, the port (or the trace) is wrong — re-read the C++, don't weaken the

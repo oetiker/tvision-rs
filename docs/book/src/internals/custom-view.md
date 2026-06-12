@@ -9,7 +9,7 @@ and let a macro write the boilerplate.
 
 ## The shape of a view
 
-A view in tvision is the port of C++ `TView` under deviation **D2**: the
+A view is the port of C++ `TView`: the
 inheritance hierarchy became a `View` **trait** plus a
 [`ViewState`](../api/tvision/view/struct.ViewState.html) **composition target**.
 Where C++ would write `class MyView : public TView`, you instead *embed* a
@@ -70,7 +70,7 @@ Three things worth noting:
   view's own extent is always `0,0 .. size.x,size.y`
   ([`get_extent`](../api/tvision/view/struct.ViewState.html#method.get_extent)).
 - **Colors come from a [`Role`](../api/tvision/theme/enum.Role.html), not a
-  palette.** Under deviation D7 there is no `getColor(n)` indirection — you ask
+  palette.** There is no `getColor(n)` indirection — you ask
   the theme for a role and get a [`Style`](../api/tvision/color/struct.Style.html)
   back. See [Theming & colors](../apps/theming.md).
 
@@ -95,7 +95,7 @@ consumed it so it does not route further.
 Other commonly overridden hooks:
 [`value`](../api/tvision/view/trait.View.html#method.value) /
 [`set_value`](../api/tvision/view/trait.View.html#method.set_value) to make a
-data control that participates in dialog gather/scatter (D10),
+data control that participates in dialog gather/scatter,
 [`size_limits`](../api/tvision/view/trait.View.html#method.size_limits) to impose
 a minimum size, and
 [`set_state`](../api/tvision/view/trait.View.html#method.set_state) to react when

@@ -1,75 +1,59 @@
-//! The `View` trait + `ViewState` — `TView` ported per deviations **D2/D5**.
+//! The [`View`] trait + [`ViewState`] — the base every widget builds on.
 //!
-//! `TView` is the root of TV's view hierarchy. D2 replaces inheritance with a
-//! [`View`] **trait** plus a [`ViewState`] **composition target**: every widget
-//! embeds a `ViewState` (TV's data members) and implements `View` (TV's virtual
-//! methods). D5 turns TV's packed flag words (`sf*`/`of*`/`gf*`/`dm*`) into
+//! A widget *embeds* a [`ViewState`] (its bounds, state flags, options, owner id,
+//! …) and *implements* [`View`] (draw, handle an event, report its value, …).
+//! The packed Turbo Vision flag words become the
 //! [`State`]/[`Options`]/[`GrowMode`]/[`DragMode`] **structs-of-bools**, and the
-//! `set*`/verb methods into plain field flips / small helpers.
+//! `set*`/verb methods become plain field flips or small helpers.
 //!
-//! # What lives here (row 23) vs. elsewhere
+//! # What lives here vs. elsewhere
 //!
-//! This module is the *abstract base*. Several `TView` methods have no home here
-//! because the data they need does not exist at a bare view:
+//! This module is the *abstract base*. Several operations have no home on a bare
+//! view because the data they need lives in the tree or the event loop:
 //!
-//! * **Up-tree / owner operations relocate to `TGroup` (row 26)** — `focus`,
-//!   `select`, `setCurrent`, sibling nav (`next`/`prev`/`makeFirst`/
-//!   `putInFrontOf`/`TopView`), and the coordinate transforms
-//!   (`makeGlobal`/`makeLocal`/`mouseInView`/`containsMouse`). D3 forbids
-//!   up-pointers, so these are driven *top-down* by the group.
+//! * **Up-tree / owner operations live on [`Group`](crate::view::Group)** —
+//!   focusing, selecting, sibling navigation, and the coordinate transforms.
+//!   Because a view has no up-pointer, the group drives these *top-down*. The
+//!   mouse-down auto-select that C++ puts in `TView::handleEvent` likewise lives
+//!   in the group's routing; the base [`View::handle_event`] is a no-op.
 //!
-//! * **`TView::handleEvent` is a no-op base here.** Its only body in C++ is the
-//!   mouse-down auto-select, which calls the up-tree `focus()` — so it relocates
-//!   to the group. Breadcrumb for row 26, verbatim:
-//!
-//!   > Row 26 (TGroup) must, on a mouse-down delivered to the top-most
-//!   > `ofSelectable` child that is **not already `sfSelected` and not
-//!   > `sfDisabled`**, select that child and pass the event through iff
-//!   > (`options.first_click` AND focus succeeded), else consume it
-//!   > (`ev.clear()`). This is the relocated body of `TView::handleEvent`
-//!   > (`tview.cpp`: `if(!(state & (sfSelected | sfDisabled)) && (options &
-//!   > ofSelectable))`); no row-23 test covers it.
-//!
-//! * **The `sfFocused` focus broadcast** (`cmReceivedFocus`/`cmReleasedFocus`,
-//!   `setState` case `sfFocused`) is fired by the row-26 focus logic via
-//!   `ctx.broadcast`, **not** by any base method here.
-//!
-//! * **Already provided elsewhere:** `setTimer`/`killTimer` →
+//! * **Already provided elsewhere:** timers →
 //!   [`Context::set_timer`](crate::view::Context::set_timer) /
-//!   [`kill_timer`](crate::view::Context::kill_timer); `getColor`/`getPalette`/
-//!   `mapColor` → views call `ctx.style(Role::…)` directly (D7), so the trait
-//!   has **no** color methods; `getClipRect` → subsumed by
-//!   [`DrawCtx::clip`](crate::view::DrawCtx::clip).
+//!   [`kill_timer`](crate::view::Context::kill_timer); colors → views call
+//!   `ctx.style(Role::…)` directly, so the trait has **no** color methods; the
+//!   clip rect → [`DrawCtx::clip`](crate::view::DrawCtx::clip).
 //!
-//! * **Deferred to later rows:** `execute`/`endModal` → TProgram/TDialog
-//!   (rows 31/34, D9); `dragView` + `moveGrow`/`change` → a capture handler at
-//!   TWindow (row 33, D9); `dataSize`/`getData`/`setData` → a typed
-//!   `value()`/`set_value()` protocol at D10/row 39.
+//! * **Modality and data transfer:** a modal loop runs through
+//!   [`Program::exec_view`](crate::app::Program::exec_view) and
+//!   [`Context::end_modal`](crate::view::Context::end_modal); window drag/resize
+//!   is a capture handler; getting/setting a view's contents is the typed
+//!   [`View::value`] / [`View::set_value`] protocol.
 //!
-//! * **Subsumed by the single loop / group teardown (D9/D3):** the blocking
-//!   event-pump helpers (`getEvent`/`putEvent`/`eventAvail`/`keyEvent`/
-//!   `mouseEvent`/`textEvent`) collapse into the one event loop (row 31, D9);
-//!   `resetCursor` (hardware-cursor placement) is the loop's job once the tree
-//!   gives absolute coords; `shutDown` (`hide(); owner->remove(this)`) becomes
-//!   `Drop` + the group's child removal (row 26, D3).
+//! * **Subsumed by the single event loop:** the blocking event-pump helpers
+//!   (`getEvent`/`putEvent`/`keyEvent`/`mouseEvent`/…), cursor placement, and
+//!   teardown collapse into the one loop plus `Drop` and the group's child
+//!   removal.
 //!
-//! * **Command-enable policy.** The program-global set
-//!   (`curCommandSet`/`enableCommand`/`disableCommand`/`commandEnabled`) lives at
-//!   TProgram (row 31) as its complement — a **disabled set** (denylist, D1):
-//!   every command, including app-minted ones, is enabled unless explicitly
-//!   disabled, and only the five window commands `initCommands` disables are
-//!   seeded. The C++ "commands > 255 are always enabled" rule is **subsumed**
-//!   (all commands are maskable; all default to enabled). Views write through
-//!   `Context::enable_command`/`disable_command` (deferred) and read through
-//!   the `Context::command_enabled` per-pump snapshot
+//! * **Command-enable policy.** The program-global command set lives on
+//!   [`Program`](crate::app::Program) as its complement — a **disabled set**
+//!   (denylist): every command, including app-minted ones, is enabled unless
+//!   explicitly disabled. Views write through
+//!   `Context::enable_command`/`disable_command` and read through the
+//!   `Context::command_enabled` per-pump snapshot
 //!   (`docs/design/command-enablement.md`).
 //!
-//! * **Dropped entirely (D8/D12):** the occlusion/damage family
-//!   (`drawView`/`exposed`/`drawHide`/`drawShow`/`drawUnder*`) and the TVWrite
-//!   occlusion writers — replaced by [`DrawCtx`] writes + whole-tree redraw +
-//!   diff; `ofBuffered`/`lock`/`unlock`/`buffer` and the `sfExposed` cache (D8);
-//!   streamable `read`/`write`/`build` (D12); `showMarkers`/`errorAttr` statics
-//!   (`errorAttr` → [`Role::Error`](crate::theme::Role); `showMarkers` dropped).
+//! * **Dropped entirely:** the occlusion/damage family
+//!   (`drawView`/`exposed`/`drawUnder*`, `ofBuffered`, the `sfExposed` cache) is
+//!   replaced by [`DrawCtx`] writes + whole-tree redraw + diff; the streamable
+//!   `read`/`write`/`build` is gone; `errorAttr` becomes
+//!   [`Role::Error`](crate::theme::Role).
+//!
+//! # Turbo Vision heritage
+//! Ports `TView` (`tview.cpp`/`views.h`), the root of the C++ view hierarchy.
+//! Inheritance becomes a trait plus a composed `ViewState` (deviation D2); the
+//! packed `sf*`/`of*`/`gf*`/`dm*` flag words become structs-of-bools (deviation
+//! D5); owner/sibling pointers become tree edges plus `ViewId` handles
+//! (deviation D3).
 
 use crate::command::{Command, CommandSet};
 use crate::data::FieldValue;
@@ -80,12 +64,12 @@ use crate::view::geometry::{Point, Rect};
 use crate::view::id::ViewId;
 
 // ---------------------------------------------------------------------------
-// D5 flag structs (struct-of-bools replacing the packed sf*/of*/gf*/dm* words)
+// Flag structs (struct-of-bools replacing the packed sf*/of*/gf*/dm* words)
 // ---------------------------------------------------------------------------
 
 /// View state flags — ports the `sf*` family (`views.h`).
 ///
-/// **Dropped:** `sfExposed` (`0x800`) — the D8 occlusion/visibility cache; under
+/// **Dropped:** `sfExposed` (`0x800`) — the occlusion/visibility cache; under
 /// whole-tree redraw + diff there is nothing to cache.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct State {
@@ -115,8 +99,8 @@ pub struct State {
 
 /// View option flags — ports the `of*` family (`views.h`).
 ///
-/// **Dropped:** `ofBuffered` (`0x040`) — D8 (per-view back buffer; we redraw the
-/// whole tree and diff). The `ofVersion*` bits are D12 (streaming) and never
+/// **Dropped:** `ofBuffered` (`0x040`) — the per-view back buffer (rstv redraws
+/// the whole tree and diffs). The `ofVersion*` bits are streaming-only and never
 /// existed in this family beyond the magiblot range, so nothing to drop there.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Options {
@@ -165,7 +149,7 @@ impl Options {
 ///   `tcluster.cpp:263`, `tlabel.cpp:94` — the only three readers in C++).
 ///
 /// C++ exposes this as a field read through `owner->phase`; rstv has no
-/// up-pointer (D3), so the phase rides the [`Context`](super::Context) as
+/// up-pointer, so the phase rides the [`Context`](super::Context) as
 /// transient routing state (see [`Context::phase`](super::Context::phase)).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Phase {
@@ -211,7 +195,7 @@ impl GrowMode {
 }
 
 /// Drag-mode flags — ports the `dm*` family (`views.h`). Controls dragging and
-/// the limits a dragged view is clamped to (consumed by the row-33 drag handler).
+/// the limits a dragged view is clamped to (consumed by the drag handler).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct DragMode {
     /// `dmDragMove` — the view can be moved by dragging.
@@ -244,13 +228,13 @@ impl DragMode {
     }
 }
 
-/// The four state flags a parent (`TGroup`, row 26) flips on a child through
+/// The four state flags a parent (`TGroup`) flips on a child through
 /// [`View::set_state`] — the named subset of the `sf*` family that the focus /
 /// activation machinery drives. Ports the `aState` argument of
-/// `TView::setState` / `TGroup::setState` for the cases that survive D8.
+/// `TView::setState` / `TGroup::setState` for the cases that survive.
 ///
 /// `sfVisible`/`sfExposed`/`sfShadow`/`sfCursor*` are **not** here: the C++
-/// `setState` cases for them are the dropped D8 occlusion/cursor side effects;
+/// `setState` cases for them are the dropped occlusion/cursor side effects;
 /// they are flipped directly on [`ViewState`] (`show`/`hide`/`show_cursor`/…),
 /// not through the propagating `set_state` hook.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -266,21 +250,27 @@ pub enum StateFlag {
 }
 
 // ---------------------------------------------------------------------------
-// ViewState — the composition target (TView's data members, D2/D5)
+// ViewState — the composition target (TView's data members)
 // ---------------------------------------------------------------------------
 
-/// The data every view owns — `TView`'s members, ported per D2/D5.
+/// The data every view owns — origin, size, cursor, state/option/grow/drag
+/// flags, owner id, and more.
 ///
 /// Widgets embed a `ViewState` (typically as a field named `state`) and reach
-/// its flags/geometry directly (`self.state.state.focused`, `self.state.size`),
-/// matching D5's field-access idiom. The data fields are `pub`; only
-/// `resize_balance` (the `calcBounds` rounding-recovery accumulator) and `id`
-/// (stamped by [`Group::insert`](crate::view::Group) — write-once, enforced by
+/// its flags/geometry directly (`self.state.state.focused`, `self.state.size`).
+/// The data fields are `pub`; only `resize_balance` (the `calcBounds`
+/// rounding-recovery accumulator) and `id` (stamped by
+/// [`Group::insert`](crate::view::Group) — write-once, enforced by
 /// `pub(crate)`) are not public.
 ///
 /// **Do not `derive(Default)`** — the all-false derive would leave the view
 /// invisible with no drag limit, a silent bug. Construct via [`ViewState::new`]
 /// (or [`Default`], which forwards to it with an empty rect).
+///
+/// # Turbo Vision heritage
+/// Holds `TView`'s data members (`tview.cpp`/`views.h`). Composing this struct
+/// into each widget replaces inheriting `TView`'s fields (deviation D2); its
+/// packed flag words become structs-of-bools (deviation D5).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ViewState {
     /// Top-left, relative to the owner. TV's `origin`.
@@ -297,7 +287,7 @@ pub struct ViewState {
     pub grow_mode: GrowMode,
     /// Drag-mode flags (`dm*`).
     pub drag_mode: DragMode,
-    /// Which opt-in event classes this view wants (D4). TV's `eventMask`; the
+    /// Which opt-in event classes this view wants. TV's `eventMask`; the
     /// unconditional `evMouseDown|evKeyDown|evCommand` classes are not opt-in
     /// here, so only `mouse_move`/`mouse_auto` survive.
     pub event_mask: EventMask,
@@ -306,7 +296,7 @@ pub struct ViewState {
     /// This view's global identity, set by [`Group::insert`](crate::view::Group)
     /// when the view enters a group; `None` before insertion. NOT an up-pointer
     /// — it is the view's own handle (like an ECS entity id), which lets a
-    /// handler/loop address it by id (D3).
+    /// handler/loop address it by id.
     pub(crate) id: Option<ViewId>,
     /// `calcBounds` rounding-recovery accumulator — TV's `resizeBalance`.
     /// Private: only `ViewState::calc_bounds` touches it.
@@ -319,7 +309,7 @@ impl ViewState {
     /// Faithful to the C++ ctor (`tview.cpp`): `state = sfVisible`,
     /// `dragMode = dmLimitLoY`, `helpCtx = hcNoContext`, everything else zero.
     /// `eventMask` is all-false here because its three TV bits
-    /// (`evMouseDown|evKeyDown|evCommand`) are unconditional under D4 and so are
+    /// (`evMouseDown|evKeyDown|evCommand`) are unconditional and so are
     /// not opt-in flags.
     pub fn new(bounds: Rect) -> Self {
         let mut s = ViewState {
@@ -366,8 +356,8 @@ impl ViewState {
     /// `TView::moveTo` — relocate the top-left to `(x, y)`, keeping the size.
     ///
     /// In C++ this routes through `locate`, whose `sizeLimits` clamp needs the
-    /// owner; that clamp relocates to row 26 (the group drives resize). Here it
-    /// reduces to recomputing bounds; the D8 redraw is the loop's whole-tree
+    /// owner; that clamp lives on the group (which drives resize). Here it
+    /// reduces to recomputing bounds; the redraw is the loop's whole-tree
     /// repaint.
     pub fn move_to(&mut self, x: i32, y: i32) {
         self.set_bounds(Rect::new(x, y, x + self.size.x, y + self.size.y));
@@ -376,7 +366,7 @@ impl ViewState {
     /// `TView::growTo` — keep the origin, set the size to `(x, y)`.
     ///
     /// Like [`move_to`](Self::move_to), `locate`'s owner-dependent `sizeLimits`
-    /// clamp relocates to row 26; here it is a plain bounds recompute.
+    /// clamp lives on the group; here it is a plain bounds recompute.
     pub fn grow_to(&mut self, x: i32, y: i32) {
         self.set_bounds(Rect::new(
             self.origin.x,
@@ -386,18 +376,18 @@ impl ViewState {
         ));
     }
 
-    // -- Verb helpers (D5; the dropped D8 redraw side effects noted inline) --
+    // -- Verb helpers (the dropped redraw side effects noted inline) --
 
     /// `TView::show` — make the view visible.
     ///
     /// `setState(sfVisible, True)`'s `drawShow`/`resetCurrent` side effects are
-    /// dropped under D8: the loop repaints the whole tree, and the group owns
-    /// `resetCurrent` (row 26).
+    /// dropped: the loop repaints the whole tree, and the group owns
+    /// `resetCurrent`.
     pub fn show(&mut self) {
         self.state.visible = true;
     }
 
-    /// `TView::hide` — make the view invisible (see [`show`](Self::show) re D8).
+    /// `TView::hide` — make the view invisible (see [`show`](Self::show)).
     pub fn hide(&mut self) {
         self.state.visible = false;
     }
@@ -405,7 +395,7 @@ impl ViewState {
     /// `TView::setCursor` — move the cursor to view-local `(x, y)`.
     ///
     /// The hardware-cursor push (`drawCursor`/`resetCursor`) needs the tree for
-    /// absolute coordinates, so it is deferred to the group/loop (row 26+).
+    /// absolute coordinates, so the group and event loop place the cursor.
     pub fn set_cursor(&mut self, x: i32, y: i32) {
         self.cursor = Point::new(x, y);
     }
@@ -558,8 +548,8 @@ fn range(val: i32, min: i32, max: i32) -> i32 {
 /// whose group has a 0×0 `size_limits`, bypassing the window's 16×6 minimum
 /// (the hazard at `window.rs`). As a free fn, `size_limits` dispatches virtually
 /// to the wrapper's override and `change_bounds` forwards to the group (faithful
-/// `TGroup::changeBounds`). The C++ `drawView`/shadow tail is moot under D8
-/// (whole-tree redraw). Backs [`TDeskTop::tile`/`cascade`](crate::desktop::Desktop).
+/// `TGroup::changeBounds`). The C++ `drawView`/shadow tail is moot under
+/// whole-tree redraw. Backs [`TDeskTop::tile`/`cascade`](crate::desktop::Desktop).
 pub(crate) fn locate(view: &mut dyn View, mut bounds: Rect, owner_size: Point) {
     let (min, max) = view.size_limits(owner_size);
     bounds.b.x = bounds.a.x + range(bounds.b.x - bounds.a.x, min.x, max.x);
@@ -615,12 +605,17 @@ fn grow(gm: GrowMode, s: i32, d: i32, i: &mut i32) {
 }
 
 // ---------------------------------------------------------------------------
-// View trait (TView's virtuals, D2)
+// View trait (TView's virtuals)
 // ---------------------------------------------------------------------------
 
-/// The behavior every view implements — `TView`'s virtual methods, ported per
-/// D2 (inheritance → trait). Widgets supply [`state`](View::state) /
+/// The behavior every view implements. Widgets supply [`state`](View::state) /
 /// [`state_mut`](View::state_mut) / [`draw`](View::draw); the rest default.
+///
+/// # Turbo Vision heritage
+/// Ports `TView`'s virtual methods (`tview.cpp`/`views.h`). C++ inheritance
+/// becomes this trait plus a composed [`ViewState`] (deviation D2); methods that
+/// reached up an `owner` pointer instead take the downward
+/// [`Context`](crate::view::Context) (deviation D3).
 // MAINTENANCE: when adding a defaulted method to this trait, also add a
 // forwarder entry to `tvision-macros/src/specs.rs` (`view()`) AND the
 // `expected` list in `tests/delegate_view.rs`. Required methods (no default)
@@ -636,29 +631,27 @@ pub trait View {
     /// `TView::draw` — paint the view through `ctx`. **Must be overridden.**
     ///
     /// The C++ base fills the extent with blanks in `getColor(1)`; with no
-    /// palette chain (D7) and no instantiable bare `TView`, there is no sensible
+    /// palette chain and no instantiable bare `TView`, there is no sensible
     /// default, so `draw` is required rather than defaulted.
     fn draw(&mut self, ctx: &mut DrawCtx);
 
     /// `TView::handleEvent` — the **base is a no-op** (the event passes through).
     ///
-    /// C++'s only base body is the mouse-down auto-select, which relocates to
-    /// `TGroup` (row 26) because it calls the up-tree `focus()` (D3). See the
-    /// module-level breadcrumb.
+    /// C++'s only base body is the mouse-down auto-select, which lives on
+    /// [`Group`](crate::view::Group) because it calls the up-tree `focus()`.
     fn handle_event(&mut self, _ev: &mut Event, _ctx: &mut Context) {}
 
     /// `TView::setState` — flip a propagating state flag and run its side
     /// effects. The base body (relocated from `tview.cpp`'s `setState`) flips the
     /// flag and, for [`StateFlag::Focused`], emits the focus broadcast
-    /// (`cmReceivedFocus`/`cmReleasedFocus`) via `ctx` — the **carryover #2**
-    /// focus broadcast that row 23 deferred to here.
+    /// (`cmReceivedFocus`/`cmReleasedFocus`) via `ctx`.
     ///
-    /// The C++ `message(owner, evBroadcast, …, this)` is reduced under D3/D4: only
-    /// the `owner` receiver is dropped (the broadcast goes to the loop's queue, not
-    /// a receiver); the `this` `infoPtr` payload is **carried** as the broadcast's
-    /// `source` (D4 amendment) — `self.state().id()`, the view whose focus changed.
-    /// `TGroup` (row 26) overrides this to also propagate to its children. The
-    /// dropped D8 `setState` cases (`sfVisible`/`sfExposed`/`sfShadow`/`sfCursor*`
+    /// The C++ `message(owner, evBroadcast, …, this)` is reduced: the `owner`
+    /// receiver is dropped (the broadcast goes to the loop's queue, not a
+    /// receiver); the `this` `infoPtr` payload is **carried** as the broadcast's
+    /// `source` — `self.state().id()`, the view whose focus changed.
+    /// `TGroup` overrides this to also propagate to its children. The
+    /// dropped `setState` cases (`sfVisible`/`sfExposed`/`sfShadow`/`sfCursor*`
     /// redraw/occlusion) have no analogue here.
     fn set_state(&mut self, flag: StateFlag, enable: bool, ctx: &mut Context) {
         self.state_mut().set_flag(flag, enable);
@@ -695,7 +688,7 @@ pub trait View {
     /// [`FileEditor`](crate::widgets::FileEditor) caches it for the re-validate).
     fn set_modal_answer(&mut self, _cmd: Command) {}
 
-    /// `TView::getData` — this control's typed value as a [`FieldValue`] (D10),
+    /// `TView::getData` — this control's typed value as a [`FieldValue`],
     /// or `None` for a non-data view. The successor to the untyped `getData`
     /// `memcpy`. Base: `None` (a bare view carries no transferable data); data
     /// controls (e.g. [`InputLine`](crate::widgets::InputLine)) override.
@@ -703,12 +696,12 @@ pub trait View {
         None
     }
 
-    /// `TView::setData` — load a typed [`FieldValue`] into this control (D10).
+    /// `TView::setData` — load a typed [`FieldValue`] into this control.
     /// Base: ignore (a non-data view has nowhere to put it); data controls
     /// override. A control ignores a `FieldValue` variant it does not understand.
     fn set_value(&mut self, _v: FieldValue) {}
 
-    /// `TView::setData` (context-aware scatter half, D10) — scatter a typed
+    /// `TView::setData` (context-aware scatter half) — scatter a typed
     /// [`FieldValue`] into this control with a `Context`. Default: calls
     /// [`set_value`](Self::set_value) (the context-free setter). Override when
     /// scatter needs deferred publishing (e.g. [`ListBox`](crate::widgets::ListBox)
@@ -741,7 +734,8 @@ pub trait View {
     }
 
     /// `TView::changeBounds` — apply `bounds`. Base just sets them (the C++
-    /// `drawView()` after is automatic under D8). `TGroup`/`TWindow` override to
+    /// `drawView()` after is automatic under whole-tree redraw).
+    /// `TGroup`/`TWindow` override to
     /// propagate the resize to children.
     fn change_bounds(&mut self, bounds: Rect) {
         self.state_mut().set_bounds(bounds);
@@ -752,7 +746,7 @@ pub trait View {
     /// `Context` for re-publishing state that depends on the new bounds (e.g. scrollbar
     /// params). Default implementation is a no-op.
     ///
-    /// B5: `TScroller::changeBounds` calls `setLimit(limit.x, limit.y)` after
+    /// `TScroller::changeBounds` calls `setLimit(limit.x, limit.y)` after
     /// `setBounds`; `TListViewer::changeBounds` re-publishes step params. Both are
     /// realized by overriding this hook in their respective concrete types.
     fn on_bounds_changed(&mut self, _ctx: &mut Context) {}
@@ -763,7 +757,7 @@ pub trait View {
     /// `None`.
     ///
     /// This is the top-down realization of the C++ focused-chain cursor walk
-    /// (`TView::resetCursor` / `TView::drawCursor`): the live loop (row 31) asks
+    /// (`TView::resetCursor` / `TView::drawCursor`): the live event loop asks
     /// the root for the absolute cursor each pass. [`Group`](crate::view::Group)
     /// overrides this to descend into its `current` child, accumulating the
     /// child's origin at each level.
@@ -780,7 +774,7 @@ pub trait View {
     /// identifies a view by id). A leaf has no descendants, so the base returns
     /// `None`; a [`Group`](crate::view::Group) overrides to search its children
     /// and recurse; a `Group`-embedding view delegates to its inner group. This is
-    /// the "tree-walk via Context" promised by D3 — the uniform way the event loop
+    /// the "tree-walk via Context" — the uniform way the event loop
     /// / a capture handler acts on a view it holds only by id (move a window's
     /// bounds, flip `sfDragging`, …).
     fn find_mut(&mut self, id: ViewId) -> Option<&mut dyn View> {
@@ -791,7 +785,7 @@ pub trait View {
     /// Remove the descendant named by `id` from whichever group owns it (faithful
     /// `destroy`/self-removal). Returns `true` if it was found+removed. Distinct
     /// from [`find_mut`](View::find_mut) because removal happens in the *owner's*
-    /// child `Vec` (a view cannot remove itself — it doesn't know its owner, D3)
+    /// child `Vec` (a view cannot remove itself — it doesn't know its owner)
     /// and must run the owning group's `reset_current`. Base: `false` (a leaf owns
     /// nothing).
     fn remove_descendant(&mut self, id: ViewId, ctx: &mut Context) -> bool {
@@ -803,12 +797,12 @@ pub trait View {
     /// — the tree-op behind `TLabel::focusLink` (`link->focus()`). Returns `true`
     /// if `id` was found in this subtree (selectable or not — finding it stops the
     /// walk). Distinct from [`find_mut`](View::find_mut) because focusing happens in
-    /// the *owning group* (a view cannot select itself within itself, D3): the
+    /// the *owning group* (a view cannot select itself within itself): the
     /// owning [`Group`](crate::view::Group) calls `focus_child` after applying the
     /// `ofSelectable` gate (faithful to C++ `focusLink`'s `link->options &
     /// ofSelectable` check). Base: `false` (a leaf owns nothing).
     ///
-    /// **Scope (breadcrumb):** this focuses the link *within its owning group*, not
+    /// **Scope:** this focuses the link *within its owning group*, not
     /// the full ancestor chain C++ `TView::focus` walks up. That is correct for the
     /// label/link sibling case (label and link share a group already on the focused
     /// path); a cross-group link would need an up-chain walk, which has no consumer.
@@ -821,19 +815,19 @@ pub trait View {
     /// `current` to the first visible+selectable child. Ports the C++ insert-time
     /// cascade `TGroup::insertBefore → p->show() → TView::setState(sfVisible) →
     /// owner->resetCurrent()` (tview.cpp:723), which rstv's ctx-less `Group::insert`
-    /// (D3) cannot run at insert. `exec_view` calls this on a freshly-inserted modal
+    /// cannot run at insert. `exec_view` calls this on a freshly-inserted modal
     /// BEFORE focusing it, so the modal's first selectable child is current on open
     /// (otherwise the modal is keyboard-dead until a nav event — see the seam note in
     /// `exec_view`). Base: no-op (a leaf has no internal currency); `Group` overrides;
     /// `Window`/`Dialog` delegate.
     fn reset_current(&mut self, _ctx: &mut Context) {}
 
-    /// Run any pending insert-time `resetCurrent` cascades in this subtree (A2).
+    /// Run any pending insert-time `resetCurrent` cascades in this subtree.
     ///
     /// Ports the deferred half of `TGroup::insertBefore` (tgroup.cpp:391):
     /// `p->hide()` → `insertView` → `if (saveState & sfVisible) p->show()`, where
     /// `show()` → `TView::setState(sfVisible)` runs `if (options & ofSelectable)
-    /// owner->resetCurrent()`. rstv's ctx-less `Group::insert` (D3) cannot run
+    /// owner->resetCurrent()`. rstv's ctx-less `Group::insert` cannot run
     /// that at insert; instead the insert marks the group `currency_dirty` and
     /// the pump / `Program::new` settles it here, BEFORE the next event pick.
     ///
@@ -847,7 +841,7 @@ pub trait View {
     fn settle_currency(&mut self, _ctx: &mut Context) {}
 
     /// Tree-op: set the `visible` flag of the descendant named by `id` from its
-    /// OWNING group, running the owning group's currency tail (A2). Ports the
+    /// OWNING group, running the owning group's currency tail. Ports the
     /// `TView::setState(sfVisible, enable)` tail `if (options & ofSelectable)
     /// owner->resetCurrent()` (tview.cpp) — which C++ runs in BOTH directions
     /// (show and hide). Returns `true` if `id` was found in this subtree.
@@ -855,7 +849,7 @@ pub trait View {
     /// Symmetric with [`remove_descendant`](View::remove_descendant) /
     /// [`focus_descendant`](View::focus_descendant): the flag write and the
     /// `reset_current` happen in the *owning group* (a view cannot re-current its
-    /// owner — it doesn't know it, D3). Backs
+    /// owner — it doesn't know it). Backs
     /// [`Deferred::SetVisible`](crate::view::Deferred::SetVisible) (the
     /// `TScroller::showSBar` → `show`/`hide` path). Base: `false` (a leaf owns
     /// nothing).
@@ -906,30 +900,29 @@ pub trait View {
     /// overrides.
     fn cascade(&mut self, _r: Rect) {}
 
-    /// The `TListViewer` read-sync broker hook (row 28). Defaulted no-op;
+    /// The `TListViewer` read-sync broker hook. Defaulted no-op;
     /// concrete list widgets override to delegate to
     /// [`list_viewer::apply_scroll`](crate::widgets::list_viewer::apply_scroll).
     /// The pump passes the freshly-read h/v scrollbar values (`None` if the bar
     /// is absent), resolved through [`View::value`].
     ///
-    /// This parallels the row-27 [`Deferred::SyncScrollerDelta`](crate::view::Deferred::SyncScrollerDelta)
+    /// This parallels the [`Deferred::SyncScrollerDelta`](crate::view::Deferred::SyncScrollerDelta)
     /// read-sync, but goes through a trait method instead of a hard downcast to a
     /// concrete struct: `TListViewer` is a *trait* (subclasses reuse its `draw`
     /// and override `get_text`/`is_selected`), so a `dyn View → dyn ListViewer`
-    /// downcast is impossible. The two read-sync mechanisms could later unify;
-    /// out of scope for row 28.
+    /// downcast is impossible. The two read-sync mechanisms could later unify.
     fn apply_list_scroll(&mut self, _h: Option<i32>, _v: Option<i32>, _ctx: &mut Context) {}
 
-    /// The `TMenuView` command-graying broker hook (row 49). Defaulted no-op;
+    /// The `TMenuView` command-graying broker hook. Defaulted no-op;
     /// menu views override to regray their menu tree against the program's live
-    /// **disabled-command set** (denylist, D1 — the argument is the set of
+    /// **disabled-command set** (denylist — the argument is the set of
     /// commands currently *disabled*; an item grays iff its command is in it).
     /// The free fn
     /// [`menu::menu_view::update_menu_commands`](crate::menu::menu_view::update_menu_commands)
     /// is the port of `TMenuView::updateMenu`.
     ///
     /// This is the §2 broker, the exact precedent of
-    /// [`apply_list_scroll`](View::apply_list_scroll): a menu view (a child, D3)
+    /// [`apply_list_scroll`](View::apply_list_scroll): a menu view (a child)
     /// cannot borrow the program's [`CommandSet`](crate::CommandSet) inline — the
     /// pump owns it, and storing a `&CommandSet` on [`Context`] would alias the
     /// apply-loop's `&mut disabled_commands` mutation (the
@@ -938,11 +931,11 @@ pub trait View {
     /// and the pump calls back here at apply time with the live set in hand. (A
     /// plain *read* needs no broker — `Context::command_enabled` answers from an
     /// owned per-pump snapshot.) The C++ `updateMenu` return-bool (`if changed
-    /// drawView`) is dropped — under whole-tree redraw (D8) the next pump
+    /// drawView`) is dropped — under whole-tree redraw the next pump
     /// repaints unconditionally.
     fn update_menu_commands(&mut self, _disabled_cmds: &CommandSet) {}
 
-    /// The `TMenuView` highlight write-back hook (rows 50–52). Defaulted no-op;
+    /// The `TMenuView` highlight write-back hook. Defaulted no-op;
     /// menu views ([`MenuBar`](crate::menu::MenuBar) /
     /// [`MenuBox`](crate::menu::MenuBox)) override to set their
     /// [`MenuViewState::current`](crate::menu::MenuViewState) — the **write-only
@@ -981,7 +974,7 @@ pub trait View {
     /// descendants); a [`Group`](crate::view::Group) overrides to walk its children
     /// accumulating origins, and a `Group`-embedding view delegates to its inner
     /// group. The successor to C++ reading `link->getBounds()` in the owner's frame
-    /// and then mapping up the owner chain — here the row-57 `THistory` open path
+    /// and then mapping up the owner chain — here the `THistory` open path
     /// needs the link's bounds in the **root/absolute** frame, because `exec_view`
     /// root-inserts the modal and `ModalFrame` hit-tests in absolute coords (the
     /// documented ROOT-INSERT + (0,0) caveat). Mirrors
@@ -1024,7 +1017,7 @@ mod tests {
                 ..Default::default()
             }
         );
-        // eventMask all-false (the three TV bits are unconditional under D4).
+        // eventMask all-false (the three TV bits are unconditional).
         assert_eq!(v.event_mask, EventMask::default());
         assert!(!v.event_mask.mouse_move && !v.event_mask.mouse_auto);
         assert_eq!(v.help_ctx, HelpCtx::NO_CONTEXT);

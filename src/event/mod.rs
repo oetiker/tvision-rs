@@ -1,23 +1,31 @@
-//! Events — deviation **D4** (TV's event records as a Rust sum type).
+//! Events — the [`Event`] enum and the key/mouse records that fill it.
 //!
-//! Turbo Vision's single `TEvent` (a tagged union over `evKeyDown`,
-//! `evMouse*`, `evCommand`/`evBroadcast`, `evNothing`; `system.h`) becomes an
-//! idiomatic [`Event`] enum matched arm-by-arm. The keyboard side lives in the
-//! [`key`] submodule ([`Key`], [`KeyEvent`], [`KeyModifiers`]); the sum type,
-//! the mouse record, and the trimmed [`EventMask`] opt-in live here.
+//! [`Event`] is the sum type a [`View`](crate::view::View) matches arm-by-arm:
+//! mouse presses/releases/moves/wheel, key presses, commands, broadcasts,
+//! timer expiries, and paste. The keyboard side lives in the [`key`] submodule
+//! ([`Key`], [`KeyEvent`], [`KeyModifiers`]); the mouse record ([`MouseEvent`])
+//! and the [`EventMask`] opt-in for expensive event classes live here.
 //!
-//! **`infoPtr` / `MessageEvent` (D4).** `TEvent`'s `MessageEvent` carried a
-//! `command` plus a `void* infoPtr` union used three unrelated ways. We do not
-//! reinstate the synchronous round-trip on the event itself: [`Event::Command`]
-//! carries **only** the [`Command`]. [`Event::Broadcast`] additionally carries an
-//! optional **`source: ViewId`** — the broadcast-subject successor to `infoPtr`,
-//! naming *which view this broadcast is about* (e.g. which scrollbar changed) as a
-//! resolvable [`ViewId`] rather than a `void*`. The timer-id integer payload (the
-//! third `infoPtr` use-case) gets its own typed variant [`Event::Timer`] rather
-//! than being forced into `Broadcast`'s `source` field, which carries a [`ViewId`],
-//! not an integer. The synchronous return-consuming `message()` primitive (the
-//! `cmCanCloseForm` veto and friends) is deferred to row 34, where it lives on the
-//! tree owner over `find_mut`, not on the event.
+//! Two events carry payloads worth naming up front. [`Event::Broadcast`] adds
+//! an optional **`source: ViewId`** naming *which view the broadcast is about*
+//! (e.g. which scrollbar changed) — a resolvable handle, `None` for broadcasts
+//! about no particular view. [`Event::Timer`] carries *which* [`TimerId`]
+//! expired.
+//!
+//! # Turbo Vision heritage
+//!
+//! Replaces the single `TEvent` tagged union (`system.h`) with a Rust sum type
+//! (deviation D4). C++ `MessageEvent` carried a `command` plus a `void* infoPtr`
+//! union used three ways; here a command event carries only the [`Command`], the
+//! "which view" case becomes [`Event::Broadcast`]'s resolvable [`ViewId`]
+//! `source`, and the timer-id case becomes the typed [`Event::Timer`] variant.
+//!
+//! One C++ primitive is deliberately not reproduced: the synchronous,
+//! return-valued `message()` round-trip (the `cmCanCloseForm` veto and
+//! friends). A view here is borrowed downward by the event loop and cannot
+//! synchronously call back into a sibling and read a return value, so there is
+//! no event that carries a reply. Code that needs that pattern queries the tree
+//! owner directly via [`find_mut`](crate::view::View::find_mut) instead.
 
 mod key;
 
@@ -29,16 +37,18 @@ use crate::command::Command;
 use crate::timer::TimerId;
 use crate::view::{Point, ViewId};
 
-/// A Turbo Vision event — deviation **D4**. Replaces the `TEvent` tagged union
-/// (`what` bitmask + `union { mouse; keyDown; message; }`; `system.h`) with a
-/// real Rust sum type, matched arm-by-arm instead of masked.
+/// An event a [`View`](crate::view::View) handles, matched arm-by-arm.
 ///
-/// The `ev*` event classes map onto the variants directly. `evNothing` and any
-/// *consumed* event are both [`Event::Nothing`] (see [`Event::clear`], the
-/// `clearEvent` equivalent). The `evMouseWheel` class is its own variant
-/// [`Event::MouseWheel`] (distinct from `evMouseDown`, faithful to
-/// `views.h`); wheel direction rides on the [`MouseEvent::wheel`] field,
-/// faithful to the C++ `MouseEventType::wheel`.
+/// `evNothing` and any *consumed* event are both [`Event::Nothing`] (see
+/// [`Event::clear`], the `clearEvent` equivalent). The mouse wheel is its own
+/// variant [`Event::MouseWheel`] (distinct from `MouseDown`); wheel direction
+/// rides on the [`MouseEvent::wheel`] field.
+///
+/// # Turbo Vision heritage
+///
+/// Replaces the `TEvent` tagged union (`what` bitmask + `union { mouse; keyDown;
+/// message; }`; `system.h`) with a real Rust sum type, matched arm-by-arm
+/// instead of masked (deviation D4).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
     /// `evMouseDown` — a mouse button was pressed.
@@ -63,11 +73,10 @@ pub enum Event {
     KeyDown(KeyEvent),
     /// `evCommand` — a command targeted at a specific receiver.
     Command(Command),
-    /// `evBroadcast` — a command broadcast to interested views. `source`
-    /// reinstates the C++ `message.infoPtr` for the broadcast-subject case (D4
-    /// amendment): it names *which view this broadcast is about* (e.g. which
-    /// scrollbar changed), as a resolvable [`ViewId`] rather than a `void*`.
-    /// `None` for broadcasts that are about no particular view (pump-internal
+    /// `evBroadcast` — a command broadcast to interested views. `source` names
+    /// *which view this broadcast is about* (e.g. which scrollbar changed), as a
+    /// resolvable [`ViewId`] (the successor to the C++ `message.infoPtr`). `None`
+    /// for broadcasts about no particular view (pump-internal
     /// `cmCommandSetChanged`).
     Broadcast {
         command: Command,
@@ -79,10 +88,10 @@ pub enum Event {
     /// In C++ the timer-expiry broadcast was `evBroadcast` with
     /// `message.command == cmTimerExpired` and `message.infoPtr ==` the
     /// `TTimerId`. That `infoPtr` is an **integer** payload (the timer id), not a
-    /// view subject, so — per the project's Phase-A precedent — it gets its own
-    /// typed variant rather than reusing [`Event::Broadcast`]'s `source` field
-    /// (which is for the view-subject `infoPtr` case only). Routed
-    /// **broadcast-class** (delivered to all views), faithful to `evBroadcast`.
+    /// view subject, so it gets its own typed variant rather than reusing
+    /// [`Event::Broadcast`]'s `source` field (which is for the view-subject case
+    /// only). Routed **broadcast-class** (delivered to all views), faithful to
+    /// `evBroadcast`.
     Timer(TimerId),
     /// `evNothing`, or an event that a handler has consumed via
     /// [`Event::clear`].
@@ -108,28 +117,31 @@ impl Event {
     }
 }
 
-/// A mouse event record — ports `MouseEventType` (`system.h`):
-/// `{ TPoint where; ushort eventFlags; ushort controlKeyState; uchar buttons;
-/// uchar wheel; }`. The `where` field (a Rust keyword) becomes `position`; the
-/// bit-words become struct-of-bools / enums per deviation **D5**; and
-/// `controlKeyState` reuses [`key::KeyModifiers`].
+/// A mouse event record: cursor position, the buttons down, wheel direction,
+/// click/move flags, and the modifiers held.
+///
+/// # Turbo Vision heritage
+///
+/// Ports `MouseEventType` (`system.h`). The `where` field (a Rust keyword)
+/// becomes `position`; the `mb*`/`me*` bit-words become struct-of-bools / enums
+/// (deviation D5); and `controlKeyState` reuses [`key::KeyModifiers`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MouseEvent {
     /// Cursor position, in the relevant coordinate space (`where`).
     pub position: Point,
-    /// Buttons currently down (`buttons`, the `mb*` bit-word; D5).
+    /// Buttons currently down (`buttons`).
     pub buttons: MouseButtons,
-    /// Wheel direction, if any (`wheel`, the `mw*` set).
+    /// Wheel direction, if any (`wheel`).
     pub wheel: MouseWheel,
-    /// Click/move flags (`eventFlags`, the `me*` bit-word; D5).
+    /// Click/move flags (`eventFlags`).
     pub flags: MouseEventFlags,
     /// Modifiers held during the event (`controlKeyState`; reuses
     /// [`key::KeyModifiers`]).
     pub modifiers: KeyModifiers,
 }
 
-/// The mouse buttons currently down — deviation **D5**, replacing the `buttons`
-/// `mb*` bit-word (`system.h`).
+/// The mouse buttons currently down. Ports the `buttons` `mb*` bit-word
+/// (`system.h`) as a struct-of-bools (deviation D5).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MouseButtons {
     /// Left button (`mbLeftButton`).
@@ -140,12 +152,11 @@ pub struct MouseButtons {
     pub middle: bool,
 }
 
-/// Mouse event flags — deviation **D5**, replacing the `eventFlags` `me*`
-/// bit-word (`system.h`).
+/// Mouse event flags: double/triple click and moved. Ports the `eventFlags`
+/// `me*` bit-word (`system.h`) as a struct-of-bools (deviation D5).
 ///
-/// `system.h` defines exactly three `me*` flags; there is **no** `meMouseWheel`
-/// (`evMouseWheel` is an event-*class* bit in `what`, not an `me*` flag). Wheel
-/// state therefore lives on [`MouseEvent::wheel`], not here.
+/// There is no wheel flag here — wheel state lives on [`MouseEvent::wheel`],
+/// because the wheel is an event *class*, not a flag.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MouseEventFlags {
     /// The press completed a double click (`meDoubleClick`).
@@ -156,8 +167,8 @@ pub struct MouseEventFlags {
     pub mouse_moved: bool,
 }
 
-/// Mouse wheel direction — deviation **D1**, replacing the `wheel` `mw*` closed
-/// set (`system.h`). [`MouseWheel::None`] means no wheel motion.
+/// Mouse wheel direction; [`MouseWheel::None`] means no wheel motion. Ports the
+/// `wheel` `mw*` closed set (`system.h`) as an enum.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum MouseWheel {
     /// No wheel motion.
@@ -173,13 +184,16 @@ pub enum MouseWheel {
     Right,
 }
 
-/// The per-view opt-in for *expensive* event classes — deviation **D4**, the
-/// surviving slice of the `ushort eventMask` bit-word (`TView::eventMask`).
+/// The per-view opt-in for *expensive* event classes.
 ///
 /// The always-on classes — mouse-down/up, key-down, command, broadcast — are
-/// **not** gated by this struct; they are delivered unconditionally. Per D4
-/// only the costly opt-ins (continuous mouse tracking, auto-repeat) are worth
-/// keeping, so the bit-word collapses to these two bools.
+/// **not** gated by this struct; they are delivered unconditionally. Only the
+/// costly opt-ins (continuous mouse tracking, auto-repeat) need a flag.
+///
+/// # Turbo Vision heritage
+///
+/// The surviving slice of the `ushort eventMask` bit-word (`TView::eventMask`),
+/// trimmed to the two opt-ins worth keeping (deviation D4).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct EventMask {
     /// Deliver [`Event::MouseMove`] (continuous tracking; `evMouseMove`).

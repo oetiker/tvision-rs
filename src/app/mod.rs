@@ -1,11 +1,12 @@
-//! Application layer — `TProgram` (row 31) and `TApplication` (row 32).
+//! The application layer: [`Program`], the application root that owns the
+//! single event loop, the timer queue, and the capture stack that powers
+//! modal dialogs; and [`Application`], a thin wrapper over it that adds
+//! window tiling/cascading and shell suspend.
 //!
-//! [`Program`] is the application root: it owns TV's single event loop (D9),
-//! making the row-20 timer queue and the row-21 capture stack live. See
-//! [`program`] for the module docs and the deferral breadcrumbs.
-//!
-//! [`Application`] is a thin D2 embed-and-delegate wrapper over [`Program`]
-//! that adds (deferred) `tile`/`cascade`/`dosShell` and `get_tile_rect`.
+//! # Turbo Vision heritage
+//! Ports `TProgram` / `TApplication` (`tprogram.cpp`, `tapplica.cpp`). C++
+//! `TApplication : TProgram` inheritance becomes embed-and-delegate composition
+//! (deviation D2) — one type holds the other and forwards to it.
 
 mod application;
 mod program;

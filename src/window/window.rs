@@ -1,4 +1,4 @@
-//! `TWindow` core — see the [module docs](super) for the deviation summary.
+//! [`Window`] core — see the [module docs](super) for the overview.
 
 use crate::capture::{CaptureFlow, CaptureHandler};
 use crate::command::Command;
@@ -8,17 +8,20 @@ use crate::view::{Context, DragMode, Group, GrowMode, Point, Rect, StateFlag, Vi
 use crate::widgets::ScrollBar;
 
 // ---------------------------------------------------------------------------
-// WindowFlags — D5 struct-of-bools for the `wf*` word (relocated from frame.rs)
+// WindowFlags
 // ---------------------------------------------------------------------------
 
-/// Window decoration flags — ports the `wf*` family (`dialogs.h`), D5.
+/// Window decoration flags: which of move / grow / close / zoom the window
+/// allows.
 ///
-/// Relocated here from `frame.rs`: these belong to `TWindow` (the `Frame` only
-/// renders a pushed-down copy). The window pushes its flags down to its frame
-/// via [`Frame::set_flags`](crate::frame::Frame::set_flags).
+/// These belong to the window (the `Frame` only renders a pushed-down copy);
+/// the window pushes them down to its frame via
+/// [`Frame::set_flags`](crate::frame::Frame::set_flags). The keyword-colliding
+/// `wfMove` becomes the raw identifier `r#move`.
 ///
-/// The keyword-colliding `wfMove` becomes the raw identifier `r#move`,
-/// consistent with the project's `r#move` / `r#union` precedent in geometry.
+/// # Turbo Vision heritage
+///
+/// Ports the `wf*` flag family (`dialogs.h`) as a struct-of-bools (deviation D5).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct WindowFlags {
     /// `wfMove` — the window can be moved by dragging its frame.
@@ -32,17 +35,21 @@ pub struct WindowFlags {
 }
 
 // ---------------------------------------------------------------------------
-// WindowPalette — the `palette` member (getPalette under D7)
+// WindowPalette
 // ---------------------------------------------------------------------------
 
-/// Which colour scheme the window draws in — ports the `wpBlueWindow` /
-/// `wpCyanWindow` / `wpGrayWindow` palette index (`views.h`).
+/// Which colour scheme the window draws in.
 ///
-/// Under D7 there is no `getPalette` returning a `TPalette*`; the scheme is
-/// recorded here and pushed down to the [`Frame`] child (D3), which selects the
-/// matching role family: `Blue` → `Role::FrameActive` / `FramePassive` /
-/// `FrameDragging` / `FrameIcon`; `Cyan` → `Role::FrameCyan*`; `Gray`
-/// (dialogs, row 34 gray theming) → `Role::FrameGray*`.
+/// The scheme is pushed down to the [`Frame`] child, which selects the matching
+/// role family: `Blue` → `Role::FrameActive` / `FramePassive` / `FrameDragging`
+/// / `FrameIcon`; `Cyan` → `Role::FrameCyan*`; `Gray` (used by dialogs) →
+/// `Role::FrameGray*`.
+///
+/// # Turbo Vision heritage
+///
+/// Replaces the `getPalette` returning a `TPalette*`; records the
+/// `wpBlueWindow` / `wpCyanWindow` / `wpGrayWindow` choice (`views.h`) as a
+/// theme-role selector instead (deviation D7).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum WindowPalette {
     /// `wpBlueWindow` — the default window scheme (the ctor default).
@@ -77,22 +84,27 @@ pub struct ScrollBarOptions {
 // Window
 // ---------------------------------------------------------------------------
 
-/// `TWindow` — a framed, selectable window: a [`Group`] that builds a
-/// [`Frame`](crate::frame::Frame) around itself (D2/D3, row 33).
+/// A framed, selectable window: a [`Group`] that builds a
+/// [`Frame`](crate::frame::Frame) around itself.
 ///
-/// Build with [`Window::new`], then drive it as any other [`View`]. See the
-/// [module docs](super) for the deviations and the 33c deferrals.
+/// Build with [`Window::new`], then drive it as any other [`View`].
+///
+/// # Turbo Vision heritage
+///
+/// Ports `TWindow`. Inheritance from `TGroup` becomes an embedded [`Group`]
+/// (deviation D2); the window pushes the frame's data down rather than letting
+/// the frame reach up (deviation D3).
 pub struct Window {
-    /// The embedded container (D2). `Window` *is-a* `TGroup`: its state, draw,
-    /// and event routing are the group's.
+    /// The embedded container. `Window` *is-a* `TGroup`: its state, draw, and
+    /// event routing are the group's.
     group: Group,
-    /// `TWindow::frame` — the frame child's id. 33c's `zoom` pushes
-    /// `set_zoomed` through it; kept live now by [`frame_id`](Self::frame_id).
+    /// `TWindow::frame` — the frame child's id. [`zoom`](Self::zoom) pushes
+    /// `set_zoomed` through it.
     frame_id: ViewId,
-    /// `TWindow::flags` (D5 struct-of-bools).
+    /// `TWindow::flags`.
     flags: WindowFlags,
-    /// `TWindow::zoomRect` — the saved bounds for un-zoom, consumed by 33c's
-    /// `zoom`. Kept live now by [`zoom_rect`](Self::zoom_rect).
+    /// `TWindow::zoomRect` — the saved bounds for un-zoom, consumed by
+    /// [`zoom`](Self::zoom).
     zoom_rect: Rect,
     /// `TWindow::number`.
     number: i16,
@@ -115,13 +127,12 @@ impl Window {
     ///    `growMode = gfGrowAll | gfGrowRel`.
     /// 6. `if( createFrame && (frame = createFrame(getExtent())) ) insert(frame)`.
     ///
-    /// **Frame data is pushed down at construction (D3, brief option (a)).** We
-    /// build the [`Frame`] **concretely** so we can call its owner-data-down
-    /// setters ([`set_title`](Frame::set_title)/[`set_flags`](Frame::set_flags)/
-    /// [`set_number`](Frame::set_number)) before boxing + inserting — no
-    /// post-insert downcast seam is needed at 33b.
+    /// **Frame data is pushed down at construction.** We build the [`Frame`]
+    /// **concretely** so we can call its owner-data-down setters
+    /// ([`set_title`](Frame::set_title)/[`set_flags`](Frame::set_flags)/
+    /// [`set_number`](Frame::set_number)) before boxing + inserting.
     ///
-    /// **A frame is mandatory at 33b:** `frame_id` is non-optional. The C++
+    /// **A frame is mandatory:** `frame_id` is non-optional. The C++
     /// `createFrame == 0` (frameless) path is the streamable case with no
     /// consumer here; supporting it would force an `Option<ViewId>` ripple for a
     /// path no caller exercises, so we always build the frame.
@@ -151,8 +162,8 @@ impl Window {
         let extent = group.state().get_extent();
 
         // NOTE: C++ TWindowInit::createFrame lets a subclass inject a custom
-        // TFrame. We build the Frame directly and push owner data into it (here at
-        // ctor; the 33c downcast seam reaches it post-insert for `set_zoomed`). A
+        // TFrame. We build the Frame directly and push owner data into it at the
+        // ctor; the downcast seam reaches it post-insert for `set_zoomed`. A
         // real createFrame/subclass-frame hook has no consumer yet; reintroduce it
         // when a subclass needs a non-default frame.
         let mut frame = Frame::new(extent);
@@ -172,9 +183,9 @@ impl Window {
         }
     }
 
-    // -- accessors (keep the D3 owner-data members live) --------------------
+    // -- accessors -----------------------------------------------------------
 
-    /// `TWindow::frame` — the frame child's id (33c's `zoom` pushes
+    /// `TWindow::frame` — the frame child's id ([`zoom`](Self::zoom) pushes
     /// `set_zoomed` through it).
     pub fn frame_id(&self) -> ViewId {
         self.frame_id
@@ -185,7 +196,7 @@ impl Window {
         self.flags
     }
 
-    /// `TWindow::zoomRect` — the saved bounds for un-zoom (consumed by 33c).
+    /// `TWindow::zoomRect` — the saved bounds for un-zoom.
     pub fn zoom_rect(&self) -> Rect {
         self.zoom_rect
     }
@@ -229,11 +240,11 @@ impl Window {
     // -- setters (subclass field overrides, e.g. TDialog) -------------------
 
     /// Override the decoration flags after construction (`TDialog::TDialog` sets
-    /// `flags = wfMove | wfClose`). Re-pushes to the frame child (D3
-    /// owner-data-down): the ctor pushes `flags` to the frame once, so a later
-    /// change must re-push or the frame would still draw the ctor's zoom/grow
-    /// icons. Resolves `frame_id` then downcast then [`Frame::set_flags`], the same
-    /// seam `zoom` uses to push `set_zoomed`.
+    /// `flags = wfMove | wfClose`). Re-pushes to the frame child: the ctor pushes
+    /// `flags` to the frame once, so a later change must re-push or the frame
+    /// would still draw the ctor's zoom/grow icons. Resolves `frame_id` then
+    /// downcast then [`Frame::set_flags`], the same seam `zoom` uses to push
+    /// `set_zoomed`.
     pub(crate) fn set_flags(&mut self, flags: WindowFlags) {
         self.flags = flags;
         if let Some(frame) = self
@@ -247,10 +258,10 @@ impl Window {
     }
 
     /// Override the colour scheme after construction (`TDialog::TDialog` sets
-    /// `palette = dpGrayDialog`). Re-pushes to the frame child (D3
-    /// owner-data-down, the [`set_flags`](Self::set_flags) pattern) so the frame
-    /// renders the matching role family: `Blue` → `Role::Frame*`, `Cyan` →
-    /// `Role::FrameCyan*`, `Gray` → `Role::FrameGray*` (row 34 theming).
+    /// `palette = dpGrayDialog`). Re-pushes to the frame child (the
+    /// [`set_flags`](Self::set_flags) pattern) so the frame renders the matching
+    /// role family: `Blue` → `Role::Frame*`, `Cyan` → `Role::FrameCyan*`,
+    /// `Gray` → `Role::FrameGray*`.
     pub(crate) fn set_palette(&mut self, palette: WindowPalette) {
         self.palette = palette;
         if let Some(frame) = self
@@ -271,9 +282,8 @@ impl Window {
 
     /// Insert a child view into the embedded group.
     ///
-    /// First production consumer: `THistoryWindow` (row 56), which inserts the
-    /// `HistoryViewer` after the scroll bars.  Also used by `Dialog` (row 34)
-    /// and the row-63 msgbox.
+    /// Used by `HistoryWindow` (which inserts the history viewer after the
+    /// scroll bars), by [`Dialog`](crate::dialog::Dialog), and by the message box.
     ///
     /// Exposed publicly so that example/application code can build custom windows
     /// with child views (the C++ equivalent is calling `insert()` from a
@@ -292,11 +302,10 @@ impl Window {
     }
 
     /// Make `id` the current (focused) child of the embedded group, so focused
-    /// (keyboard) events route to it. Test-only again: its one production caller
-    /// (`HistoryWindow`'s first-event currency workaround, row 57) was retired by
-    /// A2 — the `insertView→show→resetCurrent` cascade is now realized by
-    /// `exec_view`'s kept post-insert `reset_current` plus the pump's
-    /// `settle_currency` pass, so no per-site stand-in is needed.
+    /// (keyboard) events route to it. Test-only: the production
+    /// `insertView→show→resetCurrent` cascade is realized by `exec_view`'s
+    /// post-insert `reset_current` plus the pump's `settle_currency` pass, so no
+    /// per-site stand-in is needed.
     #[cfg(test)]
     pub(crate) fn select_child(&mut self, id: ViewId, ctx: &mut Context) {
         self.group
@@ -343,7 +352,7 @@ impl Window {
         self.group.insert(Box::new(sb))
     }
 
-    // -- zoom (33c) ----------------------------------------------------------
+    // -- zoom ----------------------------------------------------------------
 
     /// `TWindow::zoom` — toggle between the restored bounds and "filling the
     /// owner". Faithful to `twindow.cpp`:
@@ -353,8 +362,8 @@ impl Window {
     /// else                    locate( zoomRect );
     /// ```
     /// `maxSize` (= `owner->size`) is reached via the owner-extent-down channel
-    /// ([`Context::owner_size`](crate::view::Context::owner_size), D3) instead of
-    /// an up-pointer. The window's own [`size_limits`](View::size_limits) override
+    /// ([`Context::owner_size`](crate::view::Context::owner_size)) instead of an
+    /// up-pointer. The window's own [`size_limits`](View::size_limits) override
     /// (max = owner size, min = 16×6) is used.
     fn zoom(&mut self, ctx: &mut Context) {
         let owner_size = ctx.owner_size();
@@ -367,10 +376,10 @@ impl Window {
             let zr = self.zoom_rect;
             self.locate(zr, owner_size);
         }
-        // D3: the C++ TFrame::draw recomputes `owner->size == maxSize` every draw
+        // The C++ TFrame::draw recomputes `owner->size == maxSize` every draw
         // to pick the zoom vs unzoom icon. We can't read the owner from the frame,
         // so push the bool down through the downcast seam. Re-pushed in `locate`
-        // on every bounds change, so this stays current (B5, resolves TODO(33d)).
+        // on every bounds change, so this stays current.
         let zoomed = self.group.state().size == max;
         if let Some(frame) = self
             .group
@@ -385,7 +394,7 @@ impl Window {
     /// `TView::locate` — clamp `bounds`'s size to [`size_limits`](View::size_limits)
     /// then `change_bounds` iff it differs. `owner_size` feeds the (overridden)
     /// `size_limits`. The C++ `owner != 0` shadow/`drawUnderRect` tail is dropped
-    /// (D8: whole-tree redraw + diff).
+    /// (whole-tree redraw + diff makes it redundant).
     fn locate(&mut self, mut bounds: Rect, owner_size: Point) {
         let (min, max) = View::size_limits(self, owner_size);
         bounds.b.x = bounds.a.x + range(bounds.b.x - bounds.a.x, min.x, max.x);
@@ -393,11 +402,10 @@ impl Window {
         if bounds != self.group.state().get_bounds() {
             // Faithful: TGroup::changeBounds (resizes children by the delta).
             self.group.change_bounds(bounds);
-            // B5: re-push set_zoomed so the frame's zoom icon reflects the new
-            // size (C++ TFrame::draw recomputes `owner->size == maxSize` every
-            // draw; we push the bool through the downcast seam instead — D3).
-            // This resolves TODO(33d): the pushed bool went stale on owner resize
-            // / change_bounds; now re-pushed here, matching C++'s per-draw recompute.
+            // Re-push set_zoomed so the frame's zoom icon reflects the new size
+            // (C++ TFrame::draw recomputes `owner->size == maxSize` every draw;
+            // we push the bool through the downcast seam instead). Re-pushed here
+            // on every bounds change, matching C++'s per-draw recompute.
             let zoomed = self.group.state().size == max;
             if let Some(frame) = self
                 .group
@@ -410,9 +418,9 @@ impl Window {
         }
     }
 
-    // -- drag (33d-1) --------------------------------------------------------
+    // -- drag ----------------------------------------------------------------
 
-    /// Start a drag — the D9 replacement for `dragView`'s nested mouse loop
+    /// Start a drag — the replacement for `dragView`'s nested mouse loop
     /// (`tview.cpp`), reached from [`handle_event`](Self::handle_event) on a
     /// surviving title-bar / corner / middle-button `MouseDown`.
     ///
@@ -425,7 +433,7 @@ impl Window {
     ///
     /// `mouse_local` is the `MouseDown` position in **window-local** coords; adding
     /// the window's own `origin` gives the absolute mouse-down used to compute the
-    /// constant grab anchor (the 3a coordinate-frame assumption on [`DragCapture`]).
+    /// constant grab anchor (the coordinate-frame assumption on [`DragCapture`]).
     /// `owner->getExtent()` / `sizeLimits()` are read **here** (group-routed
     /// dispatch, so `ctx.owner_size()` is valid), never at drag time.
     fn start_drag(&mut self, id: ViewId, kind: DragKind, mouse_local: Point, ctx: &mut Context) {
@@ -435,10 +443,10 @@ impl Window {
 
         let origin = self.group.state().origin;
         let size = self.group.state().size;
-        let mouse_abs = mouse_local + origin; // window-local -> absolute (3a assumption)
+        let mouse_abs = mouse_local + origin; // window-local -> absolute
         // owner->getExtent() and sizeLimits(), via the owner-extent-down channel +
         // the window's size_limits override. owner_size is valid HERE (group-routed
-        // dispatch); the capture must NOT read it at drag time (DragCapture 3a).
+        // dispatch); the capture must NOT read it at drag time.
         let owner_size = ctx.owner_size();
         let limits = Rect::new(0, 0, owner_size.x, owner_size.y); // owner->getExtent()
         let (min, max) = View::size_limits(self, owner_size);
@@ -490,13 +498,12 @@ fn number_to_option(number: i16) -> Option<u8> {
 }
 
 // ---------------------------------------------------------------------------
-// Drag — the D9 capture-handler replacement for dragView's mouse loop
+// Drag — the capture-handler replacement for dragView's mouse loop
 // ---------------------------------------------------------------------------
 
-/// Which `dragView` form is running (mouse branch only; the keyboard `cmResize`
-/// sub-mode is deferred — see [`Window::handle_event`]'s `TODO(33d-2/later, D9)`).
-/// Selects how each `MouseMove` maps to new bounds (see
-/// [`DragCapture::compute_bounds`]).
+/// Which `dragView` form is running (mouse branch; the keyboard `cmResize`
+/// sub-mode runs through [`KeyboardResizeCapture`]). Selects how each
+/// `MouseMove` maps to new bounds (see [`DragCapture::compute_bounds`]).
 enum DragKind {
     /// `dmDragMove` — translate the whole window (title-bar / middle-button move).
     Move,
@@ -506,22 +513,18 @@ enum DragKind {
     GrowLeft,
 }
 
-/// The D9 replacement for `TView::dragView`'s nested `while(mouseEvent(...))`
-/// loop (`tview.cpp`), realized as a [`CaptureHandler`] (D9). Under D3 the *frame*
-/// cannot start the drag (it has no pointer to the window it would move); the
-/// [`Window`] starts it (it knows its own id and its owner's size) via
-/// [`Window::start_drag`], which pushes this handler.
+/// The replacement for `TView::dragView`'s nested `while(mouseEvent(...))` loop
+/// (`tview.cpp`), realized as a [`CaptureHandler`]. The *frame* cannot start the
+/// drag (it has no pointer to the window it would move); the [`Window`] starts
+/// it (it knows its own id and its owner's size) via [`Window::start_drag`],
+/// which pushes this handler.
 ///
 /// **Coordinate-frame assumption (mirrors [`ModalFrame`](crate::app::ModalFrame)).**
 /// The capture runs at the capture-stack level, *before* any group routing, so it
-/// sees mouse events in **absolute screen coordinates**. For row 31 the root
-/// `Group` covers the whole screen at `(0,0)` and the desktop is its child at
-/// `(0,0)`, so **absolute == root-local == desktop-local**, and a window's
-/// `origin` (relative to its owner) is in that same frame — the drag math assumes
-/// this. When a menu / status bar (Phase 4) shifts the desktop off `(0,0)`, this
-/// capture must translate absolute → desktop coords; revisit then. (The window
-/// cannot know the desktop's offset under D3, so we do not attempt it now — the
-/// same caveat `ModalFrame` carries.)
+/// sees mouse events in **absolute screen coordinates**. The root `Group` covers
+/// the whole screen at `(0,0)` and the desktop is its child at `(0,0)`, so
+/// **absolute == root-local == desktop-local**, and a window's `origin` (relative
+/// to its owner) is in that same frame — the drag math assumes this.
 struct DragCapture {
     window_id: ViewId,
     kind: DragKind,
@@ -590,8 +593,8 @@ impl CaptureHandler for DragCapture {
                 CaptureFlow::Consumed
             }
             Event::MouseUp(_) => {
-                // dragView's loop ends on mouse-up; clear sfDragging (deferred — a
-                // capture holds no &mut view) and pop ourselves.
+                // dragView's loop ends on mouse-up; clear sfDragging (via a
+                // request, since a capture holds no &mut view) and pop ourselves.
                 ctx.request_set_state(self.window_id, StateFlag::Dragging, false);
                 CaptureFlow::ConsumedPop
             }
@@ -608,12 +611,12 @@ impl CaptureHandler for DragCapture {
 }
 
 // ---------------------------------------------------------------------------
-// KeyboardResizeCapture — D9 replacement for dragView's keyboard branch
+// KeyboardResizeCapture — the replacement for dragView's keyboard branch
 // ---------------------------------------------------------------------------
 
-/// The D9 replacement for `TView::dragView`'s keyboard `else` branch
-/// (`tview.cpp:294-356`), reached from [`Window::handle_event`] on a
-/// `cmResize` command. Mirrors [`DragCapture`] for the mouse side.
+/// The replacement for `TView::dragView`'s keyboard `else` branch (`tview.cpp`),
+/// reached from [`Window::handle_event`] on a `cmResize` command. Mirrors
+/// [`DragCapture`] for the mouse side.
 ///
 /// State captured at push time (C++ `saveBounds`, `limits`, `sizeLimits`):
 /// - `save_bounds` — bounds at entry, restored on Esc.
@@ -856,8 +859,8 @@ impl View for Window {
     /// own commands + the focus-cycling keys. `TGroup::handleEvent(event)` runs
     /// **first** (faithful order), then:
     ///
-    /// * `cmZoom` (if `wfZoom`) → [`zoom`](Self::zoom) + `clearEvent` (33c). The
-    ///   C++ `infoPtr == 0 || == this` target guard is **not ported** — it is
+    /// * `cmZoom` (if `wfZoom`) → [`zoom`](Self::zoom) + `clearEvent`. The
+    ///   C++ `infoPtr == 0 || == this` target guard is **not reproduced** — it is
     ///   provably vacuous in this architecture, not merely "payloads dropped".
     ///   The frame posts `cmZoom`/`cmClose` with `infoPtr = owner` **only while
     ///   `sfActive`** (`tframe.cpp` 152/171), so the target is always the *active*
@@ -869,24 +872,24 @@ impl View for Window {
     ///   `infoPtr == 0 || == this` can never reject anything. **Trip-wire:** revisit
     ///   only if a future emitter targets a *non-active* window via a command.
     /// * `cmClose` (if `wfClose`) → `request_close` (the loop drains it into
-    ///   `remove_descendant`), or post `cmCancel` if `sfModal` (33d-1). Same vacuous
-    ///   target-guard reasoning as `cmZoom` (Phase A). Modal teardown machinery is
-    ///   row 34's; only the one `sfModal → cmCancel` branch is wired here.
+    ///   `remove_descendant`), or post `cmCancel` if `sfModal`. Same vacuous
+    ///   target-guard reasoning as `cmZoom`. The `sfModal → cmCancel` branch is
+    ///   wired here; the broader modal teardown lives in the dialog layer.
     /// * `kbTab` → `focusNext(False)` (forwards) + `clearEvent`.
     /// * `kbShiftTab` → `focusNext(True)` (backwards) + `clearEvent`. Shift+Tab
     ///   is `Key::Tab` + the `shift` modifier (there is no `Key::BackTab`).
     /// * A surviving title-bar / bottom-corner / middle-button `MouseDown` →
-    ///   [`start_drag`](Self::start_drag) (the D9 [`DragCapture`] replacement for
-    ///   `TFrame::dragWindow` → `dragView`'s mouse loop, 33d-1).
+    ///   [`start_drag`](Self::start_drag) (the [`DragCapture`] replacement for
+    ///   `TFrame::dragWindow` → `dragView`'s mouse loop).
     ///
-    /// * `cmResize` → [`KeyboardResizeCapture`] push (B5, D9). Enables `sfDragging`
+    /// * `cmResize` → [`KeyboardResizeCapture`] push. Enables `sfDragging`
     ///   and pushes a [`KeyboardResizeCapture`] that handles arrow keys until
     ///   Enter (accept) or Esc (restore). Faithful to `TWindow::handleEvent`'s
     ///   `cmResize` case + `TView::dragView`'s `else` (keyboard) branch.
     ///   `cmResize` is now enabled in [`set_state`](Self::set_state) when `sfSelected`
     ///   and `(wfMove || wfGrow)`.
-    /// * `cmSelectWindowNum` matching `number` → `select()` — **realized at 33d-2
-    ///   as a direct walk, NOT on the window.** The window number is an *integer*
+    /// * `cmSelectWindowNum` matching `number` → `select()` — **realized as a
+    ///   direct walk, NOT on the window.** The window number is an *integer*
     ///   argument (not a `ViewId`), so the `Broadcast` `source` substrate does not
     ///   serve it; instead `program_handle_event` asks the desktop
     ///   ([`Desktop::select_window_num`](crate::desktop::Desktop)) to select the
@@ -910,26 +913,26 @@ impl View for Window {
         // window, so a `cmClose` always reaches exactly its target (the same
         // trip-wire `cmZoom` documents above; revisit only if a future emitter
         // targets a non-active window via a command). Modal teardown (the
-        // `sfModal → cmCancel` branch) is wired here but row 34 owns the machinery.
+        // `sfModal → cmCancel` branch) is wired here; the dialog layer owns the
+        // broader machinery.
         if let Event::Command(c) = *ev
             && c == Command::CLOSE
             && self.flags.close
         {
             ev.clear(); // C++ clears first.
             if self.group.state().state.modal {
-                // sfModal: re-issue as cmCancel (row 34 owns modal teardown).
+                // sfModal: re-issue as cmCancel (the dialog layer owns modal teardown).
                 ctx.post(Command::CANCEL);
             } else if self.valid(Command::CLOSE, ctx) {
                 // close(): if valid(cmClose). The loop drains the request and runs
-                // `remove_descendant` (the close-removal channel, replacing the old
-                // "needs a close-removal channel" breadcrumb).
+                // `remove_descendant` (the close-removal channel).
                 if let Some(id) = self.group.state().id() {
                     ctx.request_close(id);
                 }
             }
         }
         // `cmResize` — faithful to `TWindow::handleEvent`'s cmResize case +
-        // `TView::dragView`'s keyboard else-branch (B5, D9). Pushes a
+        // `TView::dragView`'s keyboard else-branch. Pushes a
         // `KeyboardResizeCapture` that handles arrow keys until Enter/Esc.
         if let Event::Command(c) = *ev
             && c == Command::RESIZE
@@ -968,7 +971,7 @@ impl View for Window {
             self.group.focus_next(k.modifiers.shift, ctx);
             ev.clear();
         }
-        // Drag detection — the D9 replacement for `TFrame::dragWindow` →
+        // Drag detection — the replacement for `TFrame::dragWindow` →
         // `dragView`'s mouse loop. Runs AFTER group delegation: the desktop
         // delivered this `MouseDown` to the window in window-local coords; the
         // group routed it positionally to the frame, which leaves a title-bar /
@@ -1012,7 +1015,7 @@ impl View for Window {
         }
     }
 
-    /// `TWindow::setState` — for 33b: the **activation** half only.
+    /// `TWindow::setState` — the **activation** half.
     ///
     /// C++:
     /// ```cpp
@@ -1027,19 +1030,15 @@ impl View for Window {
     /// children), then — iff `Selected` — call `Group::set_state(Active)`. That
     /// `Active` propagation flips **every** child (incl. the frame) active /
     /// passive, so the explicit C++ `frame->setState(sfActive)` is redundant
-    /// here (as `frame.rs` notes) — we do NOT push the frame manually.
+    /// here — we do NOT push the frame manually.
     ///
-    /// **DIVERGENCE from C++ (the spec reviewer will check this):** C++
-    /// `TWindow::setState` enables the **full set** `{cmNext, cmPrev, cmResize if
-    /// (grow|move), cmClose if close, cmZoom if zoom}` atomically on `sfSelected`.
-    /// We enable every member **whose handler exists** ("enable only commands whose
-    /// handlers exist" staging; enabling an inert command — routed to a window that
-    /// ignores it, or filtered — is a worse state than leaving it disabled):
-    ///   cmNext, cmPrev: UNCONDITIONAL (handler in `TDeskTop::handleEvent`, 33d-2).
-    ///   33c: cmZoom (if `wfZoom`; handler in [`handle_event`](Self::handle_event)).
-    ///   33d-1: cmClose (if `wfClose`; handler in `handle_event`).
-    ///   B5: cmResize (if `wfMove || wfGrow`; handler in `handle_event` →
-    ///       [`KeyboardResizeCapture`]).
+    /// On `sfSelected`, the window-command set is enabled (and disabled when
+    /// deselected), matching C++:
+    ///   - `cmNext`, `cmPrev`: unconditional (handled by the desktop).
+    ///   - `cmZoom`: if `wfZoom` (handled in [`handle_event`](Self::handle_event)).
+    ///   - `cmClose`: if `wfClose` (handled in `handle_event`).
+    ///   - `cmResize`: if `wfMove || wfGrow` (handled in `handle_event` →
+    ///     [`KeyboardResizeCapture`]).
     fn set_state(&mut self, flag: StateFlag, enable: bool, ctx: &mut Context) {
         self.group.set_state(flag, enable, ctx);
         if flag == StateFlag::Selected {
@@ -1050,7 +1049,7 @@ impl View for Window {
             // cmNext/cmPrev are UNCONDITIONAL (C++ `windowCommands += cmNext; +=
             // cmPrev;` has NO flag guard — every selectable window can be cycled),
             // so they do NOT go through the flag-gated `toggle` closure. Their
-            // handler is `TDeskTop::handleEvent` (33d-2).
+            // handler is `TDeskTop::handleEvent`.
             if enable {
                 ctx.enable_command(Command::NEXT);
                 ctx.enable_command(Command::PREV);
@@ -1060,7 +1059,6 @@ impl View for Window {
             }
             // The flag-gated subset: cmClose (if wfClose), cmZoom (if wfZoom),
             // cmResize (if wfMove || wfGrow) — all handled in handle_event.
-            // B5: cmResize is now enabled (keyboard resize capture implemented).
             let mut toggle = |cmd: Command, cond: bool| {
                 if cond {
                     if enable {
@@ -1203,13 +1201,12 @@ mod tests {
         );
     }
 
-    /// The frame received the pushed-down title / flags / number at construction
-    /// (D3 owner-data-down at ctor).
+    /// The frame received the pushed-down title / flags / number at construction.
     #[test]
     fn new_pushes_frame_data_down() {
         let mut w = window_with_frame();
         let idx = w.group.index_of_pub(w.frame_id()).unwrap();
-        // Render the (active) frame and read its title back off row 0.
+        // Render the (active) frame and read its title back off the top row.
         w.group.child_state_mut(idx).state.active = true;
         let theme = Theme::classic_blue();
         let mut buf = Buffer::new(40, 15);
@@ -1239,8 +1236,8 @@ mod tests {
         assert_eq!(max, Point::new(80, 25), "max is the owner size");
     }
 
-    /// The 33b correctness blind spot: an owner-driven resize must honour the
-    /// window's 16×6 floor (because `calc_bounds` routes through the *window's*
+    /// An owner-driven resize must honour the window's 16×6 floor (because
+    /// `calc_bounds` routes through the *window's*
     /// `size_limits`, NOT the group's 0×0). Shrink the window's right/bottom
     /// edges below the floor via `calc_bounds` and assert it clamps to ≥ 16×6.
     #[test]
@@ -1425,11 +1422,11 @@ mod tests {
         insta::assert_snapshot!(screen.snapshot());
     }
 
-    // -- 8. setState enables/disables cmZoom + cmClose (33a channel) ----------
+    // -- 8. setState enables/disables cmZoom + cmClose ------------------------
 
     /// Selecting a `wfZoom`/`wfClose` window queues `(Command::ZOOM, true)` and
     /// `(Command::CLOSE, true)` on the command-change channel; deselecting queues
-    /// the matching `false` pairs (33d-1 added cmClose alongside cmZoom).
+    /// the matching `false` pairs.
     #[test]
     fn set_state_select_enables_and_disables_cm_zoom_and_close() {
         let mut w = window_with_frame(); // flags.zoom = true, flags.close = true
@@ -1476,7 +1473,7 @@ mod tests {
 
     // -- 9. zoom() toggles bounds + pushes the frame zoomed bool --------------
 
-    /// Read the frame child's pushed `zoomed` flag through the 33c seam.
+    /// Read the frame child's pushed `zoomed` flag through the downcast seam.
     fn frame_zoomed(w: &mut Window) -> bool {
         w.group
             .child_mut(w.frame_id())
@@ -1618,7 +1615,7 @@ mod tests {
         );
     }
 
-    // -- 11. drag-start detection (33d-1, unit; no pump) ----------------------
+    // -- 11. drag-start detection (unit; no pump) -----------------------------
 
     use crate::event::{MouseButtons, MouseEvent};
 
@@ -1786,7 +1783,7 @@ mod tests {
         assert_eq!(r, Rect::new(10, 5, 30, 13), "in-range move passes through");
     }
 
-    // -- View::number override (33d-2) ---------------------------------------
+    // -- View::number override ------------------------------------------------
 
     #[test]
     fn view_number_some_when_positive_none_when_zero() {

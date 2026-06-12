@@ -1,8 +1,10 @@
-//! Screen-cell storage and (later) the render back-buffer + diff.
+//! Screen-cell storage, the render back-buffer, and the cell diff.
 //!
-//! Row 6 lands [`Cell`] now. The `DrawBuffer` (row 7), the vendored ratatui
-//! `Buffer` + cell diff (row 18, D8), and the whole-tree redraw engine follow in
-//! this module.
+//! [`Cell`] is one character cell; [`DrawBuffer`] is a scratch row a view fills
+//! and blits; [`Buffer`] is the full in-memory screen grid that the whole view
+//! tree paints into each frame, then diffs against the previous frame so only
+//! changed cells reach the terminal. The [`snapshot`](crate::screen::snapshot)
+//! module renders a `Buffer` to a deterministic golden string for tests.
 
 mod buffer;
 mod cell;

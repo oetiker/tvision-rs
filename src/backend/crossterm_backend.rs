@@ -1,4 +1,4 @@
-//! Crossterm backend — production terminal implementation (deviation **D11**).
+//! Crossterm backend — the production terminal implementation.
 //!
 //! Wraps `crossterm` for terminal I/O behind the [`Backend`] trait.
 //!
@@ -7,9 +7,8 @@
 //!
 //! ## Terminal lifecycle (RAII)
 //! `CrosstermBackend::new()` performs the full terminal setup — raw mode,
-//! alternate screen, mouse capture — mirroring the C++ `TApplication`
-//! constructor chain (`TScreen` does the init there). `Drop` restores the
-//! terminal (best-effort, errors ignored), so a TV program never hand-rolls
+//! alternate screen, mouse capture — at construction; `Drop` restores the
+//! terminal (best-effort, errors ignored), so an rstv program never hand-rolls
 //! terminal setup.
 //!
 //! Two process-global hooks (installed once, on the first construction) keep
@@ -30,8 +29,7 @@
 //! lifetime (a later restore on an already-restored terminal is a no-op).
 //!
 //! ## Clipboard
-//! The clipboard is the [`ClipboardChain`] (see `backend::clipboard` — the
-//! `TClipboard` shape, `tclipbrd.cpp:26-44`):
+//! The clipboard is the [`ClipboardChain`] (see `backend::clipboard`):
 //!
 //! - **Copy** (`set_clipboard`): OS-native via arboard (`os-clipboard`
 //!   feature, on by default) → OSC 52 escape sequence queued on the normal
@@ -39,23 +37,29 @@
 //!   Returns `true` only on the native rung (trait contract: `false` = fell
 //!   back to internal).
 //! - **Paste** (`get_clipboard`): OS-native → internal buffer → `None`.
-//!   There is no OSC 52 *read* rung — the capability probes it needs
-//!   (`termio.cpp:314-330`) require owning the input parser, which crossterm
-//!   does.
+//!   There is no OSC 52 *read* rung — the capability probes it needs require
+//!   owning the input parser, which crossterm (not rstv) owns.
 //!
 //! **SSH story:** with no display, arboard init fails and the chain runs
 //! without its native rung — but the OSC 52 emit still reaches the *local*
 //! terminal's clipboard on copy, which is exactly what a remote TUI wants.
 //! Paste over SSH falls back to the internal buffer (copies made inside the
-//! app) or the terminal's own bracketed paste (backlog C9).
+//! app) or the terminal's own bracketed paste, which arrives as
+//! [`Event::Paste`](crate::event::Event::Paste).
 //!
 //! ## Color depth
-//! `ColorDepth` selects which rung of the quantization ladder (row 5) to use
-//! when mapping our `Color` enum to crossterm colors.
+//! `ColorDepth` selects which rung of the quantization ladder to use when
+//! mapping our `Color` enum to crossterm colors.
 //!
 //! ## Key/event translation
 //! `crossterm::event::Event` is translated to our `Event` enum.  Only
 //! `KeyEventKind::Press` and `Repeat` are translated; `Release` is ignored.
+//!
+//! # Turbo Vision heritage
+//! Replaces the platform driver behind `TScreen` / `THardwareInfo` and the
+//! Unix terminal I/O of `unixcon.cpp` / `termio.cpp` with a crossterm-backed
+//! [`Backend`]. Terminal setup that C++ does in the `TApplication` constructor
+//! chain is RAII here: construction sets the terminal up, `Drop` tears it down.
 
 use std::io::{self, Stdout, Write as _};
 use std::time::Duration;
@@ -86,7 +90,7 @@ use crate::view::Point;
 
 /// Terminal color capability level.
 ///
-/// Controls which rung of the quantization ladder (row 5) is used when mapping
+/// Controls which rung of the quantization ladder is used when mapping
 /// `Color` values to crossterm colors.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ColorDepth {
@@ -111,6 +115,10 @@ pub enum ColorDepth {
 /// terminal setup (raw mode, alternate screen, mouse capture) and `Drop`
 /// restores the terminal — see the module-level `## Terminal lifecycle (RAII)`
 /// note.
+///
+/// # Turbo Vision heritage
+/// The production realization of the [`Backend`] seam — see the module-level
+/// heritage note for the `TScreen` / terminal-driver lineage.
 pub struct CrosstermBackend {
     out: Stdout,
     color_depth: ColorDepth,
@@ -195,9 +203,7 @@ fn start_signal_thread() -> io::Result<()> {
         if let Some(signum) = signals.forever().next() {
             restore_terminal();
             // `128 + signum` is the shell convention for death-by-signal
-            // (130 SIGINT, 143 SIGTERM, 129 SIGHUP).  Deliberate improvement
-            // over the pre-B7 example code, which hard-coded 130 for all
-            // three signals.
+            // (130 SIGINT, 143 SIGTERM, 129 SIGHUP).
             std::process::exit(128 + signum);
         }
     });
@@ -208,8 +214,7 @@ fn start_signal_thread() -> io::Result<()> {
 impl CrosstermBackend {
     /// Construct a `CrosstermBackend` writing to stdout, performing the full
     /// terminal setup: enable raw mode, enter the alternate screen, enable
-    /// mouse capture (the C++ `TApplication`/`TScreen` constructor-chain
-    /// equivalent).  Also installs the process-global restore hooks (panic
+    /// mouse capture.  Also installs the process-global restore hooks (panic
     /// hook + unix signal thread) on first use.
     ///
     /// On error the partial setup is rolled back before returning.  The
@@ -445,7 +450,7 @@ fn xterm16_to_crossterm(idx: u8) -> CColor {
 
 /// Map `Style` modifiers to crossterm `Attribute`s.
 ///
-/// `no_shadow` is an internal rstv marker (D6) with no crossterm equivalent;
+/// `no_shadow` is an internal rstv marker with no crossterm equivalent;
 /// it is silently ignored here.
 fn map_attributes(style: Style) -> Vec<Attribute> {
     let m = style.modifiers;
@@ -478,22 +483,25 @@ fn map_attributes(style: Style) -> Vec<Attribute> {
 
 /// Translate a `crossterm::event::Event` to our `Event`.
 ///
-/// Returns `None` for event types we don't model yet (resize, focus).
+/// Returns `None` for events with no `Event` counterpart: resize (handled by
+/// polling `backend.size()` in the pump) and terminal focus changes.
 fn translate_event(ev: crossterm::event::Event) -> Option<Event> {
     match ev {
         crossterm::event::Event::Key(k) => translate_key(k),
         crossterm::event::Event::Mouse(m) => translate_mouse(m),
         crossterm::event::Event::Resize(_, _) => {
-            // NOTE: resize is handled without an Event variant — the pump
+            // Resize is handled without an Event variant — the pump
             // (`Program::pump_once`) polls `backend.size()` each iteration and
-            // calls `renderer.resize` + `group.change_bounds` on change.  This
-            // is the D9 realization of `setScreenMode`/`cmScreenChanged`;
-            // deliberately no `Event::Resize` variant (avoids enum churn).
+            // calls `renderer.resize` + `group.change_bounds` on change. This
+            // is the equivalent of `setScreenMode`/`cmScreenChanged`, done by
+            // polling rather than via an `Event::Resize` variant (avoids enum
+            // churn).
             None
         }
         crossterm::event::Event::Paste(text) => Some(Event::Paste(text)),
         crossterm::event::Event::FocusGained | crossterm::event::Event::FocusLost => {
-            // TODO(focus-events): not modeled yet.
+            // Terminal focus-gained/lost has no Turbo Vision counterpart, so
+            // there is no `Event` variant for it — these are dropped.
             None
         }
     }

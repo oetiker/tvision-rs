@@ -1,21 +1,31 @@
-//! Help contexts — deviation **D1** (identity as a namespaced static string).
+//! Help contexts.
 //!
-//! Ports the `hc*` help-context family (`views.h`). Exactly like [`Command`],
-//! a help context's *identity* changes from TV's hand-assigned `int` (used only
-//! to index a help file's topic table) to a **namespaced static string**:
-//! [`HelpCtx`] is an opaque newtype around `&'static str`. App- and view-defined
-//! contexts mint their own collision-safely via [`HelpCtx::custom`] under their
-//! own dotted prefix.
+//! A [`HelpCtx`] identifies which help topic applies to the focused view — the
+//! status line and a help viewer use it to show context-sensitive help. Like
+//! [`Command`], a help context's identity is a **namespaced static string**, so
+//! app- and view-defined contexts mint their own collision-safely via
+//! [`HelpCtx::custom`] under their own dotted prefix.
 //!
 //! [`Command`]: crate::command::Command
+//!
+//! # Turbo Vision heritage
+//!
+//! Ports the `hc*` help-context family (`views.h`). C++ contexts were plain
+//! `int`s used to index a help file's topic table; here the identity is a
+//! namespaced `&'static str` instead (deviation D1).
 
-/// A Turbo Vision help context. Faithful to TV's `hc*` family (`views.h`),
-/// which were plain `int`s; per D1 the identity is now a **namespaced static
-/// string** so app/view-defined contexts cannot collide.
+/// Identifies which help topic applies to the focused view.
 ///
-/// Equality and hashing compare the string *contents*.
+/// A help context's identity is a **namespaced static string** so app/view-
+/// defined contexts cannot collide. Equality and hashing compare the string
+/// *contents*.
 ///
-/// [`Default`] is [`HelpCtx::NO_CONTEXT`] (TV's `hcNoContext`).
+/// [`Default`] is [`HelpCtx::NO_CONTEXT`].
+///
+/// # Turbo Vision heritage
+///
+/// Faithful to the `hc*` family (`views.h`), which were plain `int`s; here the
+/// identity is a namespaced `&'static str` (deviation D1).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct HelpCtx(&'static str);
 

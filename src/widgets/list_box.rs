@@ -1,38 +1,37 @@
-//! `TListBox` — faithful Rust port of `tlistbox.cpp` (row 48, MECHANICAL).
-//!
-//! `TListBox` is the first **concrete** `TListViewer`: it holds a `Vec<String>`
-//! of items and delegates all draw/event/nav logic to the row-28 free functions
-//! via the [`ListViewer`] trait. Only [`get_text`](ListViewer::get_text) is
+//! A concrete list box over a `Vec<String>`: the first concrete
+//! [`ListViewer`](crate::widgets::list_viewer::ListViewer). It holds the items
+//! and delegates all draw/event/nav logic to the shared list-viewer functions via
+//! the [`ListViewer`] trait. Only [`get_text`](ListViewer::get_text) is
 //! overridden; `is_selected` and `select_item` inherit the base behavior
 //! (`item == focused` / broadcast `cmListItemSelected`).
 //!
-//! ## Population wiring
+//! # Population wiring
 //!
-//! The ctor sets fields only (empty `items`, `range` 0) — no `Context` is
-//! available at construction time. After insertion into a group:
+//! The constructor sets fields only (empty items, range 0) — no [`Context`] is
+//! available at construction. After insertion into a group:
 //!
 //! 1. Call [`new_list`](ListBox::new_list) to populate the items and publish the
-//!    v-bar range + focus position.
+//!    vertical-bar range + focus position.
 //! 2. Call [`list_viewer::update_steps`](crate::widgets::list_viewer::update_steps)
 //!    to publish the page/arrow step sizes to the bars.
 //!
-//! Missing step 1 leaves `range == 0` (empty display). Missing step 2 leaves the
-//! scrollbar thumb unsized. Both require a `Context`, so they cannot run in the
-//! ctor.
+//! Missing step 1 leaves the list empty; missing step 2 leaves the scrollbar
+//! thumb unsized. Both require a `Context`, so they cannot run in the constructor.
 //!
-//! ## `set_value` / `set_value_ctx`
+//! # The focused item as a value
 //!
-//! `set_value_ctx` is the C4 context-aware scatter; it calls
-//! `list_viewer::focus_item_num`.
+//! The list box's [`value`](View::value) is its focused item index. Scattering a
+//! value back (focusing an item) is done through
+//! [`set_value_ctx`](ListBox::set_value_ctx) rather than the plain
+//! [`set_value`](View::set_value), because focusing an item must republish the
+//! scroll-bar position and so needs a [`Context`].
 //!
-//! ## Drops / deferrals (faithful, breadcrumbed)
+//! # Turbo Vision heritage
 //!
-//! - `dataSize`/`getData`/`setData` → the typed `value()`/(deferred `set_value`)
-//!   above; `TListBoxRec` has no analogue.
-//! - `write`/`read`/`build`/`streamableName`/`name` → D12 streaming dropped.
-//! - `drawView()` calls → D8 whole-tree redraw.
-//! - Mouse press-and-hold/auto-scroll, `change_bounds` step republish, etc. are
-//!   in the row-28 base already (not re-ported here).
+//! Ports `TListBox` (`tlistbox.cpp`). The list-record `getData`/`setData` become
+//! the typed value protocol (deviation D10); mouse press-and-hold, auto-scroll,
+//! and resize handling all live in the shared list-viewer base; and `TStreamable`
+//! is dropped.
 
 use crate::data::FieldValue;
 use crate::event::Event;
@@ -71,10 +70,9 @@ impl ListBox {
     /// Replace the item collection and (re)publish the v-bar range — ports
     /// `TListBox::newList`.
     ///
-    /// Faithful: replace `self.items`; call `set_range(len)` (publishes the
-    /// v-bar `setParams(focused, 0, len-1, …)`); call `focus_item(0)` iff
-    /// `range > 0` (publishes `setValue(0)`). `destroy(items)` = the old Vec
-    /// drops on assignment; `drawView()` dropped (D8).
+    /// Replaces `self.items`; calls `set_range(len)` (publishes the vertical-bar
+    /// params); calls `focus_item(0)` iff `range > 0`. The old items drop on
+    /// assignment.
     ///
     /// Call this **post-insert**, with a `Context`, so the v-bar `ViewId`s are
     /// resolvable and the deferred ops land correctly. Also call
@@ -136,7 +134,7 @@ impl View for ListBox {
         list_viewer::set_state(self, flag, enable, ctx);
     }
 
-    /// `TListViewer::changeBounds` resize step republish — B5.
+    /// Republish the scroll-bar steps after a bounds change.
     fn on_bounds_changed(&mut self, ctx: &mut Context) {
         list_viewer::on_bounds_changed(self, ctx);
     }
@@ -153,21 +151,19 @@ impl View for ListBox {
         Some(self)
     }
 
-    /// `TListBox::getData` (selection half) — the focused item index as a typed
-    /// `FieldValue::Int`. The collection is configuration (`new_list` manages
-    /// it), NOT part of the transferable value; no `List` variant is added (D10:
-    /// `FieldValue` grows per consumer).
+    /// The focused item index as a typed `FieldValue::Int`. The collection is
+    /// configuration ([`new_list`](Self::new_list) manages it), not part of the
+    /// transferable value.
     fn value(&self) -> Option<FieldValue> {
         Some(FieldValue::Int(self.lv.focused))
     }
 
-    /// `TListBox::setData` scatter (D10) — set the focused item and republish the
-    /// v-bar. The item list is **not** transferred (it is configuration, managed
-    /// via [`new_list`](Self::new_list), not dialog data).
+    /// Set the focused item and republish the vertical bar. The item list is
+    /// **not** transferred (it is configuration, managed via
+    /// [`new_list`](Self::new_list), not dialog data).
     ///
-    /// Faithful: C++ `setData` calls `focusItem(p->selection)`. We call
-    /// `focus_item_num` (the range-clamped variant) in case the range changed
-    /// between gather and scatter.
+    /// Uses `focus_item_num` (the range-clamped variant) in case the range
+    /// changed between gather and scatter.
     fn set_value_ctx(&mut self, v: FieldValue, ctx: &mut Context) {
         if let FieldValue::Int(idx) = v {
             list_viewer::focus_item_num(self, idx, ctx);
@@ -338,7 +334,7 @@ impl View for SortedListBox {
         list_viewer::set_state(self, flag, enable, ctx);
     }
 
-    /// `TListViewer::changeBounds` resize step republish — B5.
+    /// Republish the scroll-bar steps after a bounds change.
     fn on_bounds_changed(&mut self, ctx: &mut Context) {
         list_viewer::on_bounds_changed(self, ctx);
     }

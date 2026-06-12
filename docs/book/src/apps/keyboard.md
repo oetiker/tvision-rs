@@ -10,7 +10,7 @@ covers both halves: the key model your `View`s see, and the configurable
 A keystroke is a physical [`Key`](../api/tvision/event/enum.Key.html) plus a
 separate [`KeyModifiers`](../api/tvision/event/struct.KeyModifiers.html) channel,
 bundled into a [`KeyEvent`](../api/tvision/event/struct.KeyEvent.html). This is
-the decomposed form Turbo Vision's `TKey` canonicalises to (deviation D5): there
+the decomposed form Turbo Vision's `TKey` canonicalises to: there
 are deliberately **no** modifier-combined variants. `Ctrl+C` is
 `Key::Char('c')` with `ctrl` set; `Shift+Tab` is `Key::Tab` with `shift`;
 `Alt+F3` is `Key::F(3)` with `alt`. The enum holds only base keys — characters,
@@ -89,4 +89,4 @@ scheme.
 - [Text editing](text-editing.md) — the `Memo`, `Editor` and input-line widgets
   the keymap drives.
 - [Events → enum + match](../port/events.md) — the design behind the decomposed
-  `Key`/`KeyModifiers` model (D4/D5), for Turbo Vision veterans.
+  `Key`/`KeyModifiers` model, for Turbo Vision veterans.

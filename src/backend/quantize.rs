@@ -1,15 +1,17 @@
-//! RGB colour-quantization ladder — deviation **D6**.
-//!
-//! Faithful port of `RGBtoXTerm16`, `RGBtoXTerm256`, `BIOStoXTerm16`, and
-//! related helpers from `source/platform/colors.cpp` and
-//! `include/tvision/colors.h` (magiblot/tvision).
+//! RGB colour-quantization ladder: `RGB → xterm-256 → xterm-16 → BIOS`.
 //!
 //! These are pure math functions operating on raw `u8` channel values and
 //! palette indices. They are deliberately decoupled from the [`Color`] enum —
-//! row 19 (`Backend`) assembles the capability-aware policy that decides which
-//! rung of the ladder to use.
+//! the [`Backend`](crate::backend::Backend) assembles the capability-aware
+//! policy that decides which rung of the ladder to use.
 //!
 //! [`Color`]: crate::color::Color
+//!
+//! # Turbo Vision heritage
+//! Ports `RGBtoXTerm16`, `RGBtoXTerm256`, `BIOStoXTerm16` and the related
+//! helpers from `colors.cpp` / `colors.h`. The individual functions name their
+//! C++ originals; the math is reproduced verbatim, only the storage is typed
+//! (`u8` channels rather than packed bytes).
 
 // ---------------------------------------------------------------------------
 // HCL helper (RGBtoHCL, colors.cpp)

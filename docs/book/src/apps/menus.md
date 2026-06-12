@@ -2,7 +2,7 @@
 
 The top **menu bar**, the bottom **status line**, and the **context-sensitive
 help** that ties them together are the chrome of every Turbo Vision program. In
-`tvision` all three are *data trees* you describe with fluent builders, then hand
+rstv all three are *data trees* you describe with fluent builders, then hand
 to a view. The data lives in [`tv::menu`](../api/tvision/menu/index.html) and
 [`tv::status`](../api/tvision/status/index.html); the help context is
 [`HelpCtx`](../api/tvision/help/struct.HelpCtx.html).
@@ -93,7 +93,7 @@ context is active, so the bottom line changes as focus moves between an editor, 
 browser, and so on.
 
 The current context is a [`HelpCtx`](../api/tvision/help/struct.HelpCtx.html).
-Under deviation **D1** a help context is not the C++ hand-assigned `int` but a
+A help context is not the C++ hand-assigned `int` but a
 namespaced `&'static str` (`HelpCtx::custom("myapp.editor")`), so app- and
 view-defined contexts cannot collide. Because string identity has no ordering,
 the C++ `[min, max]` numeric range becomes the two-variant `HelpCtxRange` above:

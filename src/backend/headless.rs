@@ -1,4 +1,4 @@
-//! Headless backend — the deterministic test backend (deviation **D11**).
+//! Headless backend — the deterministic test backend.
 //!
 //! `HeadlessBackend` stores an in-memory cell buffer and a programmable event
 //! queue.  It never performs I/O and never blocks.  Tests keep a `HeadlessHandle`
@@ -7,6 +7,11 @@
 //! The shared-state pattern avoids downcasting: the handle and the backend share
 //! the same `Rc<RefCell<…>>` cells, so tests can observe the screen without
 //! needing to reach through the `Box<dyn Backend>` that the `Renderer` owns.
+//!
+//! # Turbo Vision heritage
+//! An rstv addition with no Turbo Vision counterpart: it stands in for the
+//! platform terminal driver so the snapshot test suite can drive the framework
+//! synchronously, with injected input and an inspectable screen (deviation D11).
 
 use std::cell::{Cell as StdCell, RefCell};
 use std::collections::VecDeque;
@@ -64,7 +69,7 @@ impl HeadlessHandle {
         self.push_event(Event::KeyDown(KeyEvent::new(key, modifiers)));
     }
 
-    /// Queue a bracketed-paste event (C9).  Equivalent to the terminal delivering
+    /// Queue a bracketed-paste event.  Equivalent to the terminal delivering
     /// an `EnableBracketedPaste`-wrapped paste sequence.
     pub fn push_paste(&self, text: impl Into<String>) {
         self.push_event(Event::Paste(text.into()));
@@ -104,7 +109,7 @@ impl HeadlessHandle {
 // HeadlessBackend
 // ---------------------------------------------------------------------------
 
-/// In-memory backend for tests (D11).
+/// In-memory backend for tests.
 ///
 /// Create with [`HeadlessBackend::new`]; move the backend into a
 /// [`Renderer`](crate::backend::Renderer) and keep the returned
@@ -156,7 +161,7 @@ impl Backend for HeadlessBackend {
 
     /// Pop the front event from the queue, or `None` if the queue is empty.
     ///
-    /// **Never blocks** regardless of `timeout`.  This is the D11 determinism
+    /// **Never blocks** regardless of `timeout`.  This is the determinism
     /// contract: tests drive the loop synchronously by pre-loading events.
     fn poll_event(&mut self, _timeout: Option<Duration>) -> Option<Event> {
         self.shared.events.borrow_mut().pop_front()
@@ -166,8 +171,8 @@ impl Backend for HeadlessBackend {
     ///
     /// Headless deliberately does **not** run the production
     /// [`ClipboardChain`](super::clipboard::ClipboardChain) — it is the test
-    /// fake (D11 determinism): no OS clipboard, no OSC 52 bytes, just a plain
-    /// string tests can read via [`HeadlessHandle::clipboard`] and seed via
+    /// fake: no OS clipboard, no OSC 52 bytes, just a plain string tests can
+    /// read via [`HeadlessHandle::clipboard`] and seed via
     /// [`HeadlessHandle::set_clipboard`].
     fn set_clipboard(&mut self, text: &str) -> bool {
         *self.shared.clipboard.borrow_mut() = text.to_string();

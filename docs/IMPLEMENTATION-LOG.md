@@ -5,6 +5,45 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## Docs Phase 1 — user-facing cleanup + `rstv` rename (2026-06-12)
+
+Swept both doc layers so they read for library *users*, not porting contributors,
+and reflect the finished port. Spec/plan:
+`docs/superpowers/specs/2026-06-12-api-docs-user-facing-cleanup-design.md` +
+`docs/superpowers/plans/2026-06-12-docs-user-facing-cleanup.md`. Driven by a
+`Workflow` (IA-scaffolding barrier → editor→reviewer sweeps, 17 agents), then an
+orchestrator integration pass.
+
+- **Stripped porting bookkeeping** from primary prose across ~64 rustdoc files +
+  the guide: PORT-ORDER row numbers, FOUNDATION/MECHANICAL/INFRA tags, names of
+  internal porting docs, "breadcrumb"s. The integrated invariant sweep caught
+  survivors the per-group reviewers missed (row refs in frame/history/desktop/
+  filedlg/menu_box/editor; a few inline `(deviation Dn)` in static_text/view/
+  outline/key/filedlg) — fixed centrally.
+- **"Deferred" audited, not copied:** the `application.rs` tile/cascade "deferred…
+  lands when Desktop::tile/cascade exist" was stale (they exist at
+  `desktop.rs` + are menu-wired) → rewritten as implemented. The real
+  **Deferred-channel feature** sense was preserved everywhere. Zero Rule-B
+  "no good reason" escalations.
+- **C++ heritage quarantined** into a standard `# Turbo Vision heritage` rustdoc
+  section per major item. Deviation citations `(deviation Dn)` kept as TEXTUAL
+  citations **in heritage context only** (not in API-explaining prose) — the
+  linking of those citations is a deliberate follow-up.
+- **Project renamed to `rstv`** (branding-only): product = `rstv`; crate stays
+  `tvision`; namespace stays `tv::`; C++ origin stays "Turbo Vision".
+- **Guide IA fixed:** `port/faithful.md` is now philosophy+gateway (no competing
+  list); `reference/deviations.md` is the single canonical "Differences from C++
+  Turbo Vision" with `#d1`..`#d15` anchors linking to topic pages + rustdoc;
+  `symbol-map.md` no longer treats internal docs as canonical. **Event capture
+  promoted** to its own Part II page (`port/capture.md`), `modal.md` narrowed to
+  "execView → one loop", `SUMMARY.md` updated.
+
+Gate: `cargo xtask docs` OK + link check clean; 1177 lib tests + xtask tests
+green; clippy `--all-targets` clean (fixed a `doc_lazy_continuation` from a
+rewritten `key.rs` list-like line); fmt clean. **Pending (Phase 1 follow-up):**
+hyperlink the heritage `(deviation Dn)` citations to the differences reference.
+Phases 2 (example gallery) + 3 (verified docs / CI gates) still to come.
+
 ## Plan 2 — docs content: Part I vertical slice + screenshot-clobber fix (2026-06-12)
 
 First content slice on the Plan 1 docs-tooling machine. Rather than fan out all

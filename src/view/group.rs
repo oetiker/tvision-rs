@@ -1,52 +1,55 @@
-//! `TGroup` — the view container + event router (row 26, FOUNDATION).
+//! [`Group`] — the view container and event router.
 //!
-//! `TGroup` (`tgroup.cpp` / `grp.cpp`) is the node type of TV's view tree: it
-//! owns a set of child views, draws them, routes events to them, and tracks
-//! which one is current/focused. This port carries the deviations the tree
-//! forces:
+//! A `Group` is the node type of the view tree: it owns a set of child views,
+//! draws them, routes events to them, and tracks which one is current/focused.
+//! The tree shape drives a few design choices:
 //!
-//! * **Ownership is a `Vec`, links are gone (D3).** C++ threads children on a
-//!   circular `next`/`prev` ring with `last`, and every child keeps an `owner`
-//!   back-pointer. Here a [`Group`] owns `children: Vec<Child>`; children hold no
-//!   up-pointer. Each child's [`ViewId`] is a process-global identity minted at
-//!   [`Group::insert`] and stamped into the child's own `ViewState.id` (self-id,
-//!   D3). Cross-links (`current`) are a [`ViewId`], resolved by an internal index
-//!   lookup ([`Group::index_of`]).
+//! * **Ownership is a `Vec`, links are by id.** A [`Group`] owns
+//!   `children: Vec<Child>`; children hold no up-pointer. Each child's [`ViewId`]
+//!   is a process-global identity minted at [`Group::insert`] and stamped into the
+//!   child's own `ViewState.id`. Cross-links (`current`) are a [`ViewId`],
+//!   resolved by an internal index lookup ([`Group::index_of`]).
 //!
-//!   The ring maps to the `Vec` in **back-to-front paint order**:
+//!   The C++ sibling ring maps to the `Vec` in **back-to-front paint order**:
 //!   `children[0]` == C++ `last` == bottom (drawn first); `children.last()` ==
 //!   C++ `first()` == top/frontmost (drawn last). `insert` pushes (new child on
 //!   top). `forEach`/`firstThat` (C++ visits `first()`→`last`) is therefore
 //!   `children.iter().rev()`; tab order `next` walks decreasing index with wrap.
 //!
-//! * **Mouse position is view-local at each level (deviation).** C++ keeps the
-//!   mouse in absolute screen coordinates and each view calls `makeLocal`. Under
-//!   the downward model there is no owner to walk up to, so on each positional
+//! * **Mouse position is view-local at each level.** C++ keeps the mouse in
+//!   absolute screen coordinates and each view calls `makeLocal`. Under the
+//!   downward model there is no owner to walk up to, so on each positional
 //!   delivery the group subtracts the child's `origin`, handing the child a
 //!   child-local position — the downward realization of `makeLocal`/
 //!   `mouseInView`/`containsMouse`.
 //!
-//! * **No explicit `eventError`/bubble.** C++ `handleEvent` leaves an unhandled
-//!   event in `event` and the program's `execute` loop calls `eventError`; a view
-//!   that consumes calls `clearEvent`. Here "consumed" is the event being set to
+//! * **No explicit `eventError`/bubble.** "Consumed" is the event being set to
 //!   [`Event::Nothing`]; an unhandled event is simply left **not cleared**, and
 //!   as the recursive `handle_event` stack unwinds the parent/loop sees it still
 //!   live. There is no owner pointer to bubble to.
 //!
-//! * **Dropped under D8:** `buffer`/`getBuffer`/`freeBuffer`/`lock`/`unlock`/
-//!   `clip`/`ofBuffered`/`sfExposed` and the occlusion-driven draw — replaced by
-//!   whole-tree redraw + diff. `draw` paints back-to-front (painter's algorithm),
-//!   **deliberately reversed** from C++ `drawSubViews` (which paints top-first
-//!   and relies on occlusion). Shadow casting has no infra yet (`// TODO(row 33)`).
+//! * **Painter's-algorithm draw.** `draw` paints back-to-front (so higher
+//!   siblings overpaint lower ones), the reverse of C++ `drawSubViews`, which
+//!   paints top-first and relies on occlusion tracking; the buffering/occlusion
+//!   machinery (`ofBuffered`/`sfExposed`/`lock`/`unlock`) is replaced by
+//!   whole-tree redraw + diff.
 //!
-//! * **Z-reorder (row 33a):** `ofTopSelect`/`makeFirst`/`putInFrontOf` are now
-//!   realized in the owner ([`Group::put_in_front_of`]/[`Group::make_first`]); the
-//!   select path ([`Group::focus_child`]) raises an `ofTopSelect` child to the top
-//!   instead of just making it current, faithful to `TView::select`.
-//! * **Deferred:** `execute`/`execView`/the blocking modal loop/`endModal` →
-//!   row 31 (`TProgram`)/34 (the loop owns the capture stack, so a group cannot
-//!   run a modal itself); `getData`/`setData`/`dataSize` → D10/row 39;
-//!   `resetCursor` (hardware cursor) → row 31.
+//! * **Z-reorder:** `ofTopSelect`/`makeFirst`/`putInFrontOf` are realized in the
+//!   owner ([`Group::put_in_front_of`]/[`Group::make_first`]); the select path
+//!   ([`Group::focus_child`]) raises an `ofTopSelect` child to the top instead of
+//!   just making it current, faithful to `TView::select`.
+//!
+//! Running a modal loop is not a group operation: the event loop owns the capture
+//! stack, so modality runs through [`Program::exec_view`](crate::app::Program::exec_view)
+//! and a [`ModalFrame`](crate::app::ModalFrame). Bulk data transfer uses the
+//! typed [`View::value`]/[`View::set_value`] protocol, and the hardware cursor is
+//! placed by the event loop.
+//!
+//! # Turbo Vision heritage
+//! Ports `TGroup` (`tgroup.cpp`). The circular `next`/`prev` sibling ring plus
+//! `owner` back-pointers become an owned `Vec` of children addressed by `ViewId`
+//! (deviation D3); the occlusion/buffering draw machinery is dropped in favor of
+//! whole-tree redraw + diff.
 
 use crate::command::Command;
 use crate::data::FieldValue;
@@ -58,9 +61,9 @@ use crate::view::view::{Phase, StateFlag, View, ViewState};
 
 /// Which side effects `set_current` applies when changing the current view —
 /// ports the `selectMode` enum (`views.h`: `normalSelect`/`enterSelect`/
-/// `leaveSelect`). `Enter`/`Leave` are used by the deferred modal `execView`
-/// path (row 31); `set_current` honours them faithfully so that path is a drop-in
-/// when it lands.
+/// `leaveSelect`). `Enter`/`Leave` are used by the modal
+/// [`exec_view`](crate::app::Program::exec_view) path when entering and leaving a
+/// modal dialog.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SelectMode {
     /// `normalSelect` — deselect the old current, select the new one.
@@ -78,20 +81,25 @@ struct Child {
     view: Box<dyn View>,
 }
 
-/// `TGroup` — a view that owns and routes to a tree of child views (D3/D4).
+/// A view that owns and routes to a tree of child views.
 ///
-/// See the [module docs](self) for the ring↔`Vec` Z-order mapping and the
-/// deviations. Build with [`Group::new`], add children with [`Group::insert`],
-/// and drive it as any other [`View`] (`draw` / `handle_event` / …).
+/// See the [module docs](self) for the sibling-ring↔`Vec` Z-order mapping. Build
+/// with [`Group::new`], add children with [`Group::insert`], and drive it as any
+/// other [`View`] (`draw` / `handle_event` / …).
+///
+/// # Turbo Vision heritage
+/// Ports `TGroup` (`tgroup.cpp`). Owns its children in a `Vec` addressed by
+/// `ViewId` rather than the C++ `next`/`prev`/`owner` pointer ring (deviation
+/// D3); broadcasts carry a `ViewId` subject instead of `infoPtr` (deviation D4).
 pub struct Group {
     st: ViewState,
     /// Children in back-to-front paint order (`children[0]` == C++ `last`/bottom,
     /// `children.last()` == C++ `first()`/top).
     children: Vec<Child>,
-    /// The current (selected) child — C++ `current`, as a [`ViewId`] (D3).
+    /// The current (selected) child — C++ `current`, as a [`ViewId`].
     current: Option<ViewId>,
     /// A visible+selectable child was inserted since the last `set_current` —
-    /// the pending C++ insert-time `show()`→`resetCurrent` cascade (A2).
+    /// the pending C++ insert-time `show()`→`resetCurrent` cascade.
     /// Settled by [`View::settle_currency`]; cleared by any explicit
     /// [`set_current`](Group::set_current).
     currency_dirty: bool,
@@ -104,7 +112,7 @@ impl Group {
     /// Our [`crate::event::EventMask`] only has the two opt-ins (mouse-move /
     /// mouse-auto); a group must *receive* those to be able to route them to
     /// children, so it opts into both — the surviving slice of `0xFFFF`. The
-    /// dropped ctor bits are `ofBuffered`/`clip` (D8).
+    /// dropped ctor bits are `ofBuffered`/`clip`.
     pub fn new(bounds: Rect) -> Self {
         let mut st = ViewState::new(bounds);
         st.options.selectable = true;
@@ -135,7 +143,7 @@ impl Group {
     }
 
     /// Resolve a [`ViewId`] to its index in `children` — the internal lookup that
-    /// replaces the C++ pointer cross-links (D3). `None` for a stale/foreign id.
+    /// replaces the C++ pointer cross-links. `None` for a stale/foreign id.
     fn index_of(&self, id: ViewId) -> Option<usize> {
         self.children.iter().position(|c| c.id == id)
     }
@@ -194,9 +202,9 @@ impl Group {
         Some(self.children[i].view.as_mut())
     }
 
-    // -- gather / scatter (D10) ---------------------------------------------
+    // -- gather / scatter ---------------------------------------------
 
-    /// `TGroup::getData` (D10 gather) — collect each child's typed value in C++
+    /// `TGroup::getData` (gather) — collect each child's typed value in C++
     /// data-walk order (`last → prev → ...` = `children` forward). Returns one
     /// `Option<FieldValue>` per child; `None` means that child carries no
     /// transferable value.
@@ -208,7 +216,7 @@ impl Group {
         self.children.iter().map(|c| c.view.value()).collect()
     }
 
-    /// `TGroup::setData` (D10 scatter) — distribute typed values back to children
+    /// `TGroup::setData` (scatter) — distribute typed values back to children
     /// in the same C++ data-walk order as [`gather_data`](Self::gather_data).
     /// Calls [`set_value_ctx`](View::set_value_ctx) so views that need deferred
     /// bar updates (e.g. `ListBox`) receive the `Context`.
@@ -228,17 +236,17 @@ impl Group {
 
     /// Insert `view` on **top** of the group (becomes the frontmost child),
     /// mint a process-global [`ViewId`], stamp it into the view's own
-    /// `ViewState.id` (self-id, D3), and return it. Ports `TGroup::insert` →
+    /// `ViewState.id` (self-id), and return it. Ports `TGroup::insert` →
     /// `insertBefore(p, first())`.
     ///
-    /// Applies `ofCenterX`/`ofCenterY` centering. Under D8 the `insertBefore`
+    /// Applies `ofCenterX`/`ofCenterY` centering. The C++ `insertBefore`
     /// hide/show dance and the `sfActive`-restore are a **no-op** (no occlusion
     /// tracking, so show/hide is absent; the child's own saved state is preserved
     /// as-is). Centering is therefore the only observable effect here. It does
     /// **not** auto-set `current` — `insert` alone never focuses; callers use
     /// [`set_current`](Self::set_current)/[`reset_current`](Self::reset_current).
     ///
-    /// **Insert-time currency (A2):** inserting a visible+selectable child marks
+    /// **Insert-time currency:** inserting a visible+selectable child marks
     /// `currency_dirty` — the deferred stand-in for the C++ `insertBefore` tail
     /// `if (saveState & sfVisible) p->show()` → `TView::setState(sfVisible)` →
     /// `if (options & ofSelectable) owner->resetCurrent()` (tgroup.cpp:391 /
@@ -264,7 +272,7 @@ impl Group {
 
         let id = ViewId::next();
         view.state_mut().id = Some(id); // stamp the view's own handle (self-id)
-        // A2: pending insert-time show()->resetCurrent, gated exactly like the
+        // Pending insert-time show()->resetCurrent, gated exactly like the
         // C++ (sfVisible + ofSelectable); settled by settle_currency.
         let s = view.state();
         if s.options.selectable && s.state.visible {
@@ -278,7 +286,7 @@ impl Group {
     /// instead of minting a fresh one — the pre-minted-id sibling of
     /// [`insert`](Self::insert).
     ///
-    /// The menu modal layer (rows 50–52) pre-mints each open box's [`ViewId`] from
+    /// The menu modal layer pre-mints each open box's [`ViewId`] from
     /// the global counter ([`ViewId::next`]) *before* requesting the box be opened,
     /// so the [`MenuSession`](crate::menu::MenuSession) capture handler already
     /// knows every box id with no insert-time callback/downcast. The pump then
@@ -308,7 +316,7 @@ impl Group {
         }
 
         view.state_mut().id = Some(id); // stamp the caller-supplied handle
-        // A2: same pending insert-time show()->resetCurrent marker as `insert`
+        // Same pending insert-time show()->resetCurrent marker as `insert`
         // (a menu box is non-selectable, so this is a no-op on the menu path).
         let s = view.state();
         if s.options.selectable && s.state.visible {
@@ -322,7 +330,7 @@ impl Group {
     /// `hide()` runs `TView::setState(sfVisible, false)`, whose tail
     /// `if (options & ofSelectable) owner->resetCurrent()` fires for ANY
     /// visible+selectable child — so C++ resets currency on removal of a
-    /// visible+selectable child whether or not it was `current` (A2 stage 4).
+    /// visible+selectable child whether or not it was `current`.
     /// A removed `current` additionally vacates the slot first.
     pub fn remove(&mut self, id: ViewId, ctx: &mut Context) {
         let Some(i) = self.index_of(id) else {
@@ -345,10 +353,10 @@ impl Group {
 
     /// Change the current view to `p` (or `None`), applying the focus/select
     /// side effects per `mode`. Faithful port of `TGroup::setCurrent` +
-    /// `focusView`/`selectView` (`tgroup.cpp`), with the D8 `lock`/`unlock`
+    /// `focusView`/`selectView` (`tgroup.cpp`), with the `lock`/`unlock`
     /// redraw bracket dropped.
     pub fn set_current(&mut self, p: Option<ViewId>, mode: SelectMode, ctx: &mut Context) {
-        // A2 KEYSTONE — DO NOT MOVE BELOW THE EARLY RETURN. Any explicit currency
+        // CURRENCY KEYSTONE — DO NOT MOVE BELOW THE EARLY RETURN. Any explicit currency
         // op supersedes the pending insert-time reset: clearing `currency_dirty`
         // here (including on the `current == p` early-return leg) is the ENTIRE
         // defense against the settle pass clobbering explicit focus afterwards
@@ -419,8 +427,8 @@ impl Group {
     /// tail is skipped by the already-in-place no-op, which is safe in C++ only
     /// because insert-time `show()`→`resetCurrent()` keeps the topmost
     /// `ofTopSelect` window current (an already-top window is already current).
-    /// rstv's ctx-less `Group::insert` (D3) defers that cascade to the pump's
-    /// `settle_currency` pass (A2), so the invariant now self-restores between
+    /// rstv's ctx-less `Group::insert` defers that cascade to the pump's
+    /// `settle_currency` pass, so the invariant now self-restores between
     /// events — but the self-heal **remains load-bearing for same-instant focus
     /// within one call sequence** (the e8d82f2 bite): `Desktop::insert_and_focus`
     /// calls `focus_child` on a just-inserted, not-yet-settled topmost window,
@@ -455,7 +463,7 @@ impl Group {
             // because insert-time show()->resetCurrent() keeps the topmost
             // ofTopSelect window current (so an already-top window is already
             // current). rstv defers that cascade to the pump's settle_currency
-            // pass (A2), so between events the invariant holds — but it REMAINS
+            // pass, so between events the invariant holds — but it REMAINS
             // LOAD-BEARING for same-instant focus within one call sequence (the
             // e8d82f2 bite): insert_and_focus calls focus_child on a just-
             // inserted, not-yet-settled topmost window (current still None).
@@ -478,8 +486,8 @@ impl Group {
         self.set_current(p, SelectMode::Normal, ctx);
     }
 
-    /// `TGroup::firstMatch(sfVisible, ofSelectable)` — the **only** caller in
-    /// row 26. C++ checks `last` (bottom, `children[0]`) **first**, then walks
+    /// `TGroup::firstMatch(sfVisible, ofSelectable)`. C++ checks `last` (bottom,
+    /// `children[0]`) **first**, then walks
     /// `first()`→down, i.e. `children[0]`, then `children[len-1], len-2, …, 1`.
     fn first_match_visible_selectable(&self) -> Option<ViewId> {
         let n = self.children.len();
@@ -582,9 +590,9 @@ impl Group {
         }
     }
 
-    // -- Z-reorder (putInFrontOf / makeFirst, realized in the owner, D3) ------
+    // -- Z-reorder (putInFrontOf / makeFirst, realized in the owner) ------
 
-    /// `TView::putInFrontOf(target)` realized in the owner (D3 — a child cannot
+    /// `TView::putInFrontOf(target)` realized in the owner (a child cannot
     /// reorder itself; the group does it). Move child `id` so it sits immediately
     /// **in front of** `target` in Z-order. `target == None` moves `id` to the
     /// very front (top). Unknown ids are ignored.
@@ -608,7 +616,7 @@ impl Group {
     /// **C++ guards (faithful):** no-op if `id == target`, or if `id` is already
     /// immediately in front of `target` (C++ `Target == nextView()`), or — for
     /// `target == None` — if `id` is already the top. The `sfVisible` hide/show +
-    /// `drawHide`/`drawShow` dance is **dropped (D8)**: whole-tree redraw makes it
+    /// `drawHide`/`drawShow` dance is **dropped**: whole-tree redraw makes it
     /// unnecessary. The trailing `if (options & ofSelectable) owner->resetCurrent()`
     /// is kept.
     pub fn put_in_front_of(&mut self, id: ViewId, target: Option<ViewId>, ctx: &mut Context) {
@@ -666,7 +674,7 @@ impl Group {
     }
 
     /// `TView::makeFirst` == `putInFrontOf(first())` — move child `id` to the top
-    /// (frontmost) of the Z-order. Realized in the owner (D3).
+    /// (frontmost) of the Z-order. Realized in the owner.
     pub fn make_first(&mut self, id: ViewId, ctx: &mut Context) {
         self.put_in_front_of(id, None, ctx);
     }
@@ -769,7 +777,7 @@ impl View for Group {
     /// `TGroup::draw` → `drawSubViews`: paint visible children **back-to-front**
     /// (`children[0]`→`children.last()`), each through a sub-context clipped to
     /// its bounds. Painter's algorithm — deliberately reversed from C++ (which
-    /// paints top-first and relies on occlusion, dropped under D8). No own-area
+    /// paints top-first and relies on occlusion tracking, which rstv drops). No own-area
     /// fill: children cover it. After each `sfShadow` child the group casts its
     /// drop shadow ([`DrawCtx::cast_shadow`]): back-to-front order means later
     /// (higher) siblings overwrite the shadow cells they occlude — the
@@ -790,7 +798,7 @@ impl View for Group {
     /// `TGroup::setState` — flip the group's own flag (+ focus broadcast via the
     /// base behaviour) then propagate: `sfActive`/`sfDragging` to **all**
     /// children; `sfFocused` to the **current** child only. Faithful port; the
-    /// dropped C++ cases (`sfVisible`/`sfExposed`) are D8.
+    /// dropped C++ cases (`sfVisible`/`sfExposed`) are the occlusion side effects.
     fn set_state(&mut self, flag: StateFlag, enable: bool, ctx: &mut Context) {
         // Base behaviour: flip the group's own flag + (for Focused) broadcast.
         self.st.set_flag(flag, enable);
@@ -824,7 +832,7 @@ impl View for Group {
 
     /// `TGroup::changeBounds` — apply `bounds`; if the size changed, propagate the
     /// delta to every child via `calc_bounds`/`change_bounds` (the resize grow
-    /// math). The D8 `getBuffer`/`lock`/`unlock` redraw bracket is dropped.
+    /// math). The `getBuffer`/`lock`/`unlock` redraw bracket is dropped.
     fn change_bounds(&mut self, bounds: Rect) {
         let delta = (bounds.b - bounds.a) - self.st.size;
         self.st.set_bounds(bounds);
@@ -850,7 +858,7 @@ impl View for Group {
             .map(|p| p + child.view.state().origin)
     }
 
-    /// `Group`'s [`View::find_mut`] override — the recursive tree-walk (D3).
+    /// `Group`'s [`View::find_mut`] override — the recursive tree-walk.
     /// One pass per child: match the child's own id, else recurse into it. A
     /// two-pass split (all direct children, then all recursions) fails the borrow
     /// checker (E0499) — the early `return` of `&mut` in the first loop escapes to
@@ -916,7 +924,7 @@ impl View for Group {
     }
 
     /// `Group`'s [`View::focus_descendant`] override — route to the owning group's
-    /// [`focus_child`](Self::focus_child) (the faithful `link->focus()`, D3). If `id`
+    /// [`focus_child`](Self::focus_child) (the faithful `link->focus()`). If `id`
     /// is a **direct child**, apply the `ofSelectable` gate here (C++ `focusLink`'s
     /// `link->options & ofSelectable`) and select it; either way `id` was found, so
     /// **return `true` to stop the walk** (a non-selectable match is still a match —
@@ -1027,7 +1035,7 @@ impl View for Group {
         }
     }
 
-    /// `TGroup::handleEvent` — the three-phase router (D4).
+    /// `TGroup::handleEvent` — the three-phase router.
     ///
     /// * **focused events** (`KeyDown`/`Command`): `phPreProcess` (top→bottom,
     ///   `ofPreProcess` children) → `phFocused` (the current child) →
@@ -1038,11 +1046,11 @@ impl View for Group {
     ///   auto-select (carryover #1) applied before delivery.
     ///
     /// The C++ leading `TView::handleEvent(event)` (its own mouse-down→focus
-    /// body) is **not** restored here: under D3 a view does not select *itself
-    /// within itself* — that selection is the parent's job (the base
-    /// `handle_event` is a no-op).
+    /// body) is **not** restored here: a view does not select *itself within
+    /// itself* — that selection is the parent's job (the base `handle_event` is a
+    /// no-op).
     ///
-    /// **owner-extent-down (33c, D3):** the routing body is bracketed by a
+    /// **owner-extent-down:** the routing body is bracketed by a
     /// `ctx.set_owner_size(self.size)` / restore so a child can read its owner's
     /// size (`TWindow::zoom`). The restore is **unconditional**: the actual
     /// routing lives in [`route_event`](Self::route_event), which may `return`
@@ -1067,7 +1075,7 @@ impl Group {
             //
             // The phase bracket ports the C++ `phase = ph…` writes around each
             // leg (`tgroup.cpp:362-371`); a child reads it via `ctx.phase()`
-            // (the `owner->phase` successor, D3). Save/restore makes one shared
+            // (the `owner->phase` successor). Save/restore makes one shared
             // Context field behave like the per-group C++ field under nesting:
             // a nested Group's own bracket restores to ITS saved value — which
             // is exactly the phase the OUTER group set for the section this
@@ -2333,7 +2341,7 @@ mod tests {
 
     /// `focus_child` on a `top_select` child that is ALREADY topmost but NOT
     /// current must still make it current+selected. This is the post-insert
-    /// state rstv's ctx-less `Group::insert` (D3) produces (C++ never sees it:
+    /// state rstv's ctx-less `Group::insert` produces (C++ never sees it:
     /// insert-time show()->resetCurrent keeps the topmost ofTopSelect window
     /// current). Without the self-heal, make_first hits put_in_front_of's
     /// already-in-place no-op, its resetCurrent tail never runs, and the click
@@ -2435,7 +2443,7 @@ mod tests {
         );
     }
 
-    // -- 15. owner_size set during routing + unconditional restore (33c) ------
+    // -- 15. owner_size set during routing + unconditional restore ------
 
     /// A probe that records `ctx.owner_size()` at the moment it handles an event,
     /// so a test can observe the value a child sees during group routing.
@@ -2561,8 +2569,8 @@ mod tests {
     /// `View::reset_current` (the trait override) establishes a group's internal
     /// currency through the **trait** dispatch path — the seam `exec_view` uses on a
     /// freshly-inserted modal (it holds the modal only as `&mut dyn View`). This is
-    /// the DISCRIMINATING guard for the FOUNDATION change: a ctx-less `Group::insert`
-    /// leaves `current == None` (insert never focuses, D3); calling `reset_current`
+    /// the discriminating guard: a ctx-less `Group::insert`
+    /// leaves `current == None` (insert never focuses); calling `reset_current`
     /// via `&mut dyn View` must flip it to the first visible+selectable child. It
     /// also proves the override dispatches to the inherent `Group::reset_current`
     /// (UFCS) rather than recursing into itself — infinite recursion would
@@ -2577,8 +2585,8 @@ mod tests {
         let ida = with_ctx(&mut out, &mut timers, |_ctx| {
             let mut a = Probe::new(Rect::new(0, 0, 5, 5), 'A', log.clone());
             a.st.options.selectable = true;
-            // insert (ctx-less, D3) does NOT focus — current stays None. Since A2
-            // it instead marks `currency_dirty` (the pending insert-time
+            // insert (ctx-less) does NOT focus — current stays None. It
+            // instead marks `currency_dirty` (the pending insert-time
             // show()->resetCurrent), settled later by settle_currency — insert
             // itself still never touches `current`.
             group.insert(Box::new(a))
@@ -2603,7 +2611,7 @@ mod tests {
         );
     }
 
-    /// A2 keystone, EARLY-RETURN leg: `set_current` with `current == p`
+    /// Currency keystone, EARLY-RETURN leg: `set_current` with `current == p`
     /// early-returns, but MUST still clear `currency_dirty` — an explicit
     /// currency op supersedes the pending insert-time reset even when it is a
     /// no-op for `current` itself. A regression (clearing below the early
@@ -2698,7 +2706,7 @@ mod tests {
         );
     }
 
-    /// A2 stage 4 — remove parity with C++ `TGroup::remove` (tgroup.cpp:112):
+    /// Remove parity with C++ `TGroup::remove` (tgroup.cpp:112):
     /// `p->hide()` → `removeView`, where `hide()`'s `setState(sfVisible, false)`
     /// tail runs `owner->resetCurrent()` for ANY visible+selectable child. So
     /// removing a NON-current visible+selectable child must still snap `current`
@@ -2754,7 +2762,7 @@ mod tests {
         );
     }
 
-    // -- focus_by_number (33d-2) ---------------------------------------------
+    // -- focus_by_number ---------------------------------------------
 
     /// A numbered, selectable probe (the `cmSelectWindowNum` target shape).
     struct NumberedProbe {

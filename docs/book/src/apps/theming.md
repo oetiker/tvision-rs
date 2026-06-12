@@ -6,10 +6,10 @@ asked *its* owner, all the way up to the application's master palette — and th
 chain finally landed on a one-byte BIOS attribute. Re-theming the whole app was
 a matter of swapping that master palette.
 
-tvision keeps the *idea* — colors come from a central, swappable table — but
+rstv keeps the *idea* — colors come from a central, swappable table — but
 drops the index arithmetic. The palette chain collapses into a single typed map
 from a semantic [`Role`](../api/tvision/theme/enum.Role.html) to a
-[`Style`](../api/tvision/color/struct.Style.html). This is deviation **D7**; the
+[`Style`](../api/tvision/color/struct.Style.html). The
 narrative behind it is in [Palettes & glyphs](../port/theme.md).
 
 ## The three types

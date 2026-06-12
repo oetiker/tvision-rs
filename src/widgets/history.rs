@@ -27,6 +27,12 @@
 //! first-eviction byte boundary differs from ours by 3 bytes.  This is a
 //! direct consequence of the no-sentinel model above, not a separate
 //! divergence.
+//!
+//! # Turbo Vision heritage
+//!
+//! Ports the history store (`histlist.cpp`) plus `THistoryViewer`
+//! (`thstview.cpp`), `THistoryWindow` (`thistwin.cpp`), and `THistory`
+//! (`thistory.cpp`).
 
 use crate::command::Command;
 use crate::event::{Event, Key};
@@ -149,11 +155,11 @@ pub fn clear_history() {
 }
 
 // ---------------------------------------------------------------------------
-// HistoryViewer — THistoryViewer (thstview.cpp, row 55)
+// HistoryViewer
 // ---------------------------------------------------------------------------
 
-/// `THistoryViewer` — a read-only single-column list over the global history
-/// store, shown in a modal recall popup when a user drops down an input field.
+/// A read-only single-column list over the global history store, shown in a
+/// modal recall popup when a user drops down an input field.
 ///
 /// Enter / double-click confirms (`endModal(cmOK)`); Esc / `cmCancel` dismisses
 /// (`endModal(cmCancel)`). All other events fall through to the base
@@ -174,34 +180,30 @@ pub fn clear_history() {
 ///
 /// # Palette / theme
 ///
-/// C++ `getPalette` returns `cpHistoryViewer "\x06\x06\x07\x06\x06"` — the
-/// per-class recolor that turns the gray-dialog list matrix into the blue
-/// input-field look. Surfaced under D7 through the
-/// [`ListViewer::list_roles`] override: `Role::HistoryViewerNormal` (indices
-/// 1/2/4/5, chain `0x06 → cpHistoryWindow[6]=0x13 → cpGrayDialog[19]=0x32 →
-/// cpAppColor[50]=0x1F`, white on blue) and `Role::HistoryViewerFocused`
-/// (index 3, chain `0x07 → cpHistoryWindow[7]=0x14 → cpGrayDialog[20]=0x33 →
-/// cpAppColor[51]=0x2F`, white on green).
+/// The history list recolors the gray-dialog list matrix into the blue
+/// input-field look, surfaced through the [`ListViewer::list_roles`] override:
+/// `Role::HistoryViewerNormal` (white on blue) and `Role::HistoryViewerFocused`
+/// (white on green).
+///
+/// # Turbo Vision heritage
+///
+/// Ports `THistoryViewer` (`thstview.cpp`); its `getPalette` recolor surfaces as
+/// a [`ListRoles`](crate::widgets::ListRoles) override.
 pub struct HistoryViewer {
     lv: ListViewerState,
     history_id: u8,
 }
 
 impl HistoryViewer {
-    /// `THistoryViewer::getPalette` → `cpHistoryViewer "\x06\x06\x07\x06\x06"`
-    /// as a [`ListRoles`](crate::widgets::ListRoles) quintet (D7). Indices
-    /// 1/2/4/5 all map to window entry 6 → one normal role
+    /// The history viewer's color quintet: a normal row
     /// ([`Role::HistoryViewerNormal`](crate::theme::Role::HistoryViewerNormal),
-    /// chain: `0x06 → cpHistoryWindow[6]=0x13 → cpGrayDialog[19]=0x32 →
-    /// cpAppColor[50]=0x1F`); index 3 is the focused row
+    /// white on blue) and a focused row
     /// ([`Role::HistoryViewerFocused`](crate::theme::Role::HistoryViewerFocused),
-    /// chain: `0x07 → cpHistoryWindow[7]=0x14 → cpGrayDialog[20]=0x33 →
-    /// cpAppColor[51]=0x2F`).
+    /// white on green).
     ///
-    /// Lives here (not on `ListRoles` next to `LIST_VIEWER`) because the
-    /// quintet is this class's `getPalette` knowledge — the C++ defines
-    /// `cpHistoryViewer` in `thstview.cpp`, not `tlstview.cpp` — and keeping it
-    /// here spares `list_viewer.rs` any reference to the history roles.
+    /// Lives here (not next to the base `LIST_VIEWER` quintet) because it is this
+    /// class's own palette knowledge, sparing `list_viewer.rs` any reference to
+    /// the history roles.
     pub const LIST_ROLES: crate::widgets::ListRoles = crate::widgets::ListRoles {
         normal_active: crate::theme::Role::HistoryViewerNormal,
         normal_inactive: crate::theme::Role::HistoryViewerNormal,
@@ -341,7 +343,7 @@ impl View for HistoryViewer {
         list_viewer::set_state(self, flag, enable, ctx);
     }
 
-    /// `TListViewer::changeBounds` resize step republish — B5.
+    /// Republish the scroll-bar steps after a bounds change.
     fn on_bounds_changed(&mut self, ctx: &mut Context) {
         list_viewer::on_bounds_changed(self, ctx);
     }
@@ -371,56 +373,48 @@ impl HistoryViewer {
     /// in the same file, so the private-field access is allowed directly there.
     /// This accessor provides the clean named path.
     ///
-    /// First production consumer: row 57 (the code that calls `exec_view` on a
-    /// `HistoryWindow` and reads the selection after the modal returns).
+    /// Read by the code that runs a `HistoryWindow` modally and reads the
+    /// selection after `exec_view` returns.
     pub(crate) fn selection(&self) -> String {
         <Self as ListViewer>::get_text(self, self.lv.focused)
     }
 }
 
 // ---------------------------------------------------------------------------
-// HistoryWindow — THistoryWindow (thistwin.cpp, row 56)
+// HistoryWindow
 // ---------------------------------------------------------------------------
 
-/// `THistoryWindow` — the modal window hosting a [`HistoryViewer`] recall list.
+/// The modal window hosting a [`HistoryViewer`] recall list.
 ///
-/// A `TWindow` subtype (`wfClose` only — not movable) that assembles two scroll
-/// bars and the viewer, then runs modally so the caller can read
+/// A window with a close box only (not movable) that assembles two scroll bars
+/// and the viewer, then runs modally so the caller can read
 /// [`get_selection`](HistoryWindow::get_selection) after `exec_view` returns.
 ///
-/// # Deviations from C++
+/// # Color
 ///
-/// * `THistInit`/`TWindowInit` constructor-init indirection is moot (D12) —
-///   `initViewer` is inlined.
-/// * `createListViewer` hook (streamability, D12) — inlined with no substitution
-///   path.
-/// * `getPalette` returns `cpHistoryWindow "\x13\x13\x15\x18\x17\x13\x14"` —
-///   resolved through the gray dialog that opened the popup, the C++ chain
-///   yields: frame passive/active `0x13 → cpGrayDialog[19]=0x32 →
-///   cpAppColor[50]=0x1F`, icon `0x15 → cpGrayDialog[21]=0x34 →
-///   cpAppColor[52]=0x1A`, sb page `0x18 → cpGrayDialog[24]=0x37 →
-///   cpAppColor[55]=0x31`, sb controls `0x17 → cpGrayDialog[23]=0x36 →
-///   cpAppColor[54]=0x72`, scroller `0x13`/`0x14`. The window keeps the
-///   default BLUE `Window`/`Frame` role family, which matches the chain on
-///   every cell the popup actually shows: frame active `0x1F` ✓, icon `0x1A` ✓,
-///   sb page `0x31` ✓. Documented deviations: frame *passive* renders `0x17`
-///   (the chain says `0x1F`, unobservable — the popup is the modal top and is
-///   always active) and sb *controls* render `0x31` (the literal chain byte
-///   `0x72` is the original-TV quirk of pointing the controls slot at the
-///   dialog's HistorySides entry). The viewer's item colors DO remap — see
-///   [`HistoryViewer`]'s `list_roles`.
-/// * `evMouseDown && !mouseInView → endModal(cmCancel)` — ported in
-///   `handle_event` (C): outside-bounds clicks are delivered by the pump's
-///   `ModalFrame` redirect; `!extent.contains(position)` → `end_modal(CANCEL)`.
+/// The window keeps the default blue `Window`/`Frame` role family, which matches
+/// the C++ history-window palette chain on every cell the popup actually shows
+/// (active frame, icon, scroll-bar page). Two cells differ in theory but not in
+/// practice: the passive frame is never seen (the popup is the modal top and is
+/// always active), and the scroll-bar controls render a different byte from the
+/// C++ chain's quirk of pointing that slot at the dialog's history-sides entry.
+/// The viewer's item colors do remap — see [`HistoryViewer`]'s `list_roles`.
+///
+/// An outside-bounds click cancels the modal (`end_modal(CANCEL)`).
+///
+/// # Turbo Vision heritage
+///
+/// Ports `THistoryWindow` (`thistwin.cpp`); the `initViewer`/`createListViewer`
+/// constructor indirection is inlined and `TStreamable` is dropped.
 pub struct HistoryWindow {
-    /// The embedded window (D2). `HistoryWindow` *is-a* `TWindow`.
+    /// The embedded window. `HistoryWindow` *is-a* window.
     window: Window,
     /// The `HistoryViewer` child's id — resolved after construction for
     /// `setup` and `get_selection`.
     viewer_id: ViewId,
     /// Tracks whether the viewer's post-insert `setup` has been run.
     /// `setup` needs a live `Context`; it runs on the first `handle_event` call
-    /// (the Context-free-ctor deviation established by row 55/ListBox).
+    /// (the same constraint the list box's setup hits).
     setup_done: bool,
 }
 
@@ -468,16 +462,12 @@ impl HistoryWindow {
         }
     }
 
-    /// `THistoryWindow::getSelection` — the viewer's focused entry text.
+    /// The viewer's focused entry text.
     ///
-    /// Uses `&mut self` because `child_mut` / `as_any_mut` require `&mut`.
-    /// C++ `getSelection` is non-const for the same reason. The modal result
-    /// read happens after the loop completes (row 57), so `&mut` is faithful.
-    /// If the downcast somehow fails (unreachable in practice — the viewer_id
-    /// always resolves to a `HistoryViewer`), returns an empty string.
-    ///
-    /// First production consumer: row 57 (the caller of `exec_view` reads the
-    /// selection after the modal returns).
+    /// Uses `&mut self` because `child_mut` / `as_any_mut` require `&mut`. The
+    /// modal result is read after the loop completes. If the downcast somehow
+    /// fails (unreachable in practice — the viewer_id always resolves to a
+    /// `HistoryViewer`), returns an empty string.
     pub(crate) fn get_selection(&mut self) -> String {
         self.window
             .child_mut(self.viewer_id)
@@ -500,7 +490,7 @@ impl HistoryWindow {
     )
 )]
 impl View for HistoryWindow {
-    /// Downcast hook so the row-57 modal completion can downcast the modal
+    /// Downcast hook so the modal completion can downcast the modal
     /// `dyn View` back to `HistoryWindow` and read [`get_selection`](Self::get_selection).
     /// Must be a real `Some(self)` — delegating to `window.as_any_mut()` would
     /// downcast to a `Window`, returning `None` for the `HistoryWindow` downcast
@@ -509,21 +499,19 @@ impl View for HistoryWindow {
         Some(self)
     }
 
-    /// `THistoryWindow::handleEvent` — faithful order: setup guard → delegate
-    /// to `TWindow::handleEvent`.
+    /// Setup guard → delegate to the window's `handle_event` → outside-click
+    /// cancel.
     ///
     /// (A) **One-time viewer setup BEFORE delegating** — the event then reaches
-    ///     a ready viewer (range/focused initialized). This is the
-    ///     Context-free-ctor deviation row 55/ListBox established: `setup()`
-    ///     needs a live `Context`, so it lands post-insert, here, on the first
-    ///     event.
+    ///     a ready viewer (range/focused initialized). `setup()` needs a live
+    ///     `Context`, so it lands post-insert, here, on the first event (the same
+    ///     constraint the list box's setup hits).
     ///
-    /// (B) `TWindow::handleEvent` (faithful order: base first).
+    /// (B) The window's base `handle_event` (base first).
     ///
-    /// (C) **Outside-click cancel** — C++ `THistoryWindow::handleEvent`:
-    ///     `if (event.what == evMouseDown && !mouseInView(event.mouse.where)) endModal(cmCancel)`.
-    ///     Delivered via the pump's `ModalFrame` redirect (outside-bounds clicks reach
-    ///     the modal top window); `!mouse_in_view` == `!extent.contains(position)`.
+    /// (C) **Outside-click cancel** — an outside-bounds mouse-down cancels the
+    ///     modal. Such clicks reach the modal top window via the loop's modal
+    ///     redirect; the test is `!extent.contains(position)`.
     fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
         // (A) One-time viewer setup BEFORE delegating — ensures range/focused
         // are initialized before the first event reaches the viewer.
@@ -535,15 +523,15 @@ impl View for HistoryWindow {
             {
                 hv.setup(ctx);
             }
-            // NOTE (A2): the popup's internal currency (viewer == current) is NOT
+            // NOTE: the popup's internal currency (viewer == current) is NOT
             // established here anymore. `exec_view`'s kept post-insert
             // `reset_current` (the faithful open hook) makes the viewer current AT
             // OPEN — the viewer is the popup's first visible+selectable child
             // (frame and scroll bars are non-selectable) — so even an immediate
             // Esc/Enter with no prior nav routes to the viewer and its endModal
             // fires. The first-event `select_child` workaround that used to live
-            // here compensated for the pre-A2 gap and was redundant since the
-            // exec_view hook landed (proven by the no_nav_first_event bite test).
+            // here was redundant once the exec_view open hook made the viewer
+            // current (proven by the no_nav_first_event bite test).
             self.setup_done = true;
         }
         // (B) TWindow::handleEvent (faithful order: base first).
@@ -563,35 +551,36 @@ impl View for HistoryWindow {
 }
 
 // ---------------------------------------------------------------------------
-// THistory — the dropdown-arrow icon next to a TInputLine (thistory.cpp, row 57)
+// THistory — the dropdown-arrow icon next to an input line
 // ---------------------------------------------------------------------------
 
 /// `THistory` — the dropdown-arrow icon placed next to a [`InputLine`](crate::widgets::InputLine).
 ///
 /// On its trigger (a click, or Ctrl/↓ while the linked input is focused) it opens
 /// a modal [`HistoryWindow`] over the channel's history, and on **OK** writes the
-/// picked string back into the linked input line. This is the first consumer of
-/// the **view-triggered async-modal seam** ([`Deferred::OpenHistory`](crate::view::Deferred::OpenHistory)):
-/// a `THistory` leaf holds only the link's [`ViewId`] (D3) and cannot call
-/// `exec_view` (top-level only), so it **requests** the open and the pump builds +
-/// drives the modal.
+/// picked string back into the linked input line. A leaf view cannot itself run a
+/// top-level modal loop, so it **requests** the open through
+/// [`Deferred::OpenHistory`](crate::view::Deferred::OpenHistory) and the event
+/// loop builds and drives the modal.
 ///
-/// # Deviations from C++
+/// # Color
 ///
-/// * **focus-abort OUT.** C++ `THistory::handleEvent` aborts the open if
-///   `link->focus()` fails (`if (!link->focus()) { clearEvent; return; }`). Our
-///   focus is deferred ([`focus_descendant`](crate::view::View::focus_descendant))
-///   with no inline success bool, so we request focus and proceed — the open path
-///   (in the pump's `OpenHistory` arm) documents this (same class as the row-39/41
-///   deferred-focus TODOs).
-/// * **`shutDown` (`link = 0`)** is moot — the link is a [`ViewId`], not an owning
-///   pointer, so there is nothing to null out (D3).
-/// * **palette** — C++ `getPalette` returns `cpHistory "\x16\x17"`; resolved
-///   for the realistic GRAY-DIALOG owner the chain yields the classic green
-///   dropdown button: arrow `cpHistory[1]=0x16 → cpGrayDialog[22]=0x35 →
-///   cpAppColor[53]=0x20` (black on green, [`Role::HistoryArrow`](crate::theme::Role::HistoryArrow)),
-///   sides `cpHistory[2]=0x17 → cpGrayDialog[23]=0x36 → cpAppColor[54]=0x72`
-///   (green on lightgray, [`Role::HistorySides`](crate::theme::Role::HistorySides)).
+/// The classic green dropdown button: a black-on-green arrow
+/// ([`Role::HistoryArrow`](crate::theme::Role::HistoryArrow)) and green-on-gray
+/// sides ([`Role::HistorySides`](crate::theme::Role::HistorySides)).
+///
+/// # Focus on open
+///
+/// The C++ aborted the open if focusing the linked input failed. Focusing here is
+/// requested through [`focus_descendant`](crate::view::View::focus_descendant) and
+/// applied by the loop, with no inline success flag to test, so the open proceeds
+/// regardless — focusing the link and opening the popup are independent requests.
+///
+/// # Turbo Vision heritage
+///
+/// Ports `THistory` (`thistory.cpp`). The owning `link` pointer becomes a
+/// [`ViewId`] (deviation D3), so there is nothing to null out on shutdown;
+/// `getPalette` becomes [`Role`](crate::theme::Role)s.
 pub struct THistory {
     state: ViewState,
     /// The linked input line's id (`link`).
@@ -604,9 +593,9 @@ impl THistory {
     /// `THistory(bounds, aLink, aHistoryId)` — `options |= ofPostProcess`.
     ///
     /// `selectable` stays `false` (the [`ViewState`] default), so a click delivers
-    /// to the icon without grabbing focus — faithful: `THistory` is never
-    /// `current`. `eventMask |= evBroadcast` is **moot** ([`Group`](crate::view::Group)
-    /// fans broadcasts to all children regardless — handover row 49).
+    /// to the icon without grabbing focus — the icon is never `current`. Opting
+    /// into the broadcast class is moot ([`Group`](crate::view::Group) fans
+    /// broadcasts to all children regardless).
     pub fn new(bounds: Rect, link: ViewId, history_id: u8) -> Self {
         let mut state = ViewState::new(bounds);
         // ofPostProcess — the icon gets keyDowns via the postProcess phase, AFTER
@@ -642,9 +631,7 @@ impl View for THistory {
         ctx.put_cstr(0, 0, "\u{2590}~\u{2193}~\u{258C}", lo, hi);
     }
 
-    /// `THistory::handleEvent` — open the modal on a trigger, or record history on
-    /// the broadcast arm. Faithful to the C++ (base `TView::handleEvent` is a no-op
-    /// here under D3, so we match the trigger directly):
+    /// Open the modal on a trigger, or record history on the broadcast arm:
     ///
     /// * **mouse-down**: open (mouse trigger never gates on focus).
     /// * **keyDown where `ctrlToArrow(keyCode) == kbDown`**: open, gated on the link
@@ -662,12 +649,11 @@ impl View for THistory {
             }
             Event::KeyDown(k) if crate::event::ctrl_to_arrow(*k).key == crate::event::Key::Down => {
                 ctx.request_open_history(self.link, self.history_id, true);
-                // Baseline → Deviation: C++ keeps the ↓ live when the link is NOT
-                // focused — its `clearEvent` sits INSIDE the `(link->state &
-                // sfFocused)` guard. DEVIATION: we clear unconditionally. This is
-                // D3-forced — the leaf cannot read the link's focus inline (it only
-                // holds the link's id), so the focus gate is applied later in the
-                // pump's `OpenHistory` arm; clear-always is the correct horn
+                // C++ keeps the ↓ live when the link is NOT focused — its
+                // `clearEvent` sits inside the focus guard. Here we clear
+                // unconditionally: the leaf cannot read the link's focus inline
+                // (it only holds the link's id), so the focus gate is applied
+                // later in the loop's `OpenHistory` arm. Clear-always is correct
                 // (clear-never would let a focused-link ↓ be double-handled).
                 ev.clear();
             }
@@ -685,7 +671,7 @@ impl View for THistory {
 }
 
 // ---------------------------------------------------------------------------
-// THistory tests (row 57)
+// THistory tests
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
@@ -1503,7 +1489,7 @@ mod viewer_tests {
 }
 
 // ---------------------------------------------------------------------------
-// HistoryWindow tests (row 56)
+// HistoryWindow tests
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
@@ -1715,7 +1701,7 @@ mod window_tests {
 
     // -----------------------------------------------------------------------
     // Test 5: Negative h-bar max — value genuinely produced AND live drain
-    //         doesn't panic (the HANDOVER watch-item, REQUIRED)
+    //         doesn't panic
     //
     // Two halves:
     //

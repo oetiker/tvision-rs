@@ -1,40 +1,36 @@
-//! Status-line data tree — `TStatusItem`, `TStatusDef` (`menus.h:400-467`,
-//! `tstatusl.cpp`). Row 47 (data) + row 53 (the view, in [`status_line`]).
+//! The status-line **data types** — [`StatusItem`], [`StatusDef`] — plus a
+//! fluent builder. The [`StatusLine`](status_line::StatusLine) view (drawing,
+//! mouse dispatch, hotkey accelerators, command graying) lives in
+//! [`status_line`].
 //!
-//! This module ports the **status-line data types** plus a fluent builder. The
-//! [`StatusLine`](status_line::StatusLine) view (drawing, mouse dispatch, the
-//! command-graying broker) lives in [`status_line`].
+//! A [`StatusItem`] is one entry: a label, an optional accelerator key, and the
+//! command it emits. A [`StatusDef`] groups the items shown for a particular
+//! set of help contexts ([`HelpCtxRange`]); the status line walks its defs and
+//! shows the first one whose range matches the current help context.
 //!
-//! ## The C++ shape and how it maps
+//! ### Hidden hotkey bindings
 //!
-//! In the C++, `TStatusItem` is a singly linked-list node (`text`/`keyCode`/
-//! `command`); `TStatusDef` is a linked-list node carrying a `[min, max]` numeric
-//! help-context range and its list of items. The status line walks its `defs`
-//! and selects the first def whose `[min, max]` contains the current help context
-//! (`findItems`). The C++ linked lists (`next`) become [`Vec`]s.
+//! A [`StatusItem`] with no text ([`StatusItem::text`] `== None`) displays
+//! **nothing** and **consumes no horizontal space**, but its accelerator still
+//! fires its command — an invisible global hotkey (e.g. Shift-Del → Cut). Draw
+//! and mouse-hit-test skip such items; the keyboard accelerator does not.
 //!
-//! ### `text == 0` — the hidden hotkey binding (load-bearing)
-//!
-//! A `TStatusItem` with `text == 0` ([`StatusItem::text`] `== None`) displays
-//! **nothing** AND **consumes no horizontal space** (in C++ `drawSelect` /
-//! `itemMouseIsIn` the `i += l + 2` advance is *inside* `if (text != 0)`), but the
-//! `keyDown` accelerator loop in `handleEvent` **still matches it** to fire its
-//! command. Real apps use these for invisible global accelerators such as
-//! `TStatusItem(0, kbShiftDel, cmCut)`. So draw / mouse-hit-test **skip**
-//! `text == None` items entirely; the (deferred) key handler does not.
-//!
-//! ### `HelpCtxRange` — a corollary of D1
+//! ### Which help contexts a def applies to
 //!
 //! C++ `TStatusDef(min, max, ...)` selects its items when the current help
-//! context falls in the **numeric range `[min, max]`**. Those ranges were
-//! contiguous integer blocks used only to index a help-topic table. Under
-//! deviation **D1**, [`HelpCtx`] is a namespaced `&'static str` with **no
-//! ordering**, so contiguous integer ranges do not map — string identity drops
-//! contiguity. The faithful idiomatic port is therefore a 2-variant matcher
-//! ([`HelpCtxRange`]): the universal `TStatusDef(0, 0xFFFF, ...)` def becomes
-//! [`HelpCtxRange::All`], and the rare context-split case becomes an explicit
-//! membership set ([`HelpCtxRange::OneOf`]). It stays `Clone + PartialEq + Eq`
-//! (no `Box<dyn Fn>`), like [`Menu`](crate::menu::Menu).
+//! context falls in a numeric range `[min, max]` — contiguous integer blocks
+//! that indexed a help-topic table. Because a [`HelpCtx`] here is a namespaced
+//! `&'static str` with no ordering, [`HelpCtxRange`] is instead a small matcher:
+//! the universal def becomes [`HelpCtxRange::All`], and the rare context-split
+//! case becomes an explicit membership set ([`HelpCtxRange::OneOf`]). It stays
+//! `Clone + PartialEq + Eq`, like [`Menu`](crate::menu::Menu).
+//!
+//! # Turbo Vision heritage
+//!
+//! Ports `TStatusItem` and `TStatusDef` (`menus.h`, `tstatusl.cpp`). The C++
+//! singly linked lists (`next`) become [`Vec`]s, and the numeric help-context
+//! range becomes [`HelpCtxRange`] because help contexts are now namespaced
+//! strings rather than integers (deviation D1).
 
 use crate::command::Command;
 use crate::event::KeyEvent;
@@ -43,12 +39,16 @@ use crate::help::HelpCtx;
 pub mod status_line;
 pub use status_line::{StatusColors, StatusLine};
 
-/// A single status-line entry. Ports `TStatusItem` (`menus.h:403`).
+/// A single status-line entry: a label, an optional accelerator, and a command.
 ///
-/// The C++ `char *text` becomes `Option<String>`: `None` is the C++ `text == 0`,
-/// a **hidden global hotkey binding** that draws nothing and consumes no width
-/// but still fires its [`command`](StatusItem::command) when its
-/// [`key_code`](StatusItem::key_code) is pressed (see the module docs).
+/// `text == None` is a **hidden global hotkey binding** that draws nothing and
+/// consumes no width but still fires its [`command`](StatusItem::command) when
+/// its [`key_code`](StatusItem::key_code) is pressed (see the module docs).
+///
+/// # Turbo Vision heritage
+///
+/// Ports `TStatusItem` (`menus.h`); the C++ `char *text` becomes
+/// `Option<String>` (`None` is `text == 0`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StatusItem {
     /// The displayed label (C++ `char *text`). `None` is the C++ `text == 0` — a
@@ -88,17 +88,14 @@ impl StatusItem {
     }
 }
 
-/// Which help contexts a [`StatusDef`] applies to — the D1 corollary of the C++
-/// `TStatusDef` `[min, max]` numeric range (see the module docs).
+/// Which help contexts a [`StatusDef`] applies to (see the module docs).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum HelpCtxRange {
-    /// C++ `TStatusDef(0, 0xFFFF, ...)` — the universal def every real app uses
-    /// (the `TProgram` default, `tvedit`, `tvforms`, `tvdir`). Matches **any**
-    /// help context.
+    /// The universal def every real app uses (the `TProgram` default). Matches
+    /// **any** help context.
     All,
-    /// The rare context-split case (`tvdemo` `[0, 50]` / `[50, 0xffff]`): an
-    /// explicit set of help contexts this def applies to. D1 dropped contiguous
-    /// integer blocks, so the range becomes an explicit membership set.
+    /// The rare context-split case: an explicit set of help contexts this def
+    /// applies to.
     OneOf(Vec<HelpCtx>),
 }
 
@@ -114,11 +111,13 @@ impl HelpCtxRange {
 }
 
 /// A status-line definition: the items shown for a [`range`](StatusDef::range) of
-/// help contexts. Ports `TStatusDef` (`menus.h:441`).
+/// help contexts.
 ///
-/// The C++ linked list (`next`) becomes the outer `Vec<StatusDef>` the
-/// [`StatusLine`](status_line::StatusLine) owns; the inner `items` list is a
-/// [`Vec<StatusItem>`].
+/// # Turbo Vision heritage
+///
+/// Ports `TStatusDef` (`menus.h`); the C++ linked list (`next`) becomes the
+/// outer `Vec<StatusDef>` the [`StatusLine`](status_line::StatusLine) owns, and
+/// the inner `items` list is a [`Vec<StatusItem>`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StatusDef {
     /// Which help contexts this def applies to (C++ `[min, max]`).

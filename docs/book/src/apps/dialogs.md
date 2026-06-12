@@ -32,8 +32,8 @@ dialog.insert_child(Box::new(Button::new(
 
 `InputLine::new` takes a validator and a [`LimitMode`](../api/tvision/widgets/enum.LimitMode.html)
 too; [`with_limit`](../api/tvision/widgets/struct.InputLine.html#method.with_limit) is
-the no-validator, byte-limit shortcut. `ButtonFlags` is a struct of named bools
-(deviation D5), so the default button is `ButtonFlags { default: true, .. }`.
+the no-validator, byte-limit shortcut. `ButtonFlags` is a struct of named bools,
+so the default button is `ButtonFlags { default: true, .. }`.
 
 A button carries the [`Command`](commands.md) it broadcasts when pressed. The
 conventional end commands are `Command::OK` and `Command::CANCEL`; a message box
@@ -56,8 +56,8 @@ match program.exec_view(Box::new(dialog)) {
 ```
 
 There is no separate "modal loop." In C++ each `execView` was a fresh nested
-`getEvent` loop; tvision collapses them into one loop plus a **capture stack**
-(deviation D9 — see [Modal execView → one loop + capture](../port/modal.md) and
+`getEvent` loop; rstv collapses them into one loop plus a **capture stack**
+(see [Modal execView → one loop + capture](../port/modal.md) and
 [the event loop in depth](../internals/event-loop.md)). `exec_view` is
 **top-level only**: a view holds only a `&mut Context`, never the `Program`, so
 it *cannot* re-enter the loop from inside `handle_event` — which is exactly what
@@ -77,9 +77,9 @@ and return the user's answer.
 ## Moving data in and out
 
 Turbo Vision moves dialog data with `getData`/`setData`: every control
-`memcpy`s its value into an untyped record. tvision replaces that untyped blob
+`memcpy`s its value into an untyped record. rstv replaces that untyped blob
 with a **typed value currency** —
-[`FieldValue`](../api/tvision/data/enum.FieldValue.html) (deviation D10) —
+[`FieldValue`](../api/tvision/data/enum.FieldValue.html) —
 passed through the `value` / `set_value` pair on the
 [`View`](../api/tvision/view/trait.View.html) trait. A text field reads and
 writes `FieldValue::Text`; an integer control uses `FieldValue::Int`. The enum
@@ -87,7 +87,7 @@ writes `FieldValue::Text`; an integer control uses `FieldValue::Int`. The enum
 
 Two operations bracket a dialog:
 
-| Turbo Vision | tvision | Direction |
+| Turbo Vision | rstv | Direction |
 | ------------ | ------- | --------- |
 | `setData` | scatter — `set_value` on each field | seed the dialog before showing it |
 | `getData` | gather — `value()` on each field | read results after `OK` |

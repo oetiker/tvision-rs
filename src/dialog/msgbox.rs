@@ -1,34 +1,35 @@
-//! `messageBox` / `messageBoxRect` — modal alert/confirmation dialogs (row 63, PART 1).
+//! Modal alert, confirmation, and input dialogs — `messageBox` and `inputBox`.
 //!
-//! Faithful Rust port of `source/tvision/msgbox.cpp` (`messageBoxRect` +
-//! `messageBox`). The `inputBox` half is **deferred** (needs D10 dialog
-//! gather/scatter).
+//! Builders for the standard pop-up dialogs: a body of text with a title
+//! ([`build_message_box`]) and a single-field prompt ([`build_input_box`]). Each
+//! returns a ready-to-run [`Dialog`]; the program runs it modally and returns the
+//! command that closed it.
 //!
-//! ## D-rules applied
+//! The option types replace the C++ raw flag word: [`MessageBoxKind`] picks the
+//! title and [`MessageBoxButtons`] selects which of [Yes, No, OK, Cancel] to show,
+//! in that fixed order.
 //!
-//! * **D1** — drop `T` prefix; `snake_case` methods.
-//! * **D5** — flag word (`ushort aOptions`) → typed API:
-//!   [`MessageBoxKind`] (the title, C++ `aOptions & 0x3`) and
-//!   [`MessageBoxButtons`] (the button mask, C++ `0x0100 << i`).
-//! * **D8** — whole-tree redraw; no `drawView` calls needed.
-//! * **D9** — `execView` / destroy live in [`Program`](crate::app::Program); this
-//!   module only constructs the dialog (the pure builder).
+//! ## Initial focus
 //!
-//! ## `selectNext(False)` / initial focus (faithful)
+//! After inserting the buttons, focus goes to the first selectable child (the
+//! first button in [Yes, No, OK, Cancel] order). `build_message_box` returns that
+//! button's [`ViewId`], which
+//! [`Program::message_box_rect`](crate::app::Program::message_box_rect) passes as
+//! the initial-focus target.
 //!
-//! C++ calls `dialog->selectNext(False)` after inserting the buttons to focus the
-//! first selectable child (i.e. the FIRST button in [Yes, No, OK, Cancel] order).
-//! `build_message_box` returns the [`ViewId`] of that first button as the second
-//! tuple element. [`Program::message_box_rect`](crate::app::Program::message_box_rect)
-//! passes it to `exec_view_with_completion` as `initial_focus`, which calls
-//! `focus_descendant` after open — faithfully replicating `selectNext(False)`.
+//! ## Button behavior
 //!
-//! ## Button behavior (note)
+//! All message-box buttons are normal (not default). A button fires when focused
+//! (Space / Alt+hotkey) or on a direct mouse click — see `Button::handle_event`
+//! (focused-Space and Alt+hotkey arm the animation timer, which fires the command
+//! on expiry).
 //!
-//! All message-box buttons are `bfNormal` (NOT `bfDefault`). A button fires when
-//! focused (Space / Alt+hotkey) or on a direct mouse click — the existing
-//! `Button::handle_event` implements these paths (focused-Space and Alt+hotkey
-//! arms the animation timer, which fires the command on its expiry).
+//! # Turbo Vision heritage
+//! Ports `messageBox` / `messageBoxRect` / `inputBox` / `inputBoxRect`
+//! (`msgbox.cpp`, titles/labels from `tvtext2.cpp`). The C++ `ushort aOptions`
+//! flag word becomes the typed [`MessageBoxKind`] + [`MessageBoxButtons`]
+//! (deviation D5); `execView`/destroy live in [`Program`](crate::app::Program),
+//! so this module is a pure builder (deviation D9).
 
 use super::Dialog;
 use crate::command::Command;
@@ -38,7 +39,7 @@ use crate::widgets::{Button, ButtonFlags};
 use crate::widgets::{InputLine, Label, LimitMode};
 
 // ---------------------------------------------------------------------------
-// Public option types (D5 — replacing the raw `ushort aOptions` flag word)
+// Public option types (replacing the raw `ushort aOptions` flag word)
 // ---------------------------------------------------------------------------
 
 /// The dialog title — ports the `aOptions & 0x3` nibble from `msgbox.h`.
@@ -225,7 +226,7 @@ pub(crate) fn build_message_box(
 }
 
 // ---------------------------------------------------------------------------
-// Pure input-box builder (row 63, PART 2)
+// Pure input-box builder
 // ---------------------------------------------------------------------------
 
 /// Build a [`Dialog`] for `inputBoxRect` without executing it.
@@ -248,7 +249,7 @@ pub(crate) fn build_message_box(
 /// [`InputLine`]. It doubles as the `selectNext(False)` initial-focus target AND
 /// the single-field gather/scatter target (C++ `setData`/`getData`): the caller
 /// scatters the initial string into it before exec and gathers the final string
-/// out of it on a non-cancel result (the D10 value currency,
+/// out of it on a non-cancel result (the typed value currency,
 /// [`FieldValue::Text`](crate::data::FieldValue::Text)).
 pub(crate) fn build_input_box(
     bounds: Rect,
@@ -357,7 +358,7 @@ mod tests {
         assert_eq!(MessageBoxKind::Confirmation.title(), "Confirm");
     }
 
-    // -- snapshot tests (D11) -----------------------------------------------
+    // -- snapshot tests ------------------------------------------------------
 
     /// Error dialog with a single OK button — the most common alert layout.
     /// Box is 40x9; OK+Cancel centering: total_x = -2 + 1*12 = 10; x = (40-10)/2 = 15.

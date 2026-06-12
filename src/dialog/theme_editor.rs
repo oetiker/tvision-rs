@@ -1,11 +1,14 @@
-//! `ThemeEditorBody` — a scrollable role-list widget for the C8 theme editor.
+//! `ThemeEditorBody` — a scrollable role-list widget for the theme editor.
 //!
 //! This is the content pane of the theme-editor dialog: it shows all 75
 //! [`Role`]s with their current foreground / background colors and a "AaBb"
 //! preview, lets the user navigate with the keyboard, and requests a
 //! [`ColorPicker`](crate::dialog::ColorPicker) dialog for the selected role via
-//! the deferred [`Deferred::OpenColorDialogForRole`](crate::view::Deferred) seam
-//! (D3/D9 — a leaf cannot exec a modal inline).
+//! the [`Deferred::OpenColorDialogForRole`](crate::view::Deferred) channel — a
+//! leaf view cannot run a modal dialog inline, so it routes the request to the
+//! event-loop owner.
+//!
+//! This is an rstv-original widget with no Turbo Vision counterpart.
 
 use crate::{
     color::{Color, Style},
@@ -19,7 +22,7 @@ use crate::{
 /// here — the header is row 0 in local coords, roles start at row 1).
 const VISIBLE_ROWS: usize = 17;
 
-/// The scrollable role-list body of the theme-editor dialog (C8).
+/// The scrollable role-list body of the theme-editor dialog.
 ///
 /// Draws a header row followed by up to [`VISIBLE_ROWS`] role rows. Each role
 /// row shows:

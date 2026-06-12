@@ -1,25 +1,28 @@
-//! Width-aware Unicode text — faithful port of the `TText` primitives
-//! (`ttext.h`, `source/platform/ttext.cpp`), under deviation **D13**.
+//! Width-aware Unicode text: measuring, scrolling, and drawing strings by
+//! **display column** rather than byte or codepoint.
 //!
-//! magiblot's `TText` hand-decodes UTF-8 with a DFA and iterates per *codepoint*,
-//! appending zero-width combining marks onto the previous cell at draw time.
-//! Rust strings are already valid UTF-8, and `unicode-segmentation` yields
-//! grapheme clusters directly, so D13 lets us drop the DFA and the
-//! append-combining-mark machinery: **one grapheme cluster is one cell** (two for
-//! a double-width glyph), and a cluster's column width comes from its base char.
-//! This also clusters ZWJ emoji sequences into a single cell — the intentional
-//! delta beyond magiblot's per-codepoint model, which split them.
-//!
-//! All layout/cursor math here measures in **display columns**, exactly as
-//! `TText` does.
+//! The core unit is the **grapheme cluster**: one cluster is one cell (two for
+//! a double-width glyph), and a cluster's column width comes from its base
+//! char. Combining marks attach to their base inside the cluster, and ZWJ
+//! emoji sequences collapse into a single cell. All layout and cursor math here
+//! measures in display columns.
 //!
 //! ### Cell occupancy of a grapheme
-//! Driven by the base char's [`unicode_width`] (mirroring magiblot's
-//! `bool wide = mb.width > 1`):
+//! Driven by the base char's [`unicode_width`]:
 //! * control char (`width() == None`) → the replacement glyph `�`, 1 column;
 //! * zero-width (combining-only / ZWJ-only cluster) → 0 columns (occupies no cell);
 //! * width 1 → 1 column;
 //! * width ≥ 2 → a *wide* lead cell + a trailing continuation cell (2 columns).
+//!
+//! # Turbo Vision heritage
+//!
+//! Faithful port of the `TText` primitives (`ttext.h`, `ttext.cpp`). magiblot's
+//! `TText` hand-decodes UTF-8 with a DFA and iterates per codepoint, appending
+//! combining marks onto the previous cell at draw time. Because Rust strings
+//! are already valid UTF-8 and `unicode-segmentation` yields grapheme clusters
+//! directly, rstv drops the DFA and the append-combining-mark machinery and
+//! works one grapheme at a time (deviation D13) — which also clusters ZWJ emoji
+//! into one cell, where the per-codepoint model split them.
 
 use crate::color::Style;
 use crate::screen::Cell;
@@ -55,8 +58,8 @@ pub fn next(text: &str) -> Option<(usize, usize)> {
 ///
 /// magiblot's `TText::prev` reads backwards codepoint-by-codepoint until it
 /// finds a valid UTF-8 lead, returning how many bytes the previous *character*
-/// occupies (clamped to 1 for an invalid lead). Under D13 we step back over a
-/// whole **grapheme cluster** instead — `cur_pos -= prev(data, cur_pos)` lands
+/// occupies (clamped to 1 for an invalid lead). rstv steps back over a whole
+/// **grapheme cluster** instead — `cur_pos -= prev(data, cur_pos)` lands
 /// the cursor on the previous cluster boundary, never inside a multi-byte
 /// codepoint or a combining sequence.
 ///
@@ -81,8 +84,8 @@ pub fn prev(text: &str, index: usize) -> usize {
 pub struct TextMetrics {
     pub width: usize,
     /// Total grapheme clusters. NB: `TTextMetrics::characterCount` counts
-    /// *codepoints*; we count *clusters* (they differ across combining
-    /// sequences — see D13 in the porting guide).
+    /// *codepoints*; rstv counts *clusters* (they differ across combining
+    /// sequences).
     pub character_count: usize,
     /// Graphemes that occupy at least one column (`graphemeCount`).
     pub grapheme_count: usize,
@@ -265,30 +268,24 @@ pub fn draw_str(
 }
 
 // ---------------------------------------------------------------------------
-// StringList — row 64 port of TStringList / TStrListMaker (tstrlist.cpp)
+// StringList
 // ---------------------------------------------------------------------------
 
 /// A keyed lookup of strings (`u16 key → String`).
 ///
-/// **C++ origin:** `TStringList` / `TStrListMaker` (`tstrlist.cpp`).
+/// Backed by a `BTreeMap<u16, String>`, so iteration is in ascending key order.
+/// A missing key returns `None` (callers that want the old empty-string
+/// behavior can use `.unwrap_or("")`).
 ///
-/// The original classes exist *entirely* to serialize a compressed keyed-string
-/// table to/from a resource (`.res`) stream via `TStreamable`/`ipstream`/
-/// `opstream`.  Deviation **D12** drops the entire streaming/persistence
-/// machinery — `TStrIndexRec`, the `MAXKEYS=16` run-length index, the
-/// byte-length-prefixed string blob, and `build`/`read`/`write` — because
-/// there are zero in-framework consumers of that contract.
+/// # Turbo Vision heritage
 ///
-/// Only the *observable contract* is preserved: a keyed lookup of strings.
-/// `BTreeMap<u16, String>` provides that with ascending-key iteration (which
-/// the original's index scan assumed), and it derives serde trivially should
-/// persistence ever be revived (D12 scope note).
-///
-/// **Deviation on missing keys:** C++ `TStringList::get()` writes an
-/// empty-string sentinel (`*dest = EOS`) for a key that is not in the table.
-/// We return `Option<&str>` instead — idiomatic Rust.  This is intentional,
-/// not an oversight; callers that relied on the sentinel can pattern-match on
-/// `None` or use `.unwrap_or("")`.
+/// Ports `TStringList` / `TStrListMaker` (`tstrlist.cpp`). The original classes
+/// exist entirely to serialize a compressed keyed-string table to/from a
+/// resource (`.res`) stream; rstv drops that streaming/persistence machinery
+/// (`TStrIndexRec`, the run-length index, the byte-length-prefixed blob, and
+/// `build`/`read`/`write`) and keeps only the observable contract — a keyed
+/// lookup of strings (deviation D12). The maker/list split, which existed only
+/// for the write-vs-read streaming asymmetry, collapses into one type.
 pub struct StringList {
     map: BTreeMap<u16, String>,
 }
@@ -303,8 +300,7 @@ impl StringList {
 
     /// Insert or replace the string for `key`.
     ///
-    /// Successor to `TStrListMaker::put`.  The maker/list split existed only
-    /// for the streaming asymmetry (write vs. read), which is gone under D12.
+    /// Successor to `TStrListMaker::put`.
     pub fn insert(&mut self, key: u16, value: impl Into<String>) {
         self.map.insert(key, value.into());
     }

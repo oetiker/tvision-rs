@@ -10,7 +10,7 @@ framework's defining seams.
 
 ## Why a leaf can't act directly
 
-While `tvision` dispatches an event, the view tree is a live `&mut` borrow
+While rstv dispatches an event, the view tree is a live `&mut` borrow
 **stack**: root → desktop → window → frame → the focused control. Each ancestor
 is already borrowed mutably *above* the view on the stack. So the view being
 handled cannot reach **up** (its parents are borrowed) or **sideways** (a fresh
@@ -27,7 +27,8 @@ free again. That request is one variant of
 
 A view never constructs a `Deferred` itself. It calls a method on the
 [`Context`](../api/tvision/view/struct.Context.html) it was handed (the downward
-context from [D3 — no up-pointers](handles.md)), and that method pushes the
+context from [pointers → handles](handles.md), where there are no up-pointers),
+and that method pushes the
 variant onto a single queue. The loop drains the queue once per pump, in
 insertion order, and applies each effect against the state it owns.
 

@@ -1,10 +1,8 @@
-//! Deterministic textual rendering of a [`Buffer`] for golden snapshot tests —
-//! deviation **D11**.
+//! Deterministic textual rendering of a [`Buffer`] for golden snapshot tests.
 //!
-//! This is the **verification backbone** of the whole port: every widget test
-//! from Phase 1 onward diffs its `HeadlessBackend` screen against a golden
-//! string produced here. The format is therefore frozen here, once, as a
-//! FOUNDATION decision — not improvised per test.
+//! This is the verification backbone of the framework: every widget test diffs
+//! its `HeadlessBackend` screen against a golden string produced here. The
+//! format is therefore frozen here, once — not improvised per test.
 //!
 //! ## Format
 //!
@@ -46,6 +44,11 @@
 //! text layer and its key **twice** to the attr layer; the trail cell is
 //! absorbed (contributes nothing). So both layers are exactly `width` display
 //! columns wide and stay aligned.
+//!
+//! # Turbo Vision heritage
+//! An rstv addition with no Turbo Vision counterpart: it serializes the screen
+//! grid to a stable golden string so the framework can be verified with snapshot
+//! tests rather than a live terminal (deviation D11).
 
 use crate::color::{Color, Style};
 use crate::screen::{Buffer, Cell};

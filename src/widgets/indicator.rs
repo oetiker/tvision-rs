@@ -1,52 +1,35 @@
-//! `TIndicator` — faithful Rust port of `tindictr.cpp` (row 45, MECHANICAL).
+//! A 1-row strip that displays an editor's current cursor position (row:col).
+//! It is owned by the editor and updated through [`Indicator::set_value`].
 //!
-//! `TIndicator` displays the current cursor position (row:col) of an editor
-//! in a fixed 1-row strip. It is owned by the editor (`TEditor`, Batch B)
-//! and updated by that owner through [`Indicator::set_value`].
+//! # Color
 //!
-//! ## Palette (cpIndicator `"\x02\x03"`)
+//! [`Role::IndicatorNormal`] when not dragging, [`Role::IndicatorDragging`]
+//! while the editor window is being dragged.
 //!
-//! - Index 1 (not dragging): `Role::IndicatorNormal`
-//! - Index 2 (dragging):     `Role::IndicatorDragging`
-//!
-//! ## Glyph convention (D7, row 9)
+//! # Glyphs
 //!
 //! Glyphs come from `ctx.glyphs()`:
-//! - `indicator_frame_normal`  (`═` U+2550) — fill char when **not** dragging
-//!   (faithful to C++ `dragFrame = '\xCD'`; the field name is inverted in C++).
-//! - `indicator_frame_dragging` (`─` U+2500) — fill char **while** dragging
-//!   (C++ `normalFrame = '\xC4'`).
-//! - `indicator_modified` (`☼` U+263C, char 15) — the "buffer modified" marker.
+//! - `indicator_frame_normal` (`═`) — fill char when **not** dragging.
+//! - `indicator_frame_dragging` (`─`) — fill char **while** dragging.
+//! - `indicator_modified` (`☼`) — the "buffer modified" marker.
 //!
-//! ## Colon alignment
+//! # Colon alignment
 //!
-//! C++ places the position string so that the `:` character lands at column 8:
-//! ```text
-//! b.moveStr(8 - int(strchr(s, ':') - s), s, color);
-//! ```
-//! We build `s = format!(" {}:{} ", location.y+1, location.x+1)` (y before x,
-//! faithful to the C++ stream order), find the byte index of `':'` in `s`
-//! (always the ASCII colon, so byte index == column index since everything
-//! before it is ASCII), and start drawing at `start_col = 8 - colon_col`.
+//! The position string is placed so the `:` lands at column 8. The string is
+//! `" {row}:{col} "`, so the colon sits at byte index `1 + digits(row)` and
+//! drawing starts at `7 - digits(row)`. That only goes negative once the row
+//! number has 8 or more digits (row ≥ 10,000,000) — unreachable in a real
+//! editor, but handled gracefully: [`DrawCtx::put_str`] skips the off-screen
+//! prefix without panicking.
 //!
-//! The string is `" {row}:{col} "`, so the colon sits at byte index
-//! `1 + digits(row)` and `start_col = 8 - colon_col = 7 - digits(row)`. It only
-//! goes negative once the displayed row number has **8 or more digits** (row ≥
-//! 10,000,000) — unreachable in a real editor, but handled: [`DrawCtx::put_str`]
-//! skips the off-screen prefix via its `text_indent` path (no panic). (This
-//! differs from C++ `moveStr`, whose `ushort` indent would instead wrap a
-//! negative offset to a huge value and write off the *right* edge — a harmless
-//! divergence past column 8.)
+//! There is no event handling; the indicator is display-only. The dragging
+//! state is read live from the view state each frame.
 //!
-//! ## No event handling
+//! # Turbo Vision heritage
 //!
-//! `TIndicator::handleEvent` is not overridden in the C++; the base no-op
-//! suffices. No `set_state` override needed (D8: `drawView` is a no-op;
-//! `sfDragging` is read live from `self.state.state.dragging` each frame).
-//!
-//! ## Deferrals
-//!
-//! - `TStreamable` dropped (D12).
+//! Ports `TIndicator` (`tindictr.cpp`). The hardcoded frame characters become
+//! [`Glyphs`](crate::theme::Glyphs) fields (deviation D7); `getPalette` becomes
+//! [`Role`]s; and `TStreamable` is dropped.
 
 use crate::theme::Role;
 use crate::view::{DrawCtx, GrowMode, Point, Rect, View, ViewState};
@@ -55,13 +38,16 @@ use crate::view::{DrawCtx, GrowMode, Point, Rect, View, ViewState};
 // Indicator
 // ---------------------------------------------------------------------------
 
-/// `TIndicator` — row/column position display for an editor.
+/// A row/column position display for an editor.
 ///
-/// Embed pattern: `state: ViewState`, `impl View`, draw through `DrawCtx`.
-/// Owner pushes updates via [`set_value`](Self::set_value); the whole-tree
-/// redraw (D8) then reads the updated fields.
+/// The owner pushes updates via [`set_value`](Self::set_value); the next
+/// whole-tree redraw reads the updated fields.
+///
+/// # Turbo Vision heritage
+///
+/// Ports `TIndicator` (`tindictr.cpp`).
 pub struct Indicator {
-    /// View state (geometry, flags, etc.) — the D2 composition target.
+    /// View state (geometry, flags, etc.) — the composition target.
     pub state: ViewState,
     /// Current cursor position. `(0, 0)` when constructed.
     ///
@@ -93,16 +79,11 @@ impl Indicator {
         }
     }
 
-    /// `TIndicator::setValue` — update the displayed position and modified flag.
+    /// Update the displayed position and modified flag.
     ///
-    /// Faithful to C++: only updates fields (no broadcast). Under D8
-    /// `drawView()` is a no-op — the whole-tree redraw reads the new values
-    /// automatically on the next render pass.
-    ///
-    /// The C++ change-guard (`if location != aLocation || modified != aModified`)
-    /// is retained as a comment (behaviorally inert under D8; we set
-    /// unconditionally for simplicity, matching the spirit without the guard
-    /// since there is no costly side effect to skip).
+    /// Only updates fields (no broadcast). The whole-tree redraw reads the new
+    /// values automatically on the next render pass, so there is no immediate
+    /// draw and no need for the C++ change-guard.
     pub fn set_value(&mut self, location: Point, modified: bool) {
         self.location = location;
         self.modified = modified;
@@ -272,7 +253,7 @@ mod tests {
         let theme = Theme::classic_blue();
         let mut ind = Indicator::new(Rect::new(0, 0, 16, 1));
         ind.set_value(Point::new(4, 2), false);
-        // Set dragging directly — no ctx needed (D8: no side effects to propagate).
+        // Set dragging directly — no ctx needed (no side effects to propagate).
         ind.state.state.dragging = true;
 
         let (backend, screen) = HeadlessBackend::new(16, 1);

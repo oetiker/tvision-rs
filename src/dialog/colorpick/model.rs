@@ -1,7 +1,6 @@
 //! [`ColorModel`] — the picker's single source of truth, plus the conversions.
 
-// Items in this module are infrastructure for future color-picker tasks; allow
-// them to be scaffolded before they have callers.
+// Some model helpers are not exercised by every surface.
 #![allow(dead_code)]
 
 use crate::backend::xterm256_to_rgb;

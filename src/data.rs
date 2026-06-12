@@ -1,46 +1,44 @@
-//! Typed dialog-data transfer — deviation **D10** (the `getData`/`setData`
-//! currency).
+//! Typed dialog-data transfer — the value currency moved between controls and
+//! the dialog that owns them.
 //!
-//! C++ Turbo Vision moves dialog data through `TView::getData`/`setData`/
-//! `dataSize`: each control `memcpy`s its raw value into/out of an untyped
-//! `void*` record at an offset the caller tracks by hand, and a dialog gathers
-//! the whole record by walking its children in order (`TGroup::getData`/
-//! `setData`). Per **D10** that untyped `memcpy` protocol becomes a **typed
-//! value currency**: a control exposes its value as a [`FieldValue`] via the
+//! A control exposes its current value as a [`FieldValue`] via the
 //! [`value`](crate::view::View::value)/[`set_value`](crate::view::View::set_value)
-//! pair on the [`View`](crate::view::View) trait.
+//! pair on the [`View`](crate::view::View) trait. A dialog gathers the whole
+//! record by walking its children in order
+//! ([`Group::gather_data`](crate::view::Group::gather_data) returns a
+//! `Vec<Option<FieldValue>>`) and distributes edited values back the same way
+//! ([`Group::scatter_data`](crate::view::Group::scatter_data), which routes
+//! through the context-aware setter that `ListBox` overrides to republish its
+//! scrollbar).
 //!
-//! [`FieldValue`] is the unit transferred. Like the [`Role`](crate::theme::Role)
-//! / [`Glyphs`](crate::theme::Glyphs) tables, it **grows per control**:
-//! [`Text`](FieldValue::Text) lands with [`TInputLine`](crate::widgets::InputLine)
-//! (row 39) and [`Int`](FieldValue::Int) with [`TScrollBar`](crate::widgets::ScrollBar)
-//! (its first consumer is the row-27 `TScroller` read-broker, which reads a
-//! scrollbar's `value` through [`View::value`](crate::view::View::value)). Future
-//! variants land with their first consumer — e.g. a `Bits(u32)` for `TCluster`
-//! arrives when that control wires its `value`/`set_value` (deferred — no consumer
-//! reads it yet).
+//! [`FieldValue`] carries one variant per kind of value a control can hold.
+//! Only the kinds an actual control transfers are present:
+//! [`Text`](FieldValue::Text) for input lines and
+//! [`Int`](FieldValue::Int) for scrollbars. The C++ cluster controls
+//! (check boxes, radio buttons) interpret their packed bit value internally and
+//! do not participate in dialog data transfer, so there is no `Bits` variant;
+//! the color picker likewise reports its color through a dedicated accessor
+//! rather than a `FieldValue`.
 //!
-//! ## Dialog gather/scatter group-walk (C4, landed)
+//! # Turbo Vision heritage
 //!
-//! `Group::gather_data()` walks children in C++ `getData` order (see
-//! `src/view/group.rs` for the ring-mapping rationale) and returns
-//! `Vec<Option<FieldValue>>`. `Group::scatter_data(values, ctx)` distributes
-//! values back in the same order via `View::set_value_ctx` (the context-aware
-//! setter that `ListBox` overrides to republish its v-bar).
+//! C++ moves dialog data through `TView::getData`/`setData`/`dataSize`: each
+//! control `memcpy`s its raw value into/out of an untyped `void*` record at a
+//! hand-tracked offset, and a dialog gathers the record by walking its children
+//! (`TGroup::getData`/`setData`). rstv replaces that untyped `memcpy` protocol
+//! with this typed value currency (deviation D10).
 
-/// The typed unit of dialog data transfer (D10) — the successor to the untyped
+/// The typed unit of dialog data transfer — the successor to the untyped
 /// `getData`/`setData` `void*` record.
 ///
-/// **Grows per control.** [`Text`](FieldValue::Text) lands at row 39
-/// ([`TInputLine`](crate::widgets::InputLine)); [`Int`](FieldValue::Int) at row 27
-/// ([`TScrollBar`](crate::widgets::ScrollBar), read by the `TScroller` broker);
-/// `Bits(u32)` for `TCluster` lands when that control wires its `value`/`set_value`
-/// (deferred — no consumer yet).
+/// Carries one variant per kind of value a control transfers. Cluster controls
+/// (check boxes, radio buttons) keep their bit value internal and the color
+/// picker uses a dedicated accessor, so neither has a variant here.
 #[derive(Clone, Debug, PartialEq)]
 pub enum FieldValue {
     /// A text field's contents (`TInputLine`).
     Text(String),
-    /// An integer value (`TScrollBar::value`; read by the row-27 `TScroller`
+    /// An integer value (`TScrollBar::value`; read by the `TScroller`
     /// read-broker via [`View::value`](crate::view::View::value)).
     Int(i32),
 }

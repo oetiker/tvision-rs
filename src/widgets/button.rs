@@ -1,102 +1,83 @@
-//! `TButton` — faithful Rust port of `tbutton.cpp` (row 37).
-//!
-//! A `TButton` is a clickable command button: a 2+-row box with a centered (or
+//! A clickable command button: a 2+-row box with a centered (or
 //! left-justified) title, a drop shadow, and an `~`-marked hotkey. Pressing it
 //! (mouse, Alt+hotkey, focused-Space, or — for the default button — `cmDefault`)
 //! fires its [`command`](Button::command), either posted as an `Event::Command`
-//! or broadcast (`bfBroadcast`).
+//! or broadcast.
 //!
-//! # Model (D2 / D5)
+//! # Model
 //!
-//! Embeds [`ViewState`] (D2) + branches on per-instance data; the `bf*` flag word
-//! becomes the [`ButtonFlags`] struct-of-bools (D5). Draw goes through
-//! [`DrawCtx`], events through [`Context`]. Coordinates are view-local (the group
-//! already translated the mouse position into this view's frame).
+//! [`Button`] embeds [`ViewState`] and branches on its per-instance data; the
+//! decoration/behavior flags are the [`ButtonFlags`] struct-of-bools. Drawing
+//! goes through [`DrawCtx`], events through [`Context`]. Coordinates are
+//! view-local (the group already translated the mouse position into this view's
+//! frame).
 //!
-//! # The press animation (D9 — timer-id payload, first consumer)
+//! # The press animation
 //!
 //! A keyboard / `cmDefault` press does not fire immediately: it flips the button
-//! to its pressed look (`down = true`), arms a one-shot timer
-//! ([`Context::set_timer`], `animationDurationMs = 100`), and stores the
-//! [`TimerId`]. When that timer's [`Event::Timer`] arrives (broadcast-class, so it
-//! reaches every view), the button compares the id to its stored
-//! [`animation_timer`](Button::animation_timer); on a match it clears the flash
-//! and finally [`press`](Button::press)es. This is the **typed timer-id payload**
-//! (D4): the C++ `evBroadcast cmTimerExpired` with `infoPtr == animationTimer`
-//! becomes [`Event::Timer(id)`], with the id matched against the stored handle —
-//! so a button only fires on *its own* timer, never on an unrelated one.
+//! to its pressed look (`down = true`), arms a one-shot 100 ms timer
+//! ([`Context::set_timer`]), and stores the [`TimerId`]. When that timer's
+//! [`Event::Timer`] arrives (it reaches every view), the button compares the id
+//! to its stored [`animation_timer`](Button::animation_timer); on a match it
+//! clears the flash and finally [`press`](Button::press)es. Matching the id
+//! against the stored handle means a button only fires on *its own* timer, never
+//! on an unrelated one.
 //!
-//! # D-rules applied
+//! Broadcast and timer events reach every child regardless of its event mask
+//! (the mask only gates `mouse_move`/`mouse_auto`), so opting into the broadcast
+//! class is automatic — no per-button state is needed.
 //!
-//! * **D1** the `T` prefix is dropped; the view-local commands `cmGrabDefault` /
-//!   `cmReleaseDefault` become namespaced [`Command::custom`] consts
-//!   ([`Button::GRAB_DEFAULT`] / [`Button::RELEASE_DEFAULT`]).
-//! * **D3** `makeLocal` is gone — the group delivers view-local mouse positions;
-//!   `getExtent()` → `self.state.get_extent()`. `makeDefault` / `press` reach the
-//!   owner only to *broadcast / post*, which go through [`Context`], not an
-//!   up-pointer. The C++ `message(owner, evBroadcast, …, this)` carries `this` as
-//!   the broadcast `source` (the resolvable [`ViewId`] successor to `infoPtr`).
-//! * **D4** `enum Event` match; `Event::Command` carries no `source` (so `press`'s
-//!   non-broadcast path is `ctx.post(command)`); `Event::Broadcast` carries
-//!   `source = self id`. The mouse-down auto-select (the relocated
-//!   `TView::handleEvent` base body) is owned by the group + the
-//!   [`grabs_focus_on_click`](View::grabs_focus_on_click) hook, which we override
-//!   to return `bfGrabFocus` (a button only auto-selects when `bfGrabFocus`).
-//! * **D7** colors via `ctx.style(Role::Button*)`; the C++ `getColor` AttrPairs
-//!   (`0x0501` / `0x0602` / `0x0703` / `0x0404`) become explicit (lo, hi) role
-//!   pairs chosen per state (see [`Button::state_roles`]).
-//! * **D8** draw into the back buffer through `DrawCtx`; `drawView`/`writeLine`/
-//!   occlusion dropped (whole-tree redraw + diff). `drawState`'s flash is realized
-//!   by the [`down`](Button::down) field read each redraw.
-//! * **D12** `TStreamable` (`read`/`write`/`build`) dropped.
+//! # Mouse hold-tracking
 //!
-//! # `eventMask |= evBroadcast` is a no-op here
+//! A mouse-down inside the click rectangle begins a modal hold: the button sets
+//! `down = true` and calls [`Context::start_mouse_track`], caching the absolute
+//! screen origin of button-local `(0, 0)` (recorded by the last `draw`) so the
+//! capture can convert absolute mouse coordinates back to button-local.
 //!
-//! The C++ ctor opts the button into the broadcast class. Under our [`Group`] the
-//! broadcast (and timer) phase delivers to **every** child regardless of
-//! `event_mask` (which only gates `mouse_move`/`mouse_auto`), so no field is
-//! needed — the opt-in is automatic.
+//! From the next pump on, the
+//! [`MouseTrackCapture`](crate::capture::MouseTrackCapture) routes every
+//! `MouseMove` (localized to button-local) back into this `handle_event`: each
+//! move flips `down` on tracking-rectangle containment. On `MouseUp` the button
+//! presses iff the last move was still inside the tracking rectangle (`self.down`)
+//! — never the release position — then clears `down`. Both arms are guarded by a
+//! `tracking` flag so a stray, untracked release falls through. Every other event
+//! during the hold is swallowed by the capture (the hold is modal). A button
+//! without an id (an uninserted, test-only button) keeps a single-shot fallback.
 //!
-//! # Mouse hold-tracking (D9 — the A3 MouseTrackCapture seam)
+//! # Command-enabled graying
 //!
-//! A mouse-down inside `clickRect` is the **first iteration** of the C++
-//! `do{}while(mouseEvent(event, evMouseMove))` hold loop (`tbutton.cpp:195-211`):
-//! the button sets `down = true` (the down position is inside `clickRect`, a
-//! subset of the tracking rect) and calls [`Context::start_mouse_track`] with
-//! `TrackMask { mouse_move: true, .. }` and the absolute origin of button-local
-//! `(0,0)` cached in `abs_origin` by the last `draw`.
+//! When a `cmCommandSetChanged` broadcast arrives, the button grays itself out if
+//! its command is currently disabled (`state.disabled = !ctx.command_enabled(command)`).
+//! Initial disabled state is established the same way, by the first
+//! command-set-changed broadcast on the opening idle pass — no separate
+//! constructor step is needed. A disabled default button does not flash on
+//! `cmDefault`.
 //!
-//! From the next pump on, the [`MouseTrackCapture`](crate::capture::MouseTrackCapture)
-//! routes every `MouseMove` (localized to button-local) back into this
-//! `handle_event` via `Deferred::MouseTrack` — the `MouseMove` arm is the loop
-//! *body*: flip `down` on tracking-rect containment (the rect is `clickRect`
-//! with `b.x++`, recomputed per event). The `MouseUp` arm is the *post-loop*
-//! code: press iff the LAST MOVE's tracked containment (`self.down`) — never
-//! the up position, which `tbutton.cpp:199-211` never re-reads — then clear
-//! `down`/`tracking`. Both arms are guarded by the `tracking` flag: `MouseUp`
-//! is not mask-gated in `Group::wants`, so a stray (untracked) up must fall
-//! through. Every other event during the hold is swallowed by the capture (the
-//! hold is modal, faithful to `TView::mouseEvent`).
+//! # Plain-letter accelerator
 //!
-//! For a button without an id (an uninserted, test-only button) the old
-//! single-shot path is kept as a degenerate fallback.
+//! When the button has its post-process option set, an unmodified letter that
+//! matches its hotkey fires it during the post-processing phase. A focused input
+//! line that consumes the letter first still starves this path, so plain letters
+//! are only stolen when the focused view leaves them live (matching Turbo Vision).
 //!
-//! # Deferrals (documented TODOs, not built)
+//! Marker decoration (`showMarkers`/`specialChars`) is not modeled — the button
+//! always draws the no-markers form.
 //!
-//! 1. **Command-enabled graying** — **landed (B1)**. The `cmCommandSetChanged`
-//!    broadcast arm sets `state.disabled = !ctx.command_enabled(command)` (see
-//!    `handle_event`). The C++ ctor's `if(!commandEnabled) state |= sfDisabled`
-//!    is covered by the initial `COMMAND_SET_CHANGED` broadcast that fires on
-//!    the first idle pass when `initial_disabled_commands` is non-empty — no
-//!    separate ctor init needed. A disabled default button no longer flashes on
-//!    `cmDefault` (the `!self.state.state.disabled` guard was already there).
-//! 2. **Plain-letter (postProcess) accelerator** — landed with the A5 phase
-//!    signal (`ctx.phase()`, `tbutton.cpp:219`): see `handle_event`'s
-//!    `post_plain` leg. A focused input line that consumes the letter still
-//!    starves the post-loop, so plain letters are only stolen when the
-//!    focused view leaves them live (faithful TV behavior).
-//! 3. **`showMarkers` / `specialChars` / `markers`** dropped (always the
-//!    no-markers branch).
+//! # Turbo Vision heritage
+//!
+//! Ports `TButton` (`tbutton.cpp`/`dialogs.h`). C++ inheritance becomes the
+//! `View` trait plus `ViewState` composition (deviation D2); the `bf*` flag word
+//! becomes [`ButtonFlags`] (deviation D5); the view-local commands `cmGrabDefault`
+//! / `cmReleaseDefault` become namespaced [`Command::custom`] consts
+//! ([`Button::GRAB_DEFAULT`] / [`Button::RELEASE_DEFAULT`]). The owner up-pointer
+//! is replaced by [`Context`]: `message(owner, evBroadcast, …, this)` carries
+//! `this` as the broadcast `source`, the resolvable [`ViewId`] successor to
+//! `infoPtr`. `getColor` AttrPairs become explicit (lo, hi) [`Role`] pairs chosen
+//! per state (see [`Button::state_roles`]); the typed [`Event::Timer(id)`] payload
+//! replaces `evBroadcast cmTimerExpired` with `infoPtr == animationTimer`; and
+//! `TStreamable` is dropped.
+//!
+//! [`ViewId`]: crate::view::ViewId
 
 use crate::capture::TrackMask;
 use crate::command::Command;
@@ -110,10 +91,10 @@ use std::time::Duration;
 const ANIMATION_DURATION_MS: u64 = 100;
 
 // ---------------------------------------------------------------------------
-// ButtonFlags — D5 struct-of-bools for the `bf*` word (dialogs.h)
+// ButtonFlags — struct-of-bools for the `bf*` word (dialogs.h)
 // ---------------------------------------------------------------------------
 
-/// Button flags — ports the `bf*` family (`dialogs.h`), D5.
+/// Button flags — the `bf*` family as a struct-of-bools.
 ///
 /// `bfNormal == 0` is the all-false default. Build with [`ButtonFlags::new`] or
 /// struct-update syntax (`ButtonFlags { default: true, ..Default::default() }`).
@@ -142,27 +123,26 @@ impl ButtonFlags {
 
 /// `TButton` — a clickable command button.
 pub struct Button {
-    /// View state (geometry, flags, cursor) — the D2 composition target.
+    /// View state (geometry, flags, cursor) — the composition target.
     pub state: ViewState,
     /// `title` — the button label, with `~` marking the hotkey letter.
     pub title: String,
     /// `command` — the command fired when the button is pressed.
     pub command: Command,
-    /// `flags` — the `bf*` decoration/behavior flags (D5).
+    /// `flags` — the decoration/behavior flags.
     pub flags: ButtonFlags,
     /// `amDefault` — whether the button currently acts as the default (toggled by
     /// `cmGrabDefault`/`cmReleaseDefault`; initialized from `bfDefault`).
     pub am_default: bool,
     /// `animationTimer` — the in-flight press-flash timer, if armed.
     pub animation_timer: Option<TimerId>,
-    /// The pressed appearance (C++ `drawState`'s `down` argument), read each
-    /// redraw (D8). `true` during the press flash.
+    /// The pressed appearance, read each redraw. `true` during the press flash.
     pub down: bool,
     /// Absolute screen position of button-local `(0, 0)`, cached each `draw`
     /// so the mouse-tracking capture
     /// ([`MouseTrackCapture`](crate::capture::MouseTrackCapture)) can convert
-    /// absolute mouse coordinates to button-local — the
-    /// [`ColorPicker::body_origin`](crate::dialog::ColorPicker) pattern (D3/D9).
+    /// absolute mouse coordinates to button-local — the same approach as
+    /// [`ColorPicker::body_origin`](crate::dialog::ColorPicker).
     /// Initialized to `(0, 0)`; updated on the first `draw` pass.
     abs_origin: Point,
     /// Whether a mouse hold-track is in flight (between the arming `MouseDown`
@@ -173,26 +153,26 @@ pub struct Button {
 }
 
 impl Button {
-    /// `cmGrabDefault` (61) — sent by a focused non-default button to ask the
-    /// current default button to relinquish the default look. D1: a view-local
-    /// command, namespaced.
+    /// `cmGrabDefault` — sent by a focused non-default button to ask the
+    /// current default button to relinquish the default look. A view-local,
+    /// namespaced command.
     pub const GRAB_DEFAULT: Command = Command::custom("tv.button.grab_default");
     /// `cmReleaseDefault` (62) — the inverse of [`GRAB_DEFAULT`](Self::GRAB_DEFAULT):
     /// a non-default button losing focus asks the default button to take the
     /// default look back.
     pub const RELEASE_DEFAULT: Command = Command::custom("tv.button.release_default");
 
-    /// `TButton::TButton` — build a button from `bounds`, `title`, `command`,
-    /// `flags`.
+    /// Build a button from `bounds`, `title`, `command`, `flags`.
     ///
-    /// Faithful to the C++ ctor: `amDefault = (flags & bfDefault) != 0`,
-    /// `animationTimer = 0` (→ `None`), `down = false`,
-    /// `options |= ofSelectable | ofFirstClick | ofPreProcess | ofPostProcess`.
+    /// `am_default` follows the `default` flag; the press-flash timer starts
+    /// unarmed; the view is selectable and takes part in pre- and
+    /// post-processing.
     ///
-    /// The `eventMask |= evBroadcast` is a no-op under our group (broadcasts reach
-    /// every child regardless of `event_mask`); see the module docs. The
-    /// `if(!commandEnabled) state |= sfDisabled` is deferred as backlog row B1
-    /// (`Context::command_enabled` now exists for it) — see deferral 1.
+    /// Opting into the broadcast class is automatic (broadcasts reach every
+    /// child regardless of its event mask), so no per-button state is needed.
+    /// Initial command-enabled graying is established lazily by the first
+    /// command-set-changed broadcast rather than in the constructor — see the
+    /// module docs.
     pub fn new(bounds: Rect, title: &str, command: Command, flags: ButtonFlags) -> Self {
         let mut state = ViewState::new(bounds);
         state.options = Options {
@@ -202,10 +182,10 @@ impl Button {
             post_process: true,
             ..Default::default()
         };
-        // B1 (landed): the C++ ctor's `if(!commandEnabled) state |= sfDisabled`
-        // is covered by the initial COMMAND_SET_CHANGED broadcast that fires on
-        // the first idle pass when initial_disabled_commands is non-empty. The
-        // ctor has no ctx (D3), so lazy init via the broadcast arm is correct.
+        // Initial command-enabled graying is established lazily: the first
+        // COMMAND_SET_CHANGED broadcast fires on the opening idle pass when
+        // initial_disabled_commands is non-empty. The constructor has no ctx,
+        // so handling it in the broadcast arm is correct.
         Button {
             state,
             title: title.to_string(),
@@ -219,14 +199,13 @@ impl Button {
         }
     }
 
-    /// The (lo, hi) [`Role`] pair `drawState` selects for the current state — the
-    /// D7 form of the C++ `getColor` AttrPairs. `lo` is the body/label color, `hi`
-    /// the hotkey-shortcut color (the `~`-toggled half).
+    /// The (lo, hi) [`Role`] pair selected for the current state. `lo` is the
+    /// body/label color, `hi` the hotkey-shortcut color (the `~`-toggled half).
     ///
-    /// * disabled → `(ButtonDisabled, ButtonDisabled)` (`getColor(0x0404)`)
-    /// * active + selected → `(ButtonSelected, ButtonSelectedShortcut)` (`0x0703`)
-    /// * active + amDefault → `(ButtonDefault, ButtonDefaultShortcut)` (`0x0602`)
-    /// * else → `(ButtonNormal, ButtonNormalShortcut)` (`0x0501`)
+    /// * disabled → `(ButtonDisabled, ButtonDisabled)`
+    /// * active + selected → `(ButtonSelected, ButtonSelectedShortcut)`
+    /// * active + amDefault → `(ButtonDefault, ButtonDefaultShortcut)`
+    /// * else → `(ButtonNormal, ButtonNormalShortcut)`
     fn state_roles(&self) -> (Role, Role) {
         let s = &self.state.state;
         if s.disabled {
@@ -240,14 +219,14 @@ impl Button {
         }
     }
 
-    /// `TButton::press` — fire the button. Broadcasts `cmRecordHistory` first
-    /// (history with no subject → `source = None`), then either broadcasts the
-    /// command (`bfBroadcast`, `source = self id`) or posts it as an
-    /// `Event::Command` (which carries no source under D4).
+    /// Fire the button. Broadcasts `cmRecordHistory` first (history with no
+    /// subject → `source = None`), then either broadcasts the command (when the
+    /// `broadcast` flag is set, with `source = self id`) or posts it as an
+    /// `Event::Command` (which carries no source).
     ///
-    /// (Private since A3: the mouse-up press fires from this view's own
-    /// `MouseUp` arm — routed back by the `MouseTrackCapture` seam — so no
-    /// pump-side broker needs to reach in anymore.)
+    /// Private: the mouse-up press fires from this view's own `MouseUp` arm,
+    /// routed back by the [`MouseTrackCapture`](crate::capture::MouseTrackCapture),
+    /// so no pump-side broker needs to reach in.
     fn press(&mut self, ctx: &mut Context) {
         let id = self.state.id();
         ctx.broadcast(Command::RECORD_HISTORY, None);
@@ -258,15 +237,14 @@ impl Button {
         }
     }
 
-    /// `TButton::makeDefault` — grab/release the default look. Only a **non**-default
-    /// button does anything (the `if((flags & bfDefault) == 0)` guard): it
-    /// broadcasts `cmGrabDefault`/`cmReleaseDefault` (so the real default button
-    /// relinquishes/retakes the look) and toggles its own `am_default`. The C++
-    /// `drawView()` is a D8 no-op.
+    /// Grab/release the default look. Only a **non**-default button does anything:
+    /// it broadcasts `cmGrabDefault`/`cmReleaseDefault` (so the real default button
+    /// relinquishes/retakes the look) and toggles its own `am_default`.
     ///
     /// `pub(crate)` so the pump's
-    /// [`MakeButtonDefault`](crate::view::Deferred::MakeButtonDefault) broker
-    /// (row 80: `TDirListBox` focus → `chDirButton`) can drive it on a sibling.
+    /// [`MakeButtonDefault`](crate::view::Deferred::MakeButtonDefault) broker can
+    /// drive it on a sibling (a directory list box's focus moving to its directory
+    /// button).
     pub(crate) fn make_default(&mut self, enable: bool, ctx: &mut Context) {
         if !self.flags.default {
             let id = self.state.id();
@@ -284,8 +262,7 @@ impl Button {
 
     /// Arm the press flash: flip to the pressed look and start the one-shot
     /// animation timer if one is not already running. Shared by the keyboard and
-    /// `cmDefault` paths (C++ `drawState(True); if(animationTimer==0)
-    /// animationTimer = setTimer(animationDurationMs);`).
+    /// `cmDefault` paths.
     fn start_animation(&mut self, ctx: &mut Context) {
         self.down = true;
         if self.animation_timer.is_none() {
@@ -306,8 +283,7 @@ impl View for Button {
 
     /// Exposes the concrete `Button` so the pump's
     /// [`MakeButtonDefault`](crate::view::Deferred::MakeButtonDefault) broker can
-    /// downcast a sibling button and call [`make_default`](Button::make_default)
-    /// (row 80: `TDirListBox` focus → `chDirButton`).
+    /// downcast a sibling button and call [`make_default`](Button::make_default).
     fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
         Some(self)
     }
@@ -328,9 +304,9 @@ impl View for Button {
     /// attr, the right-column shadow glyph vanishes (`ch = ' '`), the title is
     /// drawn with `i = 2`. The bottom row is all shadow spaces.
     fn draw(&mut self, ctx: &mut DrawCtx) {
-        // Cache the absolute origin for the mouse-tracking capture (D3/D9 —
-        // the MouseTrackCapture converts abs mouse coords to button-local via
-        // this value, mirroring the ColorPicker `body_origin` pattern).
+        // Cache the absolute origin for the mouse-tracking capture: the
+        // MouseTrackCapture converts absolute mouse coords to button-local via
+        // this value, mirroring the ColorPicker `body_origin` pattern.
         self.abs_origin = ctx.origin();
         let down = self.down;
         let (lo_role, hi_role) = self.state_roles();
@@ -421,12 +397,11 @@ impl View for Button {
                 // either way the result is: press iff !disabled && contains, then clear.
                 if !self.state.state.disabled && click_rect.contains(m.position) {
                     if let Some(id) = self.state.id() {
-                        // Normal path (inserted button with a ViewId): this IS
-                        // the first iteration of the C++ hold loop
-                        // (tbutton.cpp:195-211) — the down position is inside
-                        // clickRect ⊂ trackRect, so `down = true` (pressed
-                        // look) — then enter the loop by starting a mouse
-                        // track (A3 seam). The capture routes subsequent
+                        // Normal path (inserted button with a ViewId): this is
+                        // the first iteration of the hold loop — the down
+                        // position is inside clickRect ⊂ trackRect, so
+                        // `down = true` (pressed look) — then enter the loop by
+                        // starting a mouse track. The capture routes subsequent
                         // MouseMove/MouseUp back into the arms below,
                         // localized via `abs_origin` (cached by the last draw).
                         self.down = true;
@@ -441,19 +416,18 @@ impl View for Button {
                         );
                     } else {
                         // Degenerate fallback: an uninserted (test-only) button has no id,
-                        // so the capture broker cannot resolve it. Press immediately,
-                        // mimicking the old pre-D9 behavior.
+                        // so the capture broker cannot resolve it. Press immediately.
                         self.press(ctx);
                     }
                 }
                 ev.clear();
             }
 
-            // The C++ hold-loop BODY (tbutton.cpp:199-206), re-entered per
-            // tracked MouseMove via Deferred::MouseTrack (position already
-            // button-local): flip `down` on tracking-rect containment.
-            // Tracking rect: clickRect widened by one on b.x (`clickRect.b.x++`,
-            // tbutton.cpp:197), recomputed per event so it stays resize-fresh.
+            // The hold-loop body, re-entered per tracked MouseMove via
+            // Deferred::MouseTrack (position already button-local): flip `down`
+            // on tracking-rect containment. Tracking rect: clickRect widened by
+            // one on b.x (`clickRect.b.x++`), recomputed per event so it stays
+            // resize-fresh.
             Event::MouseMove(m) if self.tracking => {
                 let track_rect =
                     Rect::from_points(click_rect.a, Point::new(click_rect.b.x + 1, click_rect.b.y));
@@ -464,8 +438,8 @@ impl View for Button {
                 ev.clear();
             }
 
-            // The C++ POST-loop code (tbutton.cpp:207-211): press iff the LAST
-            // MOVE's tracked containment (`self.down`) — the loop body never
+            // The post-loop code: press iff the LAST MOVE's tracked
+            // containment (`self.down`) — the loop body never
             // re-evaluates the up-event's position (`mouseEvent` returns false
             // on mouse-up before the body runs again), so the up position is
             // deliberately not read. Guarded by `tracking` against stray ups
@@ -482,12 +456,11 @@ impl View for Button {
 
             Event::KeyDown(ke) => {
                 // Alt+hotkey, OR postProcess + plain hotkey letter, OR focused +
-                // Space (`tbutton.cpp:216-228`). The Space branch is independent
-                // of whether the title has a hotkey (a hotkey-less button still
-                // acts on Space when focused). The plain-letter leg fires only
-                // on the post-process walk (`owner->phase == phPostProcess` →
-                // `ctx.phase()`, the A5 phase signal): an unfocused button picks
-                // up letters the focused view left unconsumed.
+                // Space. The Space branch is independent of whether the title
+                // has a hotkey (a hotkey-less button still acts on Space when
+                // focused). The plain-letter leg fires only on the post-process
+                // walk (`ctx.phase() == Phase::PostProcess`): an unfocused
+                // button picks up letters the focused view left unconsumed.
                 let alt_hot = c.map(|c| is_alt_hotkey(ke, c)).unwrap_or(false);
                 let post_plain = ctx.phase() == Phase::PostProcess
                     && c.map(|c| is_plain_hotkey(ke, c)).unwrap_or(false);
@@ -508,14 +481,12 @@ impl View for Button {
                 cmd @ (Self::GRAB_DEFAULT | Self::RELEASE_DEFAULT) if self.flags.default => {
                     self.am_default = cmd == Self::RELEASE_DEFAULT;
                 }
-                // B1 — command graying (tbutton.cpp:169-175, cmCommandSetChanged arm):
-                // `setState(sfDisabled, !commandEnabled(command)); drawView()`.
-                // The C++ ctor also does `if(!commandEnabled) state |= sfDisabled`, but
-                // the ctor has no ctx (D3). The COMMAND_SET_CHANGED broadcast fires
-                // during the idle phase whenever the command set changes (including the
-                // initial pass via Program::initial_disabled_commands), so this arm also
-                // covers the initial disabled state — no separate ctor init needed.
-                // Whole-tree redraw (D8) replaces drawView().
+                // Command graying: disable the button iff its command is disabled.
+                // The COMMAND_SET_CHANGED broadcast fires during the idle phase
+                // whenever the command set changes (including the initial pass via
+                // Program::initial_disabled_commands), so this arm also covers the
+                // initial disabled state — no separate constructor init needed.
+                // Whole-tree redraw replaces the C++ drawView().
                 Command::COMMAND_SET_CHANGED => {
                     self.state.state.disabled = !ctx.command_enabled(self.command);
                 }
@@ -534,10 +505,10 @@ impl View for Button {
         }
     }
 
-    /// `TButton::setState` — flip the propagating flag (replicating the trait-default
-    /// body, since Rust has no `super` for a default method) then, for
-    /// [`StateFlag::Focused`], run `makeDefault`. The C++ `if(aState &
-    /// (sfSelected|sfActive)) drawView()` is a D8 no-op.
+    /// Flip the propagating flag (replicating the trait-default body, since Rust
+    /// has no `super` for a default method) then, for [`StateFlag::Focused`], run
+    /// [`make_default`](Button::make_default). The C++ redraw on
+    /// select/activate is unneeded here (whole-tree redraw).
     ///
     /// Replicate-then-extend (the `Group::set_state` shape): flip the flag and, on
     /// `Focused`, emit the base focus broadcast (`cmReceivedFocus`/
@@ -865,8 +836,7 @@ mod tests {
     }
 
     /// The plain hotkey letter arms the press on the post-process walk —
-    /// `owner->phase == phPostProcess && c == toupper(charCode)`
-    /// (`tbutton.cpp:219-221`), via the A5 phase signal.
+    /// when the phase is `Phase::PostProcess` and the letter matches the hotkey.
     #[test]
     fn plain_hotkey_arms_at_post_process() {
         let mut b = Button::new(
@@ -1083,7 +1053,7 @@ mod tests {
         assert!(deferred.is_empty(), "no capture for disabled button");
     }
 
-    // -- mouse hold-tracking arm tests (the A3 seam's loop body / post-loop) --
+    // -- mouse hold-tracking arm tests (the loop body / post-loop) -------------
     //
     // The MouseTrackCapture routes localized MouseMove/MouseUp events back into
     // the button's own handle_event (Deferred::MouseTrack); these tests drive
@@ -1168,7 +1138,7 @@ mod tests {
 
     /// `MouseUp` at an INSIDE position after the last move tracked OUTSIDE →
     /// no press: the decision uses the LAST MOVE's containment, never the
-    /// up-event's position (tbutton.cpp:199-211 never re-reads it).
+    /// up-event's position (the hold loop never re-reads it).
     #[test]
     fn track_release_uses_last_move_not_up_position() {
         let mut b = tracked_button();
@@ -1547,10 +1517,10 @@ mod tests {
         assert!(!snap.is_empty(), "render completed without panic");
     }
 
-    // -- B1: command graying via cmCommandSetChanged broadcast -----------------
+    // -- command graying via cmCommandSetChanged broadcast ---------------------
 
     /// `cmCommandSetChanged` with the button's command disabled: the button
-    /// transitions to `state.disabled = true` (faithful to tbutton.cpp:169-175).
+    /// transitions to `state.disabled = true`.
     #[test]
     fn command_set_changed_grays_button_when_command_disabled() {
         let mut b = Button::new(

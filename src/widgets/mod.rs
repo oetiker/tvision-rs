@@ -1,9 +1,9 @@
-//! Widget implementations — leaf views ported from Turbo Vision (Phase 1+).
+//! Widget implementations — the leaf views (buttons, input lines, lists,
+//! editors, scrollbars, and more).
 //!
-//! Each submodule holds one widget class (dropping the `T` prefix per D1).
-//! The canonical embed pattern is: `state: ViewState`, `impl View` returning
-//! it from `state`/`state_mut`, implement `draw` through [`DrawCtx`], and
-//! handle events through [`Context`].
+//! Each submodule holds one widget. The canonical embed pattern is:
+//! `state: ViewState`, `impl View` returning it from `state`/`state_mut`,
+//! implement `draw` through [`DrawCtx`], and handle events through [`Context`].
 //!
 //! [`DrawCtx`]: crate::view::DrawCtx
 //! [`Context`]: crate::view::Context

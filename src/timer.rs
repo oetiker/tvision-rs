@@ -1,50 +1,58 @@
-//! Injected clock and timer queue — deviations **D9** / **D11** (deterministic time).
+//! Injected clock and timer queue.
 //!
-//! Ports `TTimerQueue` (`source/tvision/ttimerqu.cpp`,
-//! `include/tvision/system.h`) together with its time source
-//! `THardwareInfo::getTickCountMs`.  Two structural deviations from the C++:
+//! A [`TimerQueue`] holds pending one-shot and periodic timers; the event loop
+//! asks it which timers are due and how long until the next one. Time comes
+//! from an injected [`Clock`]: [`SystemClock`] in production, [`ManualClock`]
+//! in tests. **`Instant::now()` is only called inside [`SystemClock`]** — all
+//! timer logic operates on the opaque `u64` millisecond values the clock
+//! yields, so tests can advance time deterministically without sleeps.
 //!
-//! 1. **No `collectId` re-entrancy dance.** C++ marks each timer with a
-//!    per-invocation `collectId` so the user callback can mutate the list
-//!    mid-iteration. Here [`TimerQueue::collect_expired`] gathers due ids into a
-//!    `Vec` and returns them; the caller dispatches afterwards, so there is no
-//!    re-entrant mutation to guard against. Two invariants from the C++ are
-//!    preserved: a single `now_ms` value is used for the whole pass, and a
+//! Two structural choices differ from the original:
+//!
+//! 1. **No re-entrancy dance.** [`TimerQueue::collect_expired`] gathers due ids
+//!    into a `Vec` and returns them; the caller dispatches afterwards, so there
+//!    is no re-entrant mutation of the queue to guard against. Two invariants
+//!    are preserved: a single `now_ms` value is used for the whole pass, and a
 //!    periodic timer fires at most once per `collect_expired` call (even if
 //!    overdue by several periods — it reschedules forward past `now_ms` via
 //!    [`calc_next_expires_at`]).
 //!
-//! 2. **Clock not stored in the queue.** C++ holds `getTimeMs` inside
-//!    `TTimerQueue` and calls it internally. We pass `now_ms` into
-//!    [`TimerQueue::collect_expired`] and [`TimerQueue::time_until_next`] from
-//!    the event loop instead (cleaner, more testable). The [`Clock`] is owned by
-//!    the event loop (a later row), not the queue.  Similarly [`TimerQueue::set_timer`]
-//!    receives `now_ms` at the call-site rather than calling the clock internally,
-//!    because it needs an absolute expiry for the reschedule grid arithmetic.
+//! 2. **The clock lives in the event loop, not the queue.** `now_ms` is passed
+//!    into [`TimerQueue::collect_expired`], [`TimerQueue::time_until_next`], and
+//!    [`TimerQueue::set_timer`] by the caller, which keeps the queue easy to
+//!    test and gives `set_timer` the absolute expiry it needs for the
+//!    reschedule grid arithmetic.
 //!
-//! Per D11, **`Instant::now()` is only allowed inside [`SystemClock`]** — all
-//! timer logic operates on the opaque `u64` millisecond values the clock yields,
-//! so tests can use [`ManualClock`] and advance time without sleeps.
+//! # Turbo Vision heritage
+//!
+//! Ports `TTimerQueue` (`ttimerqu.cpp`, `system.h`) and its time source
+//! `THardwareInfo::getTickCountMs`. C++ marks each timer with a per-invocation
+//! `collectId` so a callback may mutate the list mid-iteration, and stores the
+//! clock inside the queue; rstv replaces the callback with a returned id list
+//! and injects the clock from the event loop (deviations D9 and D11).
 
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 // ---------------------------------------------------------------------------
-// Clock — the injected time source (D9 / D11)
+// Clock — the injected time source
 // ---------------------------------------------------------------------------
 
-/// Monotonic millisecond clock. Faithful to `TTimePoint` (`uint64_t` ms tick)
-/// and `THardwareInfo::getTickCountMs`.
+/// Monotonic millisecond clock.
 ///
 /// Two implementations are provided: [`SystemClock`] for production and
 /// [`ManualClock`] for deterministic tests.  **Only [`SystemClock`] may call
 /// `Instant::now()`** — all other code receives `u64` ms values from the
 /// injected clock.
+///
+/// # Turbo Vision heritage
+///
+/// Faithful to `TTimePoint` (a `uint64_t` ms tick count) and
+/// `THardwareInfo::getTickCountMs`. The injected clock makes time
+/// deterministic in tests (deviation D11).
 pub trait Clock {
-    /// Monotonic milliseconds since some fixed epoch. Faithful to TV's
-    /// `TTimePoint` (a `uint64_t` ms tick count) and
-    /// `THardwareInfo::getTickCountMs`.
+    /// Monotonic milliseconds since some fixed epoch.
     fn now_ms(&self) -> u64;
 }
 
@@ -56,7 +64,7 @@ pub trait Clock {
 /// ms on each call.
 ///
 /// `Instant::now()` is allowed **only here** — everything else in the timer
-/// subsystem takes a `u64` from the caller (D11).
+/// subsystem takes a `u64` from the caller.
 pub struct SystemClock {
     base: Instant,
 }
@@ -139,9 +147,11 @@ impl Clock for std::rc::Rc<ManualClock> {
 /// [`TimerQueue`]; `Copy + Eq + Hash` so callers can store it and compare it in
 /// event handlers.
 ///
-/// Faithful to `TTimerId` (`include/tvision/system.h`), which was a raw
-/// `TTimer*`. We use an opaque integer instead (no pointer arithmetic, no
-/// generational reuse needed — `u64` never realistically exhausts).
+/// # Turbo Vision heritage
+///
+/// Faithful to `TTimerId` (`system.h`), which was a raw `TTimer*`; rstv uses an
+/// opaque integer handle instead (no pointer arithmetic, and `u64` never
+/// realistically exhausts).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct TimerId(u64);
 
@@ -154,9 +164,8 @@ struct TimerEntry {
     /// Absolute ms when this timer next fires.  Faithful to `TTimer::expiresAt`.
     expires_at: u64,
     /// `None` = one-shot; `Some(ms)` = periodic with this period.
-    /// Faithful to `TTimer::period` (C++: `< 0` = one-shot, `> 0` = periodic).
-    /// We use `Option` instead of the signed sentinel (D5 spirit — remove magic
-    /// values where idiomatic).
+    /// Faithful to `TTimer::period` (C++: `< 0` = one-shot, `> 0` = periodic);
+    /// rstv uses `Option` instead of the signed sentinel.
     period_ms: Option<u64>,
 }
 
@@ -199,16 +208,18 @@ pub fn calc_next_expires_at(expires_at: u64, now: u64, period: u64) -> u64 {
 // TimerQueue — port of TTimerQueue
 // ---------------------------------------------------------------------------
 
-/// A queue of pending timers. Ports `TTimerQueue` (`source/tvision/ttimerqu.cpp`,
-/// `include/tvision/system.h`).
+/// A queue of pending one-shot and periodic timers.
 ///
-/// Two structural deviations from the C++ (described in module-level docs):
-/// 1. No `collectId` re-entrancy: [`collect_expired`](Self::collect_expired)
-///    returns a `Vec<TimerId>`; the caller dispatches.
-/// 2. Clock not stored here: `now_ms` is passed in from the event loop.
+/// [`collect_expired`](Self::collect_expired) returns the due timers as a
+/// `Vec<TimerId>` for the caller to dispatch, and the current time `now_ms` is
+/// passed in by the caller rather than stored here (see the module docs).
 ///
 /// Durations are stored internally as `u64` milliseconds (truncated from
 /// [`Duration`]).  **Sub-millisecond periods truncate to 0 and are rejected.**
+///
+/// # Turbo Vision heritage
+///
+/// Ports `TTimerQueue` (`ttimerqu.cpp`, `system.h`).
 #[derive(Debug, Default)]
 pub struct TimerQueue {
     timers: HashMap<TimerId, TimerEntry>,
@@ -226,7 +237,7 @@ impl TimerQueue {
     /// Ports `TTimerQueue::setTimer(uint32_t timeoutMs, int32_t periodMs)`.
     ///
     /// - `now_ms` — the current clock value at the moment of arming.  Must be
-    ///   supplied by the caller (deviation 2: clock not stored in the queue).
+    ///   supplied by the caller (the clock lives in the event loop, not here).
     ///   Call `clock.now_ms()` immediately before `set_timer`.
     /// - `timeout` — delay until first expiry.
     /// - `period` — `None` for a one-shot; `Some(d)` for a repeating timer.
@@ -273,10 +284,10 @@ impl TimerQueue {
 
     /// Fire all timers due at `now_ms` and return their ids (in unspecified order).
     ///
-    /// Ports `TTimerQueue::collectExpiredTimers`, with deviation 1: instead of
-    /// calling a user-supplied callback mid-iteration, we collect due ids into a
-    /// [`Vec`] and return them.  The caller then dispatches each id (posts a
-    /// command, calls a callback, etc.).
+    /// Ports `TTimerQueue::collectExpiredTimers`, but instead of calling a
+    /// user-supplied callback mid-iteration, it collects due ids into a [`Vec`]
+    /// and returns them.  The caller then dispatches each id (posts a command,
+    /// calls a callback, etc.).
     ///
     /// **Invariants preserved from C++:**
     /// - A single `now_ms` snapshot is used for the whole pass.

@@ -3,12 +3,12 @@
 Everything you see on screen is a node in one tree. The desktop is a node; each
 window on it is a node; the frame, scrollbars, buttons and input lines inside a
 window are nodes. Turbo Vision called the base class `TView` and the container
-`TGroup`; tvision keeps the model but renders it in idiomatic Rust.
+`TGroup`; rstv keeps the model but renders it in idiomatic Rust.
 
 ## A trait, not a base class
 
 C++ Turbo Vision built every widget by *inheriting* from `TView`. Rust has no
-inheritance, so the hierarchy splits in two (this is deviation **D2**):
+inheritance, so the hierarchy splits in two:
 
 - **[`View`](../api/tvision/view/trait.View.html)** — the *behaviour*. It is the
   port of `TView`'s virtual methods: [`draw`](../api/tvision/view/trait.View.html#method.draw)
@@ -29,11 +29,11 @@ the rest have sensible defaults. That is the whole composition recipe, and the
 ## Flags became fields
 
 Turbo Vision packed its `sfXxx` / `ofXxx` / `gfXxx` / `dmXxx` flag words into
-single integers. tvision unpacks each family into a **struct of named booleans**
-(deviation **D5**), so you read `self.state.state.visible` instead of masking
+single integers. rstv unpacks each family into a **struct of named booleans**,
+so you read `self.state.state.visible` instead of masking
 `sfVisible`:
 
-| C++ flag word | tvision struct |
+| C++ flag word | rstv struct |
 | ------------- | -------------- |
 | `sfXxx` (state)     | [`State`](../api/tvision/view/struct.State.html)     |
 | `ofXxx` (options)   | [`Options`](../api/tvision/view/struct.Options.html) |
@@ -63,8 +63,8 @@ A [`Group`](../api/tvision/view/struct.Group.html) is a `View` that owns child
 views — the port of `TGroup`, and the node type of the tree. The desktop, every
 window and every dialog are groups. A group:
 
-- **owns its children in a `Vec`** in back-to-front paint order (deviation
-  **D3**): `children[0]` is the bottom (drawn first), `children.last()` is the
+- **owns its children in a `Vec`** in back-to-front paint order:
+  `children[0]` is the bottom (drawn first), `children.last()` is the
   frontmost (drawn last). C++'s circular `next`/`prev` ring and per-child `owner`
   back-pointer are gone;
 - **draws** its children back-to-front (painter's algorithm — there is no damage
@@ -73,7 +73,7 @@ window and every dialog are groups. A group:
 
 Because a child has no pointer back to its parent, cross-references use a
 **[`ViewId`](../api/tvision/view/struct.ViewId.html) handle** instead of a raw
-pointer (deviation **D3**). Each view's id is minted when it is inserted into a
+pointer. Each view's id is minted when it is inserted into a
 group and stamped into its own `ViewState`; the framework resolves a handle back
 to a view by walking down from the group. This is also how a window addresses one
 of its controls, and how a leaf view reaches a sibling — see

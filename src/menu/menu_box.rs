@@ -1,14 +1,12 @@
-//! `TMenuBox` — the drop-down/pop-up menu box (`tmenubox.cpp`, rows 50/51).
+//! The drop-down / pop-up menu box.
 //!
-//! `TMenuBox` is a framed, shadowed [`MenuView`] that lays its items out
-//! vertically, one per row, inside a single-line box. This row ports its
-//! **draw/data layer**: the static [`menu_box_rect`] sizing helper
-//! ([`tmenubox.cpp:25`]), [`frame_line`](MenuBox::frame_line) ([`tmenubox.cpp:73`]),
-//! [`draw`](MenuBox::draw) ([`tmenubox.cpp:80`]), and
-//! [`get_item_rect`](MenuView::get_item_rect) ([`tmenubox.cpp:125`]). The modal
-//! `execute()` loop, navigation, and `parentMenu` are Step 2;
-//! [`handle_event`](MenuBox::handle_event) delegates to the row-49 passive
-//! [`menu_view::handle_event`] (`TMenuBox` inherits `TMenuView::handleEvent`).
+//! [`MenuBox`] is a framed, shadowed [`MenuView`] that lays its items out
+//! vertically, one per row. The box-specific work is its layout: the static
+//! [`menu_box_rect`] sizing helper, [`frame_line`](MenuBox::frame_line),
+//! [`draw`](MenuBox::draw), and [`get_item_rect`](MenuView::get_item_rect). Its
+//! [`handle_event`](MenuBox::handle_event) delegates to the shared passive
+//! [`menu_view::handle_event`] (`TMenuBox` inherits `TMenuView::handleEvent`); the
+//! interactive navigation runs in the menu session that owns the open box.
 //!
 //! ## The inset frame (faithful TV, **not** a bug)
 //!
@@ -25,13 +23,14 @@
 //! selected/disabled item row gets its interior highlighted by setting `color`
 //! *before* `frameLine(10)`, then the name is drawn over it in the same `color`.
 //!
-//! Not a D2 `View`-embed (same as [`MenuBar`](crate::menu::MenuBar)); the
-//! differing `View` methods are hand-written.
+//! As with [`MenuBar`](crate::menu::MenuBar), [`MenuViewState`] embeds a
+//! [`ViewState`] (not a `View`), so the differing `View` methods are hand-written
+//! rather than generated.
 //!
-//! ## Drops / deferrals (faithful, breadcrumbed)
-//!
-//! - `execute()`/navigation/`parentMenu` → Step 2.
-//! - `TStreamable` (`build`) → D12 dropped.
+//! # Turbo Vision heritage
+//! Ports `TMenuBox` (`tmenubox.cpp`/`menus.h`). C++ inheritance from `TMenuView`
+//! becomes the [`MenuView`] trait (deviation D2); `TStreamable` persistence is
+//! dropped (deviation D12).
 
 use crate::event::Event;
 use crate::menu::menu_view::{self, MenuColors, MenuView, MenuViewState};
@@ -274,7 +273,7 @@ impl View for MenuBox {
     }
 
     /// `TMenuBox::handleEvent` — `TMenuBox` inherits `TMenuView::handleEvent`, so
-    /// this delegates to the row-49 passive [`menu_view::handle_event`].
+    /// this delegates to the passive [`menu_view::handle_event`].
     fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
         menu_view::handle_event(&self.mv, ev, ctx);
     }
@@ -434,7 +433,7 @@ mod tests {
         use crate::view::{Context, Deferred, Group};
         use std::collections::VecDeque;
         // A box whose item has an F3 accelerator; an F3 KeyDown posts cmOpen and
-        // clears the event (proves the row-49 passive handler is wired in).
+        // clears the event (proves the passive handler is wired in).
         let menu = Menu::builder()
             .command_key("~O~pen", Command::OPEN, KeyEvent::from(Key::F(3)), "F3")
             .build();

@@ -1,50 +1,58 @@
-//! `TOutlineViewer` / `TOutline` — faithful Rust port of `toutline.cpp`
-//! (rows 88–90: `TNode`, `TOutlineViewer`, `TOutline`).
+//! A collapsible tree view: [`Node`], [`OutlineViewer`], and [`Outline`].
 //!
-//! ## D-A: a TRAIT, not a concrete struct (the `ListViewer` shape, not `Scroller`)
+//! # A trait, not a concrete struct
 //!
-//! `TOutlineViewer` extends `TScroller`, but its abstract virtuals
-//! (`getRoot`/`getNext`/`getChild`/`getText`/`isExpanded`/`hasChildren`/`adjust`)
-//! are called from inside the base's own `draw`/`handleEvent`/`update` — exactly
-//! the same constraint that made [`ListViewer`](crate::widgets::list_viewer::ListViewer)
-//! a trait rather than a `Scroller`-style embedded struct. So this row follows the
-//! **ListViewer trait pattern**: [`OutlineViewer`] carries the overridable
-//! virtuals, [`OutlineViewerState`] carries the non-virtual data members, and the
+//! An outline viewer's overridable methods
+//! (`get_root`/`get_next`/`get_child`/`get_text`/`is_expanded`/`has_children`/`adjust`)
+//! are called from inside the base's own `draw`/`handle_event`/`update` — the
+//! same constraint that made
+//! [`ListViewer`](crate::widgets::list_viewer::ListViewer) a trait rather than an
+//! embedded struct. So it follows the same shape: [`OutlineViewer`] carries the
+//! overridable methods, [`OutlineViewerState`] carries the data members, and the
 //! shared draw / event / traversal logic lives as **free functions generic over
 //! `<L: OutlineViewer + ?Sized>`** so a concrete widget's `View` impl reuses them
 //! verbatim.
 //!
-//! ## The cross-view scrollbar read-sync (D3)
+//! # The cross-view scrollbar read-sync
 //!
-//! Like the scroller and the list viewer, an outline viewer holds only `&mut
-//! Context` during dispatch (D3) and so can neither read nor mutate its
-//! window-frame sibling scrollbars. The pump is the broker: on a
-//! `cmScrollBarChanged` broadcast naming one of its bars as `source`, the viewer
-//! requests [`Deferred::SyncOutlineViewerDelta`](crate::view::Deferred::SyncOutlineViewerDelta);
+//! An outline viewer holds only `&mut Context` during dispatch and so can neither
+//! read nor mutate its window-frame sibling scroll bars. The pump is the broker:
+//! on a `cmScrollBarChanged` broadcast naming one of its bars as `source`, the
+//! viewer requests
+//! [`Deferred::SyncOutlineViewerDelta`](crate::view::Deferred::SyncOutlineViewerDelta);
 //! the pump reads both bars' `value`s and writes the resulting `(dx, dy)` into the
-//! viewer's [`delta`](OutlineViewerState::delta) (a downcast to [`Outline`], like
-//! the scroller). This read-sync is **read-only** (no editor cursor / focus
-//! write-back), so it terminates like the scroller's, no change-guard needed.
+//! viewer's [`delta`](OutlineViewerState::delta). This read-sync is **read-only**
+//! (no focus write-back), so it terminates without a change-guard.
 //!
-//! ## Drops / deferrals (faithful, breadcrumbed)
+//! # Mouse press-and-hold
 //!
-//! - **D12:** `TNode`'s and `TOutline`'s `write`/`read`/`build`/`readNode`/
-//!   `writeNode`/`streamableName`/`name` (TStreamable) dropped. `TNode`'s
-//!   destructor (`disposeNode`'s recursion) is Rust's automatic `Box<Node>` drop.
-//! - **D8:** every `drawView()` call site dropped (the whole tree redraws + diffs
-//!   each pass).
-//! - **getPalette → Theme roles** (D7): `cpOutlineViewer "\x6\x7\x3\x8"` →
-//!   [`Role::OutlineNormal`] / [`Role::OutlineFocused`] / [`Role::OutlineSelected`]
-//!   / [`Role::OutlineNotExpanded`].
-//! - **mouse press-and-hold / auto-scroll drag loop** — **landed** (row 31, D9 adoption):
-//!   `MouseDown` arms the A3 `MouseTrackCapture`; `MouseMove`/`MouseAuto`/`MouseUp` route
-//!   the hold loop faithfully (out-of-view auto-scroll `mouseAutoToSkip = 3`; `dragged`
-//!   gate distinguishes click from drag for the graph-toggle post-loop).
-//! - **ctor `update()`**: `TOutline`'s ctor calls `update()`, which needs a
-//!   `Context` (to publish scrollbar params) we do not have at construction. The
-//!   consumer must call [`ov_update`] once after inserting the outline into a group
-//!   (the same constraint the scroller / list-viewer ctors hit — see
-//!   [`Outline::new`]).
+//! A mouse-down arms the mouse-track capture; the subsequent move/auto/up events
+//! route the hold loop, auto-scrolling when the mouse moves out of view. A
+//! `dragged` gate distinguishes a click (which toggles the node's expand state)
+//! from a drag.
+//!
+//! # Colors
+//!
+//! Each role is a [`Role`]: [`Role::OutlineNormal`] / [`Role::OutlineFocused`] /
+//! [`Role::OutlineSelected`] / [`Role::OutlineNotExpanded`].
+//!
+//! # Construction
+//!
+//! Building an outline does not publish its scroll-bar parameters, because that
+//! needs a [`Context`] that is not available at construction. The consumer calls
+//! [`ov_update`] once after inserting the outline into a group (the same
+//! constraint the scroller and list-viewer constructors hit — see
+//! [`Outline::new`]).
+//!
+//! # Turbo Vision heritage
+//!
+//! Ports `TNode`, `TOutlineViewer`, and `TOutline` (`toutline.cpp`).
+//! `TOutlineViewer`'s abstract-class inheritance becomes a trait plus a state
+//! struct plus generic free functions (deviation D2), because the base's `draw`
+//! must call back into the subclass's overrides. Owner up-pointers to the sibling
+//! scroll bars become [`ViewId`] handles brokered by the event loop (deviation
+//! D3); `getPalette` becomes [`Role`]s; `TNode`'s recursive destructor becomes
+//! the automatic `Box<Node>` drop; and `TStreamable` is dropped.
 
 use crate::capture::TrackMask;
 use crate::command::Command;
@@ -65,8 +73,8 @@ const OV_LAST: u16 = 0x04;
 /// stepping the focus by ±1 when the mouse is outside the view (toutline.cpp:421).
 const MOUSE_AUTO_TO_SKIP: i32 = 3;
 
-/// Per-hold mouse-tracking state for the outline viewer (the D9 successor of the
-/// C++ locals `count` and `dragged`).
+/// Per-hold mouse-tracking state for the outline viewer (the successor of the
+/// C++ hold-loop locals `count` and `dragged`).
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct OvTrack {
     /// `count` — accumulated `evMouseAuto` ticks since the last step/reset.
@@ -78,15 +86,19 @@ pub(crate) struct OvTrack {
 }
 
 // ---------------------------------------------------------------------------
-// TNode (row 88) — the tree node
+// Node — the tree node
 // ---------------------------------------------------------------------------
 
-/// `TNode` — one outline tree node (row 88).
+/// One outline tree node.
 ///
 /// A node owns its first child (`child_list`) and its next sibling (`next`), both
-/// as `Option<Box<Node>>`; the recursive `Box` drop is the faithful successor to
-/// C++ `disposeNode` (which recurses into `childList` then `next` then deletes the
-/// node). `text` is the displayed label; `expanded` is the collapse state.
+/// as `Option<Box<Node>>`; the recursive `Box` drop frees the whole subtree.
+/// `text` is the displayed label; `expanded` is the collapse state.
+///
+/// # Turbo Vision heritage
+///
+/// Ports `TNode` (`toutline.cpp`); the recursive `disposeNode` destructor becomes
+/// the automatic `Box<Node>` drop.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Node {
     /// The node's displayed text (`TNode::text`).
@@ -132,14 +144,18 @@ impl Node {
 }
 
 // ---------------------------------------------------------------------------
-// OutlineViewerState — the non-virtual data members (row 89)
+// OutlineViewerState — the data members
 // ---------------------------------------------------------------------------
 
-/// The shared state of every outline viewer — `TOutlineViewer`'s (and its
-/// `TScroller` base's) non-virtual data members. A concrete outline widget embeds
+/// The shared state of every outline viewer. A concrete outline widget embeds
 /// one and exposes it via [`OutlineViewer::ov`]/[`OutlineViewer::ov_mut`].
+///
+/// # Turbo Vision heritage
+///
+/// The data half of `TOutlineViewer` (`toutline.cpp`) plus the scroll
+/// offset/limit it inherits from `TScroller`.
 pub struct OutlineViewerState {
-    /// View state (geometry, flags, …) — the D2 `View` composition target.
+    /// View state (geometry, flags, …) — the `View` composition target.
     pub state: ViewState,
     /// `TScroller::delta` — the scroll offset (x = horizontal char skip, y = the
     /// first visible DFS position). Refreshed from the bars by the read-sync.
@@ -154,7 +170,7 @@ pub struct OutlineViewerState {
     /// `TOutlineViewer::foc` — the focused item's DFS position (0-based).
     pub foc: i32,
     /// Absolute screen position of this view's `(0, 0)`, cached by the last
-    /// `draw` call — feeds the [`MouseTrackCapture`] origin (D9/A3 seam).
+    /// `draw` call — feeds the [`MouseTrackCapture`] origin.
     pub(crate) abs_origin: Point,
     /// Per-hold mouse-tracking state — `Some` while a track is in flight
     /// (between `MouseDown` and `MouseUp`), `None` otherwise. Guards the
@@ -163,13 +179,11 @@ pub struct OutlineViewerState {
 }
 
 impl OutlineViewerState {
-    /// Construct outline-viewer state — ports `TOutlineViewer::TOutlineViewer`
-    /// (and the `TScroller` base ctor it chains).
+    /// Construct outline-viewer state.
     ///
-    /// Faithful: `growMode = gfGrowHiX + gfGrowHiY`; `options |= ofSelectable`
-    /// (from the scroller base); `foc = 0`; `delta = limit = (0, 0)`. The C++
-    /// `eventMask |= evBroadcast` has no analogue under D4 (broadcasts always
-    /// delivered).
+    /// Grows with its lower-right corner, is selectable, and starts focused at
+    /// the top with a zero scroll offset. Opting into the broadcast class has no
+    /// analogue here (broadcasts are always delivered).
     pub fn new(bounds: Rect, h: Option<ViewId>, v: Option<ViewId>) -> Self {
         let mut state = ViewState::new(bounds);
         state.options = Options {
@@ -250,12 +264,12 @@ impl OutlineViewerState {
 }
 
 // ---------------------------------------------------------------------------
-// OutlineViewer — the overridable virtuals (a trait, D-A)
+// OutlineViewer — the overridable methods (a trait)
 // ---------------------------------------------------------------------------
 
-/// The abstract outline-viewer base — `TOutlineViewer`'s overridable virtuals
-/// (D-A). Concrete outline widgets implement [`ov`](Self::ov)/[`ov_mut`](Self::ov_mut)
-/// (the data accessors) and the tree-navigation virtuals; the shared draw / event
+/// The abstract outline-viewer base, as a trait of overridable methods.
+/// Concrete outline widgets implement [`ov`](Self::ov)/[`ov_mut`](Self::ov_mut)
+/// (the data accessors) and the tree-navigation methods; the shared draw / event
 /// / traversal logic (the free functions in this module) is generic over `L:
 /// OutlineViewer` and calls back into these.
 ///
@@ -267,6 +281,12 @@ impl OutlineViewerState {
 /// delegate the relevant `View` methods to this module's free functions: [`ov_draw`],
 /// [`ov_handle_event`], [`ov_set_state`], and [`View::as_any_mut`](crate::view::View::as_any_mut)
 /// (the cross-view broker downcasts through it).
+///
+/// # Turbo Vision heritage
+///
+/// The trait half of `TOutlineViewer` (`toutline.cpp`): its overridable
+/// tree-navigation virtuals, with the data members in [`OutlineViewerState`] and
+/// the shared logic in this module's free functions.
 pub trait OutlineViewer: View {
     /// Borrow the embedded [`OutlineViewerState`].
     fn ov(&self) -> &OutlineViewerState;
@@ -296,9 +316,9 @@ pub trait OutlineViewer: View {
     /// position `pos` in the **currently visible** tree (0-based, same numbering as
     /// [`foc`](OutlineViewerState::foc)).
     ///
-    /// (C++ `adjust(TNode*, Boolean)` takes the node pointer; under D3 the shared
-    /// free functions only hold `&self`, so the abstract contract is keyed by DFS
-    /// position — the concrete widget resolves `pos` to the owned node mutably.)
+    /// (C++ `adjust` takes the node pointer; the shared free functions only hold
+    /// `&self`, so the contract is keyed by DFS position — the concrete widget
+    /// resolves `pos` to the owned node mutably.)
     fn adjust(&mut self, pos: i32, expand: bool);
 
     // -- Overridable with defaults --------------------------------------------
@@ -560,7 +580,7 @@ pub fn ov_get_graph<L: OutlineViewer + ?Sized>(
 /// port stores the origin here to feed [`Context::start_mouse_track`]
 /// (the Button::abs_origin pattern, recipe step 1 in docs/design/mouse-track.md).
 pub fn ov_draw<L: OutlineViewer + ?Sized>(this: &mut L, ctx: &mut DrawCtx) {
-    // Cache the absolute origin for the mouse-tracking capture (D3/D9 — the
+    // Cache the absolute origin for the mouse-tracking capture (the
     // MouseTrackCapture converts abs mouse coords to view-local via this value,
     // mirroring the Button::abs_origin pattern).
     this.ov_mut().abs_origin = ctx.origin();
@@ -735,8 +755,8 @@ pub fn ov_update<L: OutlineViewer + ?Sized>(this: &mut L, ctx: &mut Context) {
 /// `TOutlineViewer::expandAll` — expand the node at position `pos` and all of its
 /// descendants (NOT its siblings).
 ///
-/// C++ `expandAll(TNode*)` recurses over a fixed node pointer; under D3 the shared
-/// code is keyed by DFS position, and positions shift as nodes expand. We restart
+/// C++ `expandAll` recurses over a fixed node pointer; the shared code here is
+/// keyed by DFS position, and positions shift as nodes expand. We restart
 /// the traversal each round: find the depth (`start_level`) of the node at `pos`
 /// once, then repeatedly expand the first unexpanded node-with-children that is
 /// inside the `pos` subtree (position `>= pos`, and either `position == pos` or
@@ -795,10 +815,8 @@ pub fn ov_expand_all<L: OutlineViewer + ?Sized>(this: &mut L, pos: i32) {
     }
 }
 
-/// `TOutlineViewer::setState` — flip the flag (+ the Focused broadcast), then on
-/// `Active`/`Selected` show/hide both bars. Mirrors the scroller's `set_state`
-/// (the outline viewer's `setState` chains `TScroller::setState`). The C++
-/// `sfFocused → drawView()` is dropped (D8; the whole tree redraws each pass).
+/// Flip the flag (plus the focus broadcast), then on `Active`/`Selected`
+/// show/hide both bars. Mirrors the scroller's `set_state`.
 pub fn ov_set_state<L: OutlineViewer + ?Sized>(
     this: &mut L,
     flag: StateFlag,
@@ -825,11 +843,11 @@ pub fn ov_set_state<L: OutlineViewer + ?Sized>(
     }
 }
 
-/// `TOutlineViewer::handleEvent` — the scrollbar broadcast filter (inherited from
-/// `TScroller`), mouse hold-tracking (D9/A3 seam, row 31), and the keyboard nav switch.
+/// The scrollbar broadcast filter (inherited from the scroller), mouse
+/// hold-tracking, and the keyboard nav switch.
 ///
-/// The press-and-hold / edge auto-scroll loop (toutline.cpp:433-463) is ported
-/// via the A3 `MouseTrackCapture` seam: `MouseDown` arms capture; tracked
+/// The press-and-hold / edge auto-scroll loop runs through the
+/// `MouseTrackCapture`: `MouseDown` arms the capture; tracked
 /// `MouseMove`/`MouseAuto` route the loop body; `MouseUp` runs the post-loop
 /// graph-toggle logic (`dragged < 2` distinguishes click from drag).
 pub fn ov_handle_event<L: OutlineViewer + View + ?Sized>(
@@ -852,10 +870,9 @@ pub fn ov_handle_event<L: OutlineViewer + View + ?Sized>(
     match *ev {
         // -------------------------------------------------------------------
         // evMouseDown — first loop iteration: position, then arm the
-        // mouse-track capture (D9/A3 seam, toutline.cpp:433-463).
+        // mouse-track capture.
         //
-        // C++ `do { … } while(mouseEvent(event, evMouseMove + evMouseAuto))`:
-        // the loop body runs once per DOWN, MOVE, or AUTO event; the post-loop
+        // The loop body runs once per DOWN, MOVE, or AUTO event; the post-loop
         // block (double-click / graph-toggle) runs after the hold ends.
         //
         // Unlike ListViewer, the post-loop logic is COMPLEX — it depends on
@@ -867,7 +884,7 @@ pub fn ov_handle_event<L: OutlineViewer + View + ?Sized>(
             let delta = this.ov().delta;
             let limit_y = this.ov().limit.y;
             let foc = this.ov().foc;
-            // mouse is view-local already (D3 — makeLocal/mouseInView are gone).
+            // mouse is view-local already (the group delivers view-local coords).
             let mouse = me.position;
             // mouseInView: the click landed inside this view's extent.
             let in_view = mouse.x >= 0
@@ -896,8 +913,8 @@ pub fn ov_handle_event<L: OutlineViewer + View + ?Sized>(
                 this.selected(this.ov().foc);
                 ev.clear();
             } else if let Some(id) = this.ov().state.id() {
-                // Non-double-click: arm the mouse-track capture (D9/A3 seam).
-                // The post-loop graph-toggle logic runs in the MouseUp arm.
+                // Non-double-click: arm the mouse-track capture. The post-loop
+                // graph-toggle logic runs in the MouseUp arm.
                 let abs_origin = this.ov().abs_origin;
                 this.ov_mut().track = Some(OvTrack { count: 0, dragged });
                 ctx.start_mouse_track(
@@ -911,8 +928,8 @@ pub fn ov_handle_event<L: OutlineViewer + View + ?Sized>(
                 );
                 ev.clear();
             } else {
-                // Uninserted (test/degenerate) widget: single-shot behavior,
-                // mirroring the existing pre-D9 path.
+                // Uninserted (test/degenerate) widget: single-shot behavior, no
+                // hold tracking.
                 if let Some((level, _lines, flags)) = ov_get_node_info(this, this.ov().foc) {
                     let graph_w = level * 3 + 3;
                     if mouse.x < graph_w {
@@ -956,7 +973,6 @@ pub fn ov_handle_event<L: OutlineViewer + View + ?Sized>(
                 };
                 if foc != new_focus {
                     adjust_focus(this, new_focus, ctx);
-                    // drawView() dropped (D8).
                 }
             }
             // Out-of-view moves: no-op (only evMouseAuto steps for out-of-view).
@@ -1017,7 +1033,6 @@ pub fn ov_handle_event<L: OutlineViewer + View + ?Sized>(
 
             if foc != new_focus {
                 adjust_focus(this, new_focus, ctx);
-                // drawView() dropped (D8).
             }
             ev.clear();
         }
@@ -1058,7 +1073,6 @@ pub fn ov_handle_event<L: OutlineViewer + View + ?Sized>(
                     ov_update(this, ctx);
                 }
             }
-            // drawView() dropped (D8).
             ev.clear();
         }
 
@@ -1143,9 +1157,7 @@ pub fn ov_handle_event<L: OutlineViewer + View + ?Sized>(
     }
 }
 
-/// Helper for the keyboard handler: clear the event, then `adjustFocus` (the C++
-/// tail `clearEvent(event); adjustFocus(newFocus); drawView();` — `drawView`
-/// dropped, D8).
+/// Helper for the keyboard handler: clear the event, then adjust the focus.
 fn clear_and_adjust<L: OutlineViewer + ?Sized>(
     this: &mut L,
     new_focus: i32,
@@ -1157,10 +1169,14 @@ fn clear_and_adjust<L: OutlineViewer + ?Sized>(
 }
 
 // ---------------------------------------------------------------------------
-// TOutline (row 90) — the concrete outline over an owned tree
+// Outline — the concrete outline over an owned tree
 // ---------------------------------------------------------------------------
 
-/// `TOutline` — the concrete outline viewer over an owned [`Node`] tree (row 90).
+/// The concrete outline viewer over an owned [`Node`] tree.
+///
+/// # Turbo Vision heritage
+///
+/// Ports `TOutline` (`toutline.cpp`).
 pub struct Outline {
     ov: OutlineViewerState,
     /// `TOutline::root` — the owned tree root (`None` = empty).
@@ -1294,9 +1310,9 @@ impl View for Outline {
         ov_set_state(self, flag, enable, ctx);
     }
 
-    /// `TScroller::changeBounds` — re-publish scrollbar range/page params with
-    /// the stored `limit` and the new `size` after the pump applies new bounds
-    /// (B5, identical to the Scroller override — Outline inherits from TScroller).
+    /// Re-publish scrollbar range/page params with the stored `limit` and the new
+    /// `size` after the loop applies new bounds (identical to the scroller, which
+    /// the outline viewer derives from).
     fn on_bounds_changed(&mut self, ctx: &mut Context) {
         let (x, y) = (self.ov().limit.x, self.ov().limit.y);
         self.ov_mut().set_limit(x, y, ctx);
@@ -1673,7 +1689,7 @@ mod tests {
         insta::assert_snapshot!(render_outline(&mut outline, 20, 5));
     }
 
-    // -- A3 mouse-track seam: Outline (D9 adoption) ---------------------------
+    // -- mouse-track: Outline -------------------------------------------------
     //
     // These tests verify that MouseDown arms tracking with the view-id payload,
     // MouseMove/MouseAuto route focus, MouseAuto out-of-view scrolls after the

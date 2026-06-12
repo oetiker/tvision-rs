@@ -1,4 +1,4 @@
-//! `TDialog` — see the [module docs](super) for the deviation summary.
+//! The modal dialog window — see the [module docs](super) for the overview.
 
 use crate::command::Command;
 use crate::event::{Event, Key};
@@ -12,46 +12,43 @@ use crate::window::{Window, WindowFlags, WindowPalette};
 // Dialog
 // ---------------------------------------------------------------------------
 
-/// `TDialog` — a modal dialog window: a [`Window`] with dialog-specific field
-/// overrides and the Esc/Enter/ok-cancel key handling (D2, row 34).
+/// A modal dialog window: a [`Window`] with dialog-specific field overrides and
+/// the Esc/Enter/ok-cancel key handling.
 ///
 /// Build with [`Dialog::new`], then run it modally via
 /// [`Program::exec_view`](crate::app::Program::exec_view). See the
-/// [module docs](super) for the deviations and the deferrals.
+/// [module docs](super) for the overview.
+///
+/// # Turbo Vision heritage
+/// Ports `TDialog` (`tdialog.cpp`/`dialogs.h`). The C++ `TDialog : TWindow`
+/// inheritance is embed-and-delegate composition (deviation D2): the dialog holds
+/// a `Window` and forwards to it.
 pub struct Dialog {
-    /// The embedded window (D2). `Dialog` *is-a* `TWindow`: its state, draw,
-    /// frame, and most event routing are the window's.
+    /// The embedded window. The dialog *is-a* window: its state, draw, frame, and
+    /// most event routing are the window's.
     window: Window,
 }
 
 impl Dialog {
-    /// `TDialog::TDialog(bounds, aTitle)` — construct the dialog.
+    /// Construct the dialog with the given bounds and optional title.
     ///
-    /// Ports the C++ ctor faithfully (`tdialog.cpp`):
-    /// ```cpp
-    /// TWindow( bounds, aTitle, wnNoNumber )   // number = 0 -> no number
-    /// growMode = 0;                           // dialogs do NOT grow with the owner
-    /// flags = wfMove | wfClose;               // NOT wfGrow, NOT wfZoom
-    /// palette = dpGrayDialog;                 // gray scheme (theming deferred)
-    /// ```
-    ///
-    /// `wnNoNumber == 0`, so the window draws no number. The flag override is
-    /// **re-pushed to the frame** by [`Window::set_flags`], so the frame shows no
-    /// zoom icon. Gray theming is recorded but deferred (the frame still renders
-    /// the blue scheme; see the module docs).
+    /// The dialog draws no window number, does not grow with its owner, carries
+    /// decoration flags `move | close` (no grow, no zoom — so the frame shows no
+    /// zoom icon), and renders in the gray dialog color scheme. The flag override
+    /// is re-pushed to the frame by [`Window::set_flags`].
     pub fn new(bounds: Rect, title: Option<String>) -> Self {
-        // TWindow(bounds, aTitle, wnNoNumber): number 0 -> no number.
+        // Window number 0 -> no number drawn.
         let mut window = Window::new(bounds, title, 0);
-        // flags = wfMove | wfClose (NOT grow, NOT zoom). set_flags re-pushes to the
+        // flags = move | close (no grow, no zoom). set_flags re-pushes to the
         // frame so it draws no zoom icon.
         window.set_flags(WindowFlags {
             r#move: true,
             close: true,
             ..WindowFlags::default()
         });
-        // growMode = 0: a dialog does not track its owner's resize.
+        // A dialog does not track its owner's resize.
         window.set_grow_mode(GrowMode::default());
-        // palette = dpGrayDialog (gray theming deferred; recorded only).
+        // The gray dialog color scheme; propagates to the frame child.
         window.set_palette(WindowPalette::Gray);
         Dialog { window }
     }
@@ -67,19 +64,18 @@ impl Dialog {
 
     /// Reach a direct child of the dialog's embedded window/group by id.
     ///
-    /// Mirrors [`Window::child_mut`]; used by `FileDialog` (row 79) to run a
-    /// child's post-insert, ctx-bearing init (e.g. `FileList::read_directory`)
-    /// and to read it back via `as_any_mut` + downcast.
+    /// Mirrors [`Window::child_mut`]; used by `FileDialog` to run a child's
+    /// post-insert, ctx-bearing init (e.g. `FileList::read_directory`) and to read
+    /// it back via `as_any_mut` + downcast.
     pub fn child_mut(&mut self, id: ViewId) -> Option<&mut dyn View> {
         self.window.child_mut(id)
     }
 
     /// Override the decoration flags after construction.
     ///
-    /// Mirrors [`Window::set_flags`]; used by `FileDialog` (row 79) and
-    /// `ChDirDialog` (row 80) to add `wfGrow` on top of the Dialog defaults
-    /// (`wfMove | wfClose`). Re-pushes to the frame child so the grow handle
-    /// draws immediately.
+    /// Mirrors [`Window::set_flags`]; used by `FileDialog` and `ChDirDialog` to
+    /// add `wfGrow` on top of the Dialog defaults (`move | close`). Re-pushes to
+    /// the frame child so the grow handle draws immediately.
     pub(crate) fn set_flags(&mut self, flags: crate::window::WindowFlags) {
         self.window.set_flags(flags);
     }
@@ -157,10 +153,10 @@ impl View for Dialog {
         }
     }
 
-    /// `TDialog::valid` — `cmCancel` is **always** valid (cancelling a dialog can
-    /// never be vetoed); otherwise defer to the embedded group (`TGroup::valid`,
-    /// which aggregates the children — the future `cmCanCloseForm` veto lands
-    /// here via a validating control, deferred).
+    /// `cmCancel` is **always** valid (cancelling a dialog can never be vetoed);
+    /// otherwise defer to the embedded group, which aggregates the children — a
+    /// control with a failing [`Validator`](crate::validate::Validator) vetoes the
+    /// close through this path.
     fn valid(&mut self, cmd: Command, ctx: &mut Context) -> bool {
         if cmd == Command::CANCEL {
             true
@@ -246,8 +242,8 @@ mod tests {
             !gm.lo_x && !gm.lo_y && !gm.hi_x && !gm.hi_y && !gm.rel && !gm.fixed,
             "growMode = 0 (dialog does not track owner resize)"
         );
-        // palette = Gray — AND pushed down into the frame child (row 34 gray
-        // theming: the frame renders the FrameGray* role family).
+        // palette = Gray — AND pushed down into the frame child (the frame
+        // renders the FrameGray* role family).
         assert_eq!(d.window.palette(), WindowPalette::Gray);
         let mut d = d;
         let frame_id = d.window.frame_id();
@@ -267,7 +263,7 @@ mod tests {
     }
 
     /// The frame shows **no zoom icon and no number** (the flags-pushed-to-frame
-    /// check). The frame renders the gray dialog scheme (row 34 gray theming).
+    /// check). The frame renders the gray dialog scheme.
     #[test]
     fn dialog_frame_has_no_zoom_icon_no_number_snapshot() {
         let theme = Theme::classic_blue();

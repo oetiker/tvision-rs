@@ -1,9 +1,9 @@
-# C++ Turbo Vision → tvision symbol map
+# C++ Turbo Vision → `tv::` symbol map
 
-A terse lookup for translating a C++ Turbo Vision symbol into its tvision
-equivalent. This is the *what*; the *why* lives in
-[The Idiomatic Port](../port/faithful.md) and the deviation summary in
-[Deviations D1–D13](deviations.md).
+A terse lookup for translating a C++ Turbo Vision symbol into its rstv
+equivalent (the `tvision` crate, imported as `tv`). This is the *what*; the *why*
+lives in [The Idiomatic Port](../port/faithful.md) and the summary in
+[Differences from C++ Turbo Vision](deviations.md).
 
 Two mechanical rules cover most of the table:
 
@@ -129,5 +129,5 @@ Rationale for each removal is in
 ---
 
 > Anything not in this table ports verbatim — same name (minus the `T`), same
-> method, same behaviour. When in doubt, the full deviation lookup is
-> Appendix A of `docs/PORTING-GUIDE.md`.
+> method, same behaviour. For the differences that *do* change a symbol, see
+> [Differences from C++ Turbo Vision](deviations.md).

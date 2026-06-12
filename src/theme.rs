@@ -1,28 +1,36 @@
-//! Theme: a `Role` → [`Style`] map plus a glyph holder — deviation **D7**
-//! (partial row 16).
+//! Theming: a [`Role`] → [`Style`] map plus a [`Glyphs`] holder.
 //!
-//! C++ Turbo Vision resolves colours by walking an owner chain of
-//! length-prefixed palette strings (`getPalette`/`getColor`) and scatters drawing
-//! glyphs (frame corners, scrollbar arrows, marks, shadows) as literals through
-//! widget source. Per D7 a single [`Theme`] owns both: a view asks
-//! `ctx.theme.style(Role::FrameActive)` and (later) reaches glyphs through
-//! [`Glyphs`]. State → role resolution is centralized at each widget's
-//! `getColor` → `Role` mapping, which lands when `TFrame`/`TButton` are ported.
+//! Every widget asks the [`Theme`] for colours by **semantic role** rather than
+//! a raw colour — a frame draws with `ctx.theme.style(Role::FrameActive)`, a
+//! button with `Role::ButtonNormal`, and so on — and reaches drawing glyphs
+//! (frame corners, scrollbar arrows, check/radio marks, shadows) through
+//! [`Glyphs`]. Swapping themes (or editing a single role) recolours the whole
+//! UI at once.
 //!
-//! [`Role`] is a **first-party closed enum** (not a newtype): third parties do
-//! not add roles. It **grows per-widget** — seeded here with exactly D7's
-//! enumerated needs (active/passive/dragging frames; the
-//! normal/focused/disabled/pressed quartet; the list-state matrix; the
-//! error/warning/info/success family).
+//! [`Role`] is a **first-party closed enum**: third parties do not add roles.
+//! It covers the frames (active/passive/dragging), the
+//! normal/focused/disabled/pressed control quartet, the list-state matrix, and
+//! the per-widget families (buttons, labels, menus, the status line, …).
+//!
+//! # Turbo Vision heritage
+//!
+//! C++ resolves colours by walking an owner chain of length-prefixed palette
+//! strings (`getPalette`/`getColor`) and scatters drawing glyphs as literals
+//! through widget source. rstv collapses both into one [`Theme`] keyed by a
+//! semantic [`Role`] (deviation D7); each C++ `getColor` call site maps to one
+//! named role here.
 
 use crate::color::{Color, Style};
 
-/// A semantic colour role. Faithful to D7's "resolve state → role in one
-/// centralized mapper": each `getPalette`/`getColor` call site in the C++ maps
-/// to one named `Role` here.
+/// A semantic colour role — the key a widget uses to ask the [`Theme`] for a
+/// [`Style`].
 ///
-/// This enum is **closed and first-party** (not app-extensible) and grows as
-/// later widgets are ported and need new roles.
+/// This enum is **closed and first-party** (not app-extensible).
+///
+/// # Turbo Vision heritage
+///
+/// Each `getPalette`/`getColor` call site in the C++ maps to one named role
+/// here (deviation D7).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Role {
     /// The desktop background fill.
@@ -35,7 +43,7 @@ pub enum Role {
     FrameDragging,
     /// A frame icon (close/zoom/resize glyphs).
     FrameIcon,
-    /// An active (focused) **gray-scheme** frame (row 34: `TDialog` /
+    /// An active (focused) **gray-scheme** frame (`TDialog` /
     /// `wpGrayWindow`). The frame selects the `FrameGray*` family when its
     /// owner's [`WindowPalette`](crate::window::WindowPalette) is `Gray`.
     FrameGrayActive,
@@ -102,7 +110,7 @@ pub enum Role {
     Info,
     /// Success feedback.
     Success,
-    /// Static (label/caption) text — `TStaticText` palette index 6 (row 36).
+    /// Static (label/caption) text — `TStaticText` palette index 6.
     StaticText,
     /// A cluster item's normal (unselected) text — `TCluster` palette idx 1.
     ClusterNormal,
@@ -209,12 +217,12 @@ pub enum Role {
     /// lo and hi.
     StatusSelDisabled,
     /// `TFileInfoPane` text (path + size/date display) — `cpInfoPane "\x1E"`
-    /// idx 1 (`getColor(0x01)`, row 78). Resolved through the classic gray-dialog
+    /// idx 1 (`getColor(0x01)`). Resolved through the classic gray-dialog
     /// palette chain: `cpInfoPane` idx 1 → `cpGrayDialog` idx `0x1E` (30) = `0x3D`
     /// → `cpAppColor[0x3D]` = **`0x13`** = BIOS attr fg=cyan(3) on bg=blue(1).
     InfoPane,
 
-    // -- row 89: TOutlineViewer (`cpOutlineViewer "\x6\x7\x3\x8"`) -------------
+    // -- TOutlineViewer (`cpOutlineViewer "\x6\x7\x3\x8"`) --------------------
     /// `TOutlineViewer` normal item — `cpOutlineViewer` idx 1 (the graph + an
     /// expanded item's text).
     OutlineNormal,
@@ -228,9 +236,9 @@ pub enum Role {
     OutlineNotExpanded,
 
     /// Window/menu drop shadows — the global C++ `shadowAttr = 0x08`
-    /// (tview.cpp:36), dark gray on black. Not a palette entry in the C++
-    /// (it is a file-scope constant); themed here per D7. Applied by the D8
-    /// shadow pass ([`DrawCtx::cast_shadow`](crate::view::DrawCtx::cast_shadow)).
+    /// (`tview.cpp`), dark gray on black. Not a palette entry in the C++ (it is a
+    /// file-scope constant); themed here as a role. Applied by the shadow pass
+    /// ([`DrawCtx::cast_shadow`](crate::view::DrawCtx::cast_shadow)).
     Shadow,
 }
 
@@ -487,46 +495,44 @@ impl Role {
 /// Holder for the framework's drawing glyphs — frame corners/tee-connectors,
 /// scrollbar arrows, check/radio marks, shadows, window decorations.
 ///
-/// The glyph tables grow **per-widget** as each control is ported (D7,
-/// row 9 convention). Fields are added here as each widget row is done;
-/// defaults match the classic CP437/BIOS character set that magiblot's
-/// `tvtext1.cpp` seeds.
+/// Defaults match the classic CP437/BIOS character set.
 ///
-/// # Scrollbar glyphs (row 25)
+/// # Scrollbar glyphs
 ///
-/// Taken verbatim from `tvtext1.cpp`:
 /// ```text
-/// TScrollChars vChars = { '\x1E', '\x1F', '\xB1', '\xFE', '\xB2' };
-/// TScrollChars hChars = { '\x11', '\x10', '\xB1', '\xFE', '\xB2' };
+/// vChars = { '\x1E', '\x1F', '\xB1', '\xFE', '\xB2' };
+/// hChars = { '\x11', '\x10', '\xB1', '\xFE', '\xB2' };
 /// ```
 /// Indices: `[0]`=back-arrow, `[1]`=fwd-arrow, `[2]`=page/trough, `[3]`=thumb,
 /// `[4]`=page-when-no-range.
 ///
-/// # Frame glyphs (row 24)
+/// # Frame glyphs
 ///
-/// `TFrame` (`tframe.cpp` / `framelin.cpp`) draws its border from CP437 box
-/// chars. magiblot encodes them as a 5-bit `frameChars[33]` mask table fed by
-/// `initFrame[19]`, plus the sibling tee-join walk. Under D3 the sibling walk is
-/// **deferred** (a frame can't reach its siblings), so we instead store the box
-/// pieces as **named glyphs** (single- and double-line) and draw plain
-/// corners/edges — byte-identical to C++ for the common case (no `ofFramed`
-/// sibling touching the border). The four icon strings carry the `~`-toggle
-/// markers consumed by [`DrawCtx::put_cstr`](crate::view::DrawCtx::put_cstr).
+/// The frame border is drawn from CP437 box characters, stored as **named
+/// glyphs** (single- and double-line corners and edges) plus four icon strings
+/// that carry the `~`-toggle markers consumed by
+/// [`DrawCtx::put_cstr`](crate::view::DrawCtx::put_cstr). The tee/cross glyphs
+/// (`frame_tee_*`, `frame_cross`) are seeded for completeness but unused — they
+/// would feed the sibling tee-join walk that rstv does not reproduce (see the
+/// [`frame`](crate::frame) module docs).
 ///
-/// The tee/cross glyphs (`frame_tee_*`, `frame_cross`) are seeded for
-/// completeness but are **unused this row** (they feed the deferred sibling
-/// walk).
-///
-/// CP437 → Unicode mapping (from `tvtext1.cpp`):
+/// CP437 → Unicode mapping:
 /// ```text
 /// ┌ \xDA  ┐ \xBF  └ \xC0  ┘ \xD9  ─ \xC4  │ \xB3   (single)
 /// ╔ \xC9  ╗ \xBB  ╚ \xC8  ╝ \xBC  ═ \xCD  ║ \xBA   (double)
 /// closeIcon "[~■~]"  zoomIcon "[~↑~]"  unZoomIcon "[~↕~]"
 /// dragIcon "~─┘~"    dragLeftIcon "~└─~"
 /// ```
+///
+/// # Turbo Vision heritage
+///
+/// Faithful to magiblot's `tvtext1.cpp` glyph tables. C++ encodes the frame box
+/// as a 5-bit `frameChars[33]` mask fed by `initFrame[19]` plus a sibling
+/// tee-join walk; rstv stores plain named box pieces instead and skips the
+/// sibling walk (deviation D3).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Glyphs {
-    // --- Scrollbar glyphs (row 25) ---
+    // --- Scrollbar glyphs ---
     /// Vertical scrollbar: up-arrow / back-arrow. `vChars[0]` = `'\x1E'` (▲).
     pub sb_v_arrow_back: char,
     /// Vertical scrollbar: down-arrow / fwd-arrow. `vChars[1]` = `'\x1F'` (▼).
@@ -542,7 +548,7 @@ pub struct Glyphs {
     /// Page fill when range is zero (both orientations). `vChars[4]` = `'\xB2'` (▓).
     pub sb_page_no_range: char,
 
-    // --- Frame glyphs (row 24) — single-line box ---
+    // --- Frame glyphs — single-line box ---
     /// Single-line top-left corner `┌` (`\xDA`).
     pub frame_tl: char,
     /// Single-line top-right corner `┐` (`\xBF`).
@@ -556,7 +562,7 @@ pub struct Glyphs {
     /// Single-line vertical edge `│` (`\xB3`).
     pub frame_v: char,
 
-    // --- Frame glyphs (row 24) — double-line box (active frame) ---
+    // --- Frame glyphs — double-line box (active frame) ---
     /// Double-line top-left corner `╔` (`\xC9`).
     pub frame_tl_d: char,
     /// Double-line top-right corner `╗` (`\xBB`).
@@ -570,19 +576,19 @@ pub struct Glyphs {
     /// Double-line vertical edge `║` (`\xBA`).
     pub frame_v_d: char,
 
-    // --- Frame glyphs (row 24) — tee/cross joins (DEFERRED sibling walk) ---
-    /// Single-line left tee `├` (`\xC3`) — unused this row.
+    // --- Frame glyphs — tee/cross joins (unused: sibling walk not reproduced) ---
+    /// Single-line left tee `├` (`\xC3`) — unused.
     pub frame_tee_l: char,
-    /// Single-line right tee `┤` (`\xB4`) — unused this row.
+    /// Single-line right tee `┤` (`\xB4`) — unused.
     pub frame_tee_r: char,
-    /// Single-line top tee `┬` (`\xC2`) — unused this row.
+    /// Single-line top tee `┬` (`\xC2`) — unused.
     pub frame_tee_t: char,
-    /// Single-line bottom tee `┴` (`\xC1`) — unused this row.
+    /// Single-line bottom tee `┴` (`\xC1`) — unused.
     pub frame_tee_b: char,
-    /// Single-line cross `┼` (`\xC5`) — unused this row.
+    /// Single-line cross `┼` (`\xC5`) — unused.
     pub frame_cross: char,
 
-    // --- Frame icon strings (row 24) — `~`-toggled for `put_cstr` ---
+    // --- Frame icon strings — `~`-toggled for `put_cstr` ---
     /// Close icon `"[~■~]"` — `[` `]` in the frame role, `■` in `FrameIcon`.
     pub close_icon: &'static str,
     /// Zoom icon `"[~↑~]"` (window not maximized).
@@ -594,7 +600,7 @@ pub struct Glyphs {
     /// Resize/drag icon (bottom-left) `"~└─~"`.
     pub drag_left_icon: &'static str,
 
-    // --- Indicator glyphs (row 45) ---
+    // --- Indicator glyphs ---
     /// `TIndicator::dragFrame` (`\xCD` ═) — drawn when the owner is **not**
     /// dragging (the C++ field name is inverted; ported verbatim).
     pub indicator_frame_normal: char,
@@ -603,7 +609,7 @@ pub struct Glyphs {
     /// The "buffer modified" marker drawn at column 0 (`char 15`, ☼).
     pub indicator_modified: char,
 
-    // --- Button shadow glyphs (row 37) ---
+    // --- Button shadow glyphs ---
     /// `TButton::shadows[0]` (`\xDC` ▄) — drawn at the top of the button's
     /// right-edge shadow column (`y == 0`).
     pub button_shadow_top: char,
@@ -613,7 +619,7 @@ pub struct Glyphs {
     /// `TButton::shadows[2]` (`\xDF` ▀) — the button's bottom-row shadow fill.
     pub button_shadow_bottom: char,
 
-    // --- Input-line glyphs (row 39) ---
+    // --- Input-line glyphs ---
     /// `TInputLine::leftArrow` (`\x11` ◄ U+25C4) — drawn at column 0 when the
     /// field can scroll left.
     pub input_left_arrow: char,
@@ -655,7 +661,7 @@ impl Default for Glyphs {
             frame_h_d: '\u{2550}',
             frame_v_d: '\u{2551}',
 
-            // Frame tee/cross joins (deferred sibling walk): ├ ┤ ┬ ┴ ┼
+            // Frame tee/cross joins (unused — sibling walk not reproduced): ├ ┤ ┬ ┴ ┼
             frame_tee_l: '\u{251C}',
             frame_tee_r: '\u{2524}',
             frame_tee_t: '\u{252C}',
@@ -671,24 +677,29 @@ impl Default for Glyphs {
             drag_icon: "~\u{2500}\u{2518}~",
             drag_left_icon: "~\u{2514}\u{2500}~",
 
-            // Indicator (row 45): ═ (0xCD) not-dragging, ─ (0xC4) dragging, ☼ (0x0F) modified.
+            // Indicator: ═ (0xCD) not-dragging, ─ (0xC4) dragging, ☼ (0x0F) modified.
             indicator_frame_normal: '\u{2550}',
             indicator_frame_dragging: '\u{2500}',
             indicator_modified: '\u{263C}',
 
-            // Button shadow (row 37): ▄ (0xDC) top, █ (0xDB) side, ▀ (0xDF) bottom.
+            // Button shadow: ▄ (0xDC) top, █ (0xDB) side, ▀ (0xDF) bottom.
             button_shadow_top: '\u{2584}',
             button_shadow_side: '\u{2588}',
             button_shadow_bottom: '\u{2580}',
 
-            // Input line (row 39): ◄ (0x11) left scroll arrow, ► (0x10) right.
+            // Input line: ◄ (0x11) left scroll arrow, ► (0x10) right.
             input_left_arrow: '\u{25C4}',
             input_right_arrow: '\u{25BA}',
         }
     }
 }
 
-/// A theme: a fixed `Role` → [`Style`] map plus a [`Glyphs`] holder (D7).
+/// A theme: a fixed [`Role`] → [`Style`] map plus a [`Glyphs`] holder.
+///
+/// # Turbo Vision heritage
+///
+/// Collapses the C++ palette chain and scattered glyph literals into one
+/// role-keyed table (deviation D7).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Theme {
     styles: [Style; ROLE_COUNT],
@@ -705,7 +716,7 @@ impl Theme {
     /// `cpBlueWindow`; program-owned widgets → one direct hop), whose entries
     /// index into `cpAppColor` (app.h); the final byte is a BIOS attr
     /// `bg << 4 | fg`. rstv collapsed that chain into this flat Role → Style
-    /// table (D7). Roles marked "rstv-native" have no C++ chain.
+    /// table. Roles marked "rstv-native" have no C++ chain.
     pub fn classic_blue() -> Self {
         // BIOS 4-bit palette reminder: 0=black 1=blue 2=green 3=cyan 4=red
         // 5=magenta 6=brown 7=lightgray 8=darkgray 9=lightblue ... F=white.
@@ -729,7 +740,7 @@ impl Theme {
         set(&mut styles, Role::FrameDragging, 0xA, 0x1); // lightgreen on blue (chain: cpFrame[5]=0x03 → cpBlueWindow[3]=0x0A → cpAppColor[10]=0x1A)
         set(&mut styles, Role::FrameIcon, 0xA, 0x1); // lightgreen on blue (chain: cpFrame[5]=0x03 → cpBlueWindow[3]=0x0A → cpAppColor[10]=0x1A)
 
-        // Gray-scheme frames (row 34: TDialog / wpGrayWindow). Faithful palette
+        // Gray-scheme frames (TDialog / wpGrayWindow). Faithful palette
         // chains — TFrame's color slots (tframe.cpp) resolve through cpFrame
         // "\x01\x01\x02\x02\x03" into the OWNER's palette, here cpGrayDialog
         // (dialogs.h) instead of cpBlueWindow, then into cpAppColor (app.h):
@@ -749,7 +760,7 @@ impl Theme {
         set(&mut styles, Role::FrameCyanDragging, 0xA, 0x3); // lightgreen on cyan (chain: cpFrame[5]=0x03 → cpCyanWindow[3]=0x12 → cpAppColor[18]=0x3A)
         set(&mut styles, Role::FrameCyanIcon, 0xA, 0x3); // lightgreen on cyan (chain: cpFrame[5]=0x03 → cpCyanWindow[3]=0x12 → cpAppColor[18]=0x3A)
 
-        // History family (rows 55-57). The THistory icon sits in a GRAY DIALOG
+        // History family. The THistory icon sits in a GRAY DIALOG
         // (`cpHistory "\x16\x17"` → cpGrayDialog → cpAppColor); the recall
         // viewer adds one more hop through its THistoryWindow owner
         // (`cpHistoryViewer` → cpHistoryWindow "\x13\x13\x15\x18\x17\x13\x14"
@@ -762,8 +773,8 @@ impl Theme {
         set(&mut styles, Role::ScrollBarPage, 0x1, 0x3); // blue on cyan (chain: cpScrollBar[1]=0x04 → cpBlueWindow[4]=0x0B → cpAppColor[11]=0x31)
         set(&mut styles, Role::ScrollBarControls, 0x1, 0x3); // blue on cyan (chain: cpScrollBar[2]=cpScrollBar[3]=0x05 → cpBlueWindow[5]=0x0C → cpAppColor[12]=0x31)
 
-        // Generic control states — rstv-native roles (D7 additions, no C++
-        // palette chain exists for them).
+        // Generic control states — rstv-native roles (no C++ palette chain
+        // exists for them).
         set(&mut styles, Role::Normal, 0x0, 0x3); // black on cyan
         set(&mut styles, Role::Focused, 0xF, 0x2); // white on green
         set(&mut styles, Role::Disabled, 0x8, 0x1); // darkgray on blue
@@ -780,13 +791,13 @@ impl Theme {
         set(&mut styles, Role::ListSelected, 0xE, 0x3); // yellow on cyan (chain: cpListViewer[4]=0x1C → cpGrayDialog[28]=0x3B → cpAppColor[59]=0x3E)
         set(&mut styles, Role::ListDivider, 0x1, 0x3); // blue on cyan (chain: cpListViewer[5]=0x1D → cpGrayDialog[29]=0x3C → cpAppColor[60]=0x31)
 
-        // Feedback family — rstv-native roles (D7 additions, no C++ chain).
+        // Feedback family — rstv-native roles (no C++ chain).
         set(&mut styles, Role::Error, 0xF, 0x4); // white on red
         set(&mut styles, Role::Warning, 0x0, 0x6); // black on brown
         set(&mut styles, Role::Info, 0xF, 0x1); // white on blue
         set(&mut styles, Role::Success, 0xF, 0x2); // white on green
 
-        // Static text + cluster family (rows 36/38). Faithful palette chains for
+        // Static text + cluster family. Faithful palette chains for
         // a TStaticText / TCluster inside a GRAY DIALOG (the realistic owner):
         // `cpStaticText "\x06"` / `cpCluster "\x10\x11\x12\x12\x1f"` →
         // cpGrayDialog → cpAppColor. Clusters sit on the classic cyan strip
@@ -799,14 +810,14 @@ impl Theme {
         set(&mut styles, Role::ClusterSelectedShortcut, 0xE, 0x3); // yellow on cyan (chain: cpCluster[4]=0x12 → cpGrayDialog[18]=0x31 → cpAppColor[49]=0x3E)
         set(&mut styles, Role::ClusterDisabled, 0x8, 0x3); // darkgray on cyan (chain: cpCluster[5]=0x1F → cpGrayDialog[31]=0x3E → cpAppColor[62]=0x38)
 
-        // Indicator (editor row/col display, row 45). Faithful palette chain for
+        // Indicator (editor row/col display). Faithful palette chain for
         // a TIndicator inside a TEditWindow — a BLUE window (teditwnd.cpp does
         // not override TWindow::getPalette, so cpBlueWindow applies):
         // `cpIndicator "\x02\x03"` → cpBlueWindow (views.h) → cpAppColor.
         set(&mut styles, Role::IndicatorNormal, 0xF, 0x1); // white on blue (chain: cpIndicator[1]=0x02 → cpBlueWindow[2]=0x09 → cpAppColor[9]=0x1F)
         set(&mut styles, Role::IndicatorDragging, 0xA, 0x1); // lightgreen on blue (chain: cpIndicator[2]=0x03 → cpBlueWindow[3]=0x0A → cpAppColor[10]=0x1A)
 
-        // Button family (row 37). Faithful palette chains for a TButton inside
+        // Button family. Faithful palette chains for a TButton inside
         // a GRAY DIALOG (the realistic owner): `cpButton
         // "\x0A\x0B\x0C\x0D\x0E\x0E\x0E\x0F"` → cpGrayDialog → cpAppColor.
         // Indices 5..7 all map to the same dialog entry 14, so the three
@@ -820,7 +831,7 @@ impl Theme {
         set(&mut styles, Role::ButtonSelectedShortcut, 0xE, 0x2); // yellow on green (chain: cpButton[7]=0x0E → cpGrayDialog[14]=0x2D → cpAppColor[45]=0x2E)
         set(&mut styles, Role::ButtonShadow, 0x0, 0x7); // black on lightgray (chain: cpButton[8]=0x0F → cpGrayDialog[15]=0x2E → cpAppColor[46]=0x70)
 
-        // Label family (row 41). Faithful palette chain for a TLabel inside a
+        // Label family. Faithful palette chain for a TLabel inside a
         // GRAY DIALOG (the realistic owner): `cpLabel "\x07\x08\x09\x09"` →
         // cpGrayDialog (dialogs.h) → cpAppColor (app.h). Both shortcut indices
         // map to the same dialog entry 9, so the two shortcut roles coincide.
@@ -829,7 +840,7 @@ impl Theme {
         set(&mut styles, Role::LabelNormalShortcut, 0xE, 0x7); // yellow on lightgray (chain: cpLabel[3]=0x09 → cpGrayDialog[9]=0x28 → cpAppColor[40]=0x7E)
         set(&mut styles, Role::LabelLightShortcut, 0xE, 0x7); // yellow on lightgray (chain: cpLabel[4]=0x09 → cpGrayDialog[9]=0x28 → cpAppColor[40]=0x7E)
 
-        // Input line (row 39). Faithful palette chain for a TInputLine inside a
+        // Input line. Faithful palette chain for a TInputLine inside a
         // GRAY DIALOG (the realistic owner): `cpInputLine "\x13\x13\x14\x15"` →
         // cpGrayDialog → cpAppColor. Indices 1 (passive) and 2 (active) both
         // map to dialog entry 0x13, so one role serves both field states: the
@@ -838,9 +849,9 @@ impl Theme {
         set(&mut styles, Role::InputSelected, 0xF, 0x2); // white on green (chain: cpInputLine[3]=0x14 → cpGrayDialog[20]=0x33 → cpAppColor[51]=0x2F)
         set(&mut styles, Role::InputArrow, 0xA, 0x1); // lightgreen on blue (chain: cpInputLine[4]=0x15 → cpGrayDialog[21]=0x34 → cpAppColor[52]=0x1A)
 
-        // Scroller / editor content fill (rows 27, 66). Faithful to the C++ palette
+        // Scroller / editor content fill. Faithful to the C++ palette
         // chain for a TScroller/TEditor inside a (blue) window — the realistic case,
-        // since rstv collapsed per-window palettes into a single Role (D7):
+        // since rstv collapsed per-window palettes into a single Role:
         //   cpScroller[1]=0x06 → cpBlueWindow[6]=0x0D → cpAppColor[0x0D]=0x1E (normal)
         //   cpScroller[2]=0x07 → cpBlueWindow[7]=0x0E → cpAppColor[0x0E]=0x71 (selected)
         // (The earlier provisional green 0x28/0x24 was the degenerate "scroller
@@ -849,7 +860,7 @@ impl Theme {
         set(&mut styles, Role::ScrollerNormal, 0xE, 0x1); // yellow on blue (0x1E)
         set(&mut styles, Role::ScrollerSelected, 0x1, 0x7); // blue on lightgray (0x71)
 
-        // Menu family (rows 50/51). Faithful palette chain: a TMenuBar/TMenuBox
+        // Menu family. Faithful palette chain: a TMenuBar/TMenuBox
         // is owned directly by TProgram, so `cpMenuView` resolves in ONE hop
         // into `cpAppColor` (app.h) — no window/dialog remap.
         set(&mut styles, Role::MenuNormal, 0x0, 0x7); // black on lightgray (chain: cpMenuView[1]=0x02 → cpAppColor[2]=0x70)
@@ -859,7 +870,7 @@ impl Theme {
         set(&mut styles, Role::MenuDisabled, 0x8, 0x7); // darkgray on lightgray (chain: cpMenuView[2]=0x03 → cpAppColor[3]=0x78)
         set(&mut styles, Role::MenuSelectedDisabled, 0x8, 0x2); // darkgray on green (chain: cpMenuView[5]=0x06 → cpAppColor[6]=0x28)
 
-        // Status-line family (rows 47/53). Faithful palette chain: a TStatusLine
+        // Status-line family. Faithful palette chain: a TStatusLine
         // is owned directly by TProgram, so `cpStatusLine` resolves in ONE hop
         // into `cpAppColor` (app.h) — identical bytes to the menu family.
         set(&mut styles, Role::StatusNormal, 0x0, 0x7); // black on lightgray (chain: cpStatusLine[1]=0x02 → cpAppColor[2]=0x70)
@@ -869,12 +880,12 @@ impl Theme {
         set(&mut styles, Role::StatusDisabled, 0x8, 0x7); // darkgray on lightgray (chain: cpStatusLine[2]=0x03 → cpAppColor[3]=0x78)
         set(&mut styles, Role::StatusSelDisabled, 0x8, 0x2); // darkgray on green (chain: cpStatusLine[5]=0x06 → cpAppColor[6]=0x28)
 
-        // File-info pane (row 78). Faithful palette chain `cpInfoPane "\x1E"`
+        // File-info pane. Faithful palette chain `cpInfoPane "\x1E"`
         // idx 1 → `cpGrayDialog[0x1E]` = `0x3D` → `cpAppColor[0x3D]` = `0x13` =
         // BIOS attr `(bg<<4)|fg` with fg=cyan(3), bg=blue(1).
         set(&mut styles, Role::InfoPane, 0x3, 0x1); // cyan on blue (0x13)
 
-        // Outline viewer (row 89). Faithful palette chain for a TOutlineViewer
+        // Outline viewer. Faithful palette chain for a TOutlineViewer
         // inside a (blue) TWindow — the realistic owner (the C++ outline demo
         // hosts a TOutline in a plain TWindow; same owner pick as the
         // ScrollerNormal precedent above): `cpOutlineViewer "\x6\x7\x3\x8"` →
@@ -884,7 +895,7 @@ impl Theme {
         set(&mut styles, Role::OutlineSelected, 0xA, 0x1); // lightgreen on blue (chain: cpOutlineViewer[3]=0x03 → cpBlueWindow[3]=0x0A → cpAppColor[10]=0x1A)
         set(&mut styles, Role::OutlineNotExpanded, 0xF, 0x1); // white on blue (chain: cpOutlineViewer[4]=0x08 → cpBlueWindow[8]=0x0F → cpAppColor[15]=0x1F)
 
-        // Window/menu drop shadow — exactly C++ `shadowAttr = 0x08` (tview.cpp:36).
+        // Window/menu drop shadow — exactly C++ `shadowAttr = 0x08` (tview.cpp).
         set(&mut styles, Role::Shadow, 0x8, 0x0); // darkgray on black
 
         Theme {
@@ -903,7 +914,7 @@ impl Theme {
         self.styles[role.index()] = style;
     }
 
-    /// The theme's glyph holder (an empty stub until row 9 / per-widget, D7).
+    /// The theme's glyph holder.
     pub fn glyphs(&self) -> &Glyphs {
         &self.glyphs
     }
@@ -981,10 +992,10 @@ mod tests {
     fn glyphs_accessor_returns_default() {
         let t = Theme::classic_blue();
         assert_eq!(*t.glyphs(), Glyphs::default());
-        // Spot-check the scrollbar glyphs (row 25).
+        // Spot-check the scrollbar glyphs.
         assert_eq!(t.glyphs().sb_page, '\u{2592}');
         assert_eq!(t.glyphs().sb_thumb, '\u{25A0}');
-        // Spot-check the frame glyphs (row 24).
+        // Spot-check the frame glyphs.
         assert_eq!(t.glyphs().frame_tl, '\u{250C}'); // ┌
         assert_eq!(t.glyphs().frame_br, '\u{2518}'); // ┘
         assert_eq!(t.glyphs().frame_tl_d, '\u{2554}'); // ╔

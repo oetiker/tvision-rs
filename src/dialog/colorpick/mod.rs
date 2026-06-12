@@ -1,8 +1,8 @@
 //! Truecolor color-picker — an rstv-original extension (NOT a faithful port).
 //!
-//! See `docs/superpowers/specs/2026-06-09-color-picker-design.md`. One
-//! [`ColorPicker`] view owns a shared [`model::ColorModel`]; four surfaces draw +
-//! handle events against it. Produces any [`Color`](crate::color::Color) variant.
+//! One [`ColorPicker`] view owns a shared [`model::ColorModel`]; four surfaces
+//! draw + handle events against it. Produces any [`Color`](crate::color::Color)
+//! variant.
 
 pub(crate) mod drag;
 pub mod model;
@@ -95,7 +95,7 @@ pub struct ColorPicker {
     /// Picker-local origin (= ctx.origin()), cached each draw for the drag handler.
     #[allow(dead_code)]
     body_origin: Point,
-    /// The drag region being scrubbed, set when the capture is pushed (Task 9).
+    /// The drag region being scrubbed, set when the drag capture is pushed.
     #[allow(dead_code)]
     pub(crate) active_drag: Option<drag::ColorDragRegion>,
     /// The initial (old) color — shown in the info column as the "before" swatch.
@@ -103,8 +103,6 @@ pub struct ColorPicker {
 }
 
 impl ColorPicker {
-    // ColorPicker is not yet wired up to the dialog chrome (Task 10); allow unused
-    // pub methods until the color_dialog wrapper calls them.
     #[allow(dead_code)]
     pub fn new(bounds: Rect, initial: Color) -> Self {
         let mut state = ViewState::new(bounds);
@@ -149,7 +147,7 @@ impl ColorPicker {
         }
     }
 
-    /// Apply a drag broker callback (Task 9 wiring). Called by the pump's deferred-apply arm.
+    /// Apply a drag broker callback. Called by the pump's deferred-apply arm.
     #[allow(dead_code)]
     pub(crate) fn apply_drag(&mut self, pos: Point) {
         let body = self.body_rect();

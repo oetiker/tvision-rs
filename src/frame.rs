@@ -1,72 +1,58 @@
-//! `TFrame` — faithful Rust port of `tframe.cpp` / `framelin.cpp` (row 24,
-//! FOUNDATION).
+//! The decorative border [`Frame`] a [`Window`](crate::window::Window) places
+//! around its interior: the box, the centered title, the optional window
+//! number, and the close / zoom / resize icons. It is a passive view — it
+//! never takes focus.
 //!
-//! A `TFrame` is the decorative border a `TWindow` (row 33) places around its
-//! interior: the box, the centered title, the optional window number, and the
-//! close / zoom / resize icons. It is a passive view — it never takes focus.
+//! # How a frame gets its data
 //!
-//! # The owner-data-down seam (D3)
+//! A frame never reaches up into the window that owns it. Instead, [`Frame`]
+//! holds its **own copy** of exactly the data it renders, pushed **down** by the
+//! owning window through public setters:
 //!
-//! In C++ `TFrame::draw` and `handleEvent` reach **up** through `owner` into the
-//! `TWindow`: `((TWindow*)owner)->{flags, number, getTitle(l), sizeLimits(), size,
-//! state}`. D3 forbids that up-pointer. Instead, [`Frame`] holds its **own copy**
-//! of exactly the data it reads, pushed **down** by the owning window:
+//! * [`title`](Frame::title) — the window title
+//! * [`flags`](Frame::flags) — the window decoration flags ([`WindowFlags`])
+//! * [`number`](Frame::number) — the window number (none → not drawn)
+//! * [`zoomed`](Frame::zoomed) — whether the window is maximized (drives the
+//!   zoom-vs-unzoom icon)
+//! * [`palette`](Frame::palette) — the owner's colour scheme
+//!   ([`WindowPalette`](crate::window::WindowPalette)), which selects the border
+//!   and icon roles: `Blue` → [`Role::FrameActive`] / [`Role::FramePassive`] /
+//!   [`Role::FrameDragging`] / [`Role::FrameIcon`]; `Cyan` → the
+//!   `Role::FrameCyan*` family; `Gray` (dialogs) → the `Role::FrameGray*`
+//!   family.
 //!
-//! * [`title`](Frame::title) ← `getTitle(l)`
-//! * [`flags`](Frame::flags) ← `owner->flags` ([`WindowFlags`], D5)
-//! * [`number`](Frame::number) ← `owner->number` (`wnNoNumber` → `None`)
-//! * [`zoomed`](Frame::zoomed) ← `owner->size == maxSize` (the unZoom-vs-zoom
-//!   icon choice — the window computes this and pushes the bool down)
+//! The window calls these setters whenever its own state changes. The frame's
+//! active / dragging state instead arrives through the normal
+//! [`View::set_state`] propagation that [`Group`](crate::view::Group) drives
+//! onto every child, so [`Frame::draw`] reads it from its own state directly.
 //!
-//! The window calls the public setters ([`set_title`](Frame::set_title) etc.)
-//! whenever its own state changes. The frame's `sfActive` / `sfDragging` state
-//! instead arrive through the normal [`View::set_state`] propagation that
-//! `Group` (row 26) already drives onto every child, so [`Frame::draw`] reads
-//! them from `self.st.state` directly.
+//! # Drag, resize, and close
 //!
-//! # Deviations applied
+//! The frame deliberately leaves window-drag `MouseDown` events (title-bar move,
+//! bottom-corner resize, middle-button move) unconsumed so they fall through to
+//! the owning [`Window`](crate::window::Window), which runs the drag. The close
+//! icon, by contrast, is handled here: pressing it arms a press-and-hold
+//! [`MouseTrackCapture`](crate::capture::MouseTrackCapture) and posts
+//! [`Command::CLOSE`](crate::Command::CLOSE) only if the button is released back
+//! over the close zone.
 //!
-//! * **D2** — `TView` is the [`View`] trait + [`ViewState`]; `Frame` embeds
-//!   `st: ViewState` and `impl View for Frame`.
-//! * **D5** — `wf*` flag word → [`WindowFlags`] struct-of-bools. Now owned by
-//!   the `window` module (relocated at row 33); `frame.rs` imports it via
-//!   `use crate::window::WindowFlags;` and renders the pushed-down copy.
-//! * **D7** — no `getColor`/`getPalette`; the border/icon roles come in
-//!   **per-palette families** selected by the owner's
-//!   [`WindowPalette`](crate::window::WindowPalette) (pushed down via
-//!   [`Frame::set_palette`], D3): `Blue` → [`Role::FrameActive`] /
-//!   [`Role::FramePassive`] / [`Role::FrameDragging`] / [`Role::FrameIcon`];
-//!   `Cyan` → the `Role::FrameCyan*` family; `Gray` (dialogs) → the
-//!   `Role::FrameGray*` family. This mirrors the C++,
-//!   where `TFrame::draw` resolves its colors through the owner's palette
-//!   (`cpBlueWindow` / `cpCyanWindow` / `cpGrayDialog`). The C++ has distinct title palette
-//!   entries (2 passive / 4 active) routed through the same chain; those belong
-//!   to row 33, so the title **reuses the border role** here.
-//! * **D8** — no `writeLine`/`TDrawBuffer`/`drawView`; we draw straight through
-//!   [`DrawCtx`] in view-local coords. The C++ `setState` override only calls
-//!   `drawView()`, which is redundant under whole-tree redraw + diff, so there
-//!   is **no `set_state` override** — the base [`View::set_state`] suffices.
+//! # Turbo Vision heritage
 //!
-//! # Deferred (per design)
+//! Ports `TFrame` (`tframe.cpp` / `framelin.cpp`). C++ `TFrame::draw` and
+//! `handleEvent` reach up through `owner` into the `TWindow`; rstv instead
+//! pushes the needed data down from the window (deviation D3). Inheritance
+//! becomes the [`View`] trait plus [`ViewState`] composition (deviation D2),
+//! the `wf*` flag word becomes [`WindowFlags`] (deviation D5), and palette
+//! lookups become [`Role`]-keyed theme styles (deviation D7).
 //!
-//! * **The `framelin.cpp` sibling tee-walk** (the `├┬┤┴` joins where a nested
-//!   `ofFramed` view meets the group frame) needs sibling bounds, which D3
-//!   denies a child. So the whole `FrameMask` / `frameChars[33]` / `initFrame`
-//!   bitmask machinery + the sibling loop is **deferred to a later polish pass**
-//!   (it will need `Group` cooperation to pass sibling bounds down). We draw
-//!   plain corners/edges — byte-identical to C++ for the common case (a window
-//!   whose border no `ofFramed` sibling touches). The tee/cross glyphs are
-//!   seeded in [`Glyphs`](crate::theme::Glyphs) for completeness but unused.
-//! * **Window drag loops** (`dragWindow`→`dragView`: title-bar move, bottom-corner
-//!   grows, middle-button move) are handled by the owning `Window` via
-//!   `start_drag`/`DragCapture` (D9). The frame deliberately leaves those
-//!   `MouseDown` events unconsumed so they fall through to `Window::handle_event`.
-//! * **The close icon's press-and-hold release-confirm loop** — adopted in this
-//!   batch (A3 seam). `MouseDown` in the close zone arms a
-//!   [`MouseTrackCapture`](crate::capture::MouseTrackCapture) with an up-only
-//!   mask; `MouseUp` posts `cmClose` only if the button is released over the
-//!   close zone (`tframe.cpp:156-167` release-confirm). The zoom and drag
-//!   behaviors are unchanged.
+//! One C++ behavior is not reproduced: the `framelin.cpp` sibling tee-walk —
+//! the `├┬┤┴` joins drawn where a nested framed view meets the group frame.
+//! That machinery (`FrameMask` / `frameChars[33]` / `initFrame` plus a
+//! sibling loop) needs the bounds of neighboring views, which the owner-data-
+//! down design (deviation D3) does not give a child. rstv draws plain
+//! corners and edges instead — byte-identical to C++ for the common case of a
+//! window whose border no framed sibling touches. The tee/cross glyphs remain
+//! seeded in [`Glyphs`](crate::theme::Glyphs) but unused.
 
 use crate::capture::TrackMask;
 use crate::command::Command;
@@ -79,49 +65,46 @@ use crate::window::{WindowFlags, WindowPalette};
 // Frame
 // ---------------------------------------------------------------------------
 
-/// `TFrame` — a window's decorative border (D2 View trait + ViewState).
+/// A window's decorative border: box, title, number, and close/zoom/resize
+/// icons.
 ///
-/// Embeds the pattern: `st: ViewState`, `impl View`, draw through [`DrawCtx`],
-/// handle events through [`Context`]. The window-owned data it renders
-/// (title / flags / number / zoomed) is pushed down by the owning `TWindow`
-/// (row 33) through the public setters; see the module docs for the D3 seam.
+/// Embeds `st: ViewState` and `impl View`, draws through [`DrawCtx`], and
+/// handles events through [`Context`]. The window-owned data it renders
+/// (title / flags / number / zoomed) is pushed down by the owning
+/// [`Window`](crate::window::Window) through the public setters; see the module
+/// docs.
 pub struct Frame {
-    /// View state (geometry, flags, etc.) — the D2 composition target.
+    /// View state (geometry, flags, etc.).
     pub st: ViewState,
-    /// The window title, pushed down from `owner->getTitle(l)` (D3).
+    /// The window title, pushed down by the owning window.
     title: Option<String>,
-    /// The window decoration flags, pushed down from `owner->flags` (D3).
+    /// The window decoration flags, pushed down by the owning window.
     flags: WindowFlags,
-    /// The window number (`wnNoNumber` → `None`); drawn only if `Some(n)` and
-    /// `n < 10`. Pushed down from `owner->number` (D3).
+    /// The window number (none → not drawn); drawn only if `Some(n)` and
+    /// `n < 10`. Pushed down by the owning window.
     number: Option<u8>,
-    /// Whether the window is maximized — replaces `owner->size == maxSize` for
-    /// the unZoom-vs-zoom icon choice. Pushed down by the window (D3).
+    /// Whether the window is maximized — drives the zoom-vs-unzoom icon choice.
+    /// Pushed down by the owning window.
     zoomed: bool,
-    /// The owner's colour scheme, pushed down from `owner->palette` (D3, row 34
-    /// gray theming). Selects the `Role::Frame*` vs `Role::FrameGray*` family
-    /// in [`draw`](View::draw).
+    /// The owner's colour scheme, pushed down by the owning window. Selects the
+    /// `Role::Frame*` vs `Role::FrameGray*` family in [`draw`](View::draw).
     palette: WindowPalette,
-    /// Absolute screen position of view-local `(0, 0)`, cached each `draw` for
-    /// the mouse-tracking capture (D3/D9 — the `Button::abs_origin` pattern).
+    /// Absolute screen position of view-local `(0, 0)`, cached each `draw` so
+    /// the close-icon mouse-tracking capture can convert absolute mouse coords
+    /// to view-local.
     abs_origin: Point,
-    /// Whether the close-icon press-and-hold track is in flight. Guarded by
-    /// `tracking` against stray `MouseUp` events.
+    /// Whether the close-icon press-and-hold track is in flight. Guarded
+    /// against stray `MouseUp` events.
     close_pressed: bool,
 }
 
 impl Frame {
-    /// `TFrame::TFrame(bounds)` — construct a frame.
+    /// Construct a frame.
     ///
-    /// Faithful to the C++ ctor: `growMode = gfGrowHiX + gfGrowHiY` so the frame
-    /// stretches with its owner on the right and bottom edges.
-    ///
-    /// The C++ also sets `eventMask |= evBroadcast | evMouseUp`. Under D4 those
-    /// classes are delivered unconditionally (our opt-in [`EventMask`] only
-    /// carries `mouse_move` / `mouse_auto`), so there is nothing to set.
-    ///
-    /// The frame is **not** selectable (it never takes focus), so `options`
-    /// stays all-false.
+    /// The grow mode stretches the frame with its owner on the right and bottom
+    /// edges. The frame is **not** selectable (it never takes focus), so its
+    /// options stay all-false. Broadcast and mouse-up events are delivered
+    /// unconditionally, so there is no event mask to set.
     pub fn new(bounds: Rect) -> Self {
         let mut st = ViewState::new(bounds);
         st.grow_mode = GrowMode {
@@ -141,9 +124,9 @@ impl Frame {
         }
     }
 
-    // -- Owner-data-down setters / getters (D3) ------------------------------
+    // -- Owner-data-down setters / getters -----------------------------------
 
-    /// Set the window title (`owner->getTitle(l)` pushed down).
+    /// Set the window title (pushed down by the owning window).
     pub fn set_title(&mut self, title: Option<String>) {
         self.title = title;
     }
@@ -153,7 +136,7 @@ impl Frame {
         self.title.as_deref()
     }
 
-    /// Set the window decoration flags (`owner->flags` pushed down).
+    /// Set the window decoration flags (pushed down by the owning window).
     pub fn set_flags(&mut self, flags: WindowFlags) {
         self.flags = flags;
     }
@@ -163,7 +146,7 @@ impl Frame {
         self.flags
     }
 
-    /// Set the window number (`owner->number` pushed down; `wnNoNumber` → `None`).
+    /// Set the window number (pushed down by the owning window; none → not drawn).
     pub fn set_number(&mut self, number: Option<u8>) {
         self.number = number;
     }
@@ -183,8 +166,8 @@ impl Frame {
         self.zoomed
     }
 
-    /// Set the owner's colour scheme (`owner->palette` pushed down, D3 — row 34
-    /// theming). [`draw`](View::draw) selects the matching role family:
+    /// Set the owner's colour scheme (pushed down by the owning window).
+    /// [`draw`](View::draw) selects the matching role family:
     /// `Blue` → `Role::Frame*`, `Cyan` → `Role::FrameCyan*`,
     /// `Gray` → `Role::FrameGray*`.
     pub(crate) fn set_palette(&mut self, palette: WindowPalette) {
@@ -219,15 +202,14 @@ impl View for Frame {
     /// | active   | `FrameActive`   | double      |
     ///
     /// We draw the box fully first, then overlay the number / title / icons onto
-    /// row 0 (and the resize icons onto the bottom row). The C++ draws into a
-    /// `TDrawBuffer` row then blits; the visual result is identical (D8).
+    /// the top row (and the resize icons onto the bottom row).
     ///
-    /// The `framelin.cpp` sibling tee-walk is deferred (D3) — we draw plain
+    /// The `framelin.cpp` sibling tee-walk is not reproduced — we draw plain
     /// corners/edges; see the module docs.
     fn draw(&mut self, ctx: &mut DrawCtx) {
-        // Cache the absolute origin for the close-icon mouse-tracking capture
-        // (D3/D9 — the MouseTrackCapture converts abs mouse coords to view-local
-        // via this value, matching the Button::abs_origin pattern).
+        // Cache the absolute origin for the close-icon mouse-tracking capture:
+        // the MouseTrackCapture converts absolute mouse coords to view-local
+        // via this value.
         self.abs_origin = ctx.origin();
 
         let glyphs = *ctx.glyphs();
@@ -332,7 +314,7 @@ impl View for Frame {
         // budget is therefore dead here and is not computed; we cap the *drawn*
         // title to `width - 10` in step 4, matching `moveStr(i, title, …, l)`.
 
-        // -- 3. Window number (row 0). -------------------------------------
+        // -- 3. Window number (top row). -----------------------------------
         // C++: if number != wnNoNumber && number < 10 { l -= 4; ... } — the
         // `l -= 4` only fed the dropped budget above, so only the draw remains.
         if let Some(n) = self.number
@@ -344,7 +326,7 @@ impl View for Frame {
             }
         }
 
-        // -- 4. Title (row 0), centered. -----------------------------------
+        // -- 4. Title (top row), centered. ---------------------------------
         // C++: title = getTitle(l); l = min(strwidth(title), width-10); l = max(l, 0);
         //      i = (width - l) >> 1; putChar(i-1, ' '); moveStr(i, title, cTitle, l);
         //      putChar(i+l, ' ');
@@ -358,14 +340,14 @@ impl View for Frame {
             // C++ centers at i=(width-l)>>1 with flanking spaces at i-1 and i+l,
             // drawn unconditionally once the title pointer is non-null (so Some("")
             // and the w<10 clamp-to-0 case still punch two spaces into the border
-            // center). Flanking spaces + title, all in the border style (D7 note).
+            // center). Flanking spaces + title, all in the border style.
             let i = (w - lw) >> 1;
             ctx.put_char(i - 1, 0, ' ', border);
             ctx.put_str(i, 0, truncated, border);
             ctx.put_char(i + lw, 0, ' ', border);
         }
 
-        // -- 5. Active-only icons (row 0). ---------------------------------
+        // -- 5. Active-only icons (top row). -------------------------------
         if self.st.state.active {
             if self.flags.close {
                 ctx.put_cstr(2, 0, glyphs.close_icon, border, icon);
@@ -387,13 +369,14 @@ impl View for Frame {
         }
     }
 
-    /// `TFrame::handleEvent` — minimal scope; most drag loops are deferred (D9).
+    /// Handle the close/zoom icon clicks; the window drag loops live in the
+    /// owning [`Window`](crate::window::Window).
     ///
-    /// The mouse position delivered by `Group` (row 26) is already **view-local**
-    /// (the group subtracts the child origin), so `makeLocal` is gone — `m`'s
-    /// position is used directly.
+    /// The mouse position delivered by [`Group`](crate::view::Group) is already
+    /// **view-local** (the group subtracts the child origin), so the position is
+    /// used directly.
     ///
-    /// Handled now (row-0 clicks while active):
+    /// Handled here (top-row clicks while active):
     /// * **close** — `x` in `2..=4` with `wfClose` and active: arm the
     ///   mouse-track capture (up-only mask, faithful to the empty `evMouse`-masked
     ///   loop in `tframe.cpp:157-158`); post `cmClose` only on `MouseUp` over the
@@ -404,7 +387,7 @@ impl View for Frame {
     ///   first in C++ too).
     ///
     /// Drag cases are handled by the owning `Window` via `start_drag`/`DragCapture`:
-    /// * `wfMove` title-bar drag: the row-0 click not on an icon is left
+    /// * `wfMove` title-bar drag: the top-row click not on an icon is left
     ///   unconsumed on purpose — `Window::handle_event` starts the move drag.
     /// * bottom-row grow drags (`wfGrow`): left unconsumed so `Window` starts
     ///   a `DragKind::Grow` or `DragKind::GrowLeft` capture.
@@ -476,8 +459,8 @@ impl View for Frame {
         }
     }
 
-    /// Downcast seam (33c, D3): `TWindow::zoom` pushes `set_zoomed` to its frame
-    /// child via [`Group::child_mut`](crate::view::Group::child_mut) +
+    /// Downcast seam: `Window::zoom` pushes `set_zoomed` to its frame child via
+    /// [`Group::child_mut`](crate::view::Group::child_mut) +
     /// `downcast_mut::<Frame>()`. See [`View::as_any_mut`].
     fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
         Some(self)
@@ -678,7 +661,7 @@ mod tests {
         let buf = render_frame(&mut f, 20, 6);
         let row0 = row_text(&buf, 0);
         // The visible title text must be at most 10 columns wide. Count the
-        // run of ASCII letters/spaces on row 0 between the border corners.
+        // run of ASCII letters/spaces on the top row between the border corners.
         let title_chars: String = row0
             .chars()
             .filter(|c| c.is_ascii_alphanumeric() || *c == ' ')
@@ -719,7 +702,7 @@ mod tests {
         assert_eq!(buf.get(0, 0).style(), expected, "top-left border style");
     }
 
-    // -- draw: gray palette → FrameGray* role family (row 34 gray theming) ----
+    // -- draw: gray palette → FrameGray* role family ----
 
     /// With `palette = Gray` (a dialog's frame), the border AND interior must
     /// carry the `FrameGray*` styles: `FrameGrayActive` when active,
@@ -763,7 +746,7 @@ mod tests {
         );
     }
 
-    // -- draw: cyan palette → FrameCyan* role family (row 34 cyan theming) ----
+    // -- draw: cyan palette → FrameCyan* role family ----
 
     /// With `palette = Cyan` (`wpCyanWindow`), the border AND interior must
     /// carry the `FrameCyan*` styles — never the blue `Frame*` family.
@@ -909,7 +892,7 @@ mod tests {
         }
         assert!(f.close_pressed);
 
-        // MouseUp outside the close zone (x = 10, row 0): no cmClose.
+        // MouseUp outside the close zone (x = 10, top row): no cmClose.
         let mut out2 = VecDeque::new();
         let mut deferred2: Vec<crate::view::Deferred> = vec![];
         {
@@ -948,7 +931,7 @@ mod tests {
         assert_eq!(out[0], Event::Command(Command::ZOOM));
     }
 
-    // -- handle_event: double-click anywhere on row 0 → zoom ------------------
+    // -- handle_event: double-click anywhere on top row → zoom ----------------
 
     #[test]
     fn double_click_row0_posts_zoom() {
@@ -1076,7 +1059,7 @@ mod tests {
         insta::assert_snapshot!(screen.snapshot());
     }
 
-    /// The 33c downcast seam: `Frame` overrides `as_any_mut` so an owner can reach
+    /// The downcast seam: `Frame` overrides `as_any_mut` so an owner can reach
     /// it concretely (e.g. `TWindow::zoom` pushing `set_zoomed`); a plain view's
     /// base `as_any_mut` returns `None`.
     #[test]

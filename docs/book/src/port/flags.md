@@ -7,8 +7,8 @@ words: `state` holds the `sf*` flags, `options` the `of*` flags, plus
 untyped and opaque — the compiler can't tell you `sfFocused` belongs to `state`
 and not `options`.
 
-We have the bytes to spare, so `tvision` turns each flag word into a plain
-struct of named `bool` fields (deviation **D5**). The bit just becomes a field:
+We have the bytes to spare, so rstv turns each flag word into a plain
+struct of named `bool` fields. The bit just becomes a field:
 
 ```rust,ignore
 if view.state().state.focused { /* ... */ }   // was: state & sfFocused
@@ -20,7 +20,7 @@ Each `sf*`/`of*`/`gf*`/`dm*` constant maps to one field, and each word maps to
 one `#[derive(Default)]` struct. The field's *name* documents the bit that the
 old `0x0001`-style constant left to a comment:
 
-| C++ word   | tvision type                                             | Example                        |
+| C++ word   | rstv type                                                | Example                        |
 | ---------- | -------------------------------------------------------- | ------------------------------ |
 | `state`    | [`State`](../api/tvision/view/struct.State.html)         | `sfFocused` → `focused`        |
 | `options`  | [`Options`](../api/tvision/view/struct.Options.html)     | `ofSelectable` → `selectable`  |
@@ -32,7 +32,7 @@ a constructor — `GrowMode::grow_all()` — rather than a single field, since i
 was never a single bit in the first place.
 
 A handful of flags fell away with their reason for existing: `sfExposed` and
-`ofBuffered` were caches for partial-repaint occlusion, and `tvision` redraws
+`ofBuffered` were caches for partial-repaint occlusion, and rstv redraws
 the whole tree and diffs it (see [Drawing & backends](../internals/drawing.md)),
 so there is nothing to cache.
 
@@ -41,7 +41,7 @@ so there is nothing to cache.
 A bare read is just field access on the snapshot returned by `state()` /
 `options()`. *Flipping* a flag is where Turbo Vision's `setState(flag, on)`
 mattered: it didn't only toggle a bit, it fired side effects — redrawing,
-broadcasting a focus change, cascading into children. `tvision` keeps that verb
+broadcasting a focus change, cascading into children. rstv keeps that verb
 where the side effects live, as
 [`View::set_state`](../api/tvision/view/trait.View.html#method.set_state) over a
 small [`StateFlag`](../api/tvision/view/enum.StateFlag.html) enum — the named
@@ -50,7 +50,9 @@ activation machinery propagates. Flags with no propagation (visibility, cursor
 shape) are set directly on the struct, never through this hook.
 
 Most application code touches neither directly: it uses the friendly verbs that
-wrap them — `button.disable()`, `window.show()`, `input.focus()`.
+wrap them — `view.show()` / `view.hide()` for visibility, and command
+enable/disable through the command set (`Context::disable_command`,
+which the menus and status line mirror) rather than poking a bit.
 
 ## Beyond the view: `WindowFlags`
 

@@ -1,33 +1,35 @@
-//! The clipboard chain — backlog **A6** (OS clipboard by default).
-//!
-//! This is the `TClipboard` shape (`tclipbrd.cpp:26-44`): **native first,
-//! internal buffer only on failure**. The C++ Unix copy order is
-//! subprocess-native → OSC 52 emit → internal (`unixcon.cpp:50-60`,
-//! `termio.cpp:896-928`); paste is native → internal. Our rungs:
+//! The clipboard fallback chain that backs every copy/paste in rstv:
+//! **native first, internal buffer only on failure**. The copy order is
+//! native → OSC 52 emit → internal; paste is native → internal. The rungs:
 //!
 //! 1. **Native** — a [`NativeClipboard`] provider (production: [`ArboardClipboard`]
-//!    under the `os-clipboard` feature; magiblot's xclip/wl-copy subprocess rung
-//!    would be a future impl). `None` when init failed or the feature is off.
+//!    under the `os-clipboard` feature). `None` when init failed or the feature
+//!    is off.
 //! 2. **OSC 52 emit** (copy only) — fire-and-forget escape sequence to the
 //!    terminal, which puts the text on the clipboard of the machine the
-//!    terminal runs on (the win over SSH). Faithful to `setOsc52Clipboard`
-//!    (`termio.cpp:896-917`): the C++ always emits the sequence when this rung
-//!    is reached and reports success only when the capability was detected; we
-//!    cannot probe (crossterm owns the input parser), so we always report the
-//!    internal fallback (`false`) after emitting.
+//!    terminal runs on (the win over SSH). The sequence is always emitted once
+//!    this rung is reached; because the input parser belongs to crossterm we
+//!    cannot probe whether the terminal accepted it, so we report the internal
+//!    fallback (`false`) after emitting.
 //! 3. **Internal buffer** — the last resort, written only on the non-native
-//!    path so it never shadows a live native clipboard with stale text
-//!    (`tclipbrd.cpp:28-34`: the C++ `localText` is only touched after
-//!    `setClipboardText` failed).
+//!    path so it never shadows a live native clipboard with stale text.
 //!
-//! There is **no OSC 52 read** rung: reading requires the capability probes of
-//! `termio.cpp:314-330` (TERM allowlist, XTGETTCAP/XTQALLOWED queries) and a
-//! reply arriving through the input parser — which crossterm owns, so rstv has
-//! no place to receive it. Terminals also gate clipboard *reads* behind
-//! security opt-ins, making a blind read request useless.
+//! There is **no OSC 52 read** rung: reading requires capability probes (a TERM
+//! allowlist plus XTGETTCAP/XTQALLOWED queries) and a reply arriving through the
+//! input parser — which crossterm owns, so rstv has no place to receive it.
+//! Terminals also gate clipboard *reads* behind security opt-ins, making a blind
+//! read request useless.
 //!
 //! The chain is unit-testable without a terminal or a real clipboard: the
 //! native rung is a trait object and the OSC 52 sink is any `io::Write`.
+//!
+//! # Turbo Vision heritage
+//! Ports the `TClipboard` text path (`tclipbrd.cpp`), whose copy is native-first
+//! with the internal `localText` touched only after the native write fails. The
+//! Unix native + OSC 52 emit rungs follow `unixcon.cpp` / `termio.cpp`. C++
+//! detects a `setOsc52Clipboard` capability before claiming success; since
+//! crossterm owns the input parser, rstv cannot probe and instead always reports
+//! the internal fallback after emitting.
 
 use std::io;
 
@@ -47,12 +49,12 @@ pub(crate) trait NativeClipboard {
     fn get(&mut self) -> Option<String>;
 }
 
-/// The `TClipboard`-shaped fallback chain (module docs have the full order).
+/// The fallback chain (module docs have the full order).
 pub(crate) struct ClipboardChain {
     /// The native rung. `None` = init failed / `os-clipboard` feature off.
     native: Option<Box<dyn NativeClipboard>>,
     /// Last-resort internal buffer — written only when the native rung failed
-    /// (no stale shadow on native-capable systems, `tclipbrd.cpp:28-34`).
+    /// (no stale shadow on native-capable systems).
     local: String,
 }
 
@@ -68,7 +70,7 @@ impl ClipboardChain {
     /// Build the production chain: the arboard native rung when the
     /// `os-clipboard` feature is on (and its init succeeds), no native rung
     /// otherwise. Init failure is swallowed — clipboard absence must not fail
-    /// backend construction (B7's fallible `with_color_depth`).
+    /// backend construction.
     pub(crate) fn with_os_native() -> Self {
         #[cfg(feature = "os-clipboard")]
         let native: Option<Box<dyn NativeClipboard>> =
@@ -81,8 +83,8 @@ impl ClipboardChain {
     /// Run the copy chain (module docs): native → OSC 52 emit → internal.
     ///
     /// Returns `true` only when the native rung took the text — and then
-    /// emits **no** OSC 52 (faithful: magiblot doesn't double-emit, and a
-    /// blind OSC sequence on a dumb terminal risks on-screen garbage). On the
+    /// emits **no** OSC 52 (no double-emit, and a blind OSC sequence on a dumb
+    /// terminal risks on-screen garbage). On the
     /// non-native path the OSC 52 sequence is queued to `osc52_out`
     /// fire-and-forget (write errors ignored), the internal mirror is
     /// written, and `false` is returned per the `Backend::set_clipboard`
@@ -93,8 +95,8 @@ impl ClipboardChain {
         {
             return true;
         }
-        // OSC 52 emit — fire-and-forget (termio.cpp:896-917 always emits
-        // once this rung is reached). `Command::write_ansi` into a String,
+        // OSC 52 emit — fire-and-forget (always emitted once this rung is
+        // reached). `Command::write_ansi` into a String,
         // then queue the bytes — `crossterm::queue!` itself can't target a
         // `&mut dyn Write` (its `by_ref()` needs a sized writer).
         use crossterm::Command as _;
@@ -134,8 +136,8 @@ impl ClipboardChain {
 /// lifetime — required on X11, where arboard's serving thread keeps the
 /// selection alive for the app lifetime (X11 clipboard is an offer, not a
 /// store). Caveat: without a clipboard manager the contents still vanish when
-/// the app exits — magiblot's xclip subprocess rung (which outlives the app)
-/// would be a future [`NativeClipboard`] impl closing that gap.
+/// the app exits — a subprocess-backed rung (e.g. `xclip`, which outlives the
+/// app) would be a future [`NativeClipboard`] impl closing that gap.
 #[cfg(feature = "os-clipboard")]
 pub(crate) struct ArboardClipboard {
     inner: arboard::Clipboard,

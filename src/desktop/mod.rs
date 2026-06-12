@@ -1,7 +1,7 @@
-//! Desktop-layer views — `TDeskTop` and `TBackground` (rows 29–30).
+//! Desktop-layer views — `TDeskTop` and `TBackground`.
 //!
-//! Row 29 [`Background`] is the simplest concrete view: fills its owner's bounds
-//! with a repeated pattern character. Row 30 [`Desktop`] is the `TGroup`-embedding
+//! [`Background`] is the simplest concrete view: fills its owner's bounds
+//! with a repeated pattern character. [`Desktop`] is the `TGroup`-embedding
 //! desktop group that owns a [`Background`] and gives `Program` a named real
 //! desktop.
 

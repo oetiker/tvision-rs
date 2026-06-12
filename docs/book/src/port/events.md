@@ -7,7 +7,7 @@ then reaching into the right union arm. It is compact, but nothing stops you fro
 reading the wrong arm, and the `void* infoPtr` inside the `message` arm is used
 three unrelated ways.
 
-In tvision the record becomes a real Rust sum type, [`Event`](../api/tvision/event/enum.Event.html),
+In rstv the record becomes a real Rust sum type, [`Event`](../api/tvision/event/enum.Event.html),
 which you **match arm-by-arm** instead of masking. Each `ev*` class maps onto one
 variant, and the variant *carries the payload that class actually uses* — so the
 compiler, not a convention, guarantees you only read fields that exist:
@@ -62,5 +62,5 @@ bit-word therefore collapses to a two-bool [`EventMask`](../api/tvision/event/st
 The *routing* of all this is ported faithfully — positional events to the
 top-most child under the cursor, focused events through the pre-process / focused
 / post-process passes. For the mechanics, see
-[The event loop in depth](../internals/event-loop.md). The full deviation record
-is **D4** in [Deviations D1–D13](../reference/deviations.md).
+[The event loop in depth](../internals/event-loop.md). For the at-a-glance
+summary see [deviation D4](../reference/deviations.md#d4).

@@ -1,96 +1,66 @@
-//! `TCluster` + `TCheckBoxes` / `TRadioButtons` / `TMultiCheckBoxes` — faithful
-//! Rust port of `tcluster.cpp` / `tcheckbo.cpp` / `tradiobu.cpp` / `tmulchkb.cpp`
-//! (rows 38 / 42 / 43 / 44).
+//! Clusters of related toggles: [`CheckBoxes`], [`RadioButtons`], and
+//! [`MultiCheckBoxes`].
 //!
-//! # The seam (D1 + D2)
+//! # The seam
 //!
-//! C++ has an abstract `TCluster` with virtuals (`mark`/`multiMark`/`press`/
-//! `movedTo`/`draw`) overridden by three concrete subclasses that differ **only**
-//! in: the box icon string, the marker characters, and how `value` is
-//! interpreted. With no vtable inheritance (D2), the polymorphism is modeled as
-//! **data** via the closed [`ClusterKind`] enum (D1: closed sets → enum):
+//! The three cluster kinds differ **only** in their box icon, marker characters,
+//! and how `value` is interpreted, so the polymorphism is modeled as **data**
+//! rather than separate behavior:
 //!
 //! * [`Cluster`] is the full engine — state + layout + nav + draw + events — and
-//!   **branches on `kind`** for the per-subclass behavior. It is the only type
-//!   that `impl`s [`View`] with real bodies.
-//! * [`CheckBoxes`] / [`RadioButtons`] / [`MultiCheckBoxes`] are thin D2
+//!   **branches on its [`ClusterKind`]** for the per-kind behavior. It is the only
+//!   type that `impl`s [`View`] with real bodies.
+//! * [`CheckBoxes`] / [`RadioButtons`] / [`MultiCheckBoxes`] are thin
 //!   embed-and-delegate wrappers (`{ cluster: Cluster }`) whose `impl View`
 //!   forwards every method to `self.cluster`. Their constructors build a
-//!   `Cluster` with the right `ClusterKind`. This keeps the named types a C++
-//!   veteran recognizes while the logic lives once.
+//!   `Cluster` with the right `ClusterKind`. This keeps named, familiar types
+//!   while the logic lives once.
 //!
-//! # Layout (verbatim `column`/`row`/`findSel`)
+//! # Layout
 //!
 //! `size.y` (the bounds height) is the **column-break period**: items fill
-//! top-to-bottom within a column, then wrap to the next column
-//! (`cur = j*size.y + i`). [`Cluster::column`] ports the `-6`/`+6` width-walk
-//! verbatim; a column is `6 + max-label-width` cells wide (` [ ] ` icon is 5
-//! cells + a 1-cell gap). Label widths use a local `cstrlen` that **strips `~`**
-//! (C++ `cstrlen`), since the `~`-toggle hotkey marker is not a printed column.
-//!
-//! # D-rules applied
-//!
-//! * **D3** `makeLocal` is gone — the `Group` delivers mouse positions already in
-//!   view-local coords; `getExtent()` → `self.state.get_extent()`.
-//! * **D4** `enum Event` match; `TView::handleEvent` (the mouse-down auto-select)
-//!   is relocated to `Group`, so this `handle_event` starts at the `ofSelectable`
-//!   guard.
-//! * **D7** colors come from `ctx.style(Role::Cluster*)`. The C++ `getColor`
-//!   AttrPairs (`0x0301`/`0x0402`/`0x0505`) are `(lo, hi)` pairs consumed by
-//!   `moveCStr`'s `~`-toggle → the icon and label go through
-//!   [`DrawCtx::put_cstr`]`(x, y, s, lo, hi)`; the marker glyph is a plain
-//!   `put_char` in the row's `lo` style (faithful to `putChar` preserving the
-//!   icon attribute).
-//! * **D8** draw into the back buffer through `DrawCtx`; `drawView`/`writeBuf`/
-//!   occlusion dropped. The C++ `setState` override only called `drawView` (a D8
-//!   no-op), so there is **no** `set_state` override — the base flips the flag and
-//!   fires the focus broadcast.
-//! * **D10** `getData`/`setData`/`dataSize` (the typed value protocol) are
-//!   **deferred to row 39** (`TInputLine`). `value`/`sel` are the eventual
-//!   backing fields but no `get_data`/`set_data` is added here. **Breadcrumb for
-//!   row 39:** `TRadioButtons::setData` additionally does `sel = value` after
-//!   the base `setData` — fold that in when the data protocol lands.
-//! * **D12** streamable dropped.
+//! top-to-bottom within a column, then wrap to the next column. A column is
+//! `6 + max-label-width` cells wide (the ` [ ] ` icon is 5 cells plus a 1-cell
+//! gap). Label widths strip the `~`-toggle hotkey marker, which is not a printed
+//! column.
 //!
 //! # Marker / icon data
 //!
-//! The box icons (` [ ] `, ` ( ) `) and marker chars (`X`, the CP437 0x07 bullet
-//! → U+2022) live inline as per-`kind` data (the simplest realization of the
-//! row-9 "glyphs fill in per-widget" convention — no `theme.rs` edit needed).
+//! The box icons (` [ ] `, ` ( ) `) and marker chars (`X`, the bullet `•`) live
+//! inline as per-kind data, with no theme edit needed.
 //!
-//! # Deferrals (documented TODOs, not built)
+//! # Mouse hold-tracking
 //!
-//! 1. **Mouse drag-cursor tracking loop** — **landed** (B2 batch, A3 seam):
-//!    `MouseDown` arms `MouseTrackCapture`; `MouseUp` is the release-confirm
-//!    (`tcluster.cpp:181-184`). See module doc section above.
-//! 2. **`getData`/`setData`/`dataSize`** (D10) → row 39.
-//! 3. **`showMarkers` specialChars block** in `drawMultiBox`: **dropped**
-//!    (`showMarkers` removed at row 23).
-//! 4. **`getHelpCtx`'s `helpCtx + sel`** integer offset does not map onto the
-//!    string-identity [`HelpCtx`](crate::help::HelpCtx) newtype; it is dropped
-//!    here (consistent with the project's `HelpCtx` treatment).
-//!
-//! (`ctrlToArrow` aliasing and the Alt-hotkey / plain-letter accelerator scan —
-//! formerly deferred here — landed with the A5 phase signal: see
-//! [`Cluster::handle_event`].)
-//!
-//! # Mouse hold-tracking (D9 — the A3 MouseTrackCapture seam)
-//!
-//! Mouse-down adopts the C++ `do { … } while(mouseEvent(event, evMouseMove))`
-//! hold loop (`tcluster.cpp:173-187`):
+//! Mouse-down begins a modal hold:
 //! * **MouseDown:** select the item under the cursor (if enabled), set
-//!   `tracking = true`, and call [`Context::start_mouse_track`] with
-//!   `TrackMask { mouse_move: true, .. }`. Do NOT press yet.
-//! * **MouseMove arm** (loop body, `tcluster.cpp:175-178`): rstv has no
-//!   `showCursor`/`hideCursor` equivalent for TUI cursors that toggles per-move;
-//!   the arm is a faithful no-op (the cue only affected the cursor visibility,
-//!   not state or rendering). Guarded by `tracking`.
-//! * **MouseUp arm** (post-loop, `tcluster.cpp:181-184`): press only if
-//!   `find_sel(up_pos) == self.sel` — the C++ same-item release-confirm.
-//!   Clear `tracking`. Guarded by `tracking`.
+//!   `tracking = true`, and call [`Context::start_mouse_track`]. Do NOT press yet.
+//! * **MouseMove arm** (loop body): a no-op — the C++ cue only toggled cursor
+//!   visibility, which has no TUI equivalent. Guarded by `tracking`.
+//! * **MouseUp arm** (post-loop): press only if the item under the release
+//!   position is still the selected one — the same-item release-confirm. Clear
+//!   `tracking`. Guarded by `tracking`.
 //!
-//! The `abs_origin` field caches the view-local `(0,0)` in absolute screen
+//! The `abs_origin` field caches the view-local `(0, 0)` in absolute screen
 //! coords from the last `draw`, used by the capture to localize events.
+//!
+//! # Value and help context
+//!
+//! The typed value protocol (`value`/`set_value`) is not implemented for clusters:
+//! their `value`/`sel` fields are read and written directly by their owning dialog
+//! rather than through the gather/scatter protocol. The C++ `getHelpCtx` offset
+//! (`helpCtx + sel`) does not map onto rstv's string-identity
+//! [`HelpCtx`](crate::help::HelpCtx) and is not modeled.
+//!
+//! # Turbo Vision heritage
+//!
+//! Ports `TCluster` and its subclasses `TCheckBoxes` / `TRadioButtons` /
+//! `TMultiCheckBoxes` (`tcluster.cpp`, `tcheckbo.cpp`, `tradiobu.cpp`,
+//! `tmulchkb.cpp`). The abstract base with virtual `mark`/`multiMark`/`press`/
+//! `movedTo`/`draw` overrides becomes one engine branching on a closed
+//! [`ClusterKind`] enum, with the named subclasses as embed-and-delegate wrappers
+//! (deviations D1, D2). `getColor` AttrPairs become `(lo, hi)` [`Role`] pairs;
+//! `makeLocal` is gone because the group delivers view-local coords; and
+//! `TStreamable` is dropped.
 
 use crate::capture::TrackMask;
 use crate::event::{Event, Key, ctrl_to_arrow, hot_key, is_alt_hotkey, is_plain_hotkey};
@@ -98,12 +68,12 @@ use crate::theme::Role;
 use crate::view::{Context, DrawCtx, Options, Phase, Point, Rect, View, ViewState};
 
 // ---------------------------------------------------------------------------
-// ClusterKind — the data-driven polymorphism (D1 closed enum)
+// ClusterKind — the data-driven polymorphism
 // ---------------------------------------------------------------------------
 
-/// Which concrete cluster behavior the engine runs. Replaces the C++ virtual
-/// overrides of `mark`/`multiMark`/`press`/`movedTo`/`draw` with data (D2: no
-/// vtable inheritance; D1: a closed set → enum).
+/// Which concrete cluster behavior the engine runs. Models what C++ achieved
+/// with virtual `mark`/`multiMark`/`press`/`movedTo`/`draw` overrides as a
+/// closed set of data variants instead.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ClusterKind {
     /// `TCheckBoxes` — `value` is a bitmask (bit `item` set ⇔ item checked).
@@ -142,14 +112,18 @@ impl ClusterKind {
 // Cluster — the engine
 // ---------------------------------------------------------------------------
 
-/// `TCluster` — the cluster engine (state + layout + nav + draw + events).
+/// The cluster engine (state + layout + nav + draw + events).
 ///
-/// Embeds [`ViewState`] (D2), `impl`s [`View`] fully, and branches on
-/// [`kind`](Cluster::kind) for per-subclass behavior. The concrete
+/// Embeds [`ViewState`], `impl`s [`View`] fully, and branches on
+/// [`kind`](Cluster::kind) for per-kind behavior. The concrete
 /// [`CheckBoxes`] / [`RadioButtons`] / [`MultiCheckBoxes`] wrappers delegate to
 /// an instance of this.
+///
+/// # Turbo Vision heritage
+///
+/// Ports `TCluster` (`tcluster.cpp`).
 pub struct Cluster {
-    /// View state (geometry, flags, cursor) — the D2 composition target.
+    /// View state (geometry, flags, cursor) — the composition target.
     pub state: ViewState,
     /// `value` — interpreted per [`kind`](Cluster::kind) (bitmask / index /
     /// packed states). Widened to `u32` (C++ `value` is a `long`/`int32_t`;
@@ -162,10 +136,10 @@ pub struct Cluster {
     pub enable_mask: u32,
     /// `strings` — the item labels, in `cur = j*size.y + i` fill order.
     pub strings: Vec<String>,
-    /// The per-subclass behavior selector (D1/D2).
+    /// The per-kind behavior selector.
     pub kind: ClusterKind,
     /// Absolute screen position of view-local `(0, 0)`, cached each `draw` for
-    /// the mouse-tracking capture (D3/D9 — same pattern as `Button::abs_origin`).
+    /// the mouse-tracking capture (the same pattern as `Button::abs_origin`).
     abs_origin: Point,
     /// Whether a mouse hold-track is in flight (between the arming `MouseDown`
     /// and the terminating `MouseUp`). Guards the `MouseMove`/`MouseUp` tracking
@@ -334,10 +308,9 @@ impl Cluster {
     /// `TCluster::moveSel(i, s)` — move the selection to item `s`, where `i` is
     /// the **loop step-counter** (number of items scanned), not an item index.
     ///
-    /// Faithful guard: `if (i <= count)` aborts the move when the nav loop
-    /// scanned `count` items without finding an enabled one (the all-disabled
-    /// case). On success: `sel = s; movedTo(sel)`. The C++ `drawView()` is a D8
-    /// no-op.
+    /// Guard: `if (i <= count)` aborts the move when the nav loop scanned
+    /// `count` items without finding an enabled one (the all-disabled case). On
+    /// success: `sel = s; movedTo(sel)`.
     fn move_sel(&mut self, i: i32, s: i32) {
         if i <= self.count() {
             self.sel = s;
@@ -439,9 +412,9 @@ impl View for Cluster {
     /// Ends with `setCursor(column(sel)+2, row(sel))` so the hardware cursor
     /// tracks the selection (surfaced via the base `cursor_request`).
     fn draw(&mut self, ctx: &mut DrawCtx) {
-        // Cache the absolute origin for the mouse-tracking capture (D3/D9 —
-        // the MouseTrackCapture converts abs mouse coords to view-local via
-        // this value, matching the Button::abs_origin pattern).
+        // Cache the absolute origin for the mouse-tracking capture: the
+        // MouseTrackCapture converts absolute mouse coords to view-local via
+        // this value, matching the Button::abs_origin pattern.
         self.abs_origin = ctx.origin();
 
         // A zero-height cluster draws nothing. This early-return is also the
@@ -514,15 +487,14 @@ impl View for Cluster {
             .set_cursor(self.column(self.sel) + 2, self.row(self.sel));
     }
 
-    /// `TCluster::handleEvent` — keyboard + mouse.
+    /// Handle keyboard and mouse events.
     ///
-    /// The C++ `TView::handleEvent` first line (mouse-down auto-select) is
-    /// relocated to `Group` (D4), so this body starts at the `ofSelectable`
-    /// guard. On `evMouseDown`: select the item, arm the mouse-track capture (A3
-    /// seam); press fires on `MouseUp` at release-inside (C++ release-confirm,
-    /// `tcluster.cpp:181-184`). On `evKeyDown`: `ctrlToArrow` aliasing, the four
-    /// arrow navigators (focused-only), the Alt-hotkey / plain-letter accelerator
-    /// scan (`tcluster.cpp:280-291`), then focused-Space → press.
+    /// The mouse-down auto-select lives in `Group`, so this body starts at the
+    /// selectable guard. On mouse-down: select the item and arm the mouse-track
+    /// capture; press fires on mouse-up at a release inside the same item. On
+    /// key-down: ctrl-to-arrow aliasing, the four arrow navigators (focused
+    /// only), the Alt-hotkey / plain-letter accelerator scan, then focused-Space
+    /// → press.
     fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
         if !self.state.options.selectable {
             return;
@@ -533,15 +505,11 @@ impl View for Cluster {
             // evMouseDown — select the item under the cursor, arm the tracking
             // capture; do NOT press yet.
             //
-            // C++ `tcluster.cpp:168-179`: select item, `drawView`, enter loop
-            // `do { showCursor/hideCursor } while(mouseEvent(event, evMouseMove))`.
-            // The press decision is the UP position (tcluster.cpp:181-184).
-            //
-            // A3 seam: MouseDown = first loop iteration (select + arm). Press
-            // is deferred to the MouseUp arm (release-confirm, same-item).
+            // MouseDown is the first loop iteration (select + arm). The press
+            // decision happens in the MouseUp arm (same-item release-confirm).
             // ---------------------------------------------------------------
             Event::MouseDown(me) => {
-                let mouse = me.position; // already view-local (D3)
+                let mouse = me.position; // already view-local
                 let i = self.find_sel(mouse);
                 if i != -1 && self.button_state(i) {
                     self.sel = i;
@@ -684,13 +652,12 @@ impl View for Cluster {
                         ev.clear();
                     }
                     // The C++ `default:` — the hotkey accelerator scan, then
-                    // the focused-Space press (`tcluster.cpp:280-291`; the
-                    // scan runs FIRST, faithful to the C++ ordering).
+                    // the focused-Space press (the scan runs FIRST, matching
+                    // the C++ ordering).
                     _ => {
                         // Accelerator scan: Alt+hotkey from anywhere, or the
-                        // plain letter when focused or on the post-process
-                        // walk (`owner->phase == phPostProcess` → `ctx.phase()`,
-                        // the A5 phase signal).
+                        // plain letter when focused or on the post-process walk
+                        // (`ctx.phase() == Phase::PostProcess`).
                         for i in 0..count {
                             let Some(c) = hot_key(&self.strings[i as usize]) else {
                                 continue;
@@ -761,11 +728,15 @@ fn cstrlen(s: &str) -> i32 {
 }
 
 // ---------------------------------------------------------------------------
-// Concrete subclasses — thin D2 embed-and-delegate wrappers
+// Concrete subclasses — thin embed-and-delegate wrappers
 // ---------------------------------------------------------------------------
 
-/// `TCheckBoxes` — a column of independent checkboxes; `value` is a bitmask.
-/// D2 embed-delegate wrapper over [`Cluster`] with [`ClusterKind::CheckBoxes`].
+/// A column of independent checkboxes; `value` is a bitmask. An
+/// embed-and-delegate wrapper over [`Cluster`] with [`ClusterKind::CheckBoxes`].
+///
+/// # Turbo Vision heritage
+///
+/// Ports `TCheckBoxes` (`tcheckbo.cpp`).
 pub struct CheckBoxes {
     /// The shared engine (state + layout + nav + draw + events).
     pub cluster: Cluster,
@@ -780,8 +751,13 @@ impl View for CheckBoxes {
     }
 }
 
-/// `TRadioButtons` — a column of mutually-exclusive buttons; `value` is the
-/// selected index. D2 wrapper with [`ClusterKind::RadioButtons`].
+/// A column of mutually-exclusive buttons; `value` is the selected index. An
+/// embed-and-delegate wrapper over [`Cluster`] with
+/// [`ClusterKind::RadioButtons`].
+///
+/// # Turbo Vision heritage
+///
+/// Ports `TRadioButtons` (`tradiobu.cpp`).
 pub struct RadioButtons {
     /// The shared engine (state + layout + nav + draw + events).
     pub cluster: Cluster,
@@ -790,8 +766,13 @@ pub struct RadioButtons {
 #[crate::delegate(to = cluster, skip(apply_list_scroll, as_any_mut, focus_descendant, grabs_focus_on_click, set_value, value))]
 impl View for RadioButtons {}
 
-/// `TMultiCheckBoxes` — checkboxes with multi-state items; `value` packs an
-/// n-bit state per item. D2 wrapper with [`ClusterKind::MultiCheckBoxes`].
+/// Checkboxes with multi-state items; `value` packs an n-bit state per item. An
+/// embed-and-delegate wrapper over [`Cluster`] with
+/// [`ClusterKind::MultiCheckBoxes`].
+///
+/// # Turbo Vision heritage
+///
+/// Ports `TMultiCheckBoxes` (`tmulchkb.cpp`).
 pub struct MultiCheckBoxes {
     /// The shared engine (state + layout + nav + draw + events).
     pub cluster: Cluster,
@@ -1145,7 +1126,7 @@ mod tests {
         assert_eq!(c.cluster.multi_mark(0), 0);
     }
 
-    // -- Accelerator scan (tcluster.cpp:280-291, A5 phase signal) ------------
+    // -- Accelerator scan -----------------------------------------------------
 
     /// Alt+hotkey selects + presses the item from anywhere (no focus/phase
     /// gate) and queues the deferred focus request.
@@ -1253,7 +1234,7 @@ mod tests {
         assert_eq!(c.cluster.sel, 0, "moved up");
     }
 
-    // -- Mouse hold-track: release-confirm (A3 seam, tcluster.cpp:181-184) ----
+    // -- Mouse hold-track: release-confirm ------------------------------------
 
     /// Degenerate fallback (no ViewId — uninserted cluster): single-shot press
     /// fires on mouse-down, preserving backwards compat for tests and inline use.

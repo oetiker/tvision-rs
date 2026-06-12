@@ -1,25 +1,22 @@
-//! `TApplication` — the thin application wrapper over `TProgram` (row 32,
-//! MECHANICAL, deviation **D2**).
+//! [`Application`], the thin application wrapper over [`Program`].
 //!
-//! `TApplication` (`tapplica.cpp`) adds three application-level commands on top of
-//! [`Program`] (row 31): `tile`/`cascade` (layout of desktop windows) and
-//! `dosShell` (suspend the terminal). In the C++ it also owns subsystem init
-//! (`TAppInit`) and teardown, and calls `initHistory`/`doneHistory` for the
-//! history list.
+//! `Application` adds the application-level window commands on top of [`Program`]:
+//! `cmTile` / `cmCascade` tile or cascade the desktop's windows (handled in the
+//! program's command dispatch, laying windows into [`get_tile_rect`]'s rectangle),
+//! and `cmDosShell` suspends the terminal. The C++ subsystem init/teardown
+//! (`TAppInit`) is subsumed by the [`Backend`](crate::backend::Backend) +
+//! [`Renderer`](crate::backend::Renderer) construction path, and C++'s
+//! `initHistory`/`doneHistory` are moot here: the history store is a
+//! `thread_local!` `Vec` that auto-initializes and auto-drops (see `history.rs`).
+//! The module is thin: one [`get_tile_rect`] helper plus forwarding delegations
+//! to the embedded program.
 //!
-//! At this row `tile`/`cascade` remain **deferred** — `Desktop::tile`/`cascade`
-//! geometry is not ported yet. `dosShell` is implemented (row C6) in
-//! `program_handle_event`. This module is thin: one `get_tile_rect` helper
-//! (the only real body) + forwarding delegations.
+//! [`get_tile_rect`]: Application::get_tile_rect
 //!
-//! ## Deferred (no dead stubs, breadcrumbed)
-//! * `tile`/`cascade`: `TDeskTop::tile`/`cascade` geometry (`mostEqualDivisors`/
-//!   `calcTileRect`/`doCascade`, `tdesktop.cpp`) is not ported. Lands when
-//!   `Desktop::tile`/`cascade` exist + a menu emits `Command::TILE`/`Command::CASCADE`.
-//! * `TAppInit` subsystem init: subsumed by the [`Backend`](crate::backend::Backend)
-//!   + [`Renderer`](crate::backend::Renderer) construction path in our model.
-//! * `initHistory`/`doneHistory`: moot — the history store uses a `thread_local!`
-//!   `Vec` that auto-initializes and auto-drops (row 54 deviation, see `history.rs`).
+//! # Turbo Vision heritage
+//! Ports `TApplication` (`tapplica.cpp`). C++ `TApplication : TProgram`
+//! inheritance becomes embed-and-delegate composition (deviation D2): the type
+//! holds a [`Program`] and forwards to it.
 
 use crate::app::Program;
 use crate::backend::Backend;
@@ -28,26 +25,23 @@ use crate::theme::Theme;
 use crate::timer::Clock;
 use crate::view::{Rect, View, ViewId};
 
-/// `TApplication` — a thin D2 embed-and-delegate wrapper over [`Program`] (row 32).
+/// A thin embed-and-delegate wrapper over [`Program`].
 ///
-/// `Application` will add (Phase 4) `tile`/`cascade` — see module docs.
-/// Currently it provides [`Application::get_tile_rect`] and forwards all other
-/// behavior verbatim to the embedded [`Program`].
+/// `Application` provides [`Application::get_tile_rect`] (the rectangle tile and
+/// cascade lay windows into) and forwards all other behavior verbatim to the
+/// embedded [`Program`].
 ///
 /// Build with [`Application::new`]; drive with [`Application::run`] or step with
 /// [`Application::pump_once`].
 ///
-/// ## C++ source (`tapplica.cpp`)
-/// ```cpp
-/// TApplication::TApplication()
-///     : TProgInit(initStatusLine, initMenuBar, initDeskTop)
-/// { initHistory(); }
-/// // ~TApplication calls doneHistory().
-/// ```
-/// `initHistory`/`doneHistory` are moot in rstv — the store is a `thread_local!`
-/// `Vec` that auto-initializes and auto-drops (row 54, see `history.rs`).
+/// # Turbo Vision heritage
+/// Ports `TApplication` (`tapplica.cpp`); its ctor is the factory mixin
+/// `TProgInit(initStatusLine, initMenuBar, initDeskTop)`. C++ inheritance from
+/// `TProgram` becomes embed-and-delegate composition (deviation D2).
+/// `initHistory`/`doneHistory` are moot — the store is a `thread_local!` `Vec`
+/// that auto-initializes and auto-drops (see `history.rs`).
 pub struct Application {
-    /// The embedded program (D2). `Application` forwards every public operation
+    /// The embedded program. `Application` forwards every public operation
     /// through this field — see the forwarding methods below.
     program: Program,
 }
@@ -143,12 +137,11 @@ impl Application {
 
     /// `TApplication::getTileRect` — the rectangle tile/cascade lay windows into:
     /// the **desktop child's extent** (`(0,0,w,h)` in desktop-local coords), so it
-    /// stays correct once Phase 4 insets the desktop under a menu/status bar.
+    /// stays correct when the desktop is inset under a menu/status bar.
     /// Returns `None` if no desktop was created.
     ///
     /// Requires `&mut self` because the underlying `Group::find_mut` requires
-    /// `&mut` — the brief sanctions this choice, preferring it over adding a `&self`
-    /// resolver to the FOUNDATION `group.rs`.
+    /// `&mut`, preferred over adding a `&self` resolver to `group.rs`.
     pub fn get_tile_rect(&mut self) -> Option<Rect> {
         self.program.get_tile_rect()
     }
@@ -183,8 +176,8 @@ mod tests {
                     Some(Desktop::init_background(r2))
                 })))
             },
-            |_r| None, // status line stubbed (Phase 4)
-            |_r| None, // menu bar stubbed (Phase 4)
+            |_r| None, // status line stubbed
+            |_r| None, // menu bar stubbed
         )
     }
 
@@ -194,8 +187,8 @@ mod tests {
     /// screen rect would produce `(0,0,80,25)` and fail this assertion.
     #[test]
     fn get_tile_rect_returns_desktop_extent() {
-        // Backend is 80×25; desktop is inset to 80×20 (Phase 4 will shrink it
-        // further under a menu/status bar — this exercises that future property now).
+        // Backend is 80×25; desktop is inset to 80×20 (a menu/status bar shrinks
+        // it further — this exercises that property).
         let (backend, _handle) = HeadlessBackend::new(80, 25);
         let theme = Theme::classic_blue();
         let clock = Rc::new(ManualClock::new(0));

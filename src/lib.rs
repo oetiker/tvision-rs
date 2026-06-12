@@ -1,15 +1,16 @@
-//! # tvision — an idiomatic Rust port of Turbo Vision
+//! # rstv — a text-user-interface framework for Rust
 //!
-//! A faithful Rust port of [magiblot/tvision](https://github.com/magiblot/tvision)
-//! (modern C++ Turbo Vision). We port *faithfully* from the C++ source; the only
-//! intentional departures are the pre-decided deviations `D1`–`D13` documented in
-//! `docs/PORTING-GUIDE.md`. The dependency-ordered class list is in
-//! `docs/PORT-ORDER.md`.
+//! rstv is an idiomatic Rust port of [magiblot/tvision](https://github.com/magiblot/tvision)
+//! (modern C++ Turbo Vision). It gives you the classic Turbo Vision experience —
+//! overlapping windows, modal dialogs, menus, a status line, validated input
+//! fields, scrollers and list boxes — built on a retained view tree and a single
+//! event loop, rendered to the terminal through a pluggable [`Backend`].
 //!
-//! ## House style (`D1`)
+//! ## House style: the `tv::` namespace
 //!
-//! Consumers alias the crate as `tv` and reach everything through the `tv::`
-//! path — the path *is* the namespace the old `T` prefix was faking:
+//! Add the crate to `Cargo.toml` aliased as `tv`, and reach everything through
+//! the `tv::` path — the path *is* the namespace the old C++ `T` prefix was
+//! faking:
 //!
 //! ```toml
 //! # Cargo.toml
@@ -23,45 +24,34 @@
 //! Public types are therefore re-exported at the crate root below, even though
 //! they live in topical modules internally.
 //!
-//! ## Phase 0 substrate (this milestone)
+//! ## Tour of the modules
 //!
-//! Per `docs/PORT-ORDER.md`, Phase 0 is the primitives + net-new runtime/render
-//! substrate. Rows land in dependency order:
+//! - [`view`] — the [`View`] trait and [`ViewState`] that every widget is built
+//!   on, plus geometry ([`Point`], [`Rect`]) and the [`Group`] container.
+//! - [`app`] — [`Program`], the application root that owns the event loop, and
+//!   [`Application`], which adds window tiling/cascading and shell suspend.
+//! - [`window`], [`dialog`], [`desktop`] — top-level frames: resizable windows,
+//!   modal dialogs, and the backdrop they sit on.
+//! - [`widgets`] — buttons, input lines, check boxes, list boxes, scrollers,
+//!   editors, the outline viewer, and more.
+//! - [`menu`], [`status`] — the menu bar / pull-down menus and the status line.
+//! - [`event`], [`command`] — the [`Event`] enum and key/mouse types, and the
+//!   command identifiers that drive them.
+//! - [`color`], [`theme`] — colors and styles, and the [`Theme`] that maps a
+//!   widget [`Role`] to glyphs and attributes.
+//! - [`screen`], [`backend`] — the cell buffer and diffing renderer, and the
+//!   [`Backend`] trait with its crossterm and headless implementations.
+//! - [`validate`], [`text`], [`timer`], [`capture`], [`data`], [`help`] — input
+//!   validators, text measurement, the timer queue, the event-capture stack,
+//!   the typed value protocol, and help contexts.
 //!
-//! | row | item | module | status |
-//! |-----|------|--------|--------|
-//! | 1, 2 | `Point`, `Rect` | [`view`] (geometry) | ✅ |
-//! | 3, 4 | `Color`, `Style` | [`color`] | ✅ |
-//! | 6 | `Cell` | [`screen`] | ✅ |
-//! | 8 | `Text` (width/scroll) | [`text`] | ✅ |
-//! | 7 | `DrawBuffer` | [`screen`] | ✅ |
-//! | 5 | quantization ladder | [`backend`] | ✅ |
-//! | 9 | glyph tables | [`theme`] (stub) | ⏳ |
-//! | 10 | `Key` | [`event`] | ✅ |
-//! | 11 | `Event` | [`event`] | ✅ |
-//! | 12 | `Command` / command set | [`command`] | ✅ |
-//! | 16 | `Theme` (minimal) | [`theme`] | ✅ |
-//! | 17 | `ViewId` minter | [`view`] | ✅ |
-//! | 18 | back-buffer + diff | [`screen`] | ✅ |
-//! | 19 | `Backend` (+ crossterm/headless) | [`backend`] | ✅ |
-//! | 20 | `Clock` + timer queue | [`timer`] | ✅ |
-//! | 21 | capture stack | [`capture`] | ✅ |
-//! | 22 | `Context` / `DrawCtx` | [`view`] | ✅ |
+//! # Turbo Vision heritage
 //!
-//! ## Phase 1 (widgets)
-//!
-//! | row | item | module | status |
-//! |-----|------|--------|--------|
-//! | 23 | `TView` (`View` trait + `ViewState`) | [`view`] | ✅ |
-//! | 29 | `TBackground` | [`desktop`] | ✅ |
-//! | 25 | `TScrollBar` | [`widgets`] | ✅ |
-//! | 26 | `TGroup` (`Group`) | [`view`] | ✅ |
-//! | 24 | `TFrame` (`Frame`) | [`frame`] | ✅ |
-//! | 31 | `TProgram` (`Program`, live loop) | [`app`] | ✅ |
-//! | 33 | `TWindow` (`Window`, core) | [`window`] | ✅ |
-//! | 30 | `TDeskTop` (`Desktop`) | [`desktop`] | ✅ |
-//! | 34 | `TDialog` (`Dialog`, modal `exec_view`) | [`dialog`] | ✅ |
-//! | 27 | `TScroller` (`Scroller`, cross-view broker) | [`widgets`] | ✅ |
+//! rstv ports Borland's Turbo Vision as modernized by magiblot/tvision. The
+//! pervasive translation choices — C++ inheritance becomes the [`View`] trait
+//! plus [`ViewState`] composition, raw pointers become [`ViewId`] handles, flag
+//! words become structs of bools, and the palette becomes a [`Theme`] keyed by
+//! [`Role`] — are summarized in the project's guide.
 
 // Lets proc-macro-generated `::tvision::Type` paths resolve inside this crate.
 extern crate self as tvision;

@@ -9,8 +9,7 @@ scrollbar arrows, check marks, shadows — are character literals scattered thro
 the widget source. To learn what color a focused button's shortcut letter is, you
 trace four palette hops by hand.
 
-tvision collapses that whole machine into one typed object. This is **deviation
-D7**.
+rstv collapses that whole machine into one typed object.
 
 ## One `Theme`, two halves
 
@@ -33,7 +32,7 @@ let corner = ctx.theme.glyphs().frame_tl; // ┌
 ## `Role` is the palette index, named
 
 Where the C++ said *"the high nibble of `cpButton` slot 6, two owner hops down"*,
-tvision says [`Role::ButtonDefaultShortcut`](../api/tvision/theme/enum.Role.html).
+rstv says [`Role::ButtonDefaultShortcut`](../api/tvision/theme/enum.Role.html).
 Each `getColor` call site in the original maps to exactly one named `Role` here,
 and the *state → role* decision is made once, in the code that draws the widget,
 rather than being implicit in a byte string. The enum covers the state matrices

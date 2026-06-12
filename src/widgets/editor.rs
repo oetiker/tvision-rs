@@ -1,70 +1,61 @@
-//! `TEditor` — faithful Rust port of `teditor1.cpp` / `teditor2.cpp` /
-//! `edits.cpp` (row 66, FOUNDATION).
+//! A gap-buffer text editor: a leaf [`View`] holding a single `Vec<u8>` split by
+//! a movable gap, with a cursor, a selection, single-level undo, and a viewport
+//! (`delta`) onto a content extent (`limit`). It references two sibling scroll
+//! bars and an indicator on the window frame, runs Find / Replace dialogs, and
+//! cuts/copies/pastes through a shared internal clipboard editor.
 //!
-//! `TEditor` is the gap-buffer text editor: a leaf [`View`] holding a single
-//! `Vec<u8>` split by a movable gap, with a cursor (`cur_ptr`), a selection
-//! (`sel_start`/`sel_end`), single-level undo, and a viewport (`delta`) onto a
-//! content extent (`limit`). It references two sibling scrollbars and an
-//! indicator on the window frame.
+//! # The context-threading split (the central seam)
 //!
-//! ## The ctx-threading split (the central seam)
-//!
-//! In C++, `update(flags)` flushes inline (`doUpdate`) whenever `lockCount == 0`,
-//! including from the ctor (`setBufLen(0) → update`). We cannot flush in the ctor
-//! (no [`Context`]). So we **split flag-set from flush**:
+//! In C++, `update(flags)` flushes inline whenever the editor is unlocked,
+//! including from the constructor. Here there is no [`Context`] at construction,
+//! so flag-set is **split from flush**:
 //!
 //! * The **core editing methods take no `Context`** — they mutate logical state
 //!   and only OR bits into [`update_flags`](Editor::update_flags). [`update`]
 //!   never flushes inline.
 //! * `&mut Context` is threaded **only** into [`do_update`], [`unlock`],
 //!   `handle_event`, `set_state`, and the public ctx-taking entries
-//!   (`apply_scroll_delta`, `insert_text`). `unlock` flushes when `lock_count`
+//!   (`apply_scroll_delta`, `insert_text`). `unlock` flushes when the lock count
 //!   hits 0; `handle_event` flushes at the end for the arms that ran unlocked.
-//! * `change_bounds` is geometry-only + a `delta` clamp + `update(ufView)` —
-//!   scrollbar params republish on the next flush (mirrors `TScroller`'s seam).
+//! * `change_bounds` is geometry-only plus a `delta` clamp plus a view-update
+//!   request — scroll-bar params republish on the next flush.
 //!
-//! This makes the entire gap-buffer + edit core ctx-free and unit-testable in
+//! This makes the entire gap-buffer + edit core context-free and unit-testable in
 //! isolation, where the real oracle (logical buffer state) lives.
 //!
-//! ## D3 — leaf view, siblings by `ViewId` via pump brokers
+//! # Siblings by `ViewId`
 //!
 //! The editor holds [`h_scroll_bar`](Editor::h_scroll_bar)/`v_scroll_bar`/
 //! `indicator` as [`Option<ViewId>`], never pointers. Every cross-view read/write
-//! is deferred to the pump: `SyncEditorDelta` (read bar values into `delta`),
-//! `ScrollBarSetParams` (publish range/value), `IndicatorSetValue`, `SetVisible`.
-//! Mirrors `TScroller`'s broker; the editor is its own concrete downcast target
-//! (it is *not* a `Scroller`).
+//! is routed through the event loop: read the bar values into `delta`, publish
+//! range/value, set the indicator value, show/hide. The editor is its own
+//! concrete downcast target (it is *not* a `Scroller`).
 //!
-//! ## D13 — grapheme text via [`crate::text`]
+//! # Grapheme text
 //!
-//! `nextChar`/`prevChar`/`formatLine`/`nextCharAndPos` read logical bytes across
-//! the gap into a small `Vec<u8>` (the `getText` port), `str`-decode the
-//! contiguous slice, and run [`text::next`]/[`text::prev`]. There is no
-//! `maxCharSize` stack buffer.
+//! The character-stepping helpers read logical bytes across the gap into a small
+//! buffer, `str`-decode the contiguous slice, and step whole grapheme clusters
+//! via [`text::next`]/[`text::prev`]. There is no fixed-size character stack
+//! buffer.
 //!
-//! ## Mouse hold-tracking (the A3 `MouseTrackCapture` seam)
+//! # Mouse hold-tracking
 //!
-//! The two `evMouseDown` hold loops (teditor1.cpp:539-583) are ported as
-//! tracked event arms (`docs/design/mouse-track.md`): the `MouseDown` arm runs
-//! the first loop iteration and arms the capture; the `MouseMove`/`MouseAuto`/
-//! `MouseWheel` arms are the loop bodies; `MouseUp` clears. Which loop is
-//! in flight lives in [`EditorTrack`] (`Select` carries the live C++ loop-local
-//! `selectMode`; `Pan` carries `lastMouse`) — both loop masks cover
-//! move+auto+wheel, so the kind discriminates the *body*, not the event class.
-//! A wheel during the `Select` hold forwards to both scrollbars via
-//! `Deferred::MouseTrack` (the C++ `vScrollBar->handleEvent`, :574-579) and
-//! self-posts `SyncEditorDelta` (the C++ answer is a synchronous `message()`
-//! that bypasses the hold loop; rstv's queue-borne broadcast would be swallowed
-//! by the modal capture) — the delta lands next pump (the seam's accepted
-//! one-pump latency). Outside a hold a wheel falls through unconsumed: C++
-//! `TEditor`'s `eventMask` excludes `evMouseWheel` (teditor1.cpp:195).
+//! The two mouse-down hold loops (drag-select and pan) become tracked event arms:
+//! the `MouseDown` arm runs the first loop iteration and arms the capture; the
+//! move/auto/wheel arms are the loop bodies; `MouseUp` clears. Which loop is in
+//! flight lives in [`EditorTrack`] (`Select` carries the live `selectMode`; `Pan`
+//! carries `lastMouse`). A wheel during a drag-select forwards to both scroll
+//! bars and self-posts a delta-sync, so the new offset lands on the next pump.
+//! Outside a hold, a wheel falls through unconsumed (the editor's event mask
+//! excludes the wheel).
 //!
-//! ## Deferrals (breadcrumbed in the code)
+//! # Turbo Vision heritage
 //!
-//! * Find/Replace **dialogs** (`editorDialog`, `find`/`replace`/prompt) — needs
-//!   dialog views not yet built. [`Editor::search`] is fully ported + unit-tested.
-//! * Internal-clipboard **TEditor branch** (`insertFrom`) — row 69.
-//! * `TStreamable` (D12).
+//! Ports `TEditor` (`teditor1.cpp`, `teditor2.cpp`, `edits.cpp`). Owner
+//! up-pointers to the scroll bars and indicator become [`ViewId`] handles
+//! brokered by the event loop (deviation D3); byte indices into the buffer become
+//! grapheme-aware stepping (deviation D13); `getColor` becomes [`Role`]s; and
+//! `TStreamable` is dropped.
 
 use crate::keymap::{self, KeyStroke, Resolve};
 use crate::theme::Role;
@@ -93,13 +84,12 @@ const SM_TRIPLE: u8 = 0x04;
 
 // The `ef*` search-option flags. `pub(crate)` (the `editor` module is private and
 // only `Editor`/`Encoding`/`LineEnding` are re-exported; `search()` takes a plain
-// `opts: u16`). Promoted to `pub` when the find/replace dialogs (deferred) need
-// them.
+// `opts: u16`).
 /// `efCaseSensitive` — `search` matches case exactly.
 pub(crate) const EF_CASE_SENSITIVE: u16 = 0x0001;
 /// `efWholeWordsOnly` — `search` rejects matches inside a larger word.
 pub(crate) const EF_WHOLE_WORDS_ONLY: u16 = 0x0002;
-// The `ef*` flags that drive the find/replace dialogs (C1).
+// The `ef*` flags that drive the find/replace dialogs.
 /// `efPromptOnReplace` — replace prompts before each substitution.
 pub(crate) const EF_PROMPT_ON_REPLACE: u16 = 0x0004;
 /// `efReplaceAll` — replace every match.
@@ -116,7 +106,7 @@ const MAX_LINE_LENGTH: i32 = 256;
 /// teditor1.cpp:539-583) — the editor's track-kind discriminator (the scrollbar
 /// `tracked_part` discipline). `None` in [`Editor::track`] = no hold; the
 /// tracked `MouseMove`/`MouseAuto`/wheel/`MouseUp` arms are guarded on it
-/// (mandatory A3 rule — a stray event falls through unconsumed).
+/// (a stray event falls through unconsumed).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum EditorTrack {
     /// The main drag-select loop (teditor1.cpp:553-583). `select_mode` is the
@@ -349,9 +339,13 @@ fn prev_grapheme_byte_len(chunk: &[u8]) -> usize {
 // Editor
 // ---------------------------------------------------------------------------
 
-/// `TEditor` — the gap-buffer text editor (D2 View trait + ViewState).
+/// The gap-buffer text editor.
+///
+/// # Turbo Vision heritage
+///
+/// Ports `TEditor` (`teditor1.cpp`, `teditor2.cpp`, `edits.cpp`).
 pub struct Editor {
-    /// View state (geometry, flags, etc.) — the D2 composition target.
+    /// View state (geometry, flags, etc.) — the composition target.
     state: ViewState,
     /// The text buffer: `buf_len` logical bytes split by a `gap_len`-byte gap at
     /// `cur_ptr`. Always physically `buf_size` bytes long; gap bytes are stale.
@@ -422,16 +416,16 @@ pub struct Editor {
     indicator: Option<ViewId>,
     /// `findStr` — last search string.
     ///
-    /// NOTE: C++ shares this statically across all editors; per-instance until the
-    /// find/replace dialogs (deferred) need otherwise.
+    /// NOTE: C++ shares this statically across all editors; here it is
+    /// per-instance.
     find_str: String,
     /// `replaceStr` — last replacement string (per-instance; see [`find_str`]).
     replace_str: String,
     /// `editorFlags` — the `ef*` search options (per-instance; see [`find_str`]).
     editor_flags: u16,
     /// Absolute screen position of view-local `(0, 0)`, cached by `draw` so the
-    /// mouse-tracking capture can localize absolute mouse coords (D3/D9 — the
-    /// `Button::abs_origin` pattern, mouse-track recipe step 1).
+    /// mouse-tracking capture can localize absolute mouse coords (the
+    /// `Button::abs_origin` pattern).
     abs_origin: Point,
     /// Per-hold mouse-track state — `Some` while a hold loop is in flight (see
     /// [`EditorTrack`]). Guards the tracked `MouseMove`/`MouseAuto`/wheel/
@@ -957,18 +951,18 @@ impl Editor {
     /// post-gap tail to the new end so the gap widens in place.
     fn set_buf_size(&mut self, new_size: usize) -> bool {
         if new_size <= self.buf_size {
-            // TODO(row 68 shrink): C++ TFileEditor::setBufSize also reallocs to SHRINK
-            // when newSize < bufSize (memory reclaim after setSelect/insertBuffer). We
-            // skip the shrink path — memory is not reclaimed; logical text + invariants
-            // are unaffected.
+            // C++ TFileEditor::setBufSize also reallocs to SHRINK when
+            // new_size < buf_size (memory reclaim). The shrink path is not
+            // modeled — memory is not reclaimed, but the logical text and all
+            // invariants are unaffected.
             return true;
         }
         if !self.file_editor {
             return false; // base TEditor / Memo: fixed buffer, cannot grow.
         }
-        // TFileEditor::setBufSize grow path. DEVIATION (documented): the C++ 16-bit
-        // ceilings (UINT_MAX-0x1F) and malloc-failure return are dropped — Vec growth
-        // is infallible. TODO(row 68 OOM): no edOutOfMemory path (was malloc-fail).
+        // TFileEditor::setBufSize grow path. The C++ 16-bit ceilings and
+        // malloc-failure return have no analogue — Vec growth is infallible, so
+        // there is no out-of-memory path.
         let rounded = (new_size + 0x0FFF) & !0x0FFF; // round up to 0x1000
         let old_size = self.buf_size;
         let n = self.buf_len - self.cur_ptr + self.del_count; // bytes after the gap
@@ -981,8 +975,8 @@ impl Editor {
         true
     }
 
-    /// `TMemo::setData` body — replace the whole buffer with `text` (D10 setData
-    /// successor, used by [`Memo::set_value`]). All-or-nothing like C++: if `text`
+    /// Replace the whole buffer with `text` (used by [`Memo::set_value`]).
+    /// All-or-nothing: if `text`
     /// does not fit the buffer and `setBufSize` fails (base/Memo fixed buffer — in
     /// file-editor mode the buffer grows instead), it is a no-op. No `selectAll`
     /// (C++ TMemo::setData, unlike TInputLine::setData, does not select).
@@ -1028,7 +1022,7 @@ impl Editor {
             self.del_count = 0;
             self.ins_count = 0;
             // setBufSize(bufLen) — no-op for the base (never shrinks); the
-            // file-editor shrink path is likewise deferred (see set_buf_size).
+            // file-editor shrink path is not modeled either (see set_buf_size).
         }
         self.draw_line = self.cur_pos.y;
         self.draw_ptr = self.line_start(p);
@@ -1226,8 +1220,8 @@ impl Editor {
         res
     }
 
-    /// Extract the current selection as a byte vec (for the pump clipboard broker,
-    /// C3). The selection bytes are always physically contiguous in the gap buffer
+    /// Extract the current selection as a byte vec (for the clipboard broker).
+    /// The selection bytes are always physically contiguous in the gap buffer
     /// (`curPtr` is at `selStart` or `selEnd`, so the gap never sits inside the
     /// selection).
     pub(crate) fn selection_bytes(&self) -> Vec<u8> {
@@ -1289,11 +1283,11 @@ impl Editor {
 
     // -- search (teditor2.cpp / edits.cpp) ----------------------------------
 
-    /// `TEditor::search(findStr, opts)` — find `needle` from the cursor; on a hit,
-    /// select it and track the cursor. Fully ported + unit-tested (the dialog-
-    /// driven `find`/`replace` are deferred).
+    /// Find `needle` from the cursor; on a hit, select it and track the cursor.
+    /// This is the low-level search primitive; the interactive Find / Replace
+    /// dialogs drive it through [`do_search_replace`].
     ///
-    /// Ctx-free: the C++ `lock`/`trackCursor`/`unlock` flush is replaced by a
+    /// Context-free: the C++ `lock`/`trackCursor`/`unlock` flush is replaced by a
     /// flag-set (`trackCursor` records the scroll target; the flush happens on the
     /// next `handle_event` boundary).
     pub fn search(&mut self, needle: &str, opts: u16) -> bool {
@@ -1437,9 +1431,8 @@ impl Editor {
         }
     }
 
-    /// `doUpdate()` — publish cursor, scrollbar params, and the indicator value if
-    /// any update is pending. The C++ inline `drawView`/`drawLines` are dropped
-    /// (D8 whole-tree redraw).
+    /// Publish cursor, scrollbar params, and the indicator value if any update is
+    /// pending. The whole-tree redraw handles the repaint.
     fn do_update(&mut self, ctx: &mut Context) {
         if self.update_flags == 0 {
             return;
@@ -1520,10 +1513,9 @@ impl Editor {
         self.update(UF_UPDATE);
     }
 
-    // -- clipboard (teditor1.cpp; D11 system-clipboard path) ----------------
+    // -- clipboard ------------------------------------------------------------
 
-    /// `clipCopy()` — copy the selection to the internal clipboard (C3) or
-    /// system clipboard (A6).
+    /// Copy the selection to the internal or system clipboard.
     fn clip_copy(&mut self, ctx: &mut Context) -> bool {
         // C++: `if (clipboard != this)` — the clipboard editor cannot copy from itself.
         if ctx.clipboard_editor_id() == self.state.id() && self.state.id().is_some() {
@@ -1538,7 +1530,7 @@ impl Editor {
             self.update(UF_UPDATE);
             true
         } else {
-            // System clipboard path (A6).
+            // System clipboard path.
             let len = self.sel_end - self.sel_start;
             let start = self.buf_ptr(self.sel_start);
             // The selection is always physically contiguous (curPtr is always at
@@ -1558,7 +1550,7 @@ impl Editor {
         }
     }
 
-    /// `clipPaste()` — paste from the internal clipboard (C3) or system clipboard (A6).
+    /// Paste from the internal or system clipboard.
     fn clip_paste(&mut self, ctx: &mut Context) {
         if let Some(clipboard_id) = ctx.clipboard_editor_id() {
             // Internal clipboard: ClipboardEditorPaste broker reads clipboard's
@@ -1567,14 +1559,14 @@ impl Editor {
                 ctx.clipboard_editor_paste(id, clipboard_id);
             }
         } else {
-            // System clipboard path (A6).
+            // System clipboard path.
             if let Some(id) = self.state.id() {
                 ctx.editor_paste(id);
             }
         }
     }
 
-    // -- find/replace accessor methods (C1 seam) ----------------------------
+    // -- find/replace accessor methods ----------------------------------------
 
     /// Read the find string — for the drain-handler pre-fill.
     pub(crate) fn find_str(&self) -> &str {
@@ -1790,9 +1782,9 @@ impl View for Editor {
     /// viewport rows. NB: `draw_ptr`/`draw_line` are display caches; mutating them
     /// in `draw` is faithful to the C++ (it does the same).
     fn draw(&mut self, ctx: &mut DrawCtx) {
-        // Cache the absolute origin for the mouse-tracking capture (D3/D9 — the
-        // MouseTrackCapture localizes abs mouse coords via this value,
-        // mirroring the Button `abs_origin` pattern; recipe step 1).
+        // Cache the absolute origin for the mouse-tracking capture: the
+        // MouseTrackCapture localizes absolute mouse coords via this value,
+        // mirroring the Button `abs_origin` pattern.
         self.abs_origin = ctx.origin();
         if self.draw_line != self.delta.y {
             self.draw_ptr = self.line_move(self.draw_ptr, self.delta.y - self.draw_line);
@@ -1838,20 +1830,16 @@ impl View for Editor {
             Event::MouseWheel(m) => {
                 let m = *m;
                 match self.track {
-                    // The wheel iteration of the drag-select loop
-                    // (teditor1.cpp:574-579): `vScrollBar->handleEvent(ev);
-                    // hScrollBar->handleEvent(ev);` then the unconditional
-                    // body (:580-581). The bars are siblings (D3): deliver
-                    // via Deferred::MouseTrack (find_mut + handle_event —
-                    // exactly the C++ direct call, one pump later). The C++
-                    // bar answers with a *synchronous* cmScrollBarChanged
-                    // message() that bypasses the hold loop; rstv's
-                    // queue-borne broadcast would be swallowed by the modal
-                    // capture, so the editor posts the SyncEditorDelta
-                    // broker itself. Both land next pump (the seam's
-                    // accepted one-pump latency), so this iteration's
-                    // setCurPtr still sees the pre-scroll `delta`; the next
-                    // tick corrects it.
+                    // The wheel iteration of the drag-select loop: forward the
+                    // wheel to both scroll bars, then run the unconditional body.
+                    // The bars are siblings, so the wheel is delivered via
+                    // Deferred::MouseTrack (find_mut + handle_event). The C++ bar
+                    // answers with a synchronous cmScrollBarChanged that bypasses
+                    // the hold loop; the queue-borne broadcast here would be
+                    // swallowed by the modal capture, so the editor posts the
+                    // SyncEditorDelta itself. Both land on the next pump, so this
+                    // iteration's setCurPtr still sees the pre-scroll `delta`; the
+                    // next tick corrects it.
                     Some(EditorTrack::Select { select_mode: sm }) => {
                         self.lock();
                         if let Some(v) = self.v_scroll_bar {
@@ -1999,8 +1987,8 @@ impl View for Editor {
                     );
                 }
             }
-            // -- evMouseMove (tracked) — a loop-body tick. Guarded by `track`
-            // (mandatory A3 rule): a stray move falls through unconsumed.
+            // -- evMouseMove (tracked) — a loop-body tick. Guarded by `track`:
+            // a stray move falls through unconsumed.
             Event::MouseMove(m) if self.track.is_some() => {
                 let m = *m;
                 match self.track {
@@ -2154,7 +2142,7 @@ impl View for Editor {
                 if let Some(id) = self.state.id() {
                     ctx.request_sync_editor_delta(id, self.h_scroll_bar, self.v_scroll_bar);
                 }
-                // DEVIATION from C++ `clearEvent`: the row-27 TScroller (the direct
+                // DEVIATION from C++ `clearEvent`: the TScroller (the direct
                 // analogue) deliberately does NOT clear cmScrollBarChanged — the
                 // codebase convention is to leave broadcasts live for siblings.
                 // Match it (return without clearing); functionally inert since the
@@ -2199,12 +2187,12 @@ impl View for Editor {
             self.flush_if_unlocked(ctx);
         }
         // NOTE: the C++ `sfExposed` arm (`if (enable) unlock()`) has no analogue —
-        // there is no sfExposed flag (D8 dropped it). The initial flush instead
-        // happens on the first active/event boundary.
+        // there is no exposed flag here. The initial flush instead happens on the
+        // first active/event boundary.
     }
 
-    /// `TEditor::changeBounds` — geometry + clamp `delta` + flag a redraw.
-    /// Scrollbar params republish on the next flush (mirrors `TScroller`'s seam).
+    /// Geometry + clamp `delta` + flag a redraw. Scrollbar params republish on
+    /// the next flush (mirrors the scroller).
     fn change_bounds(&mut self, bounds: Rect) {
         self.state.set_bounds(bounds);
         self.delta.x = 0.max(self.delta.x.min(self.limit.x - self.state.size.x));
@@ -2334,19 +2322,22 @@ impl Editor {
 }
 
 // ---------------------------------------------------------------------------
-// Memo — TMemo (tmemo.cpp), a thin D2 embed-delegate wrapper over Editor.
+// Memo — a thin embed-delegate wrapper over Editor.
 // ---------------------------------------------------------------------------
 
-/// `TMemo` (`tmemo.cpp`) — a single-field multi-line editor for use inside a
-/// dialog. A D2 embed-delegate wrapper over [`Editor`]; the only behavioural
-/// differences from the base editor are: it swallows a plain `Tab` keypress (so
-/// Tab navigates the dialog rather than inserting), and it exposes its text as a
-/// typed [`FieldValue`] for dialog gather/scatter (D10).
+/// A single-field multi-line editor for use inside a dialog. An
+/// embed-and-delegate wrapper over [`Editor`]; the only behavioural differences
+/// from the base editor are: it swallows a plain `Tab` keypress (so Tab navigates
+/// the dialog rather than inserting), and it exposes its text as a typed
+/// [`FieldValue`] for dialog gather/scatter.
 ///
-/// Dropped vs C++: `dataSize` (no untyped size in the D10 typed model);
-/// `getPalette`/`cpMemo` (D7 — Memo reuses the editor's `draw`, i.e.
-/// `Role::ScrollerNormal`/`ScrollerSelected`). A distinct dialog-context palette
-/// (`MemoNormal`/`MemoSelected` roles) is a deferred theme refinement.
+/// A memo reuses the editor's draw and so its scroller colors; it does not carry
+/// the C++ memo-specific palette, which only differed in a dialog context.
+///
+/// # Turbo Vision heritage
+///
+/// Ports `TMemo` (`tmemo.cpp`). `getData`/`setData` become the typed value
+/// protocol (deviation D10) and `getPalette` is folded into the editor's colors.
 pub struct Memo {
     /// The shared editor engine (buffer, nav, edit, undo, draw, brokers).
     pub editor: Editor,
@@ -2370,15 +2361,11 @@ impl Memo {
 
 #[crate::delegate(to = editor)]
 impl View for Memo {
-    /// `TMemo::handleEvent` — swallow a plain `Tab` KeyDown (so it bubbles to the
-    /// dialog's focus navigation) and forward everything else to the editor.
+    /// Swallow a plain `Tab` KeyDown (so it bubbles to the dialog's focus
+    /// navigation) and forward everything else to the editor.
     fn handle_event(&mut self, ev: &mut crate::event::Event, ctx: &mut Context) {
         use crate::event::{Event, Key};
-        // C++: `if (what != evKeyDown || keyCode != kbTab) TEditor::handleEvent`.
-        // kbTab is the plain Tab keycode; kbShiftTab/kbCtrlTab/kbAltTab ARE forwarded.
-        // In the rstv Key model these are Key::Tab + a modifier (shift/ctrl/alt), not
-        // distinct variants; only the unmodified Key::Tab is swallowed — the rest
-        // forward to the editor.
+        // Shift/Ctrl/Alt+Tab ARE forwarded; only the unmodified Tab is swallowed.
         if let Event::KeyDown(k) = ev
             && k.key == Key::Tab
             && !k.modifiers.shift
@@ -2391,15 +2378,15 @@ impl View for Memo {
         self.editor.handle_event(ev, ctx);
     }
 
-    /// `TMemo::getData` — the memo's text as a typed [`FieldValue`] (D10).
+    /// The memo's text as a typed [`FieldValue`].
     fn value(&self) -> Option<crate::data::FieldValue> {
         Some(crate::data::FieldValue::Text(
             String::from_utf8_lossy(&self.editor.text()).into_owned(),
         ))
     }
 
-    /// `TMemo::setData` — load text into the buffer (D10). Ignores a non-`Text`
-    /// variant (type mismatch the typed model drops, like `InputLine::set_value`).
+    /// Load text into the buffer. Ignores a non-`Text` variant (a type mismatch
+    /// the typed model drops, like `InputLine::set_value`).
     fn set_value(&mut self, v: crate::data::FieldValue) {
         if let crate::data::FieldValue::Text(s) = v {
             self.editor.set_text(s.as_bytes());
@@ -2408,46 +2395,38 @@ impl View for Memo {
 }
 
 // ---------------------------------------------------------------------------
-// FileEditor — TFileEditor (tfiledtr.cpp), a D2 embed-delegate wrapper over a
-// file-editor-mode Editor.
+// FileEditor — a file-editor-mode Editor.
 // ---------------------------------------------------------------------------
 
-/// `TFileEditor` (`tfiledtr.cpp`) — a [`Editor`] backed by a file on disk.
-/// D2 embed-delegate wrapper; the editor runs in file-editor mode (growable
-/// buffer + save commands).
+/// An [`Editor`] backed by a file on disk. An embed-and-delegate wrapper; the
+/// editor runs in file-editor mode (growable buffer plus save commands).
 ///
-/// Implemented: growable buffer (load grows it), `load_file`/`save_file` over
-/// real `std::fs`, `save()` to an existing file, `handle_event` cmSave, the
-/// full `valid` (including the modified-save `edSaveModify`/`edSaveUntitled`
-/// Yes/No/Cancel prompt) and the `edWriteError` save-error popup — both via the
-/// **async-modal-from-a-view seam** (`docs/design/async-modal-from-view.md`:
-/// `valid` requests an `OpenMessageBox`, caches the answer in
-/// [`set_modal_answer`](View::set_modal_answer), re-validates).
+/// It loads and saves over real `std::fs`, grows the buffer to fit a file, and
+/// handles the save commands. Validation runs the full modified-save
+/// Yes/No/Cancel prompt and a write-error popup, both through the
+/// async-modal-from-a-view mechanism: `valid` requests a message box, caches the
+/// answer in [`set_modal_answer`](View::set_modal_answer), then re-validates.
 ///
-/// `saveAs` / `Command::SAVE_AS` / untitled `save()` open a `TFileDialog` via the
-/// **view-triggered FileDialog seam** ([`Context::request_save_as_dialog`] →
-/// `Deferred::OpenSaveAsDialog` → `ModalCompletion::SaveAsPick`): the pump builds +
-/// runs the dialog, the completion sets `file_name` + [`pending_title_update`] and
-/// re-injects `cmSave`, which then `save_file`s and broadcasts `cmUpdateTitle`
+/// Save-as (an explicit `cmSaveAs`, or saving an untitled buffer) opens a file
+/// dialog through [`Context::request_save_as_dialog`]: the loop builds and runs
+/// the dialog, the completion sets `file_name` plus [`pending_title_update`] and
+/// re-injects `cmSave`, which writes the file and broadcasts `cmUpdateTitle`
 /// (refreshing the hosting [`EditWindow`]'s frame title).
 ///
-/// Deferred (forced by not-yet-ported substrate):
-/// * `edReadError` on **load** — stored as `pending_load_error` in `load_file` and
-///   shown via `request_message_box` on the first `handle_event` call (the ctor has
-///   no `Context`; this is the established deferred-ctor-work pattern). `edCreateError`/`edWriteError` are MERGED:
-///   `std::fs::write` does not separate create-vs-write failure, so both emit the
-///   single "Error writing file …" box (documented in `save_file`). `edOutOfMemory`
-///   has no analogue (the buffer grows fallibly via the OS).
-/// * `efBackupFiles` backup-rename in `saveFile` — **implemented** (flag
-///   defaults off). DEVIATION from C++: instead of replacing the extension with
-///   `.bak` (`fnmerge(…, backupExt)`) we append `~` to the full filename
-///   (`foo.txt` → `foo.txt~`, `Makefile` → `Makefile~`), following the Unix
-///   convention (user-directed, see D-rules).
-/// * `shutDown` cmSave/cmSaveAs disable-on-close — no rstv `shut_down` View
-///   analogue exists; dropped.
-/// * `isClipboard()→*fileName = EOS` reset after saveAs — the internal-clipboard
-///   editor (row-66 deferral) is not wired, so the reset is moot.
-/// * `TStreamable` write/read/build — D12 dropped (like every other row).
+/// A read error is reported through a message box on the first event (the
+/// constructor has no [`Context`], so the error is cached at load time).
+/// Optional backup files (off by default) append `~` to the filename
+/// (`foo.txt` → `foo.txt~`), following the Unix convention rather than the C++
+/// `.bak` extension swap.
+///
+/// Some C++ details have no analogue here: `std::fs::write` does not distinguish
+/// create-vs-write failure, so both report one "Error writing file …" box; buffer
+/// growth via the OS is fallible, so there is no out-of-memory path; and the
+/// command disable-on-close hook and `TStreamable` are dropped.
+///
+/// # Turbo Vision heritage
+///
+/// Ports `TFileEditor` (`tfiledtr.cpp`).
 pub struct FileEditor {
     /// The editor engine, in file-editor mode.
     pub editor: Editor,
@@ -2594,7 +2573,7 @@ impl FileEditor {
     /// `save()` — now with a non-empty `file_name` → `save_file`.
     ///
     /// For the modal-close path, `validate_modal_close` drives the `OpenSaveAsDialog`
-    /// inline and calls `pump_once` to service the re-injected `cmSave` (C5).
+    /// inline and calls `pump_once` to service the re-injected `cmSave`.
     pub fn save(&mut self, ctx: &mut Context) -> bool {
         if self.file_name.is_some() {
             self.save_file(ctx)
@@ -2745,20 +2724,20 @@ pub(crate) fn editor_mut(v: &mut dyn View) -> Option<&mut Editor> {
 }
 
 // ---------------------------------------------------------------------------
-// EditWindow — TEditWindow (teditwnd.cpp), row 69
+// EditWindow
 // ---------------------------------------------------------------------------
 
-/// `TEditWindow` (`teditwnd.cpp`) — a [`Window`] hosting a [`FileEditor`] with two
-/// scrollbars and an [`Indicator`]. D2 embed-delegate over [`Window`]; the
-/// constructor wires the editor to the (initially hidden) scrollbars/indicator by
-/// id, mirroring the C++ ctor.
+/// A [`Window`] hosting a [`FileEditor`] with two scroll bars and an
+/// [`Indicator`]. An embed-and-delegate wrapper over [`Window`]; the constructor
+/// wires the editor to the (initially hidden) scroll bars and indicator by id.
 ///
-/// Deferrals (breadcrumbed):
-/// * `close()` clipboard branch (`isClipboard()→hide()`) — the internal-clipboard
-///   editor (row-66 deferral) is not wired, so close is always the base
-///   `TWindow::close` (cmClose → request_close). `close()` is not a View method.
-/// * The editor's own deferred sub-features (find/replace dialogs, drag-select,
-///   context menu, internal-clipboard branch) belong to the editor row, not here.
+/// The C++ close hook hid the window when it hosted the internal clipboard
+/// editor; the clipboard editor is never hosted in an `EditWindow`, so closing is
+/// always the plain window close.
+///
+/// # Turbo Vision heritage
+///
+/// Ports `TEditWindow` (`teditwnd.cpp`).
 pub struct EditWindow {
     /// The embedded window (frame + children).
     pub window: crate::window::Window,
@@ -2775,12 +2754,11 @@ pub struct EditWindow {
 impl EditWindow {
     /// `TEditWindow::TEditWindow(bounds, fileName, aNumber)`.
     ///
-    /// Faithful to the C++ ctor: inserts the (hidden) scrollbars and indicator
-    /// FIRST to obtain their [`ViewId`]s, then constructs [`FileEditor`] wired to
-    /// those ids, then inserts the editor. Title: filename / "Untitled" (the
-    /// clipboard title is deferred with the clipboard editor).
+    /// Inserts the (hidden) scroll bars and indicator FIRST to obtain their
+    /// [`ViewId`]s, then constructs the [`FileEditor`] wired to those ids, then
+    /// inserts the editor. The title is the filename, or "Untitled".
     pub fn new(bounds: Rect, file_name: Option<std::path::PathBuf>, number: i16) -> Self {
-        // Title: filename or "Untitled" (isClipboard branch deferred).
+        // Title: filename or "Untitled".
         let title = match &file_name {
             Some(p) => p.to_string_lossy().into_owned(),
             None => "Untitled".to_string(),
@@ -2857,8 +2835,8 @@ impl View for EditWindow {
     /// **fans out to every window**. Under fan-out, clearing on the first window
     /// dispatched would starve the others — so every EditWindow refreshes its own
     /// title from its own editor (idempotent for windows that did not save,
-    /// order-independent) and the event stays live (D4 source-as-filter would let us
-    /// gate + clear, but is unneeded here).
+    /// order-independent) and the event stays live (a source filter could gate +
+    /// clear, but is unneeded here).
     fn handle_event(&mut self, ev: &mut crate::event::Event, ctx: &mut crate::view::Context) {
         use crate::command::Command;
         use crate::event::Event;
@@ -3726,7 +3704,7 @@ mod tests {
         insta::assert_snapshot!(screen.snapshot());
     }
 
-    // -- FileEditor (row 68) ------------------------------------------------
+    // -- FileEditor -----------------------------------------------------------
 
     /// A unique temp-file path per test (no `tempfile` dev-dep).
     fn tmp_path(name: &str) -> std::path::PathBuf {
@@ -3742,8 +3720,8 @@ mod tests {
         FileEditor::new(Rect::new(0, 0, 40, 10), None, None, None, None)
     }
 
-    /// FOUNDATION default-off regression (load-bearing): a base editor / Memo with
-    /// a fixed buffer REFUSES to grow. `set_buf_size` past capacity returns false,
+    /// A base editor / Memo with a fixed buffer REFUSES to grow.
+    /// `set_buf_size` past capacity returns false,
     /// and `set_text` of an over-capacity payload is a no-op (text unchanged).
     #[test]
     fn base_editor_buffer_does_not_grow() {
@@ -4056,7 +4034,8 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
-    /// Saving an untitled buffer is a no-op (saveAs deferred) — returns false, no panic.
+    /// Calling `save()` directly on an untitled buffer is a no-op (it has no name
+    /// to write to; the save-as dialog supplies one) — returns false, no panic.
     #[test]
     fn file_editor_save_untitled_is_noop() {
         let mut fe = untitled_fe();
@@ -4064,7 +4043,7 @@ mod tests {
         let mut cx = Cx::new();
         assert!(
             !fe.save(&mut cx.ctx()),
-            "untitled save is a no-op (saveAs deferred)"
+            "untitled save is a no-op (the save-as dialog supplies a name)"
         );
         assert!(fe.editor.modified(), "still modified — nothing was saved");
     }
@@ -4088,7 +4067,7 @@ mod tests {
         );
     }
 
-    // -- saveAs: the view-triggered FileDialog seam (row 68/69) ---------------
+    // -- saveAs: the view-triggered FileDialog ---------------------------------
 
     /// `cmSaveAs` on a FileEditor requests the save-as `FileDialog` (the deferred
     /// push), regardless of whether the buffer is titled, and clears the event.
@@ -4228,7 +4207,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // EditWindow tests (row 69)
+    // EditWindow tests
     // -----------------------------------------------------------------------
 
     /// 1a. Title is the filename stem when a path is given.
@@ -4321,11 +4300,11 @@ mod tests {
         insta::assert_snapshot!(screen.snapshot());
     }
 
-    // -- mouse hold-tracking (the A3 MouseTrackCapture seam) ------------------
+    // -- mouse hold-tracking --------------------------------------------------
     //
     // These tests drive the tracked arms directly with view-local positions, as
-    // the pump's Deferred::MouseTrack apply does (the seam itself is unit-tested
-    // in capture::tests; here we verify the editor's loop bodies).
+    // the pump's Deferred::MouseTrack apply does (the capture itself is
+    // unit-tested in capture::tests; here we verify the editor's loop bodies).
 
     use crate::event::{MouseButtons, MouseEvent, MouseEventFlags, MouseWheel};
 
@@ -4763,7 +4742,7 @@ mod tests {
     }
 
     /// Stray `MouseUp` / `MouseMove` / `MouseAuto` with no track in flight fall
-    /// through unconsumed (the mandatory A3 guard).
+    /// through unconsumed (the tracking guard).
     #[test]
     fn track_stray_events_fall_through() {
         let mut e = tall_ed();
@@ -4808,7 +4787,7 @@ mod tests {
     ///
     /// NOTE: this drives handle_event directly (handler-level), bypassing the
     /// pump's Deferred::MouseTrack drain; the deferred-apply path
-    /// (group.find_mut + handle_event) is covered by the seam-level tests in
+    /// (group.find_mut + handle_event) is covered by the capture tests in
     /// capture::tests and the scrollbar pump round-trip in program.rs.
     #[test]
     fn track_through_file_editor_delegation() {
@@ -4848,9 +4827,9 @@ mod tests {
         );
     }
 
-    // -- C1 find/replace dialog layout snapshots ----------------------------
+    // -- find/replace dialog layout snapshots ---------------------------------
 
-    /// Render the Find dialog to verify its layout (C1 edFind seam).
+    /// Render the Find dialog to verify its layout.
     #[test]
     fn find_dialog_layout() {
         use crate::backend::{HeadlessBackend, Renderer};
@@ -4918,7 +4897,7 @@ mod tests {
         insta::assert_snapshot!(screen.snapshot());
     }
 
-    /// Render the Replace dialog to verify its layout (C1 edReplace seam).
+    /// Render the Replace dialog to verify its layout.
     #[test]
     fn replace_dialog_layout() {
         use crate::backend::{HeadlessBackend, Renderer};
@@ -5005,7 +4984,7 @@ mod tests {
         insta::assert_snapshot!(screen.snapshot());
     }
 
-    // -- C3: internal-clipboard tests ----------------------------------------
+    // -- internal-clipboard tests ---------------------------------------------
 
     /// `insert_from` inserts another editor's bytes into self (non-clipboard dest).
     #[test]

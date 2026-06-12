@@ -1,14 +1,11 @@
-//! Commands and command sets — deviation **D1** (command identity).
+//! Commands and command sets.
 //!
-//! Ports the `cm*` command family and `TCommandSet` (`views.h`,
-//! `tcmdset.cpp`). Per D1 the command's *identity* changes from TV's
-//! hand-assigned `int` to a **namespaced static string**: [`Command`] is an
-//! opaque newtype around `&'static str`. TV's integers existed only for
-//! serialization (dropped, D12) and to index a 256-bit set (already replaced by
-//! a [`HashSet`]); neither is needed, so commands no longer carry a number.
-//! Dotted namespacing (`"tv.ok"`) makes app/view-defined commands collision-safe
-//! by construction. The command *bus* concept is unchanged — only the token's
-//! representation changes.
+//! A [`Command`] is the identity of an action — the thing a menu item, button,
+//! or key binding emits and a view interprets. Each command is an opaque
+//! newtype around a **namespaced static string** (`"tv.ok"`), so application-
+//! and view-defined commands are collision-safe by construction. A
+//! [`CommandSet`] is a set of commands the framework enables or disables in
+//! bulk.
 //!
 //! The associated constants below are **only the framework's shared
 //! vocabulary** — commands the core (program/view/window/dialog/menu/
@@ -17,12 +14,21 @@
 //! (e.g. the editor's `char_left`, the file dialog's `file_open`); external
 //! views and apps mint their own the same way, via [`Command::custom`] with
 //! their own dotted prefix.
+//!
+//! # Turbo Vision heritage
+//!
+//! Ports the `cm*` command family and `TCommandSet` (`views.h`,
+//! `tcmdset.cpp`). C++ commands were hand-assigned `int`s; here a command's
+//! identity is a namespaced `&'static str` instead, so the command space is
+//! open and extensions cannot collide (deviation D1). The integers existed
+//! only for serialization (dropped) and to index a 256-bit set (now a
+//! [`HashSet`]), so commands no longer carry a number.
 
 use std::collections::HashSet;
 use std::ops::{AddAssign, BitAndAssign, BitOrAssign, SubAssign};
 
-/// A Turbo Vision command. Faithful to TV's `cm*` family (`views.h`), which
-/// were plain `int`s; per D1 a command's identity is now a **namespaced static
+/// The identity of an action — what a menu item, button, or key binding emits
+/// and a view interprets. A command's identity is a **namespaced static
 /// string** rather than a number, so downstream code can mint
 /// application-specific commands collision-safely.
 ///
@@ -38,7 +44,12 @@ use std::ops::{AddAssign, BitAndAssign, BitOrAssign, SubAssign};
 /// Equality and hashing compare the string *contents*, so two `Command`s with
 /// equal-content names are equal regardless of where the literals live.
 ///
-/// [`Default`] is [`Command::VALID`] (TV's `cmValid`, the zero command).
+/// [`Default`] is [`Command::VALID`] (the zero command).
+///
+/// # Turbo Vision heritage
+///
+/// Faithful to the `cm*` command family (`views.h`), which were plain `int`s;
+/// here a command's identity is a namespaced `&'static str` (deviation D1).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Command(&'static str);
 
@@ -231,8 +242,9 @@ impl Command {
     /// `cmRevert` (stddlg.h `1006`)
     pub const REVERT: Command = Command("tv.revert");
     /// `cmFileFocused` (stddlg.h `102`) — broadcast by `TFileList::focusItem` on
-    /// every focus change; the focused `TSearchRec` is the payload (D4: carried
-    /// via the resolvable `source`, resolved by the pump's `ResolveFocusedFile`).
+    /// every focus change; the focused file record is the payload (carried via
+    /// the broadcast's resolvable `source`, resolved by the pump's
+    /// `ResolveFocusedFile`).
     pub const FILE_FOCUSED: Command = Command("tv.file_focused");
     /// `cmFileDoubleClicked` (stddlg.h, next after `cmFileFocused`) — broadcast by
     /// `TFileList::selectItem`. Faithfully payload-less in rstv (the only consumer,
@@ -253,22 +265,23 @@ impl Command {
     pub const THEME_EDIT_BG: Command = Command("tv.theme_edit_bg");
 }
 
-/// A set of commands. Faithful to `TCommandSet` (`views.h`, `tcmdset.cpp`);
-/// per D1 the `uchar cmds[32]` bit array (256 bits) is replaced by a
-/// [`HashSet<Command>`].
+/// A set of commands the framework enables or disables in bulk.
 ///
-/// The command space is now **open/unbounded** (commands are namespaced
-/// strings, not `0..=255`), so TV's bit-array machinery is gone: there is no
-/// trackable-range guard, and there is no `all()` constructor — "all commands"
-/// is not enumerable. The set itself is polarity-neutral; the framework's
-/// **enabled-by-default policy** (TV's `TView::initCommands` loop and
-/// `commandEnabled`) lives in `Program`, which keeps `curCommandSet` as its
-/// complement — a **disabled set** (denylist; see
-/// `docs/design/command-enablement.md`). The `enable_cmd`/`disable_cmd` method
-/// names port the C++ API and mean insert/remove regardless of which polarity a
+/// The command space is **open/unbounded** (commands are namespaced strings,
+/// not `0..=255`), so there is no trackable-range guard and no `all()`
+/// constructor — "all commands" is not enumerable. The set itself is
+/// polarity-neutral; the framework's **enabled-by-default policy** lives in
+/// [`Program`](crate::Program), which keeps its current set as the complement —
+/// a **disabled set** (a denylist). The `enable_cmd`/`disable_cmd` method names
+/// port the C++ API and mean insert/remove regardless of which polarity a
 /// particular owner stores; the polarity-neutral [`insert`](Self::insert) /
 /// [`remove`](Self::remove) aliases are preferred at sites where the set's
 /// meaning is not "enabled commands" (e.g. the disabled set).
+///
+/// # Turbo Vision heritage
+///
+/// Faithful to `TCommandSet` (`views.h`, `tcmdset.cpp`); the `uchar cmds[32]`
+/// bit array (256 bits) becomes a [`HashSet<Command>`] (deviation D1).
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct CommandSet {
     cmds: HashSet<Command>,

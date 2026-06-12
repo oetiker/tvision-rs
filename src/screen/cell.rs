@@ -1,25 +1,25 @@
-//! A single screen cell — faithful port of `TScreenCell` + `TCellChar`
-//! (`scrncell.h`), under deviations **D6** (typed [`Style`]) and **D13** (Unicode
-//! grapheme model).
+//! A single screen cell: its text (a grapheme cluster), its colour [`Style`],
+//! and flags tracking double-width glyphs.
 //!
-//! `TCellChar` stores text inline as up to 15 UTF-8 bytes — *not* a `char* — so
-//! one cell can hold a whole grapheme cluster (base + combining marks / ZWJ
-//! sequence). We model that text as an owned `String` for now; row 18 (vendoring
-//! ratatui's `Buffer`) may swap it for an inline small-string, but the shape —
-//! grapheme symbol + `wide`/`trail` flags + [`Style`] — is fixed here so later
-//! consumers don't churn.
+//! One cell can hold a whole grapheme cluster (a base character plus combining
+//! marks / ZWJ sequence), stored as an owned `String`. Double-width handling: a
+//! width-2 grapheme occupies a [`wide`](Cell::is_wide) lead cell immediately
+//! followed by a [`trail`](Cell::is_wide_trail) continuation cell whose symbol
+//! is empty.
 //!
-//! Double-width handling mirrors TV exactly: a width-2 grapheme occupies a
-//! [`wide`](Cell::is_wide) lead cell immediately followed by a
-//! [`trail`](Cell::is_wide_trail) continuation cell whose symbol is empty.
+//! # Turbo Vision heritage
+//! Ports `TScreenCell` + `TCellChar` (`scrncell.h`). C++ packs the text inline as
+//! up to 15 UTF-8 bytes; here it is an owned `String`. The colour is a typed
+//! [`Style`] rather than a packed `TColorAttr` (deviation D6), and the inline
+//! grapheme model carries combining marks and ZWJ sequences (deviation D13).
 
 use crate::color::Style;
 
 /// One character cell of the screen: its text (a grapheme cluster), its colour
 /// [`Style`], and the wide/trail flags that track double-width glyphs.
 ///
-/// `PartialEq` is derived because the render diff (row 18, D8) compares the back
-/// buffer against the front buffer cell-by-cell to emit only changed cells.
+/// `PartialEq` is derived because the render diff compares the back buffer
+/// against the front buffer cell-by-cell to emit only changed cells.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Cell {
     /// The grapheme cluster shown in this cell. Empty for a wide-char trail.
@@ -34,9 +34,9 @@ pub struct Cell {
 }
 
 impl Default for Cell {
-    /// A blank cell: a single space with the default style. (TV zero-inits to a
-    /// NUL byte; a space is the conventional on-screen blank and matches the
-    /// ratatui cell shape we adopt at row 18.)
+    /// A blank cell: a single space with the default style. (Turbo Vision
+    /// zero-inits to a NUL byte; a space is the conventional on-screen blank and
+    /// matches the ratatui-derived buffer shape.)
     fn default() -> Self {
         Cell {
             symbol: String::from(" "),
@@ -153,7 +153,7 @@ mod tests {
 
     #[test]
     fn grapheme_cluster_symbol() {
-        // Combining mark clusters into one cell (D13).
+        // Combining mark clusters into one cell.
         let mut c = Cell::default();
         c.set_str("é", false); // e + combining acute, as one grapheme
         assert_eq!(c.symbol(), "é");

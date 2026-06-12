@@ -1,65 +1,57 @@
-//! `TInputLine` — faithful Rust port of `tinputli.cpp` (row 39).
-//!
 //! A single-line text-entry field with selection, horizontal scrolling, an
-//! optional [`Validator`], and the D10 typed `value`/`set_value` data protocol.
+//! optional [`Validator`], and the typed [`value`](View::value)/
+//! [`set_value`](View::set_value) data protocol.
 //!
-//! # Coordinate model (D13 — byte offsets vs. display columns)
+//! # Coordinate model — byte offsets vs. display columns
 //!
 //! `data` is a Rust [`String`]. The cursor/selection offsets
 //! [`cur_pos`](InputLine::cur_pos) / [`sel_start`](InputLine::sel_start) /
 //! [`sel_end`](InputLine::sel_end) / [`anchor`](InputLine::anchor) are **byte
-//! offsets** into it (the C++ `int` indices into the `char*` buffer). Slicing a
-//! `String` at a non-`char` boundary panics, so every step over `data` goes
-//! through [`text::next`] / [`text::prev`] (whole grapheme clusters) — never
-//! `+1`/`-1`. `prev_word`/`next_word` scan ASCII spaces, whose byte offsets are
-//! always `char` boundaries.
+//! offsets** into it. Slicing a `String` at a non-`char` boundary panics, so
+//! every step over `data` goes through [`text::next`] / [`text::prev`] (whole
+//! grapheme clusters) — never `+1`/`-1`. `prev_word`/`next_word` scan ASCII
+//! spaces, whose byte offsets are always `char` boundaries.
 //!
 //! [`first_pos`](InputLine::first_pos), by contrast, is a **display column**
-//! (the horizontal scroll offset): the C++ `setCursor(displayedPos(curPos) -
-//! firstPos + 1, …)` and `selectAll`'s `firstPos = displayedPos(curPos) -
-//! size.x + 2` are column arithmetic. `displayedPos(pos)` = the display width of
-//! `data[..pos]`. For ASCII byte == column, but for multi-byte / wide content
-//! they diverge, so the two units are kept strictly distinct here.
+//! (the horizontal scroll offset). The displayed position of an offset is the
+//! display width of `data[..pos]`. For ASCII, byte == column, but for multi-byte
+//! / wide content they diverge, so the two units are kept strictly distinct here.
 //!
-//! # D-rules applied
+//! # Clipboard and command enabling
 //!
-//! * **D1** the `T` prefix is dropped; `ilMaxBytes/ilMaxWidth/ilMaxChars` become
-//!   the [`LimitMode`] enum.
-//! * **D2** inheritance → trait + composition (`InputLine` embeds [`ViewState`];
-//!   the validator is a [`Validator`] trait object).
-//! * **D7** colours via `ctx.style(Role::Input*)`; the `cpInputLine` palette
-//!   indices map to [`Role::InputNormal`]/[`InputSelected`]/[`InputArrow`]; the
-//!   scroll arrows are [`Glyphs`] fields.
-//! * **D8** draw into the back buffer through [`DrawCtx`]; `drawView`/`writeLine`
-//!   dropped. The selection highlight is rendered by **redrawing the selected
-//!   substring** in the selected style (the C++ `moveChar(.., 0, .., ..)`
-//!   attr-only paint has no rstv primitive — the `0 = retain glyph` sentinel was
-//!   dropped — so a segmented redraw produces identical output).
-//! * **D9** the cursor screen position is computed in `handle_event` and stored
-//!   on [`ViewState::cursor`]; the live loop's `resetCursor` (row 31) reads it
-//!   before redraw, so it is NOT set inside `draw` (which runs after).
-//! * **D10** [`value`](View::value)/[`set_value`](View::set_value) over
-//!   [`FieldValue`] replace `getData`/`setData`/`dataSize`.
-//! * **D12** `TStreamable` (`read`/`write`/`build`) dropped.
+//! Cut/copy write to the clipboard via [`Context`]; paste is requested through
+//! the context and the pump reads the backend clipboard and inserts into the
+//! field, clamped to `max_len` and replacing any selection. The field keeps
+//! `cmCut`/`cmCopy` enabled while there is a selection and `cmPaste` enabled
+//! while it is active and selected, pushing those enable/disable updates as
+//! selection and focus change.
 //!
-//! # Deferrals (documented TODOs, not built)
+//! # Validation
 //!
-//! 1. **The `evCommand` clipboard block** — **landed (B3)**. `cmCut`/`cmCopy`
-//!    use `ctx.set_clipboard`; `cmPaste` uses `ctx.request_input_line_paste`
-//!    → `Deferred::InputLinePaste` (the pump reads the backend clipboard and
-//!    inserts into the field, clamped to `max_len` and replacing any selection).
-//! 2. **`updateCommands`/`canUpdateCommands`** — **landed (B1)**. The
-//!    `can_update_commands` / `update_commands` helpers push deferred
-//!    enable/disable ops for `cmCut`/`cmCopy` (on selection change) and
-//!    `cmPaste` (always enabled when active+selected). Called from `set_state`,
-//!    `handle_event` (mouse/key tail + command arm).
-//! 3. **`valid()`'s `select()` side-effect** — focusing the bad field needs
-//!    `&mut Context`; `valid(&self)` returns the faithful boolean only.
-//!    `TODO(valid-select)`.
-//! 4. **Validator `transfer`** (the D10 typed-non-text hook) — live via
-//!    [`Validator::transfer_get`]/[`Validator::transfer_set`]; `RangeValidator`
-//!    (row 59) overrides them. `InputLine::value`/`set_value` consult the hook
-//!    before the text fallback (C++ `getData`/`setData` `voTransfer` path).
+//! A [`Validator`] gates the contents. Validators may also carry typed,
+//! non-text values: [`value`](View::value)/[`set_value`](View::set_value)
+//! consult the validator's [`transfer_get`](Validator::transfer_get) /
+//! [`transfer_set`](Validator::transfer_set) hook before falling back to the
+//! text itself, so a range validator round-trips an integer rather than a string.
+//!
+//! Validation runs on focus loss and returns a plain boolean. The C++
+//! `valid()` additionally re-focused the offending field as a side effect; rstv
+//! does not, because deciding validity is a read-only query (`valid(&self)`)
+//! while moving focus would require mutable access to the event loop.
+//!
+//! # Turbo Vision heritage
+//!
+//! Ports `TInputLine` (`tinputli.cpp`/`dialogs.h`). C++ inheritance becomes the
+//! `View` trait plus `ViewState` composition (deviation D2); the
+//! `ilMaxBytes`/`ilMaxWidth`/`ilMaxChars` constants become the [`LimitMode`] enum
+//! (deviation D1); `getData`/`setData`/`dataSize` become the typed
+//! [`value`](View::value)/[`set_value`](View::set_value) protocol over
+//! [`FieldValue`] (deviation D10); and `byte offset vs. display column` is the
+//! explicit two-unit coordinate model (deviation D13). The cursor screen
+//! position is computed in `handle_event` and stored on [`ViewState::cursor`] for
+//! the loop's cursor reset to read, rather than set inside `draw`; the
+//! attr-only selection paint becomes a segmented redraw; and `TStreamable` is
+//! dropped.
 
 use crate::capture::TrackMask;
 use crate::command::Command;
@@ -72,11 +64,11 @@ use crate::validate::Validator;
 use crate::view::{Context, DrawCtx, Options, Point, Rect, StateFlag, View, ViewState};
 
 // ---------------------------------------------------------------------------
-// LimitMode — D1 enum for ilMaxBytes / ilMaxWidth / ilMaxChars
+// LimitMode — enum for ilMaxBytes / ilMaxWidth / ilMaxChars
 // ---------------------------------------------------------------------------
 
-/// How the `limit` ctor argument is interpreted — ports `ilMaxBytes`/
-/// `ilMaxWidth`/`ilMaxChars` (`dialogs.h`), D1.
+/// How the `limit` constructor argument is interpreted — replaces the
+/// `ilMaxBytes`/`ilMaxWidth`/`ilMaxChars` constants (`dialogs.h`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum LimitMode {
     /// `ilMaxBytes` (0, the C++ default) — `limit` caps the byte length
@@ -95,9 +87,9 @@ pub enum LimitMode {
 // InputLine
 // ---------------------------------------------------------------------------
 
-/// `TInputLine` — a single-line text-entry field (D2 View trait + ViewState).
+/// A single-line text-entry field.
 pub struct InputLine {
-    /// View state (geometry, flags, cursor) — the D2 composition target.
+    /// View state (geometry, flags, cursor) — the composition target.
     pub state: ViewState,
     /// `data` — the field contents.
     pub data: String,
@@ -119,7 +111,7 @@ pub struct InputLine {
     /// `anchor` — the fixed end of a keyboard/mouse block extension, a **byte**
     /// offset.
     pub anchor: i32,
-    /// `validator` — the optional input validator (D2 trait object).
+    /// `validator` — the optional input validator (a trait object).
     pub validator: Option<Box<dyn Validator>>,
     // -- validator save-state (oldData/oldCurPos/…) ------------------------
     old_data: String,
@@ -127,10 +119,10 @@ pub struct InputLine {
     old_first_pos: i32,
     old_sel_start: i32,
     old_sel_end: i32,
-    // -- mouse hold-tracking (A3 seam) ------------------------------------
+    // -- mouse hold-tracking --------------------------------------------------
     /// Absolute screen position of input-local `(0, 0)`, cached each `draw`
     /// so the mouse-tracking capture can convert absolute mouse coords to
-    /// field-local (D3/D9 — the `Button::abs_origin` pattern).
+    /// field-local (the `Button::abs_origin` pattern).
     abs_origin: Point,
     /// Whether a mouse hold-track is in flight. Guards the `MouseAuto` /
     /// `MouseMove` / `MouseUp` tracking arms against stray events.
@@ -232,8 +224,8 @@ impl InputLine {
     }
 
     /// Store the screen-cursor position on [`ViewState::cursor`] so the loop's
-    /// `resetCursor` (row 31) can read it before redraw — the D9 split of the C++
-    /// `setCursor(displayedPos(curPos) - firstPos + 1, 0)` out of `draw`.
+    /// cursor reset can read it before redraw, splitting the cursor placement
+    /// out of `draw`.
     fn sync_cursor(&mut self) {
         let x = self.displayed_pos(self.cur_pos) - self.first_pos + 1;
         self.state.set_cursor(x, 0);
@@ -277,9 +269,9 @@ impl InputLine {
         }
     }
 
-    /// `TInputLine::selectAll` — select all (or none) and optionally scroll the
-    /// end into view. **Does not** draw (D8 whole-tree redraw) but does sync the
-    /// cursor (the C++ `drawView()` set it). Callers that have `ctx` and where
+    /// Select all (or none) and optionally scroll the end into view. **Does
+    /// not** draw (the whole tree is redrawn) but does sync the cursor. Callers
+    /// that have `ctx` and where
     /// `canUpdateCommands()` may be true (set_state, handle_event) call
     /// `update_commands` themselves after `select_all`.
     pub fn select_all(&mut self, enable: bool, scroll: bool) {
@@ -373,10 +365,11 @@ impl InputLine {
             }
             let new_len = candidate.len() as i32;
             self.data = candidate;
-            // TODO(auto-fill clamp): a mutating validator that SHRINKS data can
-            // leave cur_pos past EOS / mid-grapheme; re-clamp cur_pos to a char
-            // boundary <= data.len() when the first auto-fill validator lands
-            // (D13 panic hazard).
+            // Note: a future mutating validator that SHRINKS data could leave
+            // cur_pos past end-of-string / mid-grapheme. No bundled validator
+            // shrinks, so this is not handled; an auto-fill validator would need
+            // to re-clamp cur_pos to a char boundary <= data.len() to avoid a
+            // slicing panic.
             if self.cur_pos >= old_len && new_len > old_len {
                 self.cur_pos = new_len;
             }
@@ -384,7 +377,7 @@ impl InputLine {
         }
     }
 
-    // -- clipboard paste (B3) ------------------------------------------------
+    // -- clipboard paste ------------------------------------------------------
 
     /// Insert `text` from the clipboard at the current cursor position,
     /// replacing any active selection and clamping the result to `max_len`.
@@ -631,18 +624,18 @@ impl View for InputLine {
 
     /// Exposes the concrete `InputLine` so the pump's
     /// [`InputLinePaste`](crate::view::Deferred::InputLinePaste) broker can
-    /// downcast and call [`paste_text`](InputLine::paste_text) (B3).
+    /// downcast and call [`paste_text`](InputLine::paste_text).
     fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
         Some(self)
     }
 
-    /// `TInputLine::draw` — fill with the normal colour, draw the scrolled text,
-    /// the scroll arrows, and the selection highlight. The cursor is **not** set
-    /// here (D9 — see [`sync_cursor`](InputLine::sync_cursor)).
+    /// Fill with the normal colour, draw the scrolled text, the scroll arrows,
+    /// and the selection highlight. The cursor is **not** set here (see
+    /// [`sync_cursor`](InputLine::sync_cursor)).
     fn draw(&mut self, ctx: &mut DrawCtx) {
-        // Cache absolute origin for the mouse-tracking capture (D3/D9 — the
-        // MouseTrackCapture converts abs mouse coords to field-local via this
-        // value, mirroring the Button `abs_origin` pattern).
+        // Cache absolute origin for the mouse-tracking capture: the
+        // MouseTrackCapture converts absolute mouse coords to field-local via
+        // this value, mirroring the Button `abs_origin` pattern.
         self.abs_origin = ctx.origin();
         let size = self.state.size;
         // getColor((sfFocused)?2:1) — both palette indices map to InputNormal.
@@ -697,9 +690,9 @@ impl View for InputLine {
         }
     }
 
-    /// `TInputLine::handleEvent` — the `sfSelected` keyboard/mouse block. See the
-    /// module deferrals for the clipboard / command-graying parts that are
-    /// intentionally not ported.
+    /// The `selected` keyboard/mouse block. Clipboard ([`do_cut`](Self::do_cut) /
+    /// [`do_copy`](Self::do_copy) / [`do_paste`](Self::do_paste)) and command
+    /// graying ([`update_commands`](Self::update_commands)) are handled here.
     fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
         // Base TView::handleEvent (mouse-down auto-select is the group's job now;
         // base is a no-op).
@@ -708,12 +701,11 @@ impl View for InputLine {
         }
 
         match ev {
-            // -- Mouse positioning + hold-tracking (A3 seam) ---------------
+            // -- Mouse positioning + hold-tracking ------------------------------
             //
-            // The C++ `handleEvent` (tinputli.cpp:312-339) has two `do{}while`
-            // loops starting from the same `evMouseDown` — we port them as the
-            // first iteration in `MouseDown` then arm the capture for subsequent
-            // ticks.
+            // The C++ `handleEvent` has two `do{}while` loops starting from the
+            // same mouse-down — they become the first iteration in `MouseDown`,
+            // then arm the capture for subsequent ticks.
             Event::MouseDown(m) => {
                 let m = *m;
                 let delta = self.mouse_delta(&m);
@@ -721,7 +713,7 @@ impl View for InputLine {
                     // C++ tinputli.cpp:313-320 — edge auto-scroll loop.
                     // First iteration: `if canScroll(delta) firstPos += delta`.
                     self.first_pos += delta;
-                    // Arm auto-only repeat via the A3 seam.
+                    // Arm auto-only repeat.
                     if let Some(id) = self.state.id() {
                         self.tracking = true;
                         self.tracking_drag = false;
@@ -747,7 +739,7 @@ impl View for InputLine {
                     self.anchor = pos;
                     self.cur_pos = pos;
                     self.adjust_select_block();
-                    // Arm move+auto tracking via the A3 seam.
+                    // Arm move+auto tracking.
                     if let Some(id) = self.state.id() {
                         self.tracking = true;
                         self.tracking_drag = true;
@@ -935,7 +927,7 @@ impl View for InputLine {
                 ev.clear();
             }
 
-            // -- evCommand clipboard block (B1+B3, tinputli.cpp:403-428) --------
+            // -- evCommand clipboard block --------------------------------------
             // C++: `if ((state & sfSelected) != 0) … case evCommand: …`
             // Faithful: only when selected (the outer guard at the top of
             // handleEvent already returns if !selected, so this arm is always
@@ -966,22 +958,20 @@ impl View for InputLine {
             _ => {}
         }
 
-        // B1 — command graying: `if (canUpdateCommands()) updateCommands()`
-        // (tinputli.cpp:431-432). The early-return for unhandled KeyDown already
-        // exited above; this covers mouse, keyboard (handled), and command events.
+        // Command graying: refresh the cut/copy/paste enable state. The
+        // early-return for unhandled KeyDown already exited above; this covers
+        // mouse, keyboard (handled), and command events.
         if self.can_update_commands() {
             self.update_commands(ctx);
         }
     }
 
-    /// `TInputLine::setState` — base flag flip then, on `sfSelected` (or
-    /// `sfActive` while selected), `selectAll(enable, false)`. B1: also pushes
-    /// command enable/disable deferred ops via `update_commands` when the
-    /// `canUpdateCommands` condition changes (active+selected transition).
+    /// Base flag flip then, on `sfSelected` (or `sfActive` while selected),
+    /// `select_all(enable, false)`. Also refreshes the cut/copy/paste command
+    /// enable state when the active+selected condition changes.
     fn set_state(&mut self, flag: StateFlag, enable: bool, ctx: &mut Context) {
-        // B1 — command graying: sample canUpdate BEFORE the flag flip so we can
-        // detect the transition (faithful to C++ `updateBefore = canUpdateCommands()`
-        // at the start of TInputLine::setState, tinputli.cpp:292).
+        // Command graying: sample the enable condition BEFORE the flag flip so
+        // we can detect the transition.
         let update_before = self.can_update_commands();
 
         // Base behaviour (replicated from View::set_state — no `super`).
@@ -1000,9 +990,8 @@ impl View for InputLine {
         if flag == StateFlag::Selected || (flag == StateFlag::Active && self.state.state.selected) {
             self.select_all(enable, false);
         }
-        // B1 — command graying: faithful to tinputli.cpp TInputLine::setState:
-        // `if (updateBefore != updateAfter) updateCommands()`.
-        // If the canUpdate condition changed, push the enable/disable deferred ops.
+        // Command graying: if the enable condition changed, push the
+        // enable/disable updates.
         let update_after = self.can_update_commands();
         if update_before != update_after {
             self.update_commands(ctx);
@@ -1030,11 +1019,10 @@ impl View for InputLine {
         true
     }
 
-    /// `TInputLine::getData` — the field's text as a [`FieldValue`] (D10).
+    /// The field's text (or a validator-typed value) as a [`FieldValue`].
     fn value(&self) -> Option<FieldValue> {
-        // C++ `getData`: `if (!validator || transfer(data, rec, vtGetData)==0)
-        // memcpy(rec, data, …)`. A transfer-enabled validator (TRangeValidator
-        // with voTransfer) produces a typed value; otherwise the field's text.
+        // A transfer-enabled validator (a range validator, say) produces a typed
+        // value; otherwise the result is the field's text.
         if let Some(v) = self
             .validator
             .as_ref()
@@ -1045,25 +1033,22 @@ impl View for InputLine {
         Some(FieldValue::Text(self.data.clone()))
     }
 
-    /// `TInputLine::setData` — load text into the field and select-all (D10).
+    /// Load text into the field and select all of it.
     fn set_value(&mut self, v: FieldValue) {
-        // C++ `setData`: `if (!validator || transfer(data, rec, vtSetData)==0) {
-        // copy text } ; selectAll(True)`. A transfer-enabled validator formats the
-        // typed value into the field text; otherwise the Text path. `selectAll`
-        // runs either way.
+        // A transfer-enabled validator formats the typed value into the field
+        // text; otherwise the Text path is used. Select-all runs either way.
         if let Some(text) = self.validator.as_ref().and_then(|val| val.transfer_set(&v)) {
             self.data = text;
             self.select_all(true, true);
             return;
         }
-        // D10 divergence: when transfer is disabled and `v` is `Int` (not `Text`),
-        // the body below is skipped entirely — no data change, no `select_all` —
-        // unlike C++ `setData`, which always `memcpy`s + `selectAll(True)`. An
-        // `Int` into a non-transfer field is a type mismatch the typed model
-        // rightly drops; this is intentional under D10, not an oversight.
+        // When transfer is disabled and `v` is `Int` (not `Text`), the body
+        // below is skipped entirely — no data change, no `select_all`. An `Int`
+        // into a non-transfer field is a type mismatch the typed model rightly
+        // drops; this is intentional, not an oversight.
         #[allow(irrefutable_let_patterns)]
         if let FieldValue::Text(s) = v {
-            // C++ `setData`: `memcpy(data, rec, dataSize()-1)` — truncates to maxLen.
+            // Truncate to maxLen.
             let limit = self.max_len as usize;
             self.data = if s.len() <= limit {
                 s
@@ -1534,7 +1519,7 @@ mod tests {
         assert_eq!(il.first_pos, 0, "first_pos restored from save_state");
     }
 
-    // -- value / set_value (D10) -------------------------------------------
+    // -- value / set_value ----------------------------------------------------
 
     #[test]
     fn value_set_value_round_trip() {
@@ -1548,7 +1533,7 @@ mod tests {
         assert_eq!(il.cur_pos, 5);
     }
 
-    // -- value / set_value with a transfer-enabled validator (row 59) -------
+    // -- value / set_value with a transfer-enabled validator ------------------
 
     /// REGRESSION GUARD: with NO validator, `value()` still yields `Text`
     /// (the transfer hooks default to `None`, so the Text path is unchanged).
@@ -1783,11 +1768,11 @@ mod tests {
         assert_eq!(il.cur_pos, 5);
     }
 
-    // -- A3 seam: drag-select tracking (evMouseMove | evMouseAuto) -----------
+    // -- drag-select tracking (evMouseMove | evMouseAuto) ---------------------
     //
     // These tests drive the tracking arms directly (as the pump's Deferred::MouseTrack
-    // apply does) with field-local positions. The seam itself is unit-tested in
-    // capture::tests; here we verify the widget's loop body is correct.
+    // apply does) with field-local positions. The capture itself is unit-tested
+    // in capture::tests; here we verify the widget's loop body is correct.
 
     /// Mouse-down in the text area (not on an edge) arms drag-select tracking:
     /// anchor + cursor at the click, `tracking == true`, `tracking_drag == true`,
@@ -1919,7 +1904,7 @@ mod tests {
         assert_eq!(il.cur_pos, cur_pos_before, "no cursor change");
     }
 
-    // -- A3 seam: edge auto-scroll tracking (evMouseAuto only) ---------------
+    // -- edge auto-scroll tracking (evMouseAuto only) -------------------------
 
     /// Mouse-down on the right scroll edge (x >= size.x-1) arms auto-only tracking
     /// and does the first `first_pos += delta` step
@@ -1972,7 +1957,7 @@ mod tests {
         assert!(!il.tracking_drag, "edge branch stays edge branch");
     }
 
-    // -- B1: updateCommands / canUpdateCommands graying ----------------------
+    // -- updateCommands / canUpdateCommands graying ---------------------------
 
     /// `canUpdateCommands()` is true only when both active AND selected.
     #[test]
@@ -2073,7 +2058,7 @@ mod tests {
         );
     }
 
-    // -- B3: clipboard cut/copy/paste ----------------------------------------
+    // -- clipboard cut/copy/paste ---------------------------------------------
 
     /// cmCut with a selection: copies to clipboard (SetClipboard deferred) and
     /// deletes the selection from the field (faithful to tinputli.cpp:408-417).

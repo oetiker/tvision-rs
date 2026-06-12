@@ -1,17 +1,16 @@
 //! Views, geometry, and the downward-context substrate.
 //!
-//! Carries the geometry primitives ([`Point`]/[`Rect`], rows 1–2), the
-//! global [`ViewId`] minter ([`id`], D3 row 17), and the downward
-//! [`Context`] / [`DrawCtx`] types ([`context`], D3/D4 row 22). The `View` trait
-//! + `ViewState` (`TView`, D2/D5) land here in Phase 1 (row 23).
+//! Carries the geometry primitives ([`Point`]/[`Rect`]), the global [`ViewId`]
+//! minter ([`id`]), the downward [`Context`] / [`DrawCtx`] types ([`context`]),
+//! and the [`View`] trait + [`ViewState`] that every widget builds on.
 
 mod context;
 mod geometry;
-// `view::group` houses `TGroup` (row 26): the child tree + three-phase routing
+// `view::group` houses `TGroup`: the child tree + three-phase routing
 // + focus machinery. Re-exported below alongside the trait it builds on.
 mod group;
 mod id;
-// `view::view` houses the `View` trait + `ViewState` (TView, row 23). The
+// `view::view` houses the `View` trait + `ViewState` (TView). The
 // inner name mirrors the C++ class file; the re-exports below flatten it away.
 #[allow(clippy::module_inception)]
 mod view;

@@ -1,54 +1,28 @@
-//! `TMenuView` — the **passive (non-modal) layer** (`tmnuview.cpp`, decl in
-//! `menus.h`). Row 49 (FOUNDATION).
+//! The shared, non-interactive layer behind the menu bar and menu boxes:
+//! [`MenuViewState`] (the data every menu view holds) plus the free functions for
+//! command-graying and passive accelerator dispatch.
 //!
-//! `TMenuView` mixes two layers; this row ports **only the passive one**:
+//! Two responsibilities live here:
 //!
 //! 1. The **command-graying broker** — `updateMenu`, driven by the
-//!    `cmCommandSetChanged` broadcast (the §2 spine).
-//! 2. **Passive accelerator dispatch** — the `evKeyDown` branch of `handleEvent`
-//!    that posts the command of a menu item whose `keyCode` matches a key
-//!    (`hotKey`/`findHotKey`).
-//! 3. The **passive `handle_event`** wiring, with the *activation* branches
-//!    (mouse-down, `cmMenu`, alt-shortcut) breadcrumbed to rows 50–52.
+//!    `cmCommandSetChanged` broadcast: it walks the menu tree and marks each item
+//!    enabled/disabled to match the live command set.
+//! 2. **Passive accelerator dispatch** — the key branch of `handle_event` that
+//!    posts the command of a menu item whose `keyCode` matches a pressed key, even
+//!    when no menu is open (`hotKey`/`findHotKey`).
 //!
-//! ## What is deferred (breadcrumbed here, NOT stubbed)
+//! The interactive modal layer (opening, navigating, and selecting) lives in
+//! [`MenuBar`](crate::menu::MenuBar), [`MenuBox`](crate::menu::MenuBox), and the
+//! [`MenuSession`](crate::menu) capture handler. The parent-of relationship
+//! between an open box and the level above it is modeled by that session's level
+//! stack rather than a field on the view, so `MenuViewState` carries no
+//! `parentMenu` pointer.
 //!
-//! The whole **interactive modal layer** maps onto the unbuilt D9 view-triggered
-//! async-modal path (`Deferred::OpenModal` + a posted completion `Command`) and
-//! lands with the popup/bar/box rows:
-//!
-//! - `execute()` — the nested modal `getEvent` loop. → **rows 50–52**.
-//! - `trackMouse` / `trackKey` / `nextItem` / `prevItem` — modal navigation
-//!   (separator-skipping; `prevItem` *via* `nextItem`); only `execute()` calls
-//!   them, and only an `execute()` integration test validates them. → with
-//!   `execute()`.
-//! - `findItem` / `findAltShortcut` — feed only `execute()` + the alt-shortcut
-//!   activation branch. → with `execute()`.
-//! - `do_a_select` / `newSubView` / `mouseInOwner` / `mouseInMenus` / `topMenu` —
-//!   activation / modal plumbing. → rows 50–52.
-//! - `getItemRect` / `draw` / `getPalette` (`cpMenuView`) — drawing, overridden by
-//!   `TMenuBar` (50) / `TMenuBox` (51). → those rows.
-//! - `getHelpCtx` — needs `current`/`parentMenu`. → with `execute()`.
-//! - `current` / `parentMenu` fields — consumed only by
-//!   `execute()`/`trackMouse`/`getHelpCtx`; **omitted from [`MenuViewState`]**
-//!   (omit-until-consumer). Rows 50–52 add them.
-//! - **No `MenuView` trait yet** — the passive layer dispatches into no
-//!   overridable virtual, so a trait would be dead scaffolding. Row 49 uses free
-//!   functions over `&Menu` / `&mut Menu` / [`MenuViewState`]; the trait arrives
-//!   at row 50/51 when `execute()` needs a polymorphic `getItemRect`/`draw`.
-//! - Streaming (`writeMenu`/`readMenu`/`build`) — D12.
-//! - **Initial regray** — the C++ `TMenuItem` ctor reads `commandEnabled(command)`
-//!   at *construction*, so a menu is born with its `disabled` flags correct. Our
-//!   row-46 builder has no command set, so menus are born **all-enabled**, and the
-//!   broker here only corrects them on a `cmCommandSetChanged` broadcast — which
-//!   does NOT fire at startup (`initial_disabled_commands` seeds directly, leaving
-//!   `command_set_changed == false`). Invisible at row 49 (nothing draws; the
-//!   accelerator path is backstopped by the pump's `drop_disabled` filter), but a
-//!   menu holding a startup-disabled command (`cmZoom`/`cmClose`/`cmResize`/
-//!   `cmNext`/`cmPrev`) would *draw* it enabled. **Rows 50/51 must trigger an
-//!   initial [`Deferred::UpdateMenu`](crate::view::Deferred::UpdateMenu) on
-//!   menu-bar insert** (or have `Program` broadcast `cmCommandSetChanged` once at
-//!   startup) so the first paint is correct.
+//! # Turbo Vision heritage
+//! Ports the passive half of `TMenuView` (`tmnuview.cpp`/`menus.h`). The C++
+//! `current`/`parentMenu` up-pointers become an item index plus the session's
+//! level stack (deviation D3); the disabled-command set is held as a denylist
+//! (deviation D1) and `TStreamable` persistence is dropped (deviation D12).
 
 use crate::color::Style;
 use crate::command::{Command, CommandSet};
@@ -58,15 +32,13 @@ use crate::theme::Role;
 use crate::view::{Context, DrawCtx, Rect, View, ViewState};
 
 /// Runtime (view) state shared by the menu views — the `TMenuView` data members
-/// that the passive layer needs. The embed target `TMenuBar` (row 50) /
-/// `TMenuBox` (row 51) build on.
+/// that [`MenuBar`](crate::menu::MenuBar) and [`MenuBox`](crate::menu::MenuBox)
+/// build on.
 ///
-/// The C++ `current` (the highlighted item) field is added here (rows 50/51): the
-/// draw layer ([`MenuBar`](crate::menu::MenuBar)/[`MenuBox`](crate::menu::MenuBox))
-/// reads it to pick the selected colour. The C++ `parentMenu` (the up-pointer to
-/// the owning menu) field is still **deferred**: only `execute()` / `trackMouse` /
-/// `getHelpCtx` (the Step-2 modal layer) consume it; the row that adds `execute()`
-/// adds it.
+/// The `current` field (the highlighted item) is an **index** into the menu's
+/// items; the draw layer reads it to pick the selected colour. The C++
+/// `parentMenu` up-pointer has no field here — the parent-of relationship is held
+/// by the menu session's level stack instead.
 pub struct MenuViewState {
     /// The embedded [`ViewState`] (`TView` data members).
     pub state: ViewState,
@@ -78,10 +50,10 @@ pub struct MenuViewState {
     /// compares `Some(i) == current` to pick the selected colour; defaults to
     /// `None` (nothing highlighted).
     ///
-    /// `Option<usize>` fits every Step-2 `execute()` mutation already audited:
-    /// `current = menu->deflt` → index; `nextItem`/`prevItem` wrap by index;
-    /// `current = p` → index; `menu->deflt = current; current = 0` → set default +
-    /// `None`; `p == current` comparisons → index equality.
+    /// `Option<usize>` fits every menu mutation: `current = menu->deflt` → index;
+    /// `nextItem`/`prevItem` wrap by index; `current = p` → index;
+    /// `menu->deflt = current; current = 0` → set default + `None`;
+    /// `p == current` comparisons → index equality.
     pub current: Option<usize>,
 }
 
@@ -98,23 +70,23 @@ impl MenuViewState {
     }
 }
 
-/// `TMenuView` — the polymorphism seam between [`MenuBar`](crate::menu::MenuBar)
-/// and [`MenuBox`](crate::menu::MenuBox).
+/// The polymorphism seam between [`MenuBar`](crate::menu::MenuBar) and
+/// [`MenuBox`](crate::menu::MenuBox).
 ///
-/// Row 49's "no trait yet" decision **flips** here: `getItemRect` and `draw` are
-/// the overridable virtuals that differ between bar and box, so (mirroring
-/// [`ListViewer`](crate::widgets::list_viewer::ListViewer)) the abstract base is a
-/// trait carrying the data accessors plus the overridable virtuals, while the
-/// passive shared logic ([`hot_key`]/[`update_menu_commands`]/[`handle_event`])
-/// stays as free functions over `&Menu`/[`MenuViewState`].
+/// `get_item_rect` and `draw` are the operations that differ between a bar and a
+/// box, so (mirroring [`ListViewer`](crate::widgets::list_viewer::ListViewer)) the
+/// abstract base is a trait carrying the data accessors plus those overridable
+/// operations, while the passive shared logic
+/// ([`hot_key`]/[`update_menu_commands`]/[`handle_event`]) stays as free functions
+/// over `&Menu`/[`MenuViewState`]. The item geometry (`get_item_rect`) and the
+/// draw layout are the same contract and must agree cell-for-cell, so they live
+/// together; menu navigation calls `get_item_rect`/`draw`/`new_sub_view` through
+/// `MenuView` references.
 ///
-/// `get_item_rect`'s only callers (`trackMouse`/`execute`/`getHelpCtx`) are Step 2,
-/// but it ships **now, with `draw`,** deliberately: the item geometry and the draw
-/// layout are the *same contract* and must agree cell-for-cell; building +
-/// unit-testing them together locks that contract while the layout is fresh, and
-/// gives Step-2 navigation a verified substrate. The trait itself is the Step-2
-/// polymorphism seam (`execute()` will call `get_item_rect`/`draw`/`new_sub_view`
-/// on `MenuView` references).
+/// # Turbo Vision heritage
+/// Ports the abstract part of `TMenuView` (`tmnuview.cpp`/`menus.h`). C++
+/// inheritance (`TMenuBar`/`TMenuBox : TMenuView`) becomes a trait the two
+/// concrete views implement (deviation D2).
 pub trait MenuView: View {
     /// Borrow the embedded [`MenuViewState`].
     fn mv(&self) -> &MenuViewState;
@@ -220,8 +192,8 @@ pub fn hot_key(menu: &Menu, key: KeyEvent) -> Option<Command> {
     None
 }
 
-/// Regray the menu tree against the program's live **disabled-command set**
-/// (denylist, D1). Ports `TMenuView::updateMenu`.
+/// Regray the menu tree against the program's live **disabled-command set**.
+/// Ports `TMenuView::updateMenu`.
 ///
 /// `disabled_cmds` is the set of commands currently *disabled* (the complement
 /// of C++'s `curCommandSet`). For each **command item** sets
@@ -231,11 +203,10 @@ pub fn hot_key(menu: &Menu, key: KeyEvent) -> Option<Command> {
 /// separators**.
 ///
 /// The C++ `Boolean updateMenu` returns whether anything changed (so
-/// `handleEvent` can `drawView`). That return is **intentionally dropped**: under
-/// whole-tree redraw (D8) the `if updateMenu drawView` is moot — the next pump
-/// repaints unconditionally. The C++ guarded write (`if disabled == commandState`
-/// then flip) is equivalent to the unconditional `disabled = !commandState` once
-/// the bool is dropped.
+/// `handleEvent` can `drawView`). That return is **intentionally dropped**: the
+/// whole tree is repainted each pump, so the conditional redraw is moot. The C++
+/// guarded write (`if disabled == commandState` then flip) is equivalent to the
+/// unconditional `disabled = !commandState` once the bool is dropped.
 ///
 /// The C++ `if(menu != 0)` null-guard is moot in Rust: the [`Menu`] is owned, not
 /// a nullable pointer.
@@ -258,21 +229,22 @@ pub fn update_menu_commands(menu: &mut Menu, disabled_cmds: &CommandSet) {
 /// The **passive layer** of `TMenuView::handleEvent`.
 ///
 /// Reads `mv.menu` + `mv.state.id()` and posts / requests through `ctx`; it does
-/// **not** mutate the menu (regray is deferred through the §2 broker). The
-/// activation branches are breadcrumbed only — they require the unbuilt D9
-/// `OpenModal` path (rows 50–52) and so leave the event un-cleared and un-acted.
+/// **not** mutate the menu (regray is routed through the command-set broker). The
+/// interactive *activation* branches (opening a menu, navigating it) live in the
+/// menu session, not here, so this function leaves an activation event un-acted.
 ///
-/// Ported branches:
-/// - **`evBroadcast cmCommandSetChanged`** → request the §2 regray broker by the
+/// Handled branches:
+/// - **`evBroadcast cmCommandSetChanged`** → request the regray broker by the
 ///   view's own id ([`Context::request_update_menu`]).
-/// - **`evKeyDown`** → if a menu item's accelerator matches the key, post that
-///   item's command and clear the event ([`hot_key`]).
+/// - **`evKeyDown`** → an accelerator match posts the item's command and clears
+///   the event ([`hot_key`]); a bar alt-shortcut opens the menu session instead.
 pub fn handle_event(mv: &MenuViewState, ev: &mut Event, ctx: &mut Context) {
     match ev {
-        // C++ evBroadcast / cmCommandSetChanged: updateMenu(menu) (+ drawView,
-        // dropped under D8). The regray is the §2 broker — the menu view cannot
-        // read the command set inline (D3), so request UpdateMenu by our own id;
-        // the pump calls back through View::update_menu_commands at apply time.
+        // C++ evBroadcast / cmCommandSetChanged: updateMenu(menu) (the conditional
+        // drawView is moot under whole-tree redraw). The regray runs through the
+        // broker — the menu view cannot read the command set inline, so request
+        // UpdateMenu by our own id; the pump calls back through
+        // View::update_menu_commands at apply time.
         //
         // NOTE (deviation): C++ TMenuView sets `eventMask |= evBroadcast` to opt
         // in to broadcasts. Our Group::handle_event fans broadcasts out to EVERY
@@ -287,12 +259,12 @@ pub fn handle_event(mv: &MenuViewState, ev: &mut Event, ctx: &mut Context) {
                 ctx.request_update_menu(id);
             }
         }
-        // C++ evKeyDown (`TMenuView::handleEvent`, tmnuview.cpp:526). The C++ order
-        // is: findAltShortcut → do_a_select (open the menu at the matched item)
-        // FIRST, then fall back to the hotKey accelerator post.
+        // C++ evKeyDown (`TMenuView::handleEvent`). The C++ order is:
+        // findAltShortcut → do_a_select (open the menu at the matched item) FIRST,
+        // then fall back to the hotKey accelerator post.
         //
-        // ACTIVATION (rows 50–52, Step-2 stage 1 — keyboard). Only the **bar**
-        // (`size.y == 1`) activates: a box exists only inside an active session,
+        // Only the **bar** (`size.y == 1`) activates: a box exists only inside an
+        // active session,
         // which swallows its events on the capture stack, so a box never reaches
         // here live. The bar runs during group-routed preprocess dispatch
         // (`ofPreProcess`), so `ctx.owner_size()` is the root group size (C++
@@ -315,12 +287,12 @@ pub fn handle_event(mv: &MenuViewState, ev: &mut Event, ctx: &mut Context) {
                 ev.clear();
                 return;
             }
-            // 2. Otherwise the hotKey accelerator post (row-49 passive path).
+            // 2. Otherwise the hotKey accelerator post (the passive path).
             if let Some(cmd) = hot_key(&mv.menu, *k) {
                 // C++ posts evCommand with the matched command and clears the
                 // event. The C++ `commandEnabled(p->command)` re-check is NOT
                 // ported: (a) hot_key's `!disabled` filter already excludes
-                // disabled items, and that cached flag is kept current by the §2
+                // disabled items, and that cached flag is kept current by the
                 // regray broker; (b) even a stale-enabled post is dropped by the
                 // pump's command boundary filter (program.rs: an Event::Command
                 // whose cmd is in the disabled set is cleared before routing). The

@@ -1,6 +1,6 @@
 # Drawing & backends
 
-A `tvision` app never writes to the terminal directly. Every view paints into an
+An rstv app never writes to the terminal directly. Every view paints into an
 in-memory grid; once per frame the framework diffs that grid against the previous
 one and pushes *only the changed cells* to a pluggable backend. This is the
 [whole-tree-redraw-plus-diff draw model](../port/draw.md) — there is no
@@ -63,7 +63,7 @@ This runs at the end of every [event-loop pump](event-loop.md).
 ## The Backend trait
 
 The terminal seam is the [`Backend`](../api/tvision/backend/trait.Backend.html)
-trait ([deviation D11](../reference/deviations.md)). The app holds a
+trait ([deviation D11](../reference/deviations.md#d11)). The app holds a
 `Box<dyn Backend>`, so the trait is **object-safe** and the view tree never
 carries a backend type parameter. Its surface is small: report `size`, `draw` a
 slice of changed cells, `flush`, `set_cursor`, `poll_event`, plus clipboard and

@@ -1,19 +1,22 @@
-//! Capture stack — deviation **D9** (single loop + LIFO capture handlers).
+//! The capture stack — the single mechanism behind modality, mouse tracking,
+//! window drag/resize, and press-and-hold.
 //!
+//! A **LIFO stack of capture handlers** see each event *before* normal view-tree
+//! routing and may consume it or pass it through. Modality, drag, and
+//! press-tracking are all handlers rather than nested loops: a modal handler that
+//! consumes every otherwise-unhandled event *is* the modal loop. Handlers hold a
+//! [`ViewId`], never a view reference. The live event loop in
+//! [`Program`](crate::app::Program) owns this stack and drives
+//! [`CaptureStack::dispatch`]; the [`tests`] module here hand-plays the loop to
+//! prove the protocol composes.
+//!
+//! # Turbo Vision heritage
 //! C++ Turbo Vision implements modality by spinning a *nested* blocking
-//! `getEvent` loop inside `execView`; `dragView` and a pressed button's
-//! mouse-tracking do the same. Rust cannot nest a blocking loop that re-borrows
-//! the view tree, so D9 collapses all of them into **one** non-recursive event
-//! loop plus a **LIFO stack of capture handlers** that see each event *before*
-//! normal view-tree routing and may consume or pass it through. Modality, drag,
-//! and press-tracking become handlers, not loops; a modal handler that consumes
-//! every otherwise-unhandled event *is* the modal loop. Handlers hold
-//! [`ViewId`], never view references.
-//!
-//! **This module builds the types only.** The live event loop lands with
-//! `TProgram` (row 31); the [`tests`] module here hand-plays the loop to prove
-//! the protocol composes (the capture analogue of the row-19 end-to-end snapshot
-//! gate).
+//! `getEvent` loop inside `execView` (`tgroup.cpp`); `dragView` and a pressed
+//! button's mouse-tracking do the same. Rust cannot nest a blocking loop that
+//! re-borrows the view tree, so rstv collapses all of them into one non-recursive
+//! event loop plus this LIFO capture stack (deviation D9). Handlers hold a
+//! [`ViewId`] rather than a view pointer (deviation D3).
 
 use crate::event::Event;
 use crate::view::{Context, Point, Rect, ViewId};
@@ -23,6 +26,12 @@ use crate::view::{Context, Point, Rect, ViewId};
 /// The return value is **authoritative** for routing — handlers must *not* rely
 /// on [`Event::clear`] to signal "consumed" to the capture stack (clearing is a
 /// separate downstream concern handled by normal view routing).
+///
+/// # Turbo Vision heritage
+/// Makes explicit the consumed-vs-passed convention that C++ Turbo Vision encodes
+/// implicitly through `clearEvent` (`tview.cpp`); the self-removing
+/// [`ConsumedPop`](CaptureFlow::ConsumedPop) variant replaces a nested modal
+/// loop returning from `execute` (deviation D9).
 #[derive(Debug)]
 pub enum CaptureFlow {
     /// Did not handle the event — offer it to the next (lower) handler, and
@@ -36,10 +45,17 @@ pub enum CaptureFlow {
     ConsumedPop,
 }
 
-/// A capture handler — the D9 replacement for a nested modal/drag/press loop.
+/// A capture handler — a participant in the capture stack that stands in for a
+/// nested modal/drag/press loop.
 ///
 /// Handlers are offered each event before normal view-tree routing. Identity is
 /// a [`ViewId`]: a handler never holds a view reference.
+///
+/// # Turbo Vision heritage
+/// Replaces the nested blocking loops C++ spins for modality (`TGroup::execute`),
+/// `dragView`, and a held button's `mouseEvent` tracking (`tview.cpp`), folding
+/// them into one event loop plus stacked handlers (deviation D9). Each handler
+/// holds a [`ViewId`] instead of a view pointer (deviation D3).
 pub trait CaptureHandler {
     /// Offered an event before normal routing. May read/mutate `ctx` (post
     /// commands, schedule timers, push a *nested* capture via
@@ -76,7 +92,7 @@ pub trait CaptureHandler {
 }
 
 // ---------------------------------------------------------------------------
-// MouseTrackCapture — the D9 mouse hold-tracking seam (backlog A3)
+// MouseTrackCapture — the mouse hold-tracking seam
 // ---------------------------------------------------------------------------
 
 /// Which event classes the C++ hold-loop's `mouseEvent` mask included
@@ -84,8 +100,8 @@ pub trait CaptureHandler {
 ///
 /// The C++ callers pass `evMouseMove` (button, cluster, list viewer, …),
 /// `evMouseMove | evMouseAuto` (scrollbar, editor, menu), or `evMouse` (frame —
-/// every mouse class including evMouseWheel). The struct-of-bools is
-/// the D5 form of that mask slice.
+/// every mouse class including evMouseWheel). This struct-of-bools is the
+/// idiomatic form of that bit-mask slice.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TrackMask {
     /// Forward `evMouseMove` to the tracked view (`mask & evMouseMove`).
@@ -97,22 +113,21 @@ pub struct TrackMask {
     pub wheel: bool,
 }
 
-/// D9 successor of the C++ `do { … } while (mouseEvent(event, mask))` blocking
-/// hold-loop (`TView::mouseEvent`, `tview.cpp:636-643`): localizes and forwards
-/// masked mouse events to the tracked view, swallows everything else, pops on
-/// `MouseUp` (forwarding the localized up — cluster/frame read the up position
-/// post-loop, `tcluster.cpp:181-184` / `tframe.cpp:159-160`).
+/// The hold-tracking router: while a mouse button is held, it localizes and
+/// forwards masked mouse events to the tracked view, swallows everything else,
+/// and pops on `MouseUp` (forwarding the localized up — cluster/frame read the up
+/// position post-loop, `tcluster.cpp:181-184` / `tframe.cpp:159-160`).
 ///
 /// **A pure router, not a strategy.** The C++ loop *bodies* stay in the widgets
 /// (their `MouseMove`/`MouseAuto` arms are the body, the `MouseUp` arm the
 /// post-loop code): captures are `'static` and hold no view borrow, and several
 /// tracked views (`ListViewer`, `Outline`) are trait objects the pump could not
-/// downcast — so the capture only routes, via [`Deferred`](crate::view::Deferred)
-/// `::MouseTrack`, which the pump applies by calling the view's `handle_event`
-/// directly. Pushed via [`Context::start_mouse_track`]; because capture pushes
-/// are deferred (the `compose_full_protocol` invariant), the capture sees the
-/// **next** event — matching the C++ `do{}while` running the body once before
-/// the first wait.
+/// downcast — so the capture only routes, via
+/// [`Deferred::MouseTrack`](crate::view::Deferred), which the pump applies by
+/// calling the view's `handle_event` directly. Pushed via
+/// [`Context::start_mouse_track`]; because a capture push is itself applied
+/// through the deferred channel, the capture sees the **next** event — matching
+/// the C++ `do{}while` running the body once before the first wait.
 ///
 /// `origin` is the absolute screen position of view-local `(0, 0)`, cached by
 /// the widget's last `draw` at push time (the `Button::abs_origin` /
@@ -121,6 +136,12 @@ pub struct TrackMask {
 /// resized mid-hold the localization goes stale — acceptable, since a hold is
 /// short-lived and nothing moves the view while the (modal) hold swallows all
 /// other input.
+///
+/// # Turbo Vision heritage
+/// Replaces the C++ `do { … } while (mouseEvent(event, mask))` blocking
+/// hold-loop (`TView::mouseEvent`, `tview.cpp:636-643`) with a capture handler
+/// (deviation D9) that routes via the deferred channel instead of holding a view
+/// borrow (deviation D3).
 pub struct MouseTrackCapture {
     /// The view being tracked (identity only, per the capture contract).
     view: ViewId,
@@ -192,13 +213,18 @@ impl CaptureHandler for MouseTrackCapture {
     }
 }
 
-/// A LIFO stack of [`CaptureHandler`]s (D9).
+/// A LIFO stack of [`CaptureHandler`]s.
 ///
-/// The most-recently pushed handler is offered events first. The live event
-/// loop (row 31) owns this stack and drives [`dispatch`](Self::dispatch); a
-/// handler that wants to push a nested capture does so through
-/// [`Context::push_capture`], whose deferred queue the loop applies *after*
-/// dispatch — so the stack is never aliased while a handler runs.
+/// The most-recently pushed handler is offered events first. The live event loop
+/// in [`Program`](crate::app::Program) owns this stack and drives
+/// [`dispatch`](Self::dispatch); a handler that wants to push a nested capture
+/// does so through [`Context::push_capture`], whose deferred queue the loop
+/// applies *after* dispatch — so the stack is never aliased while a handler runs.
+///
+/// # Turbo Vision heritage
+/// Has no C++ analogue as a data structure: it replaces the nesting of blocking
+/// `getEvent` loops C++ uses for modality, drag, and press-tracking with one
+/// non-recursive loop plus this stack (deviation D9).
 #[derive(Default)]
 pub struct CaptureStack {
     handlers: Vec<Box<dyn CaptureHandler>>,
@@ -491,7 +517,7 @@ mod tests {
 
     #[test]
     fn compose_full_protocol() {
-        // Loop-owned state as locals, exactly as the real loop (row 31) will hold it.
+        // Loop-owned state as locals, exactly as the real event loop holds it.
         let mut out: VecDeque<Event> = VecDeque::new();
         let mut timers = TimerQueue::new();
         let mut deferred: Vec<crate::view::Deferred> = Vec::new();
@@ -565,7 +591,7 @@ mod tests {
         assert_eq!(pushed_log.borrow()[0], key_event(Key::Char('b')));
     }
 
-    // -- MouseTrackCapture (the A3 hold-tracking router) ----------------------
+    // -- MouseTrackCapture (the hold-tracking router) ----------------------
 
     use crate::event::{MouseButtons, MouseEvent, MouseWheel};
     use crate::view::Deferred;

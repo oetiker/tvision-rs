@@ -1,4 +1,4 @@
-//! Render back-buffer and cell diff — deviation **D8**.
+//! Render back-buffer and cell diff.
 //!
 //! [`Buffer`] is the in-memory screen grid: the whole view tree is painted into
 //! it each frame, then [`Buffer::diff`] compares it against the previous frame so
@@ -8,15 +8,20 @@
 //! (see `cell.rs`) already encodes double-width glyphs with explicit
 //! `wide`/`trail` flags, so the wide-char skipping is driven off those rather
 //! than off `unicode-width`. ratatui's `skip` field is dropped — rstv repaints
-//! the whole tree (D8), so there is nothing to opt out of.
+//! the whole tree, so there is nothing to opt out of.
+//!
+//! # Turbo Vision heritage
+//! Replaces Turbo Vision's per-view incremental screen writes with a
+//! double-buffered whole-tree repaint plus cell diff (deviation D8). The grid
+//! and diff are adapted from ratatui rather than ported from the C++.
 //
 // Portions adapted from ratatui (https://github.com/ratatui-org/ratatui),
 // licensed under the MIT License. Copyright (c) 2023-2024 The Ratatui Developers.
 
 use crate::screen::Cell;
 
-/// In-memory screen grid. Port of the ratatui `Buffer` adapted for rstv's
-/// whole-tree repaint model (D8).
+/// In-memory screen grid. Adapted from the ratatui `Buffer` for rstv's
+/// whole-tree repaint model.
 ///
 /// Unlike ratatui, `Buffer` stores only `width` × `height` rather than an
 /// `area: Rect`, because the back buffer is always screen-origin (`(0, 0)` to

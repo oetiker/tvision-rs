@@ -94,6 +94,6 @@ between the two views when it applies the broadcast — see
 - [Menus, status line & help](menus.md) — the views that *emit* commands and
   gray themselves out.
 - [Events → enum + match](../port/events.md) — the design behind `enum Event`
-  and why `infoPtr` became `source` (deviation D4), for Turbo Vision veterans.
+  and why `infoPtr` became `source`, for Turbo Vision veterans.
 - [The event loop in depth](../internals/event-loop.md) — how a command is
   routed through the tree.

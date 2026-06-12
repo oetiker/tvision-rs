@@ -3,8 +3,8 @@
 C++ Turbo Vision is built on inheritance. `TView` is the base class; `TGroup`,
 `TWindow`, `TButton` and every other widget derive from it, override a handful of
 virtuals (`draw`, `handleEvent`, `setState`, …), and inherit the rest for free.
-Rust has no inheritance, so tvision uses the idiom that replaces it: a **trait**
-for behaviour and **composition** for data. This is deviation **D2**.
+Rust has no inheritance, so rstv uses the idiom that replaces it: a **trait**
+for behaviour and **composition** for data.
 
 ## The `View` trait + `ViewState`
 
@@ -34,7 +34,7 @@ fn state(&self) -> &ViewState { &self.state }
 fn state_mut(&mut self) -> &mut ViewState { &mut self.state }
 ```
 
-So where C++ writes `class TButton : public TView`, tvision writes `struct
+So where C++ writes `class TButton : public TView`, rstv writes `struct
 Button { state: ViewState, /* … */ }` and `impl View for Button`.
 
 ## Building on a *concrete* widget: embed-and-delegate

@@ -1,11 +1,11 @@
 # Dropped & changed
 
-Most of the deviations in this part *transform* a Turbo Vision concept into an
+Most of the differences in this part *transform* a Turbo Vision concept into an
 idiomatic Rust shape. A few instead **drop** machinery outright, or keep a thing
 deliberately *unchanged* where you might expect a rewrite. This page collects
 those.
 
-## Streaming & persistence — dropped (D12)
+## Streaming & persistence — dropped
 
 Turbo Vision shipped its own object-serialization framework: `TStreamable`, the
 `ipstream`/`opstream` byte streams, a `TStreamableClass` type registry with
@@ -29,9 +29,9 @@ namespaced strings instead of small integers — see [Constant families → open
 newtypes](constants.md).
 
 > **Looking for `getData`/`setData`?** That is *not* dropped — it became the
-> typed value protocol (D10). See [Dialogs & data](../apps/dialogs.md).
+> typed value protocol. See [Dialogs & data](../apps/dialogs.md).
 
-## Damage tracking & buffered drawing — dropped (D8)
+## Damage tracking & buffered drawing — dropped
 
 Turbo Vision's `drawHide`/`drawShow`/`drawUnder*` dance and its group-buffered,
 occlusion-aware writes were an optimization for slow hardware: avoid touching
@@ -62,6 +62,6 @@ So when you see `i32` on a bounds calculation and reach for "shouldn't that be
 
 ---
 
-The full, formal list of every deviation (D1–D13) lives in
-[Deviations D1–D13](../reference/deviations.md), and the terse C++→Rust name
-lookup is the [symbol map](../reference/symbol-map.md).
+The at-a-glance list of every difference lives in
+[Differences from C++ Turbo Vision](../reference/deviations.md), and the terse
+C++→Rust name lookup is the [symbol map](../reference/symbol-map.md).

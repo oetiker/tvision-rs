@@ -1,38 +1,31 @@
-//! `TDeskTop` — the desktop group (row 30, FOUNDATION).
+//! The [`Desktop`] — the group every window lives in.
 //!
-//! `TDeskTop` (`tdesktop.cpp`) is a `TGroup` subclass that owns a
-//! [`Background`](crate::desktop::Background) and (later) tiles/cascades the
-//! windows inserted into it. Its value at this row is twofold: it gives
-//! [`Program`](crate::app::Program) a **named real desktop**, and it is the first
-//! exemplar of the **"a [`View`] that embeds a [`Group`] and delegates the whole
-//! trait"** pattern — the same shape `TWindow` (row 33) copies.
+//! A `Desktop` owns a [`Background`](crate::desktop::Background) fill and tiles
+//! or cascades the windows inserted into it. It gives
+//! [`Program`](crate::app::Program) a **named real desktop**, and it is the
+//! first exemplar of the **"a [`View`] that embeds a [`Group`] and delegates the
+//! whole trait"** pattern that [`Window`](crate::window::Window) also uses.
 //!
-//! ## Deviations in play
-//! * **D2** embed-and-delegate: [`Desktop`] embeds a [`Group`] and forwards every
-//!   [`View`] method to it. Unlike `Program` (which is *not* a `View`), a
-//!   `Desktop` *is* a `View` — a child of the program's root group — so it
-//!   implements the trait by delegation.
-//! * **D3** owner-data-down: no owner back-pointer; the inserted background is
-//!   recorded as a local [`ViewId`] ([`Desktop::background`]).
-//! * **D7** [`Role::Background`](crate::theme::Role) styles the fill (handled
-//!   inside [`Background`]).
-//! * **D8** whole-tree redraw; no `shutDown` redraw bracket.
-//! * **D9** the `cmNext`/`cmPrev` window cycling of `TDeskTop::handleEvent` is
-//!   implemented at 33d-2 (see [`Desktop::handle_event`]); Alt-N's
-//!   `cmSelectWindowNum` arm is realized as the [`Desktop::select_window_num`]
-//!   direct walk.
-//! * **D12** streamable `read`/`write`/`build`/`name` dropped.
+//! ## Window cycling and tiling
 //!
-//! ## Tiling geometry (row 30)
-//! * `tile`/`cascade` (the `mostEqualDivisors`/`calcTileRect`/`doCascade` layout)
-//!   are ported as [`View`] overrides on [`Desktop`], driven by the program's
-//!   `cmTile`/`cmCascade` handler. `tileError()` is an empty C++ no-op: when its
-//!   guard trips (a cell would be zero-sized, or a window's minimum exceeds the
-//!   cascade rect) we simply leave bounds unchanged. `tile_columns_first`
-//!   (C++ `tileColumnsFirst = False`) selects the `favorY` orientation.
+//! `cmNext`/`cmPrev` cycle the focus through the open windows (see
+//! [`Desktop::handle_event`]), and Alt-N selects a window by number via
+//! [`Desktop::select_window_num`]. `tile`/`cascade` lay the windows out — the
+//! `mostEqualDivisors`/`calcTileRect`/`doCascade` geometry — driven by the
+//! program's `cmTile`/`cmCascade` handler. When a layout cannot fit (a cell
+//! would be zero-sized, or a window's minimum exceeds the cascade rect) the
+//! affected bounds are simply left unchanged. `tile_columns_first` (C++
+//! `tileColumnsFirst = False`) selects the orientation.
 //!
-//! ## Deferred (no dead stubs)
-//! * `shutDown` (`background = 0; TGroup::shutDown()`) — no shutDown path yet.
+//! # Turbo Vision heritage
+//!
+//! Ports `TDeskTop` (`tdesktop.cpp`), a `TGroup` subclass. Inheritance becomes
+//! an embedded [`Group`] the [`Desktop`] forwards every [`View`] method to
+//! (deviation D2); the background is recorded as a local [`ViewId`] rather than
+//! through an owner back-pointer (deviation D3); and the streaming machinery is
+//! dropped (deviation D12). The C++ `shutDown` (`background = 0;
+//! TGroup::shutDown()`) is not reproduced — rstv has no separate shutdown phase;
+//! the tree is simply dropped.
 
 use crate::command::Command;
 use crate::event::Event;
@@ -117,15 +110,19 @@ fn calc_tile_rect(pos: i32, r: Rect, num_cols: i32, num_rows: i32, left_over: i3
 /// only in arbitrary test scaffolding.
 const DEFAULT_BKGRND: char = '\u{2591}';
 
-/// `TDeskTop` — the desktop group: an embedded [`Group`] that owns a
-/// [`Background`] (D2/D3, row 30).
+/// The desktop group: an embedded [`Group`] that owns a [`Background`].
 ///
 /// Build with [`Desktop::new`] supplying a background factory (use
 /// [`Desktop::init_background`] for the faithful default), then drive it as any
 /// other [`View`].
+///
+/// # Turbo Vision heritage
+///
+/// Ports `TDeskTop` (`tdesktop.cpp`); inheritance from `TGroup` becomes an
+/// embedded [`Group`] (deviation D2).
 pub struct Desktop {
-    /// The embedded container (D2). `Desktop` *is-a* `TGroup`: its state, draw,
-    /// and event routing are the group's.
+    /// The embedded container. `Desktop` *is-a* `TGroup`: its state, draw, and
+    /// event routing are the group's.
     group: Group,
     /// The inserted background child's id — `TDeskTop::background`.
     ///
@@ -182,7 +179,7 @@ impl Desktop {
         Box::new(Background::new(r, DEFAULT_BKGRND))
     }
 
-    /// `TDeskTop::background` — the background child's id (row 33's
+    /// `TDeskTop::background` — the background child's id (the
     /// `putInFrontOf(background)` target).
     pub fn background(&self) -> Option<ViewId> {
         self.background
@@ -191,9 +188,8 @@ impl Desktop {
     /// Insert an arbitrary view (a window) directly into the embedded group,
     /// returning its id — the production window-insert seam (faithful to the public
     /// `TGroup::insert` that `TDeskTop` inherits). Windows must live *inside the
-    /// desktop* because the `cmNext`/`cmPrev`/Alt-N handlers live on it. Used by the
-    /// 33d-2 round-trip tests and by app code that pre-populates the desktop (see
-    /// `examples/hello.rs`); the geometry-laying `tile`/`cascade` helpers land later.
+    /// desktop* because the `cmNext`/`cmPrev`/Alt-N handlers live on it. Used by
+    /// app code that pre-populates the desktop (see `examples/hello.rs`).
     pub fn insert_view(&mut self, view: Box<dyn View>) -> ViewId {
         self.group.insert(view)
     }
@@ -233,8 +229,8 @@ impl Desktop {
 #[crate::delegate(to = group, skip(value, set_value, number, grabs_focus_on_click, apply_list_scroll))]
 impl View for Desktop {
     /// `TDeskTop::handleEvent` — delegate to the embedded group's three-phase
-    /// router, then handle the desktop's own `cmNext`/`cmPrev` window cycling
-    /// (33d-2). Faithful to `tdesktop.cpp`:
+    /// router, then handle the desktop's own `cmNext`/`cmPrev` window cycling.
+    /// Faithful to `tdesktop.cpp`:
     /// ```cpp
     /// TGroup::handleEvent( event );
     /// if( event.what == evCommand ) switch( event.message.command ) {
@@ -286,8 +282,8 @@ impl View for Desktop {
         }
     }
 
-    /// `cmSelectWindowNum` (Alt-N) — select the desktop window numbered `num`
-    /// (33d-2). Realizes the C++ broadcast arm as a direct walk into the embedded
+    /// `cmSelectWindowNum` (Alt-N) — select the desktop window numbered `num`.
+    /// Realizes the C++ broadcast arm as a direct walk into the embedded
     /// group (see [`Group::focus_by_number`]). The program reaches this through the
     /// `select_window_num` trait method — **not** an `as_any_mut` downcast — so it
     /// stays decoupled from the concrete `Desktop` type.
@@ -309,8 +305,9 @@ impl View for Desktop {
     /// `doTile` calls `p->locate(calcTileRect(tileNum--))` per tileable child in
     /// `forEach` order, so the *first-visited* (topmost) child takes `tileNum =
     /// numTileable - 1`. `tileError()` is an empty no-op → on the guard we leave
-    /// bounds unchanged. `lock()`/`unlock()` are dropped (D8). `owner_size` is the
-    /// desktop size, fed to each child's `size_limits` inside [`locate`].
+    /// bounds unchanged. `lock()`/`unlock()` are dropped (the whole-tree redraw
+    /// makes them unnecessary). `owner_size` is the desktop size, fed to each
+    /// child's `size_limits` inside [`locate`].
     fn tile(&mut self, r: Rect) {
         let ids = self.group.tileable_ids(); // forEach order
         let n = ids.len() as i32; // numTileable
@@ -492,9 +489,9 @@ mod tests {
         insta::assert_snapshot!(screen.snapshot());
     }
 
-    /// D8 shadow pass: a `Window` (which sets `sfShadow`) inserted over the ░
+    /// Shadow pass: a `Window` (which sets `sfShadow`) inserted over the ░
     /// desktop background casts the offset-L drop shadow — 2 columns right
-    /// (rows 2..5: one below the top edge to one past the bottom) + 1 row below
+    /// (screen rows 2..5: one below the top edge to one past the bottom) + 1 row below
     /// (columns 3..10: starting 2 right of the left edge). The shadow cells keep
     /// their ░ glyph and take the theme's `Role::Shadow` attribute (+no_shadow).
     #[test]
@@ -537,7 +534,7 @@ mod tests {
         );
     }
 
-    // -- 7. D3 tree-walk resolvers through the embedders ---------------------
+    // -- 7. tree-walk resolvers through the embedders ------------------------
 
     /// Build `Desktop` → `Window` → probe (a standard scroll bar) and return the
     /// desktop plus the window/probe ids. The desktop's `group` is reachable here
@@ -624,7 +621,7 @@ mod tests {
         );
     }
 
-    // -- tiling geometry (row 30) -------------------------------------------
+    // -- tiling geometry -----------------------------------------------------
 
     /// A visible, tileable window with number `n` at `bounds`.
     fn tileable_window(bounds: Rect, n: i16) -> Box<dyn View> {

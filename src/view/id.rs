@@ -1,10 +1,10 @@
-//! Global view-identity minter — deviation **D3**.
+//! Global view-identity minter.
 //!
 //! ## Why this exists
 //!
 //! C++ Turbo Vision threads raw `TView*` pointers in every direction: `owner`
 //! (upward), a circular `next`/`prev` sibling ring, and `current`/`selected`
-//! cross-links inside groups. Rust forbids aliased mutable references, so D3
+//! cross-links inside groups. Rust forbids aliased mutable references, so rstv
 //! splits the pointer web into two clean pieces:
 //!
 //! * **Downward ownership is a tree** — a `Group` owns
@@ -28,12 +28,17 @@
 //! guarded an ABA hazard that the by-identity child scan cannot have). The
 //! `NonZeroU64` gives `Option<ViewId>` a niche, so it costs no extra size; use
 //! `Option<ViewId>` (not a sentinel value) to represent "no link / null". The
-//! `u64` space never realistically exhausts (mirrors `TimerId`, D9).
+//! `u64` space never realistically exhausts (mirrors `TimerId`).
+//!
+//! # Turbo Vision heritage
+//! Replaces the raw `TView*` pointer web (`owner`, the `next`/`prev` sibling
+//! ring, `current`/`selected`) with owned tree edges plus by-value identity
+//! handles (deviation D3).
 
 use std::num::NonZeroU64;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// A lightweight, globally-unique view identity (D3). `Copy`, carries no
+/// A lightweight, globally-unique view identity. `Copy`, carries no
 /// reference into the tree, so it can be stored freely (sibling links, focus
 /// stacks, capture handlers). Identity is `ViewId` equality.
 ///
@@ -42,7 +47,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// simply fails to resolve via [`View::find_mut`](crate::view::View::find_mut);
 /// there is no slot to alias, so no generational validation is needed. The
 /// `NonZeroU64` gives `Option<ViewId>` a niche (no discriminant word). The `u64`
-/// space never realistically exhausts (mirrors `TimerId`, D9).
+/// space never realistically exhausts (mirrors `TimerId`).
+///
+/// # Turbo Vision heritage
+/// The by-value successor to a raw `TView*` used for `owner` / sibling /
+/// `current` links (deviation D3).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct ViewId(NonZeroU64);
 

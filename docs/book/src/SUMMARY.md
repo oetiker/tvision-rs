@@ -18,7 +18,8 @@
 - [Constant families → open newtypes](port/constants.md)
 - [Palettes & glyphs → Theme/Role](port/theme.md)
 - [The draw model → whole-tree redraw + diff](port/draw.md)
-- [Modal execView → one loop + capture](port/modal.md)
+- [Modal execView → one loop](port/modal.md)
+- [Event capture](port/capture.md)
 - [The Deferred channel](port/deferred.md)
 - [Dropped & changed](port/dropped.md)
 

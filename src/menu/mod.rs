@@ -1,10 +1,11 @@
-//! Menu data tree — `TMenuItem`, `TSubMenu`, `TMenu` (`menus.h`, `menu.cpp`).
+//! Menus: the data tree and the views that present it.
 //!
-//! This module ports **only the menu data tree** — the pure node types plus a
-//! builder API. The `TMenuView`/`TMenuBar`/`TMenuBox` views (drawing, event
-//! handling, `execute`/`findItem`/`hotKey`) are later rows and live elsewhere.
+//! [`MenuItem`]/[`Menu`]/[`MenuBuilder`] are the pure data — define a menu tree
+//! fluently with the builder. [`MenuBar`], [`MenuBox`], and the menu session (see
+//! [`menu_view`], [`menu_bar`], [`menu_box`], [`menu_session`]) draw it and run the
+//! interactive open/navigate/select loop.
 //!
-//! ## The C++ shape and how it maps
+//! ## The item model
 //!
 //! In the C++, `TMenuItem` is a singly linked-list node carrying a C `union {
 //! const char *param; TMenu *subMenu; }` discriminated *implicitly* by its
@@ -15,19 +16,22 @@
 //! - else ⇒ a **command item** (the union holds `param`, the shortcut display
 //!   text such as `"Alt-X"`).
 //!
-//! Per the house style (enums, like [`Key`] and
-//! [`Event`](crate::event::Event)) we make that discrimination *explicit and
-//! type-safe* with a 3-variant [`MenuItem`] enum: the `param`-xor-`subMenu`
-//! union becomes the `Command`-vs-`SubMenu` choice, so an item can never hold
-//! both. Shared fields (`name`, `key_code`, `help_ctx`, `disabled`) are read
-//! uniformly via or-patterns, e.g.
-//! `Command { disabled, .. } | SubMenu { disabled, .. } => …`.
+//! rstv makes that discrimination *explicit and type-safe* with a 3-variant
+//! [`MenuItem`] enum: the `param`-xor-`subMenu` union becomes the
+//! `Command`-vs-`SubMenu` choice, so an item can never hold both. Shared fields
+//! (`name`, `key_code`, `help_ctx`, `disabled`) are read uniformly via
+//! or-patterns, e.g. `Command { disabled, .. } | SubMenu { disabled, .. } => …`.
 //!
 //! The C++ linked list (`next`) becomes a [`Vec`]; the `deflt` pointer becomes
 //! [`Menu::default`], an *index* into that `Vec` (any valid index — the C++
 //! `TMenu(itemList, TheDefault)` two-arg ctor allows a non-head default). The
 //! [`MenuBuilder`] mirrors the common `TMenu(itemList)` case: it sets `default`
 //! to `Some(0)` (the head) for a non-empty menu and `None` for an empty one.
+//!
+//! # Turbo Vision heritage
+//! Ports `TMenuItem`, `TSubMenu`, and `TMenu` (`menus.h`/`menu.cpp`). The implicit
+//! tagged `union` becomes a 3-variant enum and the linked list becomes a `Vec`
+//! with an index default (deviation D1).
 
 use crate::command::Command;
 use crate::event::{Key, KeyEvent, KeyModifiers};
@@ -74,8 +78,8 @@ pub enum MenuItem {
         param: Option<String>,
         /// The help context (C++ `helpCtx`).
         help_ctx: HelpCtx,
-        /// Whether the item is greyed out (C++ `disabled`). Mutated at runtime
-        /// only on command items (command-graying, a later row).
+        /// Whether the item is greyed out (C++ `disabled`). Mutated at runtime by
+        /// command-graying, which keeps it in sync with the live command set.
         disabled: bool,
     },
 

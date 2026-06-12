@@ -5,13 +5,13 @@ direction at once: `owner` points *up* at the enclosing group, a circular
 `next`/`prev`/`last` ring threads the *siblings*, and `current`/`selected`
 cross-link a group to its focused and default child. Capture handlers and
 `message()` receivers stash bare `TView*` too. Rust forbids that aliased
-mutable web. This is deviation **D3** — the one structural change every other
+mutable web. Replacing it with handles is the one structural change every other
 part of the port leans on.
 
 ## The web splits in two
 
-D3 cuts the pointer graph along a single clean line: **down is ownership,
-up-and-sideways is identity.**
+The handle model cuts the pointer graph along a single clean line: **down is
+ownership, up-and-sideways is identity.**
 
 - **Downward is a tree.** A `Group` *owns* its children as
   `Vec<Box<dyn View>>` in Z-order. Recursive dispatch (`for c in &mut

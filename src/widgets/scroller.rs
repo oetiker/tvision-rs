@@ -1,67 +1,65 @@
-//! `TScroller` — faithful Rust port of `tscrolle.cpp` (row 27, FOUNDATION).
+//! The base for scrollable content views (the editor, the text terminal, the
+//! outline viewer). A scroller references **two sibling scroll bars** that live
+//! on the window frame, mirrors their `value` into its own
+//! [`delta`](Scroller::delta) (the scroll offset its subclasses draw with), and
+//! pushes range/value changes back to them.
 //!
-//! `TScroller` is the base class for scrollable content views (`TEditor` row 66,
-//! `TTextDevice`/`TTerminal`, `TOutlineViewer`). It references **two sibling
-//! `TScrollBar`s** that live on the window frame, mirrors their `value` into its
-//! own [`delta`](Scroller::delta) (the scroll offset its subclasses draw with),
-//! and pushes range/value changes back to them.
+//! # The cross-view scrollbar broker — read **and** write
 //!
-//! ## The cross-view scrollbar broker (D3) — read **and** write
+//! A scroller both *reads* its two scroll bars (their `value`, arrow step) and
+//! *mutates* them (set value/params, show/hide). But a leaf view holds only
+//! `&mut Context` during dispatch — no tree access — and the bars are
+//! window-frame siblings it cannot own, so it can neither read nor mutate them
+//! directly.
 //!
-//! In C++ the scroller holds raw pointers to its two scrollbars and both *reads*
-//! their fields (`->value`, `->arStep`) and *mutates* them (`setValue`/
-//! `setParams`/`show`/`hide`). Under D3 a leaf view holds only `&mut Context`
-//! during dispatch — no tree access, so it can neither read nor mutate a sibling.
-//! The scrollbars are window-frame siblings, so the scroller cannot own them.
+//! **The event loop is the broker, in both directions.** The scroller stores its
+//! bars as [`Option<ViewId>`](crate::view::ViewId) handles and issues
+//! [`Deferred`](crate::view::Deferred) ops naming them; the loop performs every
+//! cross-view read/write at apply time. The `cmScrollBarChanged` broadcast's
+//! `source` is the **filter** only (the scroller reacts iff `source ∈ {h, v}`);
+//! the value is not stuffed into the message — the loop resolves the subject bar
+//! and reads its `value`.
 //!
-//! **The pump is the broker, in both directions.** The scroller stores its
-//! scrollbars as [`Option<ViewId>`](crate::view::ViewId) handles and issues
-//! [`Deferred`](crate::view::Deferred) ops naming them; the pump performs every
-//! cross-view read/write at deferred-apply time via `group.find_mut(id)` (see the
-//! `SyncScrollerDelta` / `ScrollBarSetParams` / `SetVisible` apply arms in
-//! `program.rs`). The `cmScrollBarChanged` broadcast's `source` is the **filter**
-//! only (the scroller reacts iff `source ∈ {h_id, v_id}`) — this is the first real
-//! consumer of `Broadcast{source}`. The value is **not** stuffed into the message;
-//! the pump resolves the subject bar and reads its `value` (the faithful successor
-//! to C++ reading `->value` off the `infoPtr` subject).
+//! # Selected color
 //!
-//! ## D8: `drawLock`/`drawFlag`/`checkDraw` dropped
+//! The base scroller only ever draws a fill in [`Role::ScrollerNormal`]. The
+//! "selected" scroller color exists in the palette but is never used by the base;
+//! the editor, which selects text, applies its own selection color, so no
+//! `ScrollerSelected` role is wired here.
 //!
-//! The C++ `drawLock`/`drawFlag`/`checkDraw` are a synchronous re-entrancy guard
-//! around C++'s immediate `drawView()`. Under D8 (whole-tree redraw + diff every
-//! pass) there is no immediate draw to guard, and our mutations are **deferred**
-//! (applied in one post-dispatch drain), so the batching the lock provided is
-//! structural. Dropped entirely, like `buffered`/the lock elsewhere.
+//! # Resizing
 //!
-//! ## Other deviations / drops
+//! [`View::change_bounds`](crate::view::View::change_bounds) takes no
+//! [`Context`], but re-publishing scroll-bar parameters after a resize needs one.
+//! So `change_bounds` stays geometry-only, and [`Scroller::set_limit`] /
+//! [`Scroller::scroll_to`] are the public `Context`-taking entries that
+//! (re)publish the parameters; a window or editor that resizes a scroller calls
+//! `set_limit` afterwards. There is no automatic re-emit on a bare bounds change,
+//! because nothing currently drives that path.
 //!
-//! - **D3:** scrollbars referenced by `ViewId`, not pointers; all cross-view
-//!   read/write brokered by the pump.
-//! - **D12/D2:** `shutDown`/`write`/`read`/streaming dropped.
-//! - **getPalette → Theme roles** (D7): [`Role::ScrollerNormal`]
-//!   (`cpScroller` idx 1); `ScrollerSelected` (idx 2) deferred to
-//!   `TEditor` row 66.
-//! - **`change_bounds` trait signature:** the base `View::change_bounds(bounds)`
-//!   takes no `Context`, but re-publishing scrollbar params on resize needs one.
-//!   Rather than widen the trait (a FOUNDATION decision with one consumer), this
-//!   row keeps `change_bounds` geometry-only (the base default sets bounds) and
-//!   exposes [`Scroller::set_limit`]/[`Scroller::scroll_to`] as the public
-//!   `Context`-taking entries that (re)publish scrollbar params. A window/editor
-//!   consumer that resizes a scroller will call `set_limit(ctx)` afterwards.
-//!   **TODO(resize):** re-emit limit params automatically when a window consumer
-//!   wires the resize path.
+//! # Turbo Vision heritage
+//!
+//! Ports `TScroller` (`tscrolle.cpp`). Owner up-pointers to the sibling scroll
+//! bars become [`ViewId`] handles brokered by the event loop (deviation D3);
+//! `getPalette` becomes [`Role`]s; the `drawLock`/`drawFlag`/`checkDraw`
+//! re-entrancy guard around the immediate `drawView()` is unneeded under
+//! whole-tree redraw and is dropped; and `TStreamable` is dropped.
 
 use crate::theme::Role;
 use crate::view::{Context, DrawCtx, Options, Point, Rect, StateFlag, View, ViewId, ViewState};
 
-/// `TScroller` — the base scrollable-content view (D2 View trait + ViewState).
+/// The base scrollable-content view.
 ///
-/// The base draws only a fill (it is an abstract base in C++; subclasses such as
-/// the editor override `draw` and consume [`delta`](Self::delta)). It references
-/// two sibling scrollbars by [`ViewId`] and brokers all reads/writes through the
-/// pump (see the module docs).
+/// The base draws only a fill; subclasses such as the editor override `draw` and
+/// consume [`delta`](Self::delta). It references two sibling scroll bars by
+/// [`ViewId`] and brokers all reads/writes through the event loop (see the module
+/// docs).
+///
+/// # Turbo Vision heritage
+///
+/// Ports `TScroller` (`tscrolle.cpp`).
 pub struct Scroller {
-    /// View state (geometry, flags, etc.) — the D2 composition target.
+    /// View state (geometry, flags, etc.) — the composition target.
     state: ViewState,
     /// Scroll offset — the value mirrored from the scrollbars. Subclasses (the
     /// editor) draw their content shifted by this. Public so subclasses read it.
@@ -78,9 +76,9 @@ impl Scroller {
     /// Construct a scroller from `bounds` and its two scrollbars (by id, `None` if
     /// absent).
     ///
-    /// Faithful to the C++ ctor: `delta = limit = (0, 0)`, `options |=
-    /// ofSelectable`. The C++ `eventMask |= evBroadcast` has **no analogue** — under
-    /// D4 broadcasts are delivered unconditionally (there is no `broadcast` bit in
+    /// Starts at a zero offset and empty extent and is selectable. Opting into
+    /// the broadcast class has no analogue here — broadcasts are delivered
+    /// unconditionally (there is no `broadcast` bit in
     /// [`EventMask`](crate::event::EventMask)), so the scroller already receives them.
     pub fn new(bounds: Rect, h_scroll_bar: Option<ViewId>, v_scroll_bar: Option<ViewId>) -> Self {
         let mut state = ViewState::new(bounds);
@@ -114,11 +112,10 @@ impl Scroller {
 
     /// Apply a freshly-read scrollbar delta — the body of `TScroller::scrollDraw`.
     ///
-    /// Called by the pump (the read broker) after it resolves the bars and reads
-    /// their `value`s. Faithful: if `d != delta`, shift the cursor by the **old**
-    /// `delta - d` (`setCursor(cursor + delta - d)`), then overwrite `delta = d`.
-    /// The order matters — the cursor adjust must use the old `delta`. No draw call
-    /// (D8: whole-tree redraw).
+    /// Called by the event loop (the read broker) after it resolves the bars and
+    /// reads their `value`s. If `d != delta`, shift the cursor by the **old**
+    /// `delta - d`, then overwrite `delta = d`. The order matters — the cursor
+    /// adjust must use the old `delta`.
     pub fn apply_delta(&mut self, d: Point) {
         if d != self.delta {
             // setCursor( cursor + delta - d ) — uses the OLD delta, before overwrite.
@@ -128,15 +125,12 @@ impl Scroller {
         }
     }
 
-    /// `TScroller::setLimit` — set the content extent and (re)publish each bar's
-    /// range/page params.
+    /// Set the content extent and (re)publish each bar's range/page params.
     ///
-    /// Faithful to the C++: `limit = (x, y)`; for the H bar push
-    /// `setParams(value, 0, x - size.x, size.x - 1, arStep)` — i.e. preserve
-    /// `value` and `arStep` (`None`), set `min = 0`, `max = x - size.x`,
-    /// `page_step = size.x - 1`. The V bar mirrors on `y`/`size.y`. The
-    /// `drawLock`/`drawFlag`/`drawView` are dropped (D8); the cross-view writes are
-    /// **deferred** ([`Context::request_scroll_bar_params`]).
+    /// `limit = (x, y)`; for the horizontal bar, preserve `value` and arrow step,
+    /// set `min = 0`, `max = x - size.x`, `page_step = size.x - 1`. The vertical
+    /// bar mirrors on `y`/`size.y`. The cross-view writes go through
+    /// [`Context::request_scroll_bar_params`].
     pub fn set_limit(&mut self, x: i32, y: i32, ctx: &mut Context) {
         self.limit = Point::new(x, y);
         let size = self.state.size;
@@ -162,13 +156,12 @@ impl Scroller {
         }
     }
 
-    /// `TScroller::scrollTo` — set each bar's value (`setValue`), preserving range
-    /// and steps.
+    /// Set each bar's value, preserving range and steps.
     ///
-    /// Faithful to the C++: H bar → `setValue(x)`, V bar → `setValue(y)`. Realized
-    /// as a deferred [`ScrollBarSetParams`](crate::view::Deferred::ScrollBarSetParams)
-    /// with only `value` set (the rest preserved). `set_params` clamps to the live
-    /// range. The `drawLock`/`checkDraw` are dropped (D8).
+    /// Horizontal bar → value `x`, vertical bar → value `y`, realized as a
+    /// [`ScrollBarSetParams`](crate::view::Deferred::ScrollBarSetParams) op with
+    /// only `value` set (the rest preserved). `set_params` clamps to the live
+    /// range.
     pub fn scroll_to(&mut self, x: i32, y: i32, ctx: &mut Context) {
         if let Some(h) = self.h_scroll_bar {
             ctx.request_scroll_bar_params(h, Some(x), None, None, None, None);
@@ -199,12 +192,9 @@ impl View for Scroller {
         &mut self.state
     }
 
-    /// Inherits `TView::draw` — a uniform fill: `moveChar(0, ' ', getColor(1),
-    /// size.x)` for each row, palette index 1 only, no active/selected branch.
-    /// Fills the entire view rect with [`Role::ScrollerNormal`].
-    ///
-    /// `Role::ScrollerSelected` (`cpScroller` idx 2) is deferred to the first
-    /// subclass that draws with it (`TEditor`, row 66).
+    /// A uniform fill of the entire view rect with [`Role::ScrollerNormal`] (no
+    /// active/selected branch). The "selected" scroller color is never used by
+    /// the base; the editor applies its own selection color instead.
     ///
     /// Subclasses (the editor) override `draw` and consume [`delta`](Self::delta).
     fn draw(&mut self, ctx: &mut DrawCtx) {
@@ -319,7 +309,7 @@ mod tests {
         assert!(s.state.options.selectable, "ofSelectable set");
         assert_eq!(s.delta, Point::new(0, 0));
         assert_eq!(s.limit(), Point::new(0, 0));
-        // NOTE: the C++ `eventMask |= evBroadcast` has no analogue under D4 —
+        // NOTE: opting into the broadcast class has no analogue here —
         // broadcasts are delivered unconditionally (no `broadcast` bit in
         // EventMask), so there is nothing to assert about the mask here.
         assert_eq!(s.state.event_mask, crate::event::EventMask::default());

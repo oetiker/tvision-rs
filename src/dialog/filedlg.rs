@@ -1,31 +1,39 @@
-//! `TFileDialog` data-support classes (rows 71–75): [`DirEntry`],
-//! [`SearchRec`], [`DirCollection`], [`FileCollection`], [`DirListBox`].
+//! The file-selection dialog and its building blocks: [`FileDialog`],
+//! [`ChDirDialog`], the directory/file panes ([`FileList`], [`DirListBox`],
+//! [`FileInfoPane`], [`FileInputLine`]), and the data types they hold
+//! ([`DirEntry`], [`SearchRec`], [`DirCollection`], [`FileCollection`]).
 //!
-//! Rows 71–74 are pure-data types. Row 75 (`TDirListBox`) is the first view
-//! type here — a concrete [`ListViewer`](crate::widgets::list_viewer::ListViewer)
-//! impl over a [`Vec<DirEntry>`] that renders a tree-indented directory listing.
+//! [`DirEntry`]/[`SearchRec`]/[`DirCollection`]/[`FileCollection`] are pure data;
+//! [`DirListBox`] is the directory-tree pane, a concrete
+//! [`ListViewer`](crate::widgets::list_viewer::ListViewer) over a
+//! [`Vec<DirEntry>`] that renders a tree-indented listing.
 //!
-//! Per the rstv "collections → `Vec`" deviation (no `TCollection`; cf.
-//! `ListBox`'s `Vec<String>`), `TDirCollection` is a plain `Vec<DirEntry>`
-//! alias and `TFileCollection` is a `Vec<SearchRec>` carrying only the one
-//! piece of real logic — the sorted insert and its comparator.  The unused C++
-//! collection API (`indexOf`/`remove`/`atPut`/`firstThat`/…) is dropped; no
-//! consumer exists.
+//! Following rstv's "collections become `Vec`" convention, `DirCollection` is a
+//! plain `Vec<DirEntry>` alias and `FileCollection` is a `Vec<SearchRec>` carrying
+//! only the one piece of real logic — the sorted insert and its comparator. The
+//! unused C++ collection API (`indexOf`/`remove`/`atPut`/`firstThat`/…) is
+//! omitted; nothing here needs it.
 //!
-//! ## D14 — native Linux paths
-//! `TDirListBox::newDirectory` had a DOS `showDrives` branch (A:–Z: drive scan)
-//! and a DOS `showDirs` branch (`\`-separated). Per D14 only `showDirs` is
-//! ported, with `/`-separated paths and `std::fs::read_dir` for enumeration.
-//! The `showDrives` branch and all drive-related helpers are dropped.
+//! ## Native paths
+//! Paths are native and `/`-separated, enumerated with `std::fs::read_dir`. The
+//! C++ DOS drive-letter machinery (`showDrives`, A:–Z: scanning, `\`-separators)
+//! has no Linux counterpart and is omitted.
+//!
+//! # Turbo Vision heritage
+//! Ports the `TFileDialog` family — `TFileDialog`, `TChDirDialog`, `TFileList`,
+//! `TDirListBox`, `TFileInfoPane`, `TFileInputLine`, plus `TDirEntry`,
+//! `TSearchRec`, `TDirCollection`, `TFileCollection` (`filedial.cpp`,
+//! `fileopen.cpp`, `tfildlg.cpp` and headers). The DOS file model is re-imagined
+//! for native Linux `/`-paths (deviation D14); `TCollection`s become `Vec`s and
+//! `TStreamable` persistence is dropped (deviation D12).
 
 use core::cmp::Ordering;
 
 // ---------------------------------------------------------------------------
-// DirEntry — row 71
+// DirEntry
 // ---------------------------------------------------------------------------
 
-/// `TDirEntry` (row 71) — a (display-text, directory-path) pair for the
-/// directory tree pane.
+/// A (display-text, directory-path) pair for the directory tree pane.
 ///
 /// The C++ type heap-allocates two `char*` fields (`displayText`,
 /// `directory`).  In Rust they are plain `String`s on the same allocation as
@@ -60,25 +68,23 @@ impl DirEntry {
 }
 
 // ---------------------------------------------------------------------------
-// DirCollection — row 72
+// DirCollection
 // ---------------------------------------------------------------------------
 
-/// `TDirCollection` (row 72) — an ordered list of [`DirEntry`] items.
+/// An ordered list of [`DirEntry`] items.
 ///
-/// The C++ type is a `TCollection` of `TDirEntry*`.  Per the
-/// collections→`Vec` deviation this collapses to a bare type alias: row 75
-/// (`TDirListBox`) only needs `push`, index, and `len`; the full `TCollection`
-/// API is dropped.
+/// The C++ `TDirCollection` is a `TCollection` of `TDirEntry*`; here it collapses
+/// to a bare `Vec` alias — [`DirListBox`] only needs `push`, index, and `len`.
 pub type DirCollection = Vec<DirEntry>;
 
 // ---------------------------------------------------------------------------
-// SearchRec — row 73
+// SearchRec
 // ---------------------------------------------------------------------------
 
 /// The directory-attribute bit of [`SearchRec::attr`] (`FA_DIREC = 0x10`).
 pub const FA_DIREC: u8 = 0x10;
 
-/// `TSearchRec` (row 73) — a directory-listing file-metadata record.
+/// A directory-listing file-metadata record.
 ///
 /// The C++ struct uses a fixed-length `char name[MAXFILE+MAXEXT-1]` to keep
 /// it POD-copyable for the collection.  In Rust, `name` is a `String` and the
@@ -101,12 +107,11 @@ pub struct SearchRec {
 }
 
 // ---------------------------------------------------------------------------
-// FileCollection — row 74
+// FileCollection
 // ---------------------------------------------------------------------------
 
-/// `TFileCollection::compare` (row 74) — the sort order for a directory
-/// listing: `".."` last, directories after plain files, then case-sensitive
-/// byte-order by name.
+/// The sort order for a directory listing: `".."` last, directories after plain
+/// files, then case-sensitive byte-order by name.
 ///
 /// Ported verbatim from the C++ (the sign of every branch matters — do not
 /// "tidy" it).
@@ -146,12 +151,11 @@ pub fn search_rec_compare(a: &SearchRec, b: &SearchRec) -> Ordering {
     a.name.cmp(&b.name)
 }
 
-/// `TFileCollection` (row 74) — a name-sorted list of [`SearchRec`] items.
+/// A name-sorted list of [`SearchRec`] items.
 ///
-/// The C++ type is a `TSortedCollection` of `TSearchRec*`.  Per the
-/// collections→`Vec` deviation the only transported behaviour is the sorted
-/// insert and its comparator ([`search_rec_compare`]); the rest of the C++
-/// `TSortedCollection` API is dropped (no consumer).
+/// The C++ `TFileCollection` is a `TSortedCollection` of `TSearchRec*`; the only
+/// transported behaviour is the sorted insert and its comparator
+/// ([`search_rec_compare`]).
 ///
 /// The sort order is: plain files alphabetically (case-sensitive), then
 /// directories alphabetically, then `".."` last.
@@ -205,7 +209,7 @@ impl FileCollection {
 }
 
 // ---------------------------------------------------------------------------
-// DirListBox — row 75
+// DirListBox
 // ---------------------------------------------------------------------------
 
 /// Tree-glyph connector: root entry and each ancestor — `pathDir` in the C++.
@@ -217,35 +221,32 @@ const MIDDLE_DIR: &str = " ├─"; // SPACE U+251C U+2500
 /// How many extra spaces are added per depth level.
 const INDENT_STEP: usize = 2;
 
-/// `TDirListBox` (row 75) — a concrete [`ListViewer`] over a
-/// [`Vec<DirEntry>`] that renders the current working directory as a
-/// tree-indented listing of its ancestors and immediate subdirectories.
+/// A concrete [`ListViewer`] over a [`Vec<DirEntry>`] that renders the current
+/// working directory as a tree-indented listing of its ancestors and immediate
+/// subdirectories.
 ///
 /// ## How it differs from `ListBox`
 ///
-/// `TDirListBox` is a **C++ subclass of `TListBox`**. In rstv it is a *second,
+/// Where C++ derives `TDirListBox` from `TListBox`, here it is a *second,
 /// parallel, direct* [`ListViewer`] impl — exactly like
 /// [`ListBox`](crate::widgets::ListBox) is — over its own `Vec<DirEntry>`
-/// storage. It does **not** embed or delegate through a
-/// `ListBox`: if it delegated [`View::draw`](crate::view::View::draw), draw
-/// would run with the inner `ListBox` as `self` and call its `get_text` over
-/// `Vec<String>`, never consulting the `Vec<DirEntry>`. See the D2
-/// embed-and-delegate note in PORTING-GUIDE.md.
+/// storage. It does **not** embed or delegate through a `ListBox`: if it
+/// delegated [`View::draw`](crate::view::View::draw), draw would run with the
+/// inner `ListBox` as `self` and call its `get_text` over `Vec<String>`, never
+/// consulting the `Vec<DirEntry>`.
 ///
-/// ## D14 — native Linux paths
+/// ## Native paths
 ///
-/// The C++ `newDirectory` has a DOS `showDrives` branch (A:–Z: drive scan).
-/// Per D14 only `showDirs` is ported, re-imagined for Linux `/`-separated
-/// paths. No `showDrives`, no drive letters, no backslashes.
-///
-/// ## Drops / deferrals
-///
-/// - `showDrives` / drive-letter scan — D14 (native Linux).
-/// - `~TDirListBox` / `destroy` — Vec ownership; no manual destroy needed.
-/// - `write`/`read`/`build`/`streamableName`/`name` — D12 streaming dropped.
-/// - `select_item` cmChangeDir payload — deferred to row 80 (`TChDirDialog`).
+/// The listing is built from native `/`-separated paths; there are no DOS drive
+/// letters or backslashes.
 ///
 /// [`ListViewer`]: crate::widgets::list_viewer::ListViewer
+///
+/// # Turbo Vision heritage
+/// Ports `TDirListBox` (`fileopen.cpp`/`dialogs.h`). The C++ `TListBox` subclass
+/// becomes a parallel `ListViewer` impl over its own storage (deviation D2,
+/// embed-and-delegate); native `/`-paths replace the DOS drive model (deviation
+/// D14) and `TStreamable` persistence is dropped (deviation D12).
 pub struct DirListBox {
     lv: crate::widgets::list_viewer::ListViewerState,
     /// The `TDirCollection` — the rendered tree of [`DirEntry`] items.
@@ -254,10 +255,10 @@ pub struct DirListBox {
     cur: usize,
     /// The current directory path (native `/`-separated, with trailing `/`).
     ///
-    /// Retained for the row-80 `TChDirDialog` consumer (`select_item` /
-    /// `cmChangeDir` reads the current directory). Currently **unread in the
-    /// base port** — like `SortedListBox::shift_state`, it is captured but has
-    /// no reader until its consumer lands.
+    /// Recorded when the tree is rebuilt. The directory-change flow reads the
+    /// *focused* entry's path ([`focused_entry`](DirListBox::focused_entry))
+    /// rather than this field, so it is currently kept for completeness and not
+    /// otherwise consulted.
     dir: String,
     /// The owner `TChDirDialog`'s `chDirButton` id, wired by
     /// [`set_chdir_button`](DirListBox::set_chdir_button) after assembly. On an
@@ -317,7 +318,7 @@ impl DirListBox {
     /// `(entries, cur)` where `cur` is the index of the current-directory entry
     /// (the deepest ancestor, highlighted by [`ListViewer::is_selected`]).
     ///
-    /// ## Layout (D14)
+    /// ## Layout
     ///
     /// ```text
     /// └─┬/             ← root, indent 0 (PATH_DIR)
@@ -407,7 +408,7 @@ impl DirListBox {
     /// The only impure operation (filesystem read) is isolated here; all tree
     /// construction is in the pure `build_tree`.
     pub fn new_directory(&mut self, dir: &str, ctx: &mut crate::view::Context) {
-        // Normalize to a trailing `/` (build_tree's precondition). The row-80
+        // Normalize to a trailing `/` (build_tree's precondition). The
         // callers (`reset_current`/`cmRevert`) pass `std::env::current_dir()`,
         // which has NO trailing slash; without this, `build_tree`'s segment
         // joins and the subdir `dir + name` concatenation would mis-form paths.
@@ -443,7 +444,7 @@ impl DirListBox {
                 .collect(),
             Err(_) => Vec::new(),
         };
-        // Sort case-insensitively (row-70 ordering — identical to `ci_cmp` in
+        // Sort case-insensitively (ordering — identical to `ci_cmp` in
         // list_box.rs; inlined here to avoid cross-module coupling).
         subdirs.sort_by(|a, b| {
             a.chars()
@@ -526,8 +527,8 @@ impl crate::view::View for DirListBox {
     /// list grabs the dialog's default button when focused and releases it when
     /// not.
     ///
-    /// rstv (D3): the leaf list cannot poke its sibling button inline, so it
-    /// requests the change through the pump's
+    /// Here the leaf list cannot poke its sibling button inline, so it requests
+    /// the change through the pump's
     /// [`MakeButtonDefault`](crate::view::Deferred::MakeButtonDefault) broker via
     /// [`Context::make_button_default`]. `chdir_button` is `None` outside a
     /// `TChDirDialog`, so this is a no-op for any other owner.
@@ -545,7 +546,7 @@ impl crate::view::View for DirListBox {
         }
     }
 
-    /// `TListViewer::changeBounds` resize step republish — B5.
+    /// `TListViewer::changeBounds` — republish scrollbar range on resize.
     fn on_bounds_changed(&mut self, ctx: &mut crate::view::Context) {
         crate::widgets::list_viewer::on_bounds_changed(self, ctx);
     }
@@ -575,10 +576,10 @@ impl crate::view::View for DirListBox {
 }
 
 // ---------------------------------------------------------------------------
-// FileList — row 76
+// FileList
 // ---------------------------------------------------------------------------
 
-/// `TFileList` (row 76) — the file-listing pane of `TFileDialog`. A concrete
+/// The file-listing pane of the file dialog. A concrete
 /// [`SortedSearch`](crate::widgets::list_viewer::SortedSearch) (hence
 /// [`ListViewer`]) over a name-sorted [`Vec<SearchRec>`] (== a
 /// [`FileCollection`]'s contents), with two columns and incremental
@@ -586,7 +587,7 @@ impl crate::view::View for DirListBox {
 ///
 /// ## Structural shape
 ///
-/// `TFileList` is a C++ subclass of `TSortedListBox`. In rstv it is a *direct*
+/// Where C++ derives `TFileList` from `TSortedListBox`, here it is a *direct*
 /// [`SortedSearch`] impl — the same shape as
 /// [`SortedListBox`](crate::widgets::SortedListBox), NOT
 /// [`DirListBox`](crate::dialog::DirListBox) (which is a plain [`ListViewer`]).
@@ -594,7 +595,7 @@ impl crate::view::View for DirListBox {
 /// `cursor_request`→`sorted_cursor`, inherits the base `is_selected`
 /// (`item == focused`), and contributes no dialog data (`value() == None`).
 ///
-/// ## The `search` key (getKey + list()->search, fused)
+/// ## The `search` key
 ///
 /// `search` is the one method whose comparator is **non-obvious**: it must
 /// compare via [`search_rec_compare`] over raw [`SearchRec`]s, **not** over
@@ -606,33 +607,37 @@ impl crate::view::View for DirListBox {
 /// collection. That routing exists only in `search_rec_compare`'s file/dir
 /// ordering — hence this is a per-impl `search`, not the shared `get_text` one.
 ///
-/// ## D14 — native Linux paths
+/// ## Native paths
 ///
-/// `getText` appends `/` (not the DOS `\`) to directory names; `getKey`'s
-/// `strupr` (DOS-only, `#ifndef __FLAT__`) is **not** ported — the Linux build
-/// is case-sensitive.
+/// `get_text` appends `/` to directory names; the listing is case-sensitive (the
+/// DOS-only upper-casing of the search key has no Linux counterpart).
 ///
-/// ## Owner broadcasts (row 77)
+/// ## Owner broadcasts
 ///
-/// `TFileList::focusItem` broadcasts `cmFileFocused` (payload = the focused
-/// `SearchRec`) on every focus change, and `selectItem` broadcasts
-/// `cmFileDoubleClicked`. Both are wired here via the `on_focus_changed`
-/// virtual-`focusItem` hook ([`ListViewer::on_focus_changed`]) and the
-/// `select_item` override; the payload travels through the pump's
-/// [`ResolveFocusedFile`](crate::view::Deferred::ResolveFocusedFile) broker (D4:
-/// payload-less broadcast + resolvable `source`).
+/// On every focus change the list broadcasts `cmFileFocused` (subject = the
+/// focused entry), and on double-click/Enter it broadcasts
+/// `cmFileDoubleClicked`. Both are wired via the `on_focus_changed` hook
+/// ([`ListViewer::on_focus_changed`]) and the `select_item` override; the focused
+/// record is resolved through the pump's
+/// [`ResolveFocusedFile`](crate::view::Deferred::ResolveFocusedFile) broker — the
+/// broadcast itself is payload-less and carries a resolvable source id.
 ///
-/// ## Drops / deferrals (faithful, breadcrumbed)
+/// ## Intentional simplifications
 ///
-/// - `getData`/`setData`/`dataSize` no-op → `value() == None` (no dialog data).
-/// - `write`/`read`/`build`/`streamableName`/`name` — D12 streaming dropped.
-/// - the `tooManyFiles` messageBox OOM guard — dropped (`Vec` is infallible).
-/// - `DirSearchRec::operator new` safety-pool check — dropped.
-/// - `fexpand`/`squeeze`/path canonicalization — DOS path machinery, not needed
-///   under D14 (the caller passes an absolute `/`-path).
+/// - No dialog data (`value() == None`).
+/// - The C++ `tooManyFiles` out-of-memory guard is unnecessary: a Rust `Vec`
+///   grows fallibly only on true allocation failure, which aborts.
+/// - The DOS path canonicalization (`fexpand`/`squeeze`) is not needed: the
+///   caller passes an absolute `/`-path.
 ///
 /// [`ListViewer`]: crate::widgets::list_viewer::ListViewer
 /// [`SortedSearch`]: crate::widgets::list_viewer::SortedSearch
+///
+/// # Turbo Vision heritage
+/// Ports `TFileList` (`fileopen.cpp`/`dialogs.h`). The C++ `TSortedListBox`
+/// subclass becomes a direct `SortedSearch` impl (deviation D2); `TStreamable`
+/// persistence is dropped (deviation D12) and the DOS path model becomes native
+/// `/`-paths (deviation D14).
 pub struct FileList {
     lv: crate::widgets::list_viewer::ListViewerState,
     /// The sorted listing — the contents of the C++ `TFileCollection`.
@@ -730,17 +735,17 @@ impl FileList {
     /// - **`".."`:** appended iff `dir != "/"` (C++ `strlen(dir) > 1`).
     ///
     /// `time` carries the DOS-packed mtime ([`pack_dos_time`]) on every real
-    /// entry — the value the [`FileInfoPane`] (row 78) unpacks to render the
+    /// entry — the value the [`FileInfoPane`] unpacks to render the
     /// size/date line. A real entry with no reportable mtime gets `time = 0`
     /// (an empty `name` would suppress its date line; a real name would draw a
     /// blank date, an acceptable degenerate case).
     ///
-    /// **D-time deviation on the `".."` row.** rstv synthesizes `".."` *without*
-    /// statting the parent, so it uses [`DOTDOT_TIME`] (`0x210000`)
-    /// unconditionally — a cosmetic difference in the displayed date on the
-    /// `".."` row only. C++ `readDirectory` (tfillist.cpp) instead stats the real
-    /// parent via `findfirst("..", FA_DIREC)` and uses the parent dir's real
-    /// mtime, falling back to this constant only when that findfirst fails.
+    /// **Deviation on the `".."` row.** rstv synthesizes `".."` *without* statting
+    /// the parent, so it uses [`DOTDOT_TIME`] (`0x210000`) unconditionally — a
+    /// cosmetic difference in the displayed date on the `".."` row only. C++
+    /// `readDirectory` instead stats the real parent via
+    /// `findfirst("..", FA_DIREC)` and uses the parent dir's real mtime, falling
+    /// back to this constant only when that findfirst fails.
     ///
     /// Returns the [`search_rec_compare`]-sorted `Vec`, built via
     /// [`FileCollection::insert`].
@@ -867,8 +872,8 @@ impl crate::widgets::list_viewer::ListViewer for FileList {
         &mut self.lv
     }
 
-    /// `TFileList::getText` — the file/dir name, with a trailing `/` (D14, not
-    /// the DOS `\`) appended to directories. OOB → empty.
+    /// `TFileList::getText` — the file/dir name, with a trailing `/` appended to
+    /// directories. Out of bounds → empty.
     fn get_text(&self, item: i32) -> String {
         match self.items.get(item as usize) {
             Some(rec) => {
@@ -888,8 +893,8 @@ impl crate::widgets::list_viewer::ListViewer for FileList {
     /// `TFileList::focusItem` — the virtual tail, fired on EVERY focus change.
     ///
     /// Faithful: `message(owner, evBroadcast, cmFileFocused, list()->at(item))`.
-    /// rstv's broadcast is payload-less (D4), so we broadcast `FILE_FOCUSED` with
-    /// this view as the resolvable `source`; the pump's
+    /// The broadcast carries no payload, so we broadcast `FILE_FOCUSED` with this
+    /// view as the resolvable `source`; the pump's
     /// [`ResolveFocusedFile`](crate::view::Deferred::ResolveFocusedFile) broker
     /// reads [`focused_rec`](FileList::focused_rec) and delivers it to the
     /// consumer. (The C++ calls `TSortedListBox::focusItem` first — that base step
@@ -905,13 +910,10 @@ impl crate::widgets::list_viewer::ListViewer for FileList {
     ///
     /// Faithful: `message(owner, evBroadcast, cmFileDoubleClicked, list()->at(item))`.
     /// The C++ payload is the focused `SearchRec`, but the only consumer
-    /// (`TFileDialog::handleEvent`) merely turns `cmFileDoubleClicked` into `cmOK`
-    /// and never reads the record — so it is faithfully **payload-less** here (D4):
-    /// just `FILE_DOUBLE_CLICKED { source = self }`. Does NOT call the base, so it
-    /// does NOT also broadcast `cmListItemSelected`.
-    ///
-    /// TODO(row 79 TFileDialog): the dialog's `cmFileDoubleClicked → cmOK`
-    /// conversion is row 79's job.
+    /// ([`FileDialog`]'s event handler) merely turns `cmFileDoubleClicked` into
+    /// `cmOK` and never reads the record — so it is **payload-less** here: just
+    /// `FILE_DOUBLE_CLICKED { source = self }`. Does NOT call the base, so it does
+    /// NOT also broadcast `cmListItemSelected`.
     fn select_item(&mut self, _item: i32, ctx: &mut crate::view::Context) {
         if let Some(id) = self.lv.state.id() {
             ctx.broadcast(crate::command::Command::FILE_DOUBLE_CLICKED, Some(id));
@@ -999,8 +1001,8 @@ impl crate::view::View for FileList {
         crate::widgets::list_viewer::sorted_cursor(self)
     }
 
-    /// `TFileList` has no `setState` override (its only owner poke is in the
-    /// `focusItem` override, deferred to row 79) — the plain base.
+    /// `TFileList` has no `setState` override (its only owner notification is in
+    /// the `focusItem` override above) — the plain base.
     fn set_state(
         &mut self,
         flag: crate::view::StateFlag,
@@ -1010,7 +1012,7 @@ impl crate::view::View for FileList {
         crate::widgets::list_viewer::set_state(self, flag, enable, ctx);
     }
 
-    /// `TListViewer::changeBounds` resize step republish — B5.
+    /// `TListViewer::changeBounds` — republish scrollbar range on resize.
     fn on_bounds_changed(&mut self, ctx: &mut crate::view::Context) {
         crate::widgets::list_viewer::on_bounds_changed(self, ctx);
     }
@@ -1036,43 +1038,46 @@ impl crate::view::View for FileList {
 }
 
 // ---------------------------------------------------------------------------
-// FileInputLine — row 77
+// FileInputLine
 // ---------------------------------------------------------------------------
 
-/// `TFileInputLine` (stddlg.cpp) — a [`TInputLine`](crate::widgets::InputLine)
-/// filename field that mirrors the [`FileList`]'s focused entry.
+/// A filename [`InputLine`](crate::widgets::InputLine) that mirrors the
+/// [`FileList`]'s focused entry.
 ///
 /// On a `cmFileFocused` broadcast (and only while the user is **not** typing in
 /// it — the `!(state & sfSelected)` guard) it copies the focused entry's name
-/// into the field, appending `/<wildCard>` (D14 `/`, not the DOS `\`) when the
-/// entry is a directory.
+/// into the field, appending `/<wildCard>` when the entry is a directory.
 ///
-/// ## Structural shape (D2 embed-and-delegate)
+/// ## Structural shape
 ///
-/// `TFileInputLine` is a C++ subclass of `TInputLine`. In rstv it **embeds** an
+/// Where C++ derives `TFileInputLine` from `TInputLine`, here it **embeds** an
 /// [`InputLine`] and forwards the un-overridden [`View`](crate::view::View)
-/// methods via `#[crate::delegate(to = inner)]` — only `handle_event` and
-/// `as_any_mut` differ. `value`/`set_value` (D10) are NOT overridden (the C++
+/// methods (embed-and-delegate composition) — only `handle_event` and
+/// `as_any_mut` differ. `value`/`set_value` are NOT overridden (the C++
 /// `TFileInputLine` has no `getData`/`setData`), so they forward to the inner
 /// `InputLine`.
 ///
-/// ## The payload broker (D3/D4)
+/// ## The payload broker
 ///
-/// The broadcast is payload-less in rstv, so `handle_event` does not read the
-/// record inline; it requests
+/// The broadcast carries no payload, so `handle_event` does not read the record
+/// inline; it requests
 /// [`ResolveFocusedFile`](crate::view::Deferred::ResolveFocusedFile) and the pump
 /// resolves the producer's [`focused_rec`](FileList::focused_rec), then calls
 /// [`on_file_focused`](FileInputLine::on_file_focused) on this view.
 ///
-/// ## Drops / deferrals
-/// - **D8:** the C++ `drawView()` after the copy is dropped (whole-tree redraw).
-/// - **D12:** `write`/`read`/`build`/`streamableName`/`name` streaming dropped.
+/// # Turbo Vision heritage
+/// Ports `TFileInputLine` (`stddlg.cpp`/`stddlg.h`). The C++ `TInputLine`
+/// subclass becomes embed-and-delegate composition (deviation D2); the focused
+/// record reaches it via a sibling broker because a child cannot read its owner
+/// inline (deviation D3/D4), and `TStreamable` persistence is dropped (deviation
+/// D12).
 pub struct FileInputLine {
-    /// The embedded `TInputLine` — the D2 delegation target.
+    /// The embedded `TInputLine` — the delegation target.
     inner: crate::widgets::InputLine,
-    /// Cached `((TFileDialog*)owner)->wildCard` (D3: a child can't read its owner
-    /// inline). Set at ctor; row 79 pushes updates when the dialog re-reads with a
-    /// new mask. Appended after a `/` when the focused entry is a directory.
+    /// Cached `((TFileDialog*)owner)->wildCard` — a child can't read its owner
+    /// inline. Set at construction; the dialog pushes updates when it re-reads
+    /// with a new mask. Appended after a `/` when the focused entry is a
+    /// directory.
     wild_card: String,
 }
 
@@ -1102,9 +1107,10 @@ impl FileInputLine {
     /// once it has resolved the producer's focused [`SearchRec`].
     ///
     /// Faithful: `strcpy(data, rec->name)`; if `rec->attr & FA_DIREC`, then
-    /// `strcat(data, "/"); strcat(data, wildCard)` (D14 `/`, not `\`); then
-    /// `selectAll(False)`. `None` is the C++ all-zero `noFile` sentinel (empty
-    /// name) → a blank field. `drawView()` is dropped (D8).
+    /// `strcat(data, "/"); strcat(data, wildCard)`; then `selectAll(False)`.
+    /// `None` is the C++ all-zero `noFile` sentinel (empty name) → a blank field.
+    /// The explicit redraw is unnecessary here (the whole tree is redrawn each
+    /// frame).
     pub fn on_file_focused(&mut self, rec: Option<SearchRec>) {
         let text = match rec {
             Some(r) if r.attr & FA_DIREC != 0 => format!("{}/{}", r.name, self.wild_card),
@@ -1117,7 +1123,7 @@ impl FileInputLine {
         // selectAll(False) — the C++ shorthand `selectAll(Boolean)` defaults
         // `scroll = True`, so this is `select_all(false, true)`.
         self.inner.select_all(false, true);
-        // drawView() dropped (D8 — whole-tree redraw + diff).
+        // No explicit redraw needed (whole-tree redraw + diff each frame).
     }
 
     /// Update the cached owner `wildCard` ([`FileDialog::valid`]'s isWild branch
@@ -1166,7 +1172,7 @@ impl crate::view::View for FileInputLine {
 }
 
 // ---------------------------------------------------------------------------
-// FileInfoPane — row 78
+// FileInfoPane
 // ---------------------------------------------------------------------------
 
 /// Month names indexed by the DOS `ft_month` field (1–12); index 0 is the empty
@@ -1184,11 +1190,10 @@ const PM: &str = "p";
 /// (rather than a literal `0`, which would unpack to month 0 / day 0 — a blank
 /// month name + a `00` day) keeps the `".."` row's date well-formed.
 ///
-/// **D-time deviation.** rstv synthesizes `".."` without statting the parent, so
-/// it uses this constant unconditionally. C++ `readDirectory` only falls back to
-/// `0x210000` when its `findfirst("..", FA_DIREC)` fails; in the normal path it
-/// shows the real parent dir's mtime. The difference is cosmetic (the `".."`
-/// row's displayed date).
+/// rstv synthesizes `".."` without statting the parent, so it uses this constant
+/// unconditionally. C++ `readDirectory` only falls back to `0x210000` when its
+/// `findfirst("..", FA_DIREC)` fails; in the normal path it shows the real parent
+/// dir's mtime. The difference is cosmetic (the `".."` row's displayed date).
 const DOTDOT_TIME: i32 = 0x0021_0000;
 
 /// Pack a [`SystemTime`](std::time::SystemTime) into the DOS `ftime` `u32`
@@ -1201,11 +1206,11 @@ const DOTDOT_TIME: i32 = 0x0021_0000;
 /// - time: `hour` (0–23) in bits 11–15, `min` (0–59) in bits 5–10, `sec/2` in
 ///   bits 0–4.
 ///
-/// **D-time deviation.** The C++ time came from DOS `findfirst` in **local**
-/// time. rstv reads `std::fs` mtime and packs the civil Y/M/D H:M:S in **UTC**
-/// (computed via Howard Hinnant's days-from-civil algorithm — no timezone crate
-/// dependency). The displayed clock is therefore UTC, not local. Times before
-/// the 1980 DOS epoch clamp to Jan 01 1980 00:00 (DOS cannot represent earlier).
+/// The C++ time came from DOS `findfirst` in **local** time. rstv reads
+/// `std::fs` mtime and packs the civil Y/M/D H:M:S in **UTC** (computed via
+/// Howard Hinnant's days-from-civil algorithm — no timezone crate dependency).
+/// The displayed clock is therefore UTC, not local. Times before the 1980 DOS
+/// epoch clamp to Jan 01 1980 00:00 (DOS cannot represent earlier).
 fn pack_dos_time(t: &std::time::SystemTime) -> i32 {
     let secs = match t.duration_since(std::time::UNIX_EPOCH) {
         Ok(d) => d.as_secs() as i64,
@@ -1240,16 +1245,16 @@ fn pack_dos_time(t: &std::time::SystemTime) -> i32 {
     ((date << 16) | time) as i32
 }
 
-/// `TFileInfoPane` (stddlg.cpp) — a plain `TView` that displays the focused
-/// file's path on line 0 and its name + size + date on line 1.
+/// A plain view that displays the focused file's path on line 0 and its name +
+/// size + date on line 1.
 ///
 /// ## Structural shape
 ///
-/// `TFileInfoPane` is a C++ subclass of `TView` (not `TInputLine`/`TListViewer`),
-/// so in rstv it is a **direct [`View`](crate::view::View) impl** over a
-/// [`ViewState`](crate::view::ViewState) — *not* a D2 delegate.
+/// Where C++ derives `TFileInfoPane` from `TView` (not `TInputLine`/
+/// `TListViewer`), here it is a **direct [`View`](crate::view::View) impl** over a
+/// [`ViewState`](crate::view::ViewState) — it does not embed another widget.
 ///
-/// ## The payload broker (D3/D4) — shared with [`FileInputLine`]
+/// ## The payload broker — shared with [`FileInputLine`]
 ///
 /// Like `FileInputLine` it subscribes to `cmFileFocused`: on the broadcast it
 /// requests [`ResolveFocusedFile`](crate::view::Deferred::ResolveFocusedFile)
@@ -1258,30 +1263,27 @@ fn pack_dos_time(t: &std::time::SystemTime) -> i32 {
 /// [`on_file_focused`](FileInfoPane::on_file_focused) on this view. Unlike the
 /// input line there is **no `!sfSelected` guard** — the pane always updates.
 ///
-/// ## D3 — cached owner fields
+/// ## Cached owner fields
 ///
-/// `TFileInfoPane::draw` reads `owner->directory` and `owner->wildCard`. A leaf
-/// view cannot read its owner inline (and `draw` has no `Context` at all), so
-/// both are **cached** (`directory` / `wild_card`), set at ctor and refreshed by
-/// [`set_dir_info`](FileInfoPane::set_dir_info) (row 79 drives that via a
-/// deferred push when the dialog re-reads with a new mask). The focused record
-/// is cached in `file_block`.
+/// `draw` needs the owner's `directory` and `wildCard`. A leaf view cannot read
+/// its owner inline (and `draw` has no `Context` at all), so both are **cached**
+/// (`directory` / `wild_card`), set at construction and refreshed by
+/// [`set_dir_info`](FileInfoPane::set_dir_info) when the dialog re-reads with a
+/// new mask. The focused record is cached in `file_block`. The pane is drawn in
+/// the [`Role::InfoPane`] color; the path line is `directory` concatenated with
+/// `wild_card` (the dialog guarantees `directory` ends with `/`).
 ///
-/// ## Deviations
-/// - **D7:** no palette chain — the text is drawn in [`Role::InfoPane`].
-/// - **D8:** the C++ `drawView()` after a focus change is dropped (whole-tree
-///   redraw).
-/// - **D14:** `fexpand` is dropped — the path line is `directory` concatenated
-///   with `wild_card` (the dialog guarantees `directory` ends with `/`); no
-///   `\`↔`/` translation.
-/// - **D12:** `getPalette`/`write`/`read`/`build`/`streamableName`/`name`
-///   streaming dropped.
+/// # Turbo Vision heritage
+/// Ports `TFileInfoPane` (`stddlg.cpp`/`stddlg.h`). It stays a direct view; the
+/// owner fields it reads in `draw` are cached because a child can't reach its
+/// owner inline (deviation D3/D4), and `TStreamable` persistence is dropped
+/// (deviation D12).
 pub struct FileInfoPane {
     /// The base-view state (bounds, flags, id, …).
     state: crate::view::ViewState,
-    /// Cached `((TFileDialog*)owner)->directory` (D3), `/`-terminated.
+    /// Cached `((TFileDialog*)owner)->directory`, `/`-terminated.
     directory: String,
-    /// Cached `((TFileDialog*)owner)->wildCard` (D3).
+    /// Cached `((TFileDialog*)owner)->wildCard`.
     wild_card: String,
     /// The focused record (`file_block`); `None` = the all-zero `noFile`
     /// sentinel → a blank name → no size/date line.
@@ -1290,7 +1292,7 @@ pub struct FileInfoPane {
 
 impl FileInfoPane {
     /// `TFileInfoPane::TFileInfoPane(bounds)` — build the pane. `directory` /
-    /// `wild_card` cache the owner fields the draw needs (D3); `file_block`
+    /// `wild_card` cache the owner fields the draw needs; `file_block`
     /// starts `None` (blank) until the first `cmFileFocused`.
     ///
     /// The C++ `eventMask |= evBroadcast` is implicit (the group delivers every
@@ -1311,8 +1313,8 @@ impl FileInfoPane {
     /// Cache the focused record — the body of the C++ `handleEvent`'s
     /// `cmFileFocused` block (`file_block = *infoPtr`), called by the pump's
     /// [`ResolveFocusedFile`](crate::view::Deferred::ResolveFocusedFile) broker.
-    /// `None` is the all-zero `noFile` sentinel → a blank name. `drawView()` is
-    /// dropped (D8).
+    /// `None` is the all-zero `noFile` sentinel → a blank name. No explicit
+    /// redraw is needed (the whole tree is redrawn each frame).
     pub fn on_file_focused(&mut self, rec: Option<SearchRec>) {
         self.file_block = rec;
     }
@@ -1344,7 +1346,7 @@ impl crate::view::View for FileInfoPane {
         let w = self.state.size.x;
         let h = self.state.size.y;
 
-        // --- line 0: the path (directory + wildCard, D14 — no fexpand) ------
+        // --- line 0: the path (directory + wildCard) ------------------------
         // `Rect::new` is `TRect(ax, ay, bx, by)` — corners, not (x, y, w, h).
         ctx.fill(crate::view::Rect::new(0, 0, w, 1), ' ', color);
         let path = format!("{}{}", self.directory, self.wild_card);
@@ -1384,7 +1386,7 @@ impl crate::view::View for FileInfoPane {
             // 12-hour clock with a/p suffix. The C++ `time->ft_hour %= 12`
             // mutates `file_block` through an aliased pointer (a latent C++ bug);
             // rstv computes into the local `hour`, correctly NOT reproducing it
-            // (required under D8 — draw must not mutate cached state).
+            // (draw must not mutate cached state).
             let pm = hour >= 12;
             hour %= 12;
             if hour == 0 {
@@ -1428,7 +1430,7 @@ impl crate::view::View for FileInfoPane {
 }
 
 // ---------------------------------------------------------------------------
-// FileDialog — row 79 (skeleton: B1)
+// FileDialog
 // ---------------------------------------------------------------------------
 
 use crate::dialog::Dialog;
@@ -1446,10 +1448,10 @@ fn cstrlen(s: &str) -> i32 {
 const MAXPATH: i32 = 255;
 
 // ---------------------------------------------------------------------------
-// Path helpers (D14 — native `/` paths). Pure, FS-independent unless noted.
+// Path helpers (native `/` paths). Pure, FS-independent unless noted.
 // ---------------------------------------------------------------------------
 
-/// `fexpand(buf, directory)` (D14) — resolve `input` against `dir`, lexically.
+/// `fexpand(buf, directory)` — resolve `input` against `dir`, lexically.
 ///
 /// If `input` is absolute (starts with `/`) it stands alone; otherwise it is
 /// joined onto `dir`. The result is then **lexically normalized** — `.` is
@@ -1476,7 +1478,7 @@ fn expand_path(dir: &str, input: &str) -> String {
     let mut out = PathBuf::new();
     for comp in joined.components() {
         match comp {
-            Component::Prefix(_) => {} // no Windows prefixes under D14
+            Component::Prefix(_) => {} // no Windows prefixes on native paths
             Component::RootDir => out.push("/"),
             Component::CurDir => {} // "." — drop
             Component::ParentDir => {
@@ -1529,8 +1531,8 @@ fn is_dir_only(path: &str) -> bool {
     )
 }
 
-/// `fnsplit` (the dir-vs-file split, D14) — split an absolute, normalized path
-/// into its directory part (with a trailing `/`) and its filename part.
+/// `fnsplit` (the dir-vs-file split) — split an absolute, normalized path into
+/// its directory part (with a trailing `/`) and its filename part.
 ///
 /// A path that ends with `/` (or whose final component is `.`/`..`) has an empty
 /// filename — equivalently [`Path::file_name`] is `None`. The dir part always
@@ -1570,15 +1572,16 @@ fn is_dir(s: &str) -> bool {
 }
 
 /// `pathValid(str)` — the directory `str` exists and is a directory. FS-dependent.
-/// (D14 simplification of the C++ `pathValid`, which validated DOS drive letters.)
+/// (A simplification of the C++ `pathValid`, which also validated DOS drive
+/// letters.)
 fn path_valid(s: &str) -> bool {
     std::fs::metadata(s).map(|m| m.is_dir()).unwrap_or(false)
 }
 
-/// `validFileName(s)` (D14 simplification) — `s` has a non-empty filename
-/// component and no interior NUL. The C++ `validFileName` enforced DOS 8.3 /
-/// charset rules we do not need on Linux; a non-empty name with a real parent is
-/// plausible enough, and the OS rejects a truly invalid name at open time.
+/// `validFileName(s)` — `s` has a non-empty filename component and no interior
+/// NUL. The C++ `validFileName` enforced DOS 8.3 / charset rules that have no
+/// Linux counterpart; a non-empty name with a real parent is plausible enough,
+/// and the OS rejects a truly invalid name at open time.
 fn valid_file_name(s: &str) -> bool {
     if s.is_empty() || s.contains('\0') {
         return false;
@@ -1604,7 +1607,7 @@ pub const FD_HELP_BUTTON: u16 = 0x0010;
 /// `fdNoLoadDir` — skip the initial `readDirectory` on open.
 pub const FD_NO_LOAD_DIR: u16 = 0x0100;
 
-// --- TChDirDialog options (row 80) -----------------------------------------
+// --- TChDirDialog options ---------------------------------------------------
 
 /// `cdNormal` — no extra buttons, load the directory on open.
 pub const CD_NORMAL: u16 = 0x0000;
@@ -1613,7 +1616,7 @@ pub const CD_NO_LOAD_DIR: u16 = 0x0001;
 /// `cdHelpButton` — insert a "Help" button (`cmHelp`).
 pub const CD_HELP_BUTTON: u16 = 0x0002;
 
-// `TChDirDialog` text (tvtext2.cpp). `drivesText` is DROPPED (D14 — no drives).
+// `TChDirDialog` text (from `tvtext2.cpp`). `drivesText` is dropped — no drives.
 const CHANGE_DIR_TITLE: &str = "Change Directory";
 const DIR_NAME_TEXT: &str = "Directory ~n~ame";
 const DIR_TREE_TEXT: &str = "Directory ~t~ree";
@@ -1718,43 +1721,45 @@ fn button_specs(options: u16) -> Vec<(&'static str, crate::command::Command, boo
     specs
 }
 
-/// `TFileDialog` (tfildlg.cpp) — a [`Dialog`] that assembles the row-76/77/78
-/// widgets ([`FileList`], [`FileInputLine`], [`FileInfoPane`]) plus a filename
-/// label, a history icon, a scroll bar, and the action buttons into a working
-/// file picker.
+/// A [`Dialog`] that assembles the file picker — the directory/file panes
+/// ([`FileList`], [`FileInputLine`], [`FileInfoPane`]) plus a filename label, a
+/// history icon, a scroll bar, and the action buttons — into a working file
+/// dialog.
 ///
-/// ## Structural shape (D2 embed-and-delegate)
+/// ## Structural shape
 ///
-/// `TFileDialog` is a C++ subclass of `TDialog`. In rstv it **embeds** a
+/// Where C++ derives `TFileDialog` from `TDialog`, here it **embeds** a
 /// [`Dialog`] and forwards the un-overridden [`View`](crate::view::View) methods
-/// via `#[crate::delegate(to = dialog)]`. It overrides only `handle_event`,
+/// (embed-and-delegate composition). It overrides only `handle_event`,
 /// `size_limits`, `reset_current`, and `as_any_mut` (so the modal loop / the
 /// owner-downcast target is the `FileDialog`, not the inner `Dialog`).
-/// `calc_bounds` is **skip-listed** (left at the trait default) so an
-/// owner-driven resize routes through this type's `size_limits` 49×19 floor —
-/// mirroring the `EditWindow` precedent.
+/// `calc_bounds` is left at the trait default so an owner-driven resize routes
+/// through this type's `size_limits` 49×19 floor — mirroring the `EditWindow`
+/// precedent.
 ///
-/// ## D14 — native Linux paths
+/// ## Native paths
 ///
-/// The initial directory comes from [`std::env::current_dir`] (not DOS
-/// `getCurDir`), normalized to end with `/` (the [`FileList::read_directory`]
-/// trailing-slash precondition). No drive letters, no `\`.
+/// The initial directory comes from [`std::env::current_dir`], normalized to end
+/// with `/` (the [`FileList::read_directory`] trailing-slash precondition). No
+/// drive letters, no backslashes.
 ///
-/// ## Deferrals
+/// The "21st-century percentages" screen-relative resize is applied at the first
+/// `handle_event` call (when `ctx.owner_size()` is available) rather than at
+/// construction, since there is no `Context` in the constructor; this happens
+/// before the first draw, so it is observably identical to the C++.
 ///
-/// - The "21st-century percentages" screen-relative resize block — applied at
-///   the first `handle_event` call (when `ctx.owner_size()` is available), not
-///   at ctor time (D3: no `Context` in ctor). See
-///   [`needs_screen_resize`](FileDialog::needs_screen_resize) + the deviation
-///   note in `handle_event`.
-/// - **D12:** `TStreamable` (`write`/`read`/`build`/`streamableName`) dropped.
+/// # Turbo Vision heritage
+/// Ports `TFileDialog` (`tfildlg.cpp`/`stddlg.h`). The C++ `TDialog` subclass
+/// becomes embed-and-delegate composition (deviation D2); the DOS path model
+/// becomes native `/`-paths (deviation D14) and `TStreamable` persistence is
+/// dropped (deviation D12).
 pub struct FileDialog {
-    /// The embedded `TDialog` — the D2 delegation target.
+    /// The embedded `TDialog` — the delegation target.
     dialog: Dialog,
     /// `wildCard` — the active file mask (cached; pushed to the children).
     wild_card: String,
-    /// `directory` — set by `reset_current`'s initial `readDirectory` (D14,
-    /// `/`-terminated).
+    /// `directory` — set by `reset_current`'s initial `readDirectory`,
+    /// `/`-terminated.
     directory: String,
     /// The [`FileInputLine`] child's id — read by
     /// [`get_file_name`](FileDialog::get_file_name)/[`valid`](FileDialog::valid)
@@ -1769,16 +1774,16 @@ pub struct FileDialog {
     /// One-time guard for the "21st-century percentages" screen-relative resize.
     ///
     /// The C++ ctor applies this immediately (it has `TProgram::application->size`).
-    /// In rstv a `Context` is required to get the screen size via `ctx.owner_size()`
-    /// and to queue the `Deferred::ChangeBounds` — neither is available at ctor
-    /// time (D3: no `Context` in ctor). **D-deviation from C++**: the resize fires
-    /// at the first `handle_event` call where `ctx.owner_size()` is non-zero,
-    /// before the first dispatch to children — observably identical to C++ (both
-    /// happen before the first draw).
+    /// Here a `Context` is required to get the screen size via `ctx.owner_size()`
+    /// and to queue the `Deferred::ChangeBounds` — neither is available in the
+    /// constructor. So the resize fires at the first `handle_event` call where
+    /// `ctx.owner_size()` is non-zero, before the first dispatch to children —
+    /// observably identical to C++ (both happen before the first draw).
     needs_screen_resize: bool,
     /// Cache of the last [`get_file_name`](FileDialog::get_file_name) result, so
-    /// the `&self` [`value`](FileDialog::value) (D10 `getData`) can return the
-    /// resolved filename. `get_file_name` needs `&mut self` (it reads the input
+    /// the `&self` [`value`](FileDialog::value) (the `getData` successor) can
+    /// return the resolved filename. `get_file_name` needs `&mut self` (it reads
+    /// the input
     /// line via `child_mut`), and an immutable `child` accessor would live
     /// outside this module — so `valid()` (the gate the modal gather runs right
     /// before reading `value()`) refreshes this cache. Invariant: the cache is
@@ -1817,7 +1822,7 @@ impl FileDialog {
             opts.center_y = true;
         }
         // flags |= wfGrow — faithful C++ port; Dialog::set_flags/flags are
-        // pub(crate) accessors added on Dialog for this row (row 79 B6).
+        // pub(crate) accessors on Dialog.
         {
             let mut f = dialog.flags();
             f.grow = true;
@@ -1913,9 +1918,9 @@ impl FileDialog {
         // (focuses the first selectable child = the input line, inserted first),
         // so no explicit selectNext is needed here (see View::reset_current).
 
-        // The "21st-century percentages" screen-relative resize (C++ ctor lines
-        // 141-167) is deferred to the first handle_event (needs ctx.owner_size()).
-        // See the `needs_screen_resize` field doc for the full deviation note.
+        // The "21st-century percentages" screen-relative resize runs at the first
+        // handle_event (it needs ctx.owner_size()). See the `needs_screen_resize`
+        // field doc for the full note.
 
         FileDialog {
             dialog,
@@ -1935,8 +1940,9 @@ impl FileDialog {
     ///
     /// Faithful: `trim` (a no-op under `__FLAT__`) → `fexpand(buf, directory)` →
     /// `fnsplit`; when the resolved path is a **bare directory** (no filename
-    /// part) the wildcard's filename is appended. Under D14 the wildcard *is* its
-    /// own filename (no drive/ext split), so we append `self.wild_card` directly.
+    /// part) the wildcard's filename is appended. With native paths the wildcard
+    /// *is* its own filename (no drive/ext split), so we append `self.wild_card`
+    /// directly.
     ///
     /// `&mut self` (not `&self`): it reads the [`FileInputLine`] via `child_mut`.
     /// It is only called from [`valid`](FileDialog::valid) (which has `&mut self`)
@@ -2048,7 +2054,7 @@ impl crate::view::View for FileDialog {
     /// `TFileDialog::handleEvent` — delegate to `TDialog::handleEvent` first (the
     /// faithful base call), then:
     /// - `cmFileOpen`/`cmFileReplace`/`cmFileClear` → `endModal(command)` + clear.
-    ///   (B2 inserts the `valid()` path-check gate before accepting.)
+    ///   (The path-check gate is `valid()`, run by the modal loop on close.)
     /// - `cmFileDoubleClicked` broadcast → re-inject as `cmOK` (`putEvent`) +
     ///   clear. The base `TDialog::handleEvent` then turns `cmOK` into
     ///   `endModal(cmOK)` on the next cycle (the dialog is modal).
@@ -2056,22 +2062,19 @@ impl crate::view::View for FileDialog {
     /// **One-time pre-delegate work** (before the base call): if
     /// `needs_screen_resize` is true and the screen size is available from
     /// `ctx.owner_size()`, applies the C++ ctor's "21st-century percentages"
-    /// resize formula (C++ tfildlg.cpp lines 141-167). D-deviation: the C++
-    /// ctor runs this immediately against `TProgram::application->size`; rstv
-    /// defers it to the first handle_event where `ctx.owner_size()` is non-zero
-    /// (set by the owning group's handle_event bracket). Before-first-draw
-    /// ordering is preserved.
+    /// resize formula. The C++ ctor runs this immediately against
+    /// `TProgram::application->size`; here it runs at the first handle_event where
+    /// `ctx.owner_size()` is non-zero (set by the owning group's handle_event
+    /// bracket). Before-first-draw ordering is preserved.
     fn handle_event(&mut self, ev: &mut crate::event::Event, ctx: &mut crate::view::Context) {
         use crate::command::Command;
         use crate::event::Event;
 
-        // "21st-century percentages" screen-relative resize (C++ ctor lines
-        // 141-167 in tfildlg.cpp). D-deviation: the C++ ctor runs this
-        // immediately against `TProgram::application->size`; rstv defers it to
+        // "21st-century percentages" screen-relative resize. The C++ ctor runs
+        // this immediately against `TProgram::application->size`; here it runs at
         // the first `handle_event` where `ctx.owner_size()` (set by the owning
-        // group's `handle_event` bracket) is non-zero. Before-first-draw
-        // ordering is preserved: no event is dispatched to children before this
-        // fires.
+        // group's `handle_event` bracket) is non-zero. Before-first-draw ordering
+        // is preserved: no event is dispatched to children before this fires.
         if self.needs_screen_resize {
             let screen_size = ctx.owner_size();
             if screen_size.x > 0 {
@@ -2153,7 +2156,7 @@ impl crate::view::View for FileDialog {
     /// The ctx-bearing init hook (the C++ ctor's trailing `readDirectory()` maps
     /// here — the ctor has no `Context`). Establishes the dialog's internal
     /// currency first (focuses the input line), then, once, performs the initial
-    /// `readDirectory`: the current dir (D14, `/`-terminated) is read into the
+    /// `readDirectory`: the current dir (`/`-terminated) is read into the
     /// [`FileList`] (ctx-ful — scrollbar sync + `cmFileFocused` broadcast) and the
     /// [`FileInfoPane`]'s cached dir/wildcard are refreshed (direct owner-state
     /// push, not a cross-view broker — the dialog owns the group).
@@ -2162,12 +2165,12 @@ impl crate::view::View for FileDialog {
 
         if self.needs_read_directory {
             self.needs_read_directory = false;
-            // D14: the initial directory from std::env::current_dir, not getCurDir.
+            // The initial directory from std::env::current_dir, not DOS getCurDir.
             let dir = std::env::current_dir()
                 .ok()
                 .and_then(|p| p.to_str().map(String::from))
                 .unwrap_or_else(|| "/".into());
-            // D14 trailing-slash precondition for FileList::read_directory.
+            // Trailing-slash precondition for FileList::read_directory.
             let dir = if dir.ends_with('/') {
                 dir
             } else {
@@ -2271,7 +2274,7 @@ impl crate::view::View for FileDialog {
             if self.check_directory(&f_name, ctx) {
                 let mut dir = f_name;
                 if !dir.ends_with('/') {
-                    dir.push('/'); // D14: append '/' (the C++ '\\')
+                    dir.push('/'); // native '/' (the C++ used '\\')
                 }
                 self.directory = dir;
                 if cmd != Command::FILE_INIT {
@@ -2295,7 +2298,7 @@ impl crate::view::View for FileDialog {
         }
     }
 
-    /// `TFileDialog::getData` → `getFileName` (D10): the resolved filename. Reads
+    /// `TFileDialog::getData` → `getFileName`: the resolved filename. Reads
     /// the [`resolved_name`](FileDialog::resolved_name) cache, which any non-VALID
     /// `valid()` call refreshes unconditionally (it runs `get_file_name` before
     /// any early-return), so the cache is current after the modal gather's
@@ -2304,19 +2307,17 @@ impl crate::view::View for FileDialog {
         Some(crate::data::FieldValue::Text(self.resolved_name.clone()))
     }
 
-    /// `TFileDialog::setData` (D10) — load the field text from a `FieldValue::Text`.
+    /// `TFileDialog::setData` — load the field text from a `FieldValue::Text`.
     ///
     /// The C++ `setData` also runs `valid(cmFileInit)` when the input is wild (to
     /// navigate into the new mask on open) and then `fileName->select()`. Neither
     /// is done here: `set_value` has **no `&mut Context`**, so it cannot drive the
-    /// navigate (which needs `read_directory(…, ctx)`) nor request focus.
-    /// BREADCRUMB(row 79): the on-wild navigate-on-load + select are deferred until
-    /// a ctx-bearing setData seam exists (no current consumer needs them — the
-    /// dialog opens with the ctor's wildcard and `reset_current` does the initial
-    /// read).
+    /// navigate (which needs `read_directory(…, ctx)`) nor request focus. This is
+    /// not needed in practice — the dialog opens with the constructor's wildcard
+    /// and `reset_current` does the initial read.
     fn set_value(&mut self, v: crate::data::FieldValue) {
-        // Forward to the FileInputLine, whose View::set_value delegates (D2) to
-        // the embedded InputLine::set_value — the faithful `TInputLine::setData`
+        // Forward to the FileInputLine, whose View::set_value delegates to the
+        // embedded InputLine::set_value — the faithful `TInputLine::setData`
         // (copy text + `selectAll(True)`). We resolve by id rather than
         // downcasting to a concrete type so the delegation runs.
         if let Some(fil) = self.dialog.child_mut(self.file_name_id) {
@@ -2326,38 +2327,39 @@ impl crate::view::View for FileDialog {
 }
 
 // ---------------------------------------------------------------------------
-// ChDirDialog — row 80
+// ChDirDialog
 // ---------------------------------------------------------------------------
 
-/// `TChDirDialog` (tchdrdlg.cpp) — a [`Dialog`] that lets the user change the
-/// process current directory, assembling a path input line, a directory-tree
-/// pane ([`DirListBox`]), a history icon, and the OK / Chdir / Revert (and
-/// optional Help) buttons.
+/// A [`Dialog`] that lets the user change the process current directory,
+/// assembling a path input line, a directory-tree pane ([`DirListBox`]), a
+/// history icon, and the OK / Chdir / Revert (and optional Help) buttons.
 ///
-/// ## Structural shape (D2 embed-and-delegate)
+/// ## Structural shape
 ///
-/// Like [`FileDialog`], `TChDirDialog` is a C++ subclass of `TDialog`; in rstv it
+/// Like [`FileDialog`], where C++ derives `TChDirDialog` from `TDialog`, here it
 /// **embeds** a [`Dialog`] and forwards the un-overridden
-/// [`View`](crate::view::View) methods via `#[crate::delegate(to = dialog)]`. It
+/// [`View`](crate::view::View) methods (embed-and-delegate composition). It
 /// overrides only `handle_event`, `size_limits`, `reset_current`, and
-/// `as_any_mut`. `value`/`set_value` are **skip-listed** (left at the trait
-/// default — `None` / no-op) because the C++ `dataSize()` returns 0 (the dialog
-/// carries no transfer data); skipping them stops the macro forwarding to the
-/// inner `Dialog`'s gather/scatter. `calc_bounds` is skip-listed so an
-/// owner-driven resize routes through this type's `size_limits` 48×18 floor.
+/// `as_any_mut`. `value`/`set_value` are left at the trait default (`None` /
+/// no-op) because the C++ `dataSize()` returns 0 (the dialog carries no transfer
+/// data); this stops the macro forwarding to the inner `Dialog`'s
+/// gather/scatter. `calc_bounds` is also left at the default so an owner-driven
+/// resize routes through this type's `size_limits` 48×18 floor.
 ///
-/// ## D14 — native Linux paths
+/// ## Native paths
 ///
-/// `/`-separated, root `/`, no drives / `\` / "Drives" entry. The initial
-/// directory comes from [`std::env::current_dir`]; `cmRevert` re-reads the
-/// **live** cwd (not a saved baseline — there is no `directory` field); `valid`'s
-/// accept does the real `chdir` via [`std::env::set_current_dir`].
+/// `/`-separated, root `/`, no drives, no backslashes, no "Drives" entry. The
+/// initial directory comes from [`std::env::current_dir`]; `cmRevert` re-reads
+/// the **live** cwd (not a saved baseline — there is no `directory` field);
+/// `valid`'s accept does the real `chdir` via [`std::env::set_current_dir`].
 ///
-/// ## Deferrals
-///
-/// - **D12:** `TStreamable` (`write`/`read`/`build`/`streamableName`) dropped.
+/// # Turbo Vision heritage
+/// Ports `TChDirDialog` (`tchdrdlg.cpp`/`stddlg.h`). The C++ `TDialog` subclass
+/// becomes embed-and-delegate composition (deviation D2); the DOS drive model
+/// becomes native `/`-paths (deviation D14) and `TStreamable` persistence is
+/// dropped (deviation D12).
 pub struct ChDirDialog {
-    /// The embedded `TDialog` — the D2 delegation target.
+    /// The embedded `TDialog` — the delegation target.
     dialog: Dialog,
     /// The path [`InputLine`](crate::widgets::InputLine) child's id (`dirInput`).
     dir_input_id: crate::view::ViewId,
@@ -2393,7 +2395,7 @@ impl ChDirDialog {
             opts.center_y = true;
         }
         // flags |= wfGrow — faithful C++ port; Dialog::set_flags/flags are
-        // pub(crate) accessors added on Dialog for row 79 B6 (mirrors FileDialog).
+        // pub(crate) accessors on Dialog (mirrors FileDialog).
         {
             let mut f = dialog.flags();
             f.grow = true;
@@ -2541,9 +2543,9 @@ impl ChDirDialog {
     }
 
     /// Trim a single trailing `/` from `path`, **keeping the root `/`**
-    /// (`trimEndSeparator`). D14 adaptation of the DOS `if (len > 3 &&
-    /// isSeparator(path[len-1]))` guard — the DOS `len > 3` protected `"C:\"`; here
-    /// `len > 1` protects the bare root `"/"`.
+    /// (`trimEndSeparator`). The DOS `if (len > 3 && isSeparator(path[len-1]))`
+    /// guard protected `"C:\"` with `len > 3`; here `len > 1` protects the bare
+    /// root `"/"`.
     fn trim_end_separator(path: &str) -> String {
         if path.len() > 1 && path.ends_with('/') {
             path[..path.len() - 1].to_string()
@@ -2553,7 +2555,7 @@ impl ChDirDialog {
     }
 
     /// Read the current process directory (`getCurrentDir`/`getCurDir`) as a
-    /// `/`-terminated absolute path (D14, `std::env::current_dir`), falling back to
+    /// `/`-terminated absolute path (via `std::env::current_dir`), falling back to
     /// `/` when it cannot be read.
     fn current_dir_normalized() -> String {
         let dir = std::env::current_dir()
@@ -2608,11 +2610,11 @@ impl crate::view::View for ChDirDialog {
     /// `TChDirDialog::handleEvent` — delegate to `TDialog::handleEvent` first (the
     /// faithful base call), then handle `cmRevert` / `cmChangeDir`:
     /// - `cmRevert` → re-read the **live** cwd (`getCurrentDir`).
-    /// - `cmChangeDir` → read the **focused** dir-list entry's path; under D14, if
-    ///   it starts with `/` ((`isSeparator`)) append a trailing `/` (the C++
-    ///   `\\`); otherwise `return` leaving the event uncleared (passes through —
-    ///   faithful to the C++ `else return;`, NOT a `clearEvent`). The C++
-    ///   `drivesText` compare is dropped (D14).
+    /// - `cmChangeDir` → read the **focused** dir-list entry's path; if it starts
+    ///   with `/` (`isSeparator`) append a trailing `/`; otherwise `return`
+    ///   leaving the event uncleared (passes through — faithful to the C++ `else
+    ///   return;`, NOT a `clearEvent`). The C++ `drivesText` compare has no Linux
+    ///   counterpart and is omitted.
     ///
     /// Both feed the shared navigate tail ([`navigate_to`](ChDirDialog::navigate_to)):
     /// `newDirectory` → reflect in `dirInput` → focus the dir list, then clear.
@@ -2638,7 +2640,7 @@ impl crate::view::View for ChDirDialog {
                     let Some(mut path) = focused else {
                         return;
                     };
-                    // D14: the drivesText compare is dropped; only the isSeparator
+                    // The drivesText compare is omitted; only the isSeparator
                     // branch remains (a `/`-rooted path). Anything else → return
                     // (leave the event uncleared, NOT clearEvent).
                     if path.starts_with('/') {
@@ -2671,7 +2673,7 @@ impl crate::view::View for ChDirDialog {
 
     /// The ctx-bearing init hook — `setUpDialog()` + `selectNext(False)`. Establish
     /// the dialog's internal currency first (focuses dirInput), then, once, do the
-    /// initial directory read: the live cwd (D14, `/`-terminated) is read into the
+    /// initial directory read: the live cwd (`/`-terminated) is read into the
     /// [`DirListBox`] and reflected (trimmed) into `dirInput`.
     fn reset_current(&mut self, ctx: &mut crate::view::Context) {
         self.dialog.reset_current(ctx);
@@ -2711,7 +2713,7 @@ impl crate::view::View for ChDirDialog {
             return true;
         }
 
-        // Read dirInput's text (D10 value protocol → FieldValue::Text).
+        // Read dirInput's text (value protocol → FieldValue::Text).
         let field_text = self
             .dialog
             .child_mut(self.dir_input_id)
@@ -2917,7 +2919,7 @@ mod tests {
     }
 
     // =========================================================================
-    // DirListBox — row 75
+    // DirListBox
     // =========================================================================
 
     // -- build_tree: pure deterministic tests ----------------------------------
@@ -3148,7 +3150,7 @@ mod tests {
     }
 
     // =========================================================================
-    // FileList — row 76
+    // FileList
     // =========================================================================
 
     use crate::event::{Event, Key, KeyEvent, KeyModifiers};
@@ -3446,7 +3448,7 @@ mod tests {
     }
 
     // =========================================================================
-    // FileInputLine + the cmFileFocused payload broker — row 77
+    // FileInputLine + the cmFileFocused payload broker
     // =========================================================================
 
     use crate::command::Command;
@@ -3650,7 +3652,7 @@ mod tests {
         }));
         assert_eq!(fil.inner.data, "main.rs");
 
-        // A directory -> "name/<wild_card>" (D14 slash).
+        // A directory -> "name/<wild_card>" (trailing slash).
         fil.on_file_focused(Some(SearchRec {
             attr: FA_DIREC,
             time: 0,
@@ -3793,7 +3795,7 @@ mod tests {
     }
 
     // =========================================================================
-    // FileInfoPane — row 78
+    // FileInfoPane
     // =========================================================================
 
     // -- 1. on_file_focused sets / clears the cached record -------------------
@@ -4017,7 +4019,7 @@ mod tests {
     }
 
     // =========================================================================
-    // FileDialog — row 79 (skeleton: B1)
+    // FileDialog
     // =========================================================================
 
     /// Resolve a `FileList` child by id, panicking if absent (test helper).
@@ -4155,7 +4157,7 @@ mod tests {
     // -- 1b. reset_current performs the initial readDirectory (the title task) --
 
     /// Driving `reset_current` (the ctx-bearing init hook) once flips the guard,
-    /// sets the D14 trailing-slash directory, and reads the current dir into the
+    /// sets the trailing-slash directory, and reads the current dir into the
     /// FileList. Asserts invariants (not the machine-dependent cwd contents): the
     /// guard flips, `directory` ends with `/`, and the FileList got a non-empty
     /// listing (the cwd always has at least `..`). A second call is a no-op.
@@ -4174,7 +4176,7 @@ mod tests {
         assert!(!fd.needs_read_directory, "guard flips after the first run");
         assert!(
             fd.directory.ends_with('/'),
-            "D14 trailing-slash precondition on directory: {:?}",
+            "trailing-slash precondition on directory: {:?}",
             fd.directory
         );
         assert!(
@@ -4347,7 +4349,7 @@ mod tests {
     }
 
     // =========================================================================
-    // FileDialog — row 79 B2: path logic + valid + messageBoxes
+    // FileDialog: path logic + valid + messageBoxes
     // =========================================================================
 
     // -- 6a. pure path helpers -------------------------------------------------
@@ -4723,7 +4725,7 @@ mod tests {
     }
 
     // =========================================================================
-    // ChDirDialog — row 80
+    // ChDirDialog
     // =========================================================================
 
     /// Resolve the `DirListBox` child by id (for deterministic injection).
@@ -4749,7 +4751,7 @@ mod tests {
         assert_ne!(cd.dir_input_id, cd.chdir_button_id);
 
         // dir_input is a plain InputLine (no as_any_mut override → not
-        // downcastable); verify it resolves and exposes a Text value (D10).
+        // downcastable); verify it resolves and exposes a Text value.
         assert!(
             matches!(
                 cd.dialog.child_mut(cd.dir_input_id).and_then(|v| v.value()),
@@ -4775,7 +4777,7 @@ mod tests {
         assert_eq!(cmd, Some(Command::CHANGE_DIR), "chdir button cmChangeDir");
     }
 
-    /// D10 / `dataSize() == 0`: `value`/`set_value` are skip-listed so they fall to
+    /// `dataSize() == 0`: `value`/`set_value` are skip-listed so they fall to
     /// the `View` trait default (`None` / no-op), NOT the inner `Dialog`'s
     /// group-gather. Proven empirically: `value()` returns `None` (a gather would
     /// return `Some(Record(..))`), and `set_value` is a silent no-op (value stays
@@ -4810,7 +4812,7 @@ mod tests {
         );
     }
 
-    // -- breadcrumb 1: select_item posts cmChangeDir ---------------------------
+    // -- select_item posts cmChangeDir ----------------------------------------
 
     /// `TDirListBox::selectItem` → `message(owner, evCommand, cmChangeDir)`: posts
     /// a `cmChangeDir` command (payload-less; the dialog reads the focused entry).
@@ -4833,7 +4835,7 @@ mod tests {
         );
     }
 
-    // -- breadcrumb 2: set_state -> MakeButtonDefault --------------------------
+    // -- set_state -> MakeButtonDefault ----------------------------------------
 
     /// `TDirListBox::setState` on an `sfFocused` change queues
     /// `MakeButtonDefault { button, enable }` for the wired chdir button.
@@ -4923,7 +4925,7 @@ mod tests {
         assert_eq!(dl.list()[0].dir(), "/", "root entry");
     }
 
-    // -- trim_end_separator (D14 root guard) -----------------------------------
+    // -- trim_end_separator (root guard) ---------------------------------------
 
     #[test]
     fn trim_end_separator_keeps_root() {
@@ -5045,7 +5047,7 @@ mod tests {
     }
 
     // =========================================================================
-    // B6 finishers: wfGrow, screen-relative resize, SearchRec fs metadata
+    // finishers: wfGrow, screen-relative resize, SearchRec fs metadata
     // =========================================================================
 
     // ---- finisher 1: wfGrow -------------------------------------------------

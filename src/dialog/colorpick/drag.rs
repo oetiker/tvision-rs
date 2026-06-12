@@ -15,7 +15,7 @@ pub enum ColorDragRegion {
     RgbBar(u8),
 }
 
-/// The D9 drag capture for the color picker (the `window.rs DragCapture` analogue).
+/// The drag capture for the color picker (the `window.rs DragCapture` analogue).
 ///
 /// Holds the picker's id + the picker's **picker-local** origin (`body_origin`,
 /// cached from the picker's last `draw` = the absolute screen pos of picker-local

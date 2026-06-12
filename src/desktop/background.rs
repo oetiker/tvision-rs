@@ -1,25 +1,15 @@
-//! `TBackground` ported per D2/D5/D7/D8 (row 29).
+//! The desktop [`Background`] — the backdrop the desktop and its windows sit
+//! on.
 //!
-//! The simplest concrete view: fills its entire extent with a repeated pattern
-//! character styled with [`Role::Background`]. There are no overridden event
-//! methods — `TBackground` only overrides `draw` in the C++ source
-//! (`tbkgrnd.cpp`); `handleEvent` is the inherited no-op base.
-//!
-//! The C++ `getPalette` (`cpBackground "\x01"`) maps its single colour index to
-//! [`Role::Background`] (D7). No `getPalette`/`getColor` methods appear on the
-//! Rust type; a view simply calls `ctx.style(Role::Background)` instead.
-//!
-//! The `gfGrowHiX | gfGrowHiY` grow mode set in the C++ constructor is
-//! faithfully carried over as `grow_mode.hi_x = true` and `grow_mode.hi_y =
-//! true`, which causes the background to stretch with its owner on the right
-//! and bottom edges — the expected desktop behaviour.
-//!
-//! Streamable `read`/`write`/`build` are dropped per D12.
+//! The simplest concrete view: it fills its entire extent with a repeated
+//! pattern character styled with [`Role::Background`], and handles no events.
+//! Its grow mode stretches it with its owner on the right and bottom edges, so
+//! it always covers the desktop.
 
 use crate::theme::Role;
 use crate::view::{DrawCtx, Rect, View, ViewState};
 
-/// Desktop background fill — `TBackground` (D2/D7/D8, row 29).
+/// Desktop background fill.
 ///
 /// Fills its extent with a single repeated `pattern` character, styled through
 /// [`Role::Background`] from the active [`Theme`](crate::theme::Theme).
@@ -28,6 +18,13 @@ use crate::view::{DrawCtx, Rect, View, ViewState};
 /// ```ignore
 /// let bg = Background::new(Rect::new(0, 0, 80, 25), '▒');
 /// ```
+///
+/// # Turbo Vision heritage
+///
+/// Ports `TBackground` (`tbkgrnd.cpp`), which overrides only `draw`. The
+/// `getPalette` (`cpBackground "\x01"`) colour index becomes
+/// [`Role::Background`] (deviation D7), and the streaming machinery is dropped
+/// (deviation D12).
 pub struct Background {
     st: ViewState,
     /// The fill character. TV's `char pattern`.
@@ -60,9 +57,8 @@ impl View for Background {
     /// `TBackground::draw` — fill the entire extent with `pattern`.
     ///
     /// C++ body: `b.moveChar(0, pattern, getColor(0x01), size.x)` per row, then
-    /// `writeLine(0, 0, size.x, size.y, b)`.  Under D8 this collapses to a single
-    /// `ctx.fill` call; D7 maps `getColor(0x01)` (palette index 1 of `cpBackground
-    /// "\x01"` → resolved colour 1) to [`Role::Background`].
+    /// `writeLine(0, 0, size.x, size.y, b)`. Here this collapses to a single
+    /// `ctx.fill` call; `getColor(0x01)` maps to [`Role::Background`].
     fn draw(&mut self, ctx: &mut DrawCtx) {
         let ext = self.st.get_extent();
         let style = ctx.style(Role::Background);
@@ -71,7 +67,7 @@ impl View for Background {
 
     // `TBackground::handleEvent` — NOT overridden in the C++ source.
     // The inherited `TView::handleEvent` is a no-op base (mouse-down select
-    // relocated to TGroup, row 26). Default here; no override needed.
+    // relocated to the group). Default here; no override needed.
 }
 
 #[cfg(test)]

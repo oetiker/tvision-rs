@@ -6,7 +6,7 @@ the same `TDeskTop`/`TWindow` pair you know from C++, ported as
 [`Desktop`](../api/tvision/desktop/struct.Desktop.html) and
 [`Window`](../api/tvision/window/struct.Window.html). Both *embed a*
 [`Group`](../api/tvision/view/struct.Group.html) and delegate the
-[`View`](../api/tvision/view/trait.View.html) trait to it (the D2 embed-and-delegate
+[`View`](../api/tvision/view/trait.View.html) trait to it (the embed-and-delegate
 pattern — see [Inheritance → trait + composition](../port/inheritance.md)), so a
 desktop *is* a view and a window *is* a view: you insert windows into a desktop,
 and child controls into a window.
@@ -76,7 +76,7 @@ and menu; the commands themselves carry no built-in key.
 You can also drag a window by its title bar to move it, or by a bottom corner to
 resize it — the desktop routes the click and the window starts the drag. The
 underlying nested mouse loop of C++ `dragView` becomes a capture handler on the
-single event loop (D9 — [Modal execView → one loop + capture](../port/modal.md)).
+single event loop (see [Modal execView → one loop + capture](../port/modal.md)).
 
 ## Tiling and cascading
 

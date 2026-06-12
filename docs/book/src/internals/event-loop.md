@@ -6,7 +6,7 @@ window; a pressed button spins its own while you hold the mouse. Each one
 re-enters the framework and re-borrows the view tree.
 
 Rust will not let you nest a blocking loop that re-borrows the same `&mut` tree,
-so deviation **D9** collapses all of those into **one** non-recursive loop in
+so rstv collapses all of those into **one** non-recursive loop in
 [`Program`](../api/tvision/app/struct.Program.html). What used to be a nested
 loop becomes a *capture handler* on a LIFO stack (see
 [Cross-view brokering & ViewId](./brokering.md) and the
@@ -43,7 +43,7 @@ machinery below.
 
 ## One pass: `pump_once`
 
-`pump_once` is the heart of D9. Each call does exactly one trip through these
+`pump_once` is the heart of the single loop. Each call does exactly one trip through these
 phases, in order:
 
 | Phase | What happens |
@@ -100,7 +100,7 @@ The return value is authoritative — handlers do **not** signal "consumed" by
 clearing the event. A handler holds a [`ViewId`](./brokering.md), never a view
 reference. Concrete handlers include a bounds-gating *modal frame*, window
 dragging and keyboard resize, mouse hold-tracking, and the menu session — each
-the D9 form of a C++ loop body that used to block. Before every dispatch the pump
+the single-loop form of a C++ loop body that used to block. Before every dispatch the pump
 re-syncs each bounds-gating handler from the live tree (`sync_gate_bounds`), so a
 dialog you have just dragged stays clickable in its new position.
 

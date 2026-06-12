@@ -8,7 +8,7 @@ group (`lock` / `unlock`, `ofBuffered`) all exist to repaint as little of the
 screen as possible. That is damage tracking, and it is the single most intricate
 part of the original framework.
 
-`tvision` drops all of it (deviation **D8**). The reasoning: in-memory work is
+rstv drops all of it. The reasoning: in-memory work is
 free by 1991 standards, and the *only* expensive operation left is writing escape
 sequences to the terminal. So we split drawing into two layers with very
 different costs.
@@ -66,5 +66,5 @@ previous frame is what keeps a full repaint cheap.
 
 The runtime mechanics of the buffer pair, the diff, and the `Backend` trait that
 emits the escape sequences are covered in
-[Drawing & backends](../internals/drawing.md). The formal deviation entry is D8
-in [the deviations summary](../reference/deviations.md).
+[Drawing & backends](../internals/drawing.md). For the at-a-glance summary see
+[deviation D8](../reference/deviations.md#d8).

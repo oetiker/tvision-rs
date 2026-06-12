@@ -1,25 +1,31 @@
-//! `DrawBuffer` — faithful port of `TDrawBuffer` (`drawbuf.h`, `drivers.cpp`).
+//! `DrawBuffer` — a scratch row of [`Cell`]s.
 //!
-//! A scratch row of [`Cell`]s that a view fills (one display line at a time) and
-//! then blits. magiblot allocates a fixed `capacity` sized to the screen; we hold
-//! a `Vec<Cell>` of an explicit width. Writes past the end are clipped exactly as
-//! the C++ clamps against `capacity`. Text writing delegates to the [`text`]
-//! primitives (D13), so width-aware truncation and double-width handling are
-//! shared with the rest of the renderer.
+//! A view fills a `DrawBuffer` one display line at a time and then blits it. The
+//! buffer is a `Vec<Cell>` of an explicit width; writes past the end are clipped
+//! against that width. Text writing delegates to the [`text`] primitives, so
+//! width-aware truncation and double-width handling are shared with the rest of
+//! the renderer.
 //!
-//! ### Deviation from the `0 = retain` sentinel
-//! `TDrawBuffer::moveChar` overloads a `0` char/attribute to mean "keep what is
-//! already there" — a packed-byte trick. In the typed model (D6) there is no such
-//! sentinel: [`move_char`](DrawBuffer::move_char) always writes both the char and
-//! the style. For the rare "change only the attribute / only the char of a cell"
-//! cases, use [`put_attribute`](DrawBuffer::put_attribute) /
+//! ### No `0 = retain` sentinel
+//! Turbo Vision's `TDrawBuffer::moveChar` overloads a `0` char/attribute to mean
+//! "keep what is already there" — a packed-byte trick. In rstv's typed cell model
+//! there is no such sentinel: [`move_char`](DrawBuffer::move_char) always writes
+//! both the char and the style. For the rare "change only the attribute / only
+//! the char of a cell" cases, use [`put_attribute`](DrawBuffer::put_attribute) /
 //! [`put_char`](DrawBuffer::put_char).
+//!
+//! # Turbo Vision heritage
+//! Ports `TDrawBuffer` (`drawbuf.h`, `drivers.cpp`). C++ allocates a fixed
+//! `capacity` sized to the screen; here it is a `Vec<Cell>` of an explicit width.
+//! The packed `0 = retain` sentinel of `moveChar` is dropped in favour of the
+//! typed cell model (deviation D6); text drawing routes through the shared
+//! Unicode-aware text primitives (deviation D13).
 
 use crate::color::Style;
 use crate::screen::Cell;
 use crate::text;
 
-/// A fixed-width row of screen cells under construction. Port of `TDrawBuffer`.
+/// A fixed-width row of screen cells under construction.
 #[derive(Clone, Debug)]
 pub struct DrawBuffer {
     data: Vec<Cell>,
@@ -183,9 +189,9 @@ impl DrawBuffer {
     /// `TDrawBuffer::moveBuf` — copy a run of pre-built cells into the buffer at
     /// `indent`, clipped to capacity.
     ///
-    /// magiblot's `moveBuf` reinterprets a raw byte buffer as a string; in the
+    /// The C++ `moveBuf` reinterprets a raw byte buffer as a string; in the
     /// typed cell model the meaningful operation is copying cells, so this takes a
-    /// `&[Cell]` (D6/D8).
+    /// `&[Cell]`.
     pub fn move_buf(&mut self, indent: usize, src: &[Cell]) {
         let cap = self.data.len();
         if indent >= cap {

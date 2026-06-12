@@ -1,89 +1,79 @@
-//! `TMenuView::execute()` — the **modal layer**, flattened onto the single event
-//! loop (D9) as one [`MenuSession`] capture handler (rows 50–52, Step-2 stages 1
-//! (keyboard navigation) + 2 (mouse)).
+//! The interactive menu layer — opening, navigating, and selecting menus — driven
+//! by one [`MenuSession`] capture handler on the single event loop.
 //!
-//! ## The architecture (settled in `docs/briefs/row50-52-menu-modal.md`)
+//! ## The architecture
 //!
-//! C++ `TMenuView::execute()` (`tmnuview.cpp:179`) is a nested `getEvent` loop:
-//! opening a submenu **recurses** via `owner->execView(target)` (one nested modal
-//! loop per open box level). We have a single event loop, so **one** `MenuSession`
-//! capture handler owns the WHOLE open stack (bar + every open box) and runs the
-//! flattened `execute()` for the entire interaction. While the session is on the
-//! capture stack it **consumes every menu-directed event** (Clean Architecture A):
-//! the bar and boxes are pure `draw`/`get_item_rect` — never focused, no event
-//! logic of their own runs.
+//! C++ `TMenuView::execute()` is a nested `getEvent` loop: opening a submenu
+//! **recurses** via `owner->execView(target)` (one nested modal loop per open box
+//! level). rstv has a single event loop, so **one** `MenuSession` capture handler
+//! owns the WHOLE open stack (bar + every open box) and runs the flattened
+//! interaction. While the session is on the capture stack it **consumes every
+//! menu-directed event**: the bar and boxes are pure `draw`/`get_item_rect` —
+//! never focused, with no event logic of their own running.
 //!
 //! ## State
 //!
-//! The session holds a **stack of levels** ([`MenuLevel`]), one per open
-//! bar/box, each carrying its `view_id`, a **clone** of its `menu` (clone-at-open
-//! is faithful — `execute()` has no `evBroadcast` case, so `disabled` is frozen
-//! for the menu's lifetime; the session swallows `evBroadcast` while active), its
-//! `current` highlight index, its `bounds` (cached at open — a box never moves),
-//! and `is_bar` (the C++ `size.y == 1` discriminator that splits nearly every
-//! `execute()` switch arm). The top of the stack is the **active** level (the one
-//! C++ `execute()` frame currently running its `do/while`); a parent level is
-//! "suspended" in its loop exactly as a C++ frame is across the nested
-//! `execView`. The [`bounds`](MenuLevel::bounds) is shaped for stage-2 mouse from
-//! day one (cross-level mouse gates against this cached per-level set).
+//! The session holds a **stack of levels** ([`MenuLevel`]), one per open bar/box,
+//! each carrying its `view_id`, a **clone** of its `menu` (cloning at open is
+//! faithful — the interaction has no `evBroadcast` case, so the `disabled` flags
+//! are frozen for the menu's lifetime; the session swallows `evBroadcast` while
+//! active), its `current` highlight index, its `bounds` (cached at open — a box
+//! never moves), and `is_bar` (the C++ `size.y == 1` discriminator). The top of
+//! the stack is the **active** level; a parent level is "suspended" exactly as a
+//! C++ frame is across the nested `execView`. Cross-level mouse hit-testing gates
+//! against the cached per-level `bounds`.
 //!
-//! **Known divergence (clone-at-open consequence, breadcrumbed):** the child-pop
-//! `menu.default = current` write (C++ `menu->deflt = current`, `tmnuview.cpp:386`)
-//! lands on the *level's clone* of the menu, which is discarded when the session
-//! closes — so the bar's permanent `Menu::default` is NOT updated, and a later
-//! *re-activation* restarts on the original default rather than the last-selected
-//! item (TV's "the menu remembers your last choice"). Inert within a session (a
-//! closed box is only reopened by re-cloning through the bar); the same accepted
-//! trade-off as the `disabled`-freezing rationale above. To make deflt persist, a
-//! future row would write the chosen index back to the bar's real menu at
-//! `end_session_with` (the session has the bar's `view_id`, so a new
-//! `Deferred::SetMenuDefault(id, idx)` mirroring `SetMenuCurrent` would do it).
+//! **Behavioral note (a consequence of cloning at open):** the child-pop
+//! `menu.default = current` write lands on the *level's clone* of the menu, which
+//! is discarded when the session closes — so the bar's permanent `Menu::default`
+//! is NOT updated, and a later re-activation restarts on the original default
+//! rather than the last-selected item. This is inert within a session (a closed
+//! box is only reopened by re-cloning through the bar), the same trade-off as the
+//! `disabled`-freezing above. Persisting the default would write the chosen index
+//! back to the bar's real menu at `end_session_with` via a `SetMenuDefault`
+//! request mirroring the existing `SetMenuCurrent`.
 //!
-//! ## What is implemented (Step-2 stage 1 — keyboard)
+//! ## Keyboard
 //!
-//! The **keyboard** arms of `execute()`'s switch: `kbUp`/`kbDown`/`kbLeft`/
-//! `kbRight`/`kbHome`/`kbEnd`/`kbEnter`/`kbEsc` plus the `default:` char /
+//! The keyboard arms: Up/Down/Left/Right/Home/End/Enter/Esc plus the char /
 //! alt-shortcut / hotKey arm, with `trackKey`/`nextItem`/`prevItem`/`findItem`/
 //! `findAltShortcut`. Submenu recursion pushes a level; command selection ends the
 //! session and posts the command; Esc/left close levels.
 //!
-//! ## What is implemented (Step-2 stage 2 — mouse)
+//! ## Mouse
 //!
-//! The `evMouseDown`/`evMouseUp`/`evMouseMove` arms of `execute()`'s switch
-//! (`tmnuview.cpp:201-276`), plus `trackMouse` (`:97`), `mouseInOwner` (`:148`),
-//! `mouseInMenus` (`:160`), and the per-level loop-locals `lastTargetItem` /
-//! `mouseActive` / `firstEvent`. The keyboard and mouse steps share one re-apply
-//! [`run`](MenuSession::run) loop tail (set-current → reset-lastTarget → open-gate
-//! → command-result → doReturn-pop/re-apply). The open-gate re-applies the
-//! triggering mouse-down/move into the freshly-opened child (`:374` `putEvent(e)`);
-//! the child-pop sets the parent's `lastTargetItem`/`menu.default`/`firstEvent`
-//! (`:385-386,:400`, the "click an open title to close it" mechanism). The bar's
-//! `evMouseDown`-activation branch lives in [`menu_view::handle_event`]
-//! ([`activate_mouse`]). `putClickEventOnExit` is the per-session
-//! [`put_click_event_on_exit`](MenuSession) flag (the bottom level's flag — the
-//! bar/box default `true`, a `TMenuPopup` `false`): it gates the bottom-level
-//! exit-click re-post.
+//! The mouse-down/up/move arms, plus `trackMouse`, `mouseInOwner`, `mouseInMenus`,
+//! and the per-level loop-locals `lastTargetItem` / `mouseActive` / `firstEvent`.
+//! Keyboard and mouse share one re-apply [`run`](MenuSession::run) loop tail
+//! (set-current → reset-lastTarget → open-gate → command-result → pop/re-apply).
+//! The open-gate re-applies the triggering mouse event into the freshly-opened
+//! child; the child-pop sets the parent's `lastTargetItem`/`menu.default`/
+//! `firstEvent` (the "click an open title to close it" mechanism). The bar's
+//! mouse-down activation lives in [`menu_view::handle_event`] ([`activate_mouse`]).
+//! `putClickEventOnExit` is the per-session
+//! [`put_click_event_on_exit`](MenuSession) flag (`true` for a bar/box, `false`
+//! for a context popup): it gates the bottom-level exit-click re-post.
 //!
-//! ## What is implemented (Step-2 stage 3 — `TMenuPopup`, row 52)
+//! ## Context popups (`popupMenu`)
 //!
-//! `TMenuPopup` (`tmenupop.cpp`, `popupmnu.cpp`) is a `TMenuBox` subclass with two
-//! observable differences, mapped onto the flattened model: `menu->deflt = 0` (no
-//! default highlight on open — the popup level starts `current = None` and clears
-//! its clone's `Menu::default`) and `putClickEventOnExit = False` (an exit-click is
-//! NOT re-posted — the [`popup_menu`] constructor flips
+//! A context popup is a menu box with two observable differences: no default
+//! highlight on open (the level starts `current = None` and clears its clone's
+//! `Menu::default`) and no exit-click re-post (the [`popup_menu`] constructor sets
 //! [`put_click_event_on_exit`](MenuSession) to `false`). The `popupMenu()` free
-//! function is [`popup_menu`] (placement via [`auto_place_popup`]). The third C++
-//! difference — `TMenuPopup::handleEvent` (getCtrlChar/hotKey accelerators) — is
-//! **moot** under this model and dropped: a popup created by `popupMenu` is
-//! immediately `execView`'d, so `execute()` owns the event loop via `getEvent` and
-//! `handleEvent` is never routed during the popup's modal life; the accelerators it
-//! adds are already covered by the flattened loop's `step_default_key` (`find_item`
-//! on the active level + `hot_key(levels[0].menu)`, which for a popup IS the popup
-//! box's own tree). The only un-ported sliver is the Ctrl+letter accelerator —
-//! breadcrumbed at [`popup_menu`].
+//! function is [`popup_menu`] (placement via [`auto_place_popup`]). The C++
+//! `TMenuPopup::handleEvent` accelerators are unnecessary here: a popup created by
+//! `popupMenu` is immediately run modally, so the session owns the event loop and
+//! the accelerators it would add are already covered by the flattened loop's
+//! default-key handling. (The Ctrl+letter accelerator specifically has no
+//! counterpart in this model — see [`popup_menu`].)
 //!
-//! Still deferred: mouse auto-repeat / press-hold (no `evMouseAuto` arm in
-//! `execute()`).
+//! Mouse auto-repeat / press-and-hold does not apply to menus: the C++
+//! `execute()` has no `evMouseAuto` arm either.
+//!
+//! # Turbo Vision heritage
+//! Flattens `TMenuView::execute()` and `TMenuPopup` (`tmnuview.cpp`,
+//! `tmenupop.cpp`, `popupmnu.cpp`/`menus.h`). The C++ nested modal `getEvent`
+//! loops become one capture handler on the single event loop (deviation D9).
 
 use crate::capture::{CaptureFlow, CaptureHandler};
 use crate::command::Command;
@@ -111,8 +101,8 @@ struct MenuLevel {
     current: Option<usize>,
     /// The level's bounds in the root group's frame, cached at open (a box never
     /// moves). The bar's bounds; each box's computed bounds. Used to compute a
-    /// child box's geometry (`getItemRect` + origin), and — stage 2 — to gate
-    /// mouse.
+    /// child box's geometry (`getItemRect` + origin) and to gate mouse
+    /// hit-testing.
     bounds: Rect,
     /// `size.y == 1` (C++ the bar/box discriminator). The bar is a one-row
     /// horizontal strip; a box is a vertical column.
@@ -157,7 +147,7 @@ impl MenuLevel {
     /// same contract as [`MenuBar::get_item_rect`](crate::menu::MenuView::get_item_rect)
     /// / [`MenuBox::get_item_rect`](crate::menu::MenuView::get_item_rect), but
     /// computed from the cached `menu` + `bounds` (the session has no view
-    /// reference, D3). Must agree cell-for-cell with the draw layer.
+    /// reference). Must agree cell-for-cell with the draw layer.
     fn item_rect_local(&self, index: usize) -> Rect {
         if self.is_bar {
             // TMenuBar::getItemRect (tmenubar.cpp:94): horizontal accumulator.
@@ -198,8 +188,8 @@ fn item_name(item: &MenuItem) -> &str {
     }
 }
 
-/// `TMenuView::execute()` flattened onto the capture stack — the modal menu
-/// interaction (rows 50–52, keyboard stage).
+/// The modal menu interaction — `TMenuView::execute()` flattened onto the capture
+/// stack.
 ///
 /// Pushed at activation (via [`Deferred::PushCapture`](crate::view::Deferred::PushCapture))
 /// alongside the first [`OpenMenuBox`](crate::view::Deferred::OpenMenuBox) — or,
@@ -207,6 +197,11 @@ fn item_name(item: &MenuItem) -> &str {
 /// first key opens a box). Consumes every event it is offered; pops itself
 /// ([`CaptureFlow::ConsumedPop`]) when the last level closes, restoring the
 /// pre-menu focus.
+///
+/// # Turbo Vision heritage
+/// Flattens `TMenuView::execute()` (`tmnuview.cpp`/`menus.h`). The C++ nested modal
+/// `getEvent` loops (one per open box) become a single capture handler on the one
+/// event loop (deviation D9).
 pub struct MenuSession {
     /// The open levels, bottom (bar) → top (deepest box). The top is the active
     /// level (the running C++ `execute()` frame).
@@ -574,8 +569,8 @@ impl MenuSession {
         }
         // No item match: try the bar's hotKey accelerator (topMenu()->hotKey).
         if let Some(cmd) = hot_key(&self.levels[0].menu, k) {
-            // commandEnabled is backstopped by the pump's drop_disabled filter
-            // (row 49); hot_key already skips cached-disabled items. The result
+            // commandEnabled is backstopped by the pump's drop_disabled filter;
+            // hot_key already skips cached-disabled items. The result
             // path ends the session (clearEvent runs, tmnuview.cpp:395).
             *pending_command = Some(cmd);
             return (MenuAction::Return, true);
@@ -616,7 +611,7 @@ impl MenuSession {
                     if is_bar {
                         // autoSelect makes a click OPEN the clicked title's box, yet
                         // CLOSE it on the second click of the same title (after a box
-                        // closed it set last_target_item == that title; §3.1).
+                        // closed it set last_target_item == that title).
                         let cur = self.top().current;
                         self.top_mut().auto_select =
                             cur.is_none() || self.top().last_target_item != cur;
@@ -720,7 +715,7 @@ impl MenuSession {
     /// (`tmnuview.cpp:401-405`: `putEvent(e)` → parent-`getEvent`).
     fn run(&mut self, ev: Event, ctx: &mut Context) -> CaptureFlow {
         // Cache the event kind for the per-iteration step + the open-gate's
-        // mouse-down/move `continue` divergence (§3.3, tmnuview.cpp:374).
+        // mouse-down/move `continue` divergence (tmnuview.cpp:374).
         let is_mouse_carry = matches!(ev, Event::MouseDown(_) | Event::MouseMove(_));
         loop {
             let mut pending_command = None;
@@ -818,7 +813,7 @@ impl MenuSession {
                     // Pop + close the top box; the parent becomes active. C++
                     // `execView` returns here → set the parent's lastTargetItem /
                     // menu.default to its current (the "click an open title to close
-                    // it" crux, §3.1, tmnuview.cpp:385-386) and flip firstEvent
+                    // it" crux, tmnuview.cpp:385-386) and flip firstEvent
                     // (tmnuview.cpp:400, runs after execView returns).
                     let top = self.levels.pop().expect("len > 1");
                     ctx.request_close(top.view_id);
@@ -918,9 +913,8 @@ impl MenuSession {
         // every **box** (C++ `TMenuBox`/`TMenuPopup`, `execView`'d then destroyed) is
         // closed. A bar session has the bar at `levels[0]` + boxes above; a
         // [`popup_menu`] session has NO bar — its single level IS a box and must be
-        // closed (the brief's §3 "no change to end_session_with" assumed the popup
-        // would be purely additive, but the popup's level-0-is-a-box teardown needs
-        // this kind-keyed loop, replacing the old `skip(1)`/`first()` bar hard-coding).
+        // closed: the popup's level-0-is-a-box teardown needs this kind-keyed
+        // loop, not a `skip(1)`/`first()` bar hard-coding.
         for level in &self.levels {
             if level.is_bar {
                 ctx.request_set_menu_current(level.view_id, None);
@@ -1143,21 +1137,20 @@ pub fn activate_mouse(
 /// at `(0,0)`, so `makeLocal` is identity in our model). `owner_size` is the root
 /// group size (C++ `app->size`).
 ///
-/// **Deviations (D9 async capture-stack model):**
+/// Differences from the C++ (the asynchronous capture-stack model):
 /// * The C++ synchronous return value (`ushort popupMenu` returns the selected
-///   command) is **dropped**: this function returns immediately, the command arrives
+///   command) is replaced: this function returns immediately, the command arrives
 ///   later via [`Context::post`] (in [`end_session_with`](MenuSession::end_session_with))
 ///   when the user selects an item.
-/// * The `receiver: TGroup*` argument is **dropped**: our model has no per-receiver
-///   (`TGroup*`) routing seam; the command reaches the active routing, which IS the
-///   receiver for the only C++ consumer (the editor right-click, `teditor1.cpp:536`,
-///   which passes its own group as receiver). The faithful `receiver->putEvent` is
-///   the unconditional `ctx.post(cmd)` on select.
+/// * The `receiver: TGroup*` argument is unnecessary: this model has no
+///   per-receiver routing seam; the command reaches the active routing, which IS
+///   the receiver for the only C++ consumer (the editor right-click, which passes
+///   its own group as receiver). The faithful `receiver->putEvent` is the
+///   unconditional `ctx.post(cmd)` on select.
 ///
-/// `TMenuPopup::handleEvent`'s Ctrl+letter accelerator is not ported (see the module
-/// docs):
-/// TODO(TMenuPopup Ctrl+letter accel: dead under the execView/capture-stack model;
-/// revive iff a persistent-popup consumer appears).
+/// `TMenuPopup::handleEvent`'s Ctrl+letter accelerator has no counterpart here: a
+/// popup is run modally by this session, which owns the event loop, so a separate
+/// `handleEvent` accelerator path is never reached (the module docs explain this).
 pub fn popup_menu(where_: Point, menu: Menu, owner_size: Point, ctx: &mut Context) {
     let bounds = auto_place_popup(where_, &menu, owner_size);
     let id = ViewId::next();

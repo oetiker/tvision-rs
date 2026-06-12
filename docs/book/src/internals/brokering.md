@@ -3,10 +3,10 @@
 A scroller needs to know how far its scrollbars have moved; a list box needs to
 push its position back into them. In C++ Turbo Vision the two views simply hold
 raw `TView*` pointers at each other and call across. Rust forbids that aliased
-mutable access, so tvision splits the old pointer web into two halves: ownership
+mutable access, so rstv splits the old pointer web into two halves: ownership
 is a downward tree of `Box<dyn View>`, and every up- or sideways link becomes a
-lightweight handle — a [`ViewId`](../api/tvision/view/struct.ViewId.html). This
-is deviation **D3** (see [Pointers & `infoPtr` → handles](../port/handles.md)).
+lightweight handle — a [`ViewId`](../api/tvision/view/struct.ViewId.html) (see
+[Pointers & `infoPtr` → handles](../port/handles.md)).
 
 ## `ViewId`: identity, not a pointer
 
@@ -49,7 +49,7 @@ type via `as_any_mut()` to call its real method:
 // At deferred-apply, inside the pump, `group` is the whole tree:
 let dx = h_bar_id
     .and_then(|id| group.find_mut(id))   // resolve one bar
-    .and_then(|view| view.value())       // read its value (D10)
+    .and_then(|view| view.value())       // read its value
     .and_then(field_int)
     .unwrap_or(0);
 // ...read the v-bar the same way, then write the scroller:

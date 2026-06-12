@@ -1,4 +1,4 @@
-//! Renderer — the D8 draw cycle.
+//! Renderer — the per-frame draw cycle.
 //!
 //! The `Renderer` owns the back/front `Buffer` pair plus a boxed `Backend`.  Each
 //! frame it:
@@ -11,8 +11,14 @@
 //! 7. Swaps back/front so the new frame becomes the reference for the next diff.
 //!
 //! This mirrors the role of ratatui's `Terminal::draw` but is simpler: there is
-//! no partial-repaint or damage-tracking (D8 — we always do a whole-tree repaint
-//! and rely on the diff to keep the terminal I/O bounded).
+//! no partial-repaint or damage-tracking — the whole view tree is painted every
+//! frame and the cell diff keeps the terminal I/O bounded.
+//!
+//! # Turbo Vision heritage
+//! Replaces Turbo Vision's incremental, per-view screen writes (`TView::writeBuf`
+//! through `TScreen`) with a double-buffered whole-tree repaint plus diff. The
+//! per-view damage tracking is dropped in favour of repaint-and-diff
+//! (deviation D8).
 
 use crate::backend::Backend;
 use crate::screen::Buffer;
@@ -97,7 +103,7 @@ impl Renderer {
 
     /// Resize both buffers to `width × height`, resetting all content.
     ///
-    /// Call this when the terminal reports a resize event (row 31).
+    /// Call this when the terminal reports a resize.
     pub fn resize(&mut self, width: u16, height: u16) {
         self.buffers[0].resize(width, height);
         self.buffers[1].resize(width, height);

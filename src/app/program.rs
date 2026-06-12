@@ -1,63 +1,48 @@
-//! `TProgram` — the live event loop (row 31, FOUNDATION, deviation **D9**).
+//! The live event loop and application root.
 //!
-//! `TProgram` (`tprogram.cpp`) is TV's application root: it owns the single event
-//! loop, the desktop / status-line / menu-bar subviews, the timer queue, and the
-//! capture stack. This is the keystone that makes the row-20 [`TimerQueue`] and
-//! the row-21 [`CaptureStack`] *live*.
+//! [`Program`] is the application root: it owns the single event loop, the
+//! desktop / status-line / menu-bar subviews, the [`TimerQueue`], and the
+//! [`CaptureStack`]. [`Program::run`] is the *only* loop ([`Program::pump_once`]
+//! is one iteration), and modality is a [`ModalFrame`] on the [`CaptureStack`]:
+//! a handler that consumes every otherwise-unhandled event *is* the modal loop.
 //!
-//! ## Deviations realized here
+//! ## How it works
 //!
-//! * **D9 — one loop, no nested modal loops.** C++ `TGroup::execute` spins a
-//!   blocking `getEvent`/`handleEvent` loop; modality nests another. Here
-//!   [`Program::run`] is the *only* loop ([`Program::pump_once`] is one
-//!   iteration), and modality is a [`ModalFrame`] on the [`CaptureStack`] — "a
-//!   handler that consumes every otherwise-unhandled event *is* the modal loop".
-//!   The deferred-capture handshake is exactly the [`compose_full_protocol`]
-//!   blueprint from `capture.rs`, now driven by the real pump.
+//! * **One loop, no nested modal loops.** [`Program::run`] is the single event
+//!   loop and `pump_once` is one iteration; modal dialogs are realized as a
+//!   [`ModalFrame`] capture handler rather than a nested blocking loop.
 //!
-//! * **D4 — `Event::Broadcast` carries a `source: ViewId`** (the broadcast-subject
-//!   successor to `infoPtr`); `Event::Command` carries only the [`Command`]. The
-//!   *integer*-argument payloads are **not** served by `source` (they are not
-//!   `ViewId`s) and have their own typed mechanisms: `cmTimerExpired`'s `TTimerId`
-//!   is now carried by [`Event::Timer`], and `cmSelectWindowNum`'s window number
-//!   has its own design (see the Alt-N breadcrumb).
+//! * **Broadcasts carry a subject.** `Event::Broadcast` carries a
+//!   `source: ViewId` identifying the subject view; `Event::Command` carries only
+//!   the [`Command`]. Integer payloads are not served by `source` (they are not
+//!   `ViewId`s): a fired timer's id is carried by [`Event::Timer`], and a window
+//!   number is resolved by a direct desktop walk.
 //!
-//! * **D8 — whole-tree redraw + diff every pass.** No damage tracking, no
-//!   `sfExposed`; `setScreenMode`/`cmScreenChanged` collapse into the resize
-//!   check at the top of `pump_once` (the backend reports terminal size live).
+//! * **Whole-tree redraw + diff every pass.** No damage tracking; a terminal
+//!   resize is picked up by the size check at the top of `pump_once` (the backend
+//!   reports terminal size live).
 //!
-//! * **D11 — injected [`Clock`] + [`Backend`].** Headless never blocks, so tests
-//!   drive `pump_once` synchronously with a [`ManualClock`](crate::timer::ManualClock).
+//! * **Injected [`Clock`] + [`Backend`].** Headless never blocks, so tests drive
+//!   `pump_once` synchronously with a
+//!   [`ManualClock`](crate::timer::ManualClock).
 //!
-//! * **D1 — string commands, enabled-by-default (denylist).** `curCommandSet`
-//!   is stored as its complement: the **disabled** set, seeded with the five
-//!   startup-disabled window commands (see [`initial_disabled_commands`]). Every
-//!   command not in it — including any app-minted [`Command::custom`] — is
-//!   enabled, which subsumes C++'s ">255 always enabled" bit-array artifact
-//!   (see `docs/design/command-enablement.md`).
+//! * **String commands, enabled-by-default.** The command set is stored as its
+//!   complement — the **disabled** set, seeded with the five startup-disabled
+//!   window commands (see [`initial_disabled_commands`]). Every command not in it,
+//!   including any app-minted [`Command::custom`], is enabled. See
+//!   `docs/design/command-enablement.md`.
 //!
-//! ## Deferred to later rows (grep-able breadcrumbs)
+//! Modal dialogs ([`exec_view`](Program::exec_view) / `messageBox` / `inputBox`)
+//! run on top of the [`ModalFrame`] mechanism; Alt-1..9 window selection walks the
+//! desktop directly for the child whose [`number`](View::number) matches; the
+//! status line and menu bar are real subviews that the pump pre-routes keyDown and
+//! over-the-line mouseDown events to before normal dispatch.
 //!
-//! * `exec_view` / `executeDialog` / `getData` / `setData` (the blocking modal
-//!   wrapper + data marshalling) → **row 34 (`TDialog`)**, built on top of the
-//!   [`ModalFrame`] mechanism proven here. The sync-vs-event-driven return is
-//!   decided there.
-//! * Alt-1..9 window selection (`cmSelectWindowNum`) → **realized at row 33d-2**
-//!   in [`program_handle_event`] as a direct walk (the program asks the desktop to
-//!   select the child whose [`number`](View::number) matches, gated by
-//!   `canMoveFocus` == `deskTop.valid(cmReleasedFocus)`). Not a payload broadcast —
-//!   the window number is an integer, not a `ViewId`.
-//! * Status-line / menu-bar real subviews + the `getEvent` status-line
-//!   pre-handling → **Phase 4, DONE.** A real bar/line are inserted by the factory
-//!   closures (see `examples/hello.rs`), their ids are held
-//!   ([`menu_bar`](Program::menu_bar) / [`status_line`](Program::status_line)) and
-//!   seeded with the initial command-graying in [`Program::new`], and
-//!   [`pump_once`](Program::pump_once) pre-routes keyDown / over-the-line mouseDown
-//!   to the status line before normal dispatch. `statusLine->update()` is
-//!   omit-until-consumer (see the breadcrumb in `pump_once`'s idle arm).
-//! * Timer-id payload (which timer fired) → revisit when a widget needs it (D4
-//!   dropped the `infoPtr` that carried it; several designs are possible — do not
-//!   invent one now).
+//! # Turbo Vision heritage
+//! Ports `TProgram` (`tprogram.cpp`/`tprogram.h`), TV's application root and
+//! blocking `getEvent`/`handleEvent` loop. The single non-recursive loop plus a
+//! capture stack replaces C++'s nested modal loops (deviation D9); broadcasts
+//! carry a `ViewId` subject instead of the `infoPtr` pointer (deviation D4).
 
 use std::collections::VecDeque;
 use std::time::Duration;
@@ -73,7 +58,7 @@ use crate::timer::TimerQueue;
 use crate::view::{Context, Deferred, DrawCtx, Group, Point, Rect, SelectMode, View, ViewId};
 
 /// The frame-tick timeout: ports `TProgram::eventTimeoutMs` (20 ms → 50 wakeups
-/// per second). Headless ignores it (D11).
+/// per second). Headless ignores it.
 const EVENT_TIMEOUT_MS: u64 = 20;
 
 /// `evMouseAuto` initial delay before the first auto-repeat, in ms.
@@ -95,7 +80,7 @@ const MOUSE_AUTO_DELAY_MS: u64 = 440;
 const MOUSE_AUTO_PERIOD_MS: u64 = 110;
 
 // ---------------------------------------------------------------------------
-// MouseAutoState — the global evMouseAuto synthesizer (backlog A3)
+// MouseAutoState — the global evMouseAuto synthesizer
 // ---------------------------------------------------------------------------
 
 /// The pump's `evMouseAuto` synthesizer state — ports the `autoTicks` /
@@ -107,7 +92,7 @@ const MOUSE_AUTO_PERIOD_MS: u64 = 110;
 /// events always win — the C++ auto arm is the *last* check in `getMouseEvent`
 /// (tevent.cpp:196), so an auto only fires on a pass that produced no event.
 ///
-/// **Why a timer-driven synthesizer (D9 note):** upstream's modern platform
+/// **Why a timer-driven synthesizer:** upstream's modern platform
 /// layer only auto-repeats while the terminal keeps sending mouse reports
 /// (`THardwareInfo::getMouseEvent` returns False on an empty queue,
 /// hardware.cpp:69-78), so on a quiet terminal `evMouseAuto` starves. The
@@ -177,7 +162,7 @@ impl MouseAutoState {
 /// `cmNext`/`cmPrev`), stored as its complement.
 ///
 /// rstv keeps `curCommandSet` as a **disabled set** (denylist): everything not
-/// in it is enabled, so the open string-command space (D1) is enabled-by-default
+/// in it is enabled, so the open string-command space is enabled-by-default
 /// exactly like C++'s "all bits on" init — and any app-minted
 /// [`Command::custom`] works without registration, subsuming the C++ ">255
 /// always enabled" bit-array artifact. Only the five window-management commands
@@ -199,10 +184,10 @@ fn initial_disabled_commands() -> CommandSet {
 }
 
 // ---------------------------------------------------------------------------
-// ModalFrame — the D9 modality mechanism (a capture handler)
+// ModalFrame — the modality mechanism (a capture handler)
 // ---------------------------------------------------------------------------
 
-/// A capture handler that realizes modality (D9): while it is on the
+/// A capture handler that realizes modality: while it is on the
 /// [`CaptureStack`], keyboard and command events
 /// [`Pass`](CaptureFlow::Pass) through to normal routing and reach the modal
 /// view via focus; broadcast events also [`Pass`](CaptureFlow::Pass) and fan
@@ -212,18 +197,20 @@ fn initial_disabled_commands() -> CommandSet {
 /// consumes every otherwise-unhandled event *is* the modal loop" realization.
 ///
 /// It holds the modal view's [`ViewId`] (identity, per the capture contract) and
-/// its `bounds` in the root group's frame (so positional events can be hit-tested
-/// without a view reference — D3). For row 31 the root group covers the whole
-/// screen at `(0,0)`, so group-local == absolute == this `bounds` frame.
+/// its `bounds` in the root group's frame, so positional events can be hit-tested
+/// without holding a view reference. The root group covers the whole screen at
+/// `(0,0)`, so group-local == absolute == this `bounds` frame.
 ///
-/// **Popping is row 34's job, not this row's.** [`CaptureStack`] (row 21) has no
-/// pop API — a handler removes itself only by returning
-/// [`CaptureFlow::ConsumedPop`]. `exec_view` / `executeDialog` (row 34, TDialog)
-/// is the blocking wrapper that pushes this frame, runs the pump until
-/// [`Program::end_modal`] sets the end state, then pops it and marshals dialog
-/// data. This row only proves the *gating* mechanism with a synthetic modal view
-/// (see `modal_frame_gates_events`); the frame stays on the stack after
-/// `end_modal` here.
+/// [`exec_view`](Program::exec_view) is the blocking wrapper that pushes this
+/// frame, runs the pump until [`Program::end_modal`] sets the end state, then
+/// pops it (the one place a frame is popped other than a handler self-popping via
+/// [`CaptureFlow::ConsumedPop`]) and marshals dialog data.
+///
+/// # Turbo Vision heritage
+/// Replaces the nested blocking modal loop C++ `TGroup::execute` spins inside
+/// `execView` (`tgroup.cpp`). The single non-recursive loop plus this capture
+/// handler stands in for that nesting (deviation D9), and the handler holds a
+/// [`ViewId`] rather than a view pointer (deviation D3).
 pub struct ModalFrame {
     id: ViewId,
     bounds: Rect,
@@ -278,27 +265,32 @@ impl CaptureHandler for ModalFrame {
 // Program — the application root + event loop
 // ---------------------------------------------------------------------------
 
-/// The application root and single event loop — `TProgram` (D2 embed-and-delegate
-/// + D9 single loop).
+/// The application root and single event loop.
 ///
 /// `Program` is **not** a [`View`] (it is the root; nothing contains it). It
 /// embeds a [`Group`] as its view container and adds the loop machinery: the
 /// [`Renderer`], the live [`CaptureStack`] and [`TimerQueue`], the injected
-/// [`Clock`], and the `curCommandSet`.
+/// [`Clock`], and the current command set.
 ///
 /// Construct with [`Program::new`] (backend-injected so headless tests drive it),
 /// drive production with [`Program::run`], or step one iteration with
 /// [`Program::pump_once`] in tests.
+///
+/// # Turbo Vision heritage
+/// Ports `TProgram` (`tprogram.cpp`). C++ derives `TApplication : TProgram` by
+/// inheritance; here [`Application`] embeds a `Program` and forwards to it
+/// (deviation D2), and the single event loop replaces C++'s nested modal loops
+/// (deviation D9).
 pub struct Program {
     /// The root container (holds desktop/status-line/menu-bar children).
     group: Group,
     /// Owns the back/front [`Buffer`](crate::screen::Buffer) pair + boxed backend.
     renderer: Renderer,
-    /// Row 21 — now live: the LIFO capture stack.
+    /// The LIFO capture stack.
     captures: CaptureStack,
-    /// Row 20 — now live: the timer queue.
+    /// The timer queue.
     timers: TimerQueue,
-    /// Injected time source (D11).
+    /// Injected time source (so headless tests drive a manual clock).
     clock: Box<dyn Clock>,
     /// The active theme (the paint pass needs `&Theme` for `DrawCtx`).
     theme: Theme,
@@ -311,13 +303,13 @@ pub struct Program {
     /// `disabled_commands`), and tree mutations (bounds / state-flag / close →
     /// `group`).
     /// A downward-borrowed view / capture handler cannot touch the capture stack,
-    /// the command set, or the tree inline (D3/D9), so it requests the effect via
+    /// the command set, or the tree inline, so it requests the effect via
     /// `Context` and the loop drains this one queue. A distinct field for the same
     /// disjoint-borrow reason as `out_events`. One channel — a new capability adds a
     /// [`Deferred`] variant, not a field.
     deferred: Vec<Deferred>,
     /// The **disabled**-command set — `curCommandSet` stored as its complement
-    /// (denylist; D1): a command is enabled iff it is NOT in here, so the open
+    /// (denylist): a command is enabled iff it is NOT in here, so the open
     /// string-command space is enabled-by-default like C++'s all-bits-on
     /// `initCommands`. Seeded by [`initial_disabled_commands`].
     disabled_commands: CommandSet,
@@ -332,16 +324,16 @@ pub struct Program {
     /// created. The `getEvent` pre-routing in [`pump_once`](Self::pump_once) reads
     /// it to hand keyDown / over-the-line mouseDown events to the line first.
     status_line: Option<ViewId>,
-    /// The global `evMouseAuto` synthesizer (backlog A3): while a real mouse
-    /// button is held, idle pump passes synthesize [`Event::MouseAuto`] on the
-    /// 440 ms / 110 ms Borland cadence (see [`MouseAutoState`]).
+    /// The global `evMouseAuto` synthesizer: while a real mouse button is held,
+    /// idle pump passes synthesize [`Event::MouseAuto`] on the 440 ms / 110 ms
+    /// Borland cadence (see [`MouseAutoState`]).
     mouse_auto: MouseAutoState,
     /// `TGroup::endState` — `Some(cmd)` ends the (modal) loop.
     end_state: Option<Command>,
     /// `TProgram::commandSetChanged` — set on an enable/disable change, broadcast
     /// once on the next idle, then cleared.
     command_set_changed: bool,
-    /// A view-requested modal awaiting top-level execution (row 57). Set by the
+    /// A view-requested modal awaiting top-level execution. Set by the
     /// `OpenHistory` / `OpenMessageBox` apply arms in the `pump_once` deferred drain
     /// (a view cannot call `exec_view` — top-level only); drained by the outer
     /// driver [`pump_and_drive`](Self::pump_and_drive) after `pump_once` returns,
@@ -359,7 +351,7 @@ pub struct Program {
     /// command handling, analogous to `TApplication::handleEvent` in C++ tvision.
     app_commands: VecDeque<Command>,
     /// The registered internal-clipboard editor ID — mirrors `TEditor::clipboard`
-    /// (a process-global static in C++). `None` = use the OS clipboard (A6 path).
+    /// (a process-global static in C++). `None` = use the OS clipboard.
     /// Set via `Deferred::RegisterClipboardEditor` in the pump drain.
     clipboard_editor_id: Option<ViewId>,
     /// Whether the current clipboard editor has a non-empty selection. Refreshed
@@ -371,8 +363,8 @@ pub struct Program {
 /// What to do with a view-triggered modal's result, run AFTER the modal loop ends
 /// but BEFORE the modal view is removed/dropped (so it can read the modal's final
 /// state, e.g. `get_selection`). An enum, not a boxed `FnOnce`: a view-made closure
-/// cannot hold `&mut Program`, and the codebase's pattern is "ADD A VARIANT"
-/// (msgbox 63 adds its own variant here).
+/// cannot hold `&mut Program`, and the codebase's pattern is to add a variant for
+/// each new completion kind.
 enum ModalCompletion {
     /// `THistory`: on `cmOK`, read the `HistoryWindow`'s selection and `set_value`
     /// it into the linked input line (data + `select_all`). On cancel, nothing.
@@ -410,7 +402,7 @@ enum ModalCompletion {
     /// (faithful to C++ `saveAs`'s `editorDialog(edSaveAs, …) != cmCancel`).
     SaveAsPick { editor_id: ViewId },
 
-    /// `edFind` result (C1): on non-cancel, read `find_str` + options from the
+    /// `edFind` result: on non-cancel, read `find_str` + options from the
     /// in-tree Find dialog, update the editor, and re-inject `cmSearchAgain`.
     FindPick {
         editor_id: ViewId,
@@ -420,7 +412,7 @@ enum ModalCompletion {
         opts_id: ViewId,
     },
 
-    /// `edReplace` result (C1): on non-cancel, read find+replace strings + options
+    /// `edReplace` result: on non-cancel, read find+replace strings + options
     /// from the in-tree Replace dialog, set `EF_DO_REPLACE`, and re-inject
     /// `cmSearchAgain`.
     ReplacePick {
@@ -433,7 +425,7 @@ enum ModalCompletion {
         opts_id: ViewId,
     },
 
-    /// C8: result from the per-role color picker opened from `ThemeEditorBody`.
+    /// Result from the per-role color picker opened from `ThemeEditorBody`.
     /// On `cmOK`, read the `ColorPicker`'s color() and update the
     /// `ThemeEditorBody`'s working theme for the given role/fg. On cancel,
     /// nothing.
@@ -448,7 +440,7 @@ enum ModalCompletion {
         fg: bool,
     },
 
-    /// C8: result from the theme editor dialog. On `cmOK`, read the
+    /// Result from the theme editor dialog. On `cmOK`, read the
     /// `ThemeEditorBody`'s working theme and write it into the sink; the caller
     /// installs it via `Program::set_theme`.
     ThemeEdit {
@@ -462,16 +454,16 @@ impl Program {
     /// Construct the program. Ports `TProgram::TProgram` (factory-mixin
     /// deferral): the three subviews are built from injected factory closures over
     /// the full program extent; each factory owns its own shrinking (the real
-    /// status-line/menu-bar are Phase 4, so they are stubbed `None` for now).
+    /// status-line/menu-bar factories may return `None` to omit them).
     ///
     /// Faithful ctor behavior:
     /// - Bounds = `(0, 0, w, h)` from `backend.size()`.
     /// - The group's state gets `active`/`selected`/`focused`/`modal` set
     ///   directly (C++ `state = sfVisible | sfSelected | sfFocused | sfModal |
-    ///   sfExposed`; `sfExposed` dropped D8, `sfVisible` is the ctor default).
+    ///   sfExposed`; `sfExposed` is dropped, `sfVisible` is the ctor default).
     /// - Insert desktop, status-line, menu-bar **in that order**.
     /// - The desktop is made `current` so focused events route into it (the
-    ///   row-26 `insert` deliberately does not auto-select).
+    ///   `insert` deliberately does not auto-select).
     pub fn new(
         backend: Box<dyn Backend>,
         clock: Box<dyn Clock>,
@@ -486,7 +478,8 @@ impl Program {
         let mut group = Group::new(extent);
         // C++ sets the bits directly here (not through the propagating set_state):
         // state = sfVisible | sfSelected | sfFocused | sfModal | sfExposed.
-        // sfVisible is already the ctor default; sfExposed is dropped (D8).
+        // sfVisible is already the ctor default; sfExposed is dropped (no
+        // occlusion tracking — the whole tree is redrawn each pass).
         {
             let st = group.state_mut();
             st.state.active = true;
@@ -502,7 +495,7 @@ impl Program {
 
         // Insert the three subviews in C++ order: desktop, statusline, menubar.
         // Each factory receives the full extent and owns its own shrinking
-        // (initDeskTop: r.a.y++; r.b.y--, etc.); for row 31 the factory does it.
+        // (initDeskTop: r.a.y++; r.b.y--, etc.); the factory does it.
         let mut desktop = None;
         let mut status_line = None;
         let mut menu_bar = None;
@@ -532,7 +525,7 @@ impl Program {
             }
         }
 
-        // STARTUP CURRENCY (A2): one eager settle pass over the whole tree — the
+        // STARTUP CURRENCY: one eager settle pass over the whole tree — the
         // insert-time show()->resetCurrent cascade C++ runs inline at every
         // insert of an ofSelectable view (`show() -> setState(sfVisible) ->
         // owner->resetCurrent()`). The ctx-less inserts above (desktop / status
@@ -550,7 +543,7 @@ impl Program {
         //     focus cascade descends desktop -> window -> child.
         // With no selectable child anywhere this whole pass is a no-op.
         //
-        // Side-effect bookkeeping (preserved from the pre-A2 explicit block): a
+        // Side-effect bookkeeping: a
         // window's set_state(Selected) queues Deferred::EnableCommand(NEXT/...)
         // and the focus cascade queues RECEIVED_FOCUS broadcasts into
         // out_events. The first pump pops one of those broadcasts (out_events is
@@ -609,7 +602,7 @@ impl Program {
     ///
     /// **Owner-side, immediate.** This is the top-level path — call it when you
     /// hold `&mut Program` (an app `main`, startup, or a test). A *view* has no
-    /// up-pointer to the program (D3) and must instead defer via
+    /// up-pointer to the program and must instead defer via
     /// [`Context::end_modal`](crate::view::Context::end_modal) (→
     /// [`Deferred::EndModal`], applied by the pump). Rule of thumb: view →
     /// `ctx.end_modal`; owner / top-level → `Program::end_modal`.
@@ -647,7 +640,7 @@ impl Program {
 
     /// Whether `cmd` is currently enabled (`TView::commandEnabled`): enabled iff
     /// not in the disabled set. The C++ "`command > 255` always enabled" rule is
-    /// **subsumed** (D1): the command space is open strings, all enabled by
+    /// **subsumed**: the command space is open strings, all enabled by
     /// default and all maskable — strictly more capable, identical observable
     /// behavior for the C++ vocabulary.
     pub fn command_enabled(&self, cmd: Command) -> bool {
@@ -656,9 +649,9 @@ impl Program {
 
     /// `TApplication::getTileRect` — the rectangle tile/cascade lay windows into:
     /// the **desktop child's extent** (`(0,0,w,h)` in desktop-local coords), so it
-    /// stays correct once Phase 4 insets the desktop under a menu/status bar.
-    /// Returns `None` if no desktop was created. Used by `Application::tile`/`cascade`
-    /// (Phase 4) and the `Application::get_tile_rect` forwarding method.
+    /// stays correct when the desktop is inset under a menu/status bar.
+    /// Returns `None` if no desktop was created. Backs the `cmTile`/`cmCascade`
+    /// command handlers and the `Application::get_tile_rect` forwarding method.
     ///
     /// Note: requires `&mut self` because `Group::find_mut` requires `&mut`.
     pub fn get_tile_rect(&mut self) -> Option<Rect> {
@@ -845,34 +838,30 @@ impl Program {
         }
     }
 
-    // -- exec_view: the blocking modal wrapper (row 34, D9) -----------------
+    // -- exec_view: the blocking modal wrapper --------------------------------
 
-    /// `TGroup::execView` (run on `TProgram`, the owner group) — insert a view
-    /// modally, drive the loop until it validates an end command, and return that
-    /// command. Ports `TGroup::execView` + `TGroup::execute` (`tgroup.cpp`).
+    /// Insert a view modally, drive the loop until it validates an end command,
+    /// and return that command.
     ///
     /// **Top-level only — the type system enforces it:** a [`View`] holds only
     /// `&mut Context`, never `&mut Program`, so a view *cannot* call this from
-    /// inside `handle_event` (which is what makes the nested
-    /// [`pump_once`](Self::pump_once) loop sound — D9 "exec_view — corrected"). Call
-    /// from an app `main`, startup, or a test driving pre-queued events. The
-    /// view-/menu-triggered async modal (`Deferred::OpenModal` + a posted
-    /// completion command) is **Phase 4** — only the sync `exec_view` is built here.
+    /// inside `handle_event` (which is what keeps the nested
+    /// [`pump_once`](Self::pump_once) loop sound). Call from an app `main`,
+    /// startup, or a test driving pre-queued events. A view-/menu-triggered modal
+    /// instead requests one through the deferred channel
+    /// (`Deferred::OpenModal` + a posted completion command).
     ///
-    /// **D9 DEVIATION — program-level handling runs during the modal pump (NOT a
-    /// faithful 1:1).** Under our single loop, the nested
-    /// [`pump_once`](Self::pump_once) calls below still run
+    /// **Program-level handling runs during the modal pump.** Under the single
+    /// loop, the nested [`pump_once`](Self::pump_once) calls below still run
     /// [`program_handle_event`] every iteration — so the Alt-N window-selection
-    /// block and the `cmQuit` catch are live *during* the modal. C++ does NOT do
+    /// block and the `cmQuit` catch are live *during* the modal. C++ does not do
     /// this: `TGroup::execView` → `p->execute()` (`tgroup.cpp:205`) dispatches via
-    /// `p->handleEvent` (the **dialog's**), so `TProgram::handleEvent` — where
-    /// `cmQuit → endModal(cmQuit)` (`tprogram.cpp:205`) and Alt-N live — is NOT in
+    /// the dialog's `handleEvent`, so `TProgram::handleEvent` — where
+    /// `cmQuit → endModal(cmQuit)` (`tprogram.cpp:205`) and Alt-N live — is not in
     /// the modal dispatch path. Consequence: here a `cmQuit` arriving during a
     /// modal ends the modal (with `QUIT`); in C++ it reaches the dialog, goes
-    /// unhandled, is discarded, and the modal stays open. We KEEP this behavior
-    /// ("cmQuit ends the modal + app even from a dialog" is defensible UX, and no
-    /// menu/Alt-N trigger exists at row 34) — see the Phase-4 modal-isolation
-    /// breadcrumb on the Alt-N block in [`program_handle_event`].
+    /// unhandled, is discarded, and the modal stays open. rstv keeps this behavior
+    /// — "cmQuit ends the modal and app even from a dialog" is defensible UX.
     ///
     /// **HEADLESS HANG WARNING:** [`pump_once`](Self::pump_once) does not block on a
     /// headless backend, so the inner `while end_state.is_none()` loop spins until
@@ -884,8 +873,7 @@ impl Program {
     /// Control flow (faithful to `execView`):
     /// 1. Save `current` + a clone of the command set (`getCommands`).
     /// 2. **Insert** the view into the root group (we always own it — `saveOwner ==
-    ///    0` always here; the "already owned" branch has no caller at row 34).
-    ///    Insert FIRST so `set_current` can resolve the id.
+    ///    0` always here). Insert FIRST so `set_current` can resolve the id.
     /// 3. Clear `ofSelectable` on the view (`p->options &= ~ofSelectable`).
     /// 4. `setState(sfModal, True)` — set the bit **directly** (NOT via the
     ///    propagating `set_state`: C++ `TGroup::setState` never propagates `sfModal`
@@ -899,12 +887,17 @@ impl Program {
     ///    (`TDialog::valid`), NOT the root group's (`tgroup.cpp:184/205`).
     /// 8. Pop the frame, `remove` the view, `setCurrent(saveCurrent, leaveSelect)`.
     /// 9. Restore the command set (`setCommands`).
+    ///
+    /// # Turbo Vision heritage
+    /// Ports `TGroup::execView` + `TGroup::execute` (`tgroup.cpp`), run on the
+    /// owner program group. The blocking nested loop becomes a single pump plus a
+    /// [`ModalFrame`] capture handler (deviation D9).
     pub fn exec_view(&mut self, view: Box<dyn View>) -> Command {
         self.exec_view_with_completion(view, None, None, None, false)
             .0
     }
 
-    // -- message box (row 63, PART 1) ----------------------------------------
+    // -- message box ---------------------------------------------------------
 
     /// `messageBoxRect` — build and exec a message-box dialog at an explicit
     /// `Rect`. Faithful to `msgbox.cpp::messageBoxRect` except that construction
@@ -939,10 +932,9 @@ impl Program {
     ///   desktop was created).
     ///
     /// **Coordinate note:** `exec_view` root-inserts the modal, so the rect is
-    /// in absolute/root coords. The desktop may be inset by a menu/status bar in
-    /// Phase 4; centering here uses the desktop's SIZE (faithful to C++'s
-    /// `deskTop->size.x/y`), so the result may be off by the menu-bar offset in
-    /// that phase. Documented as a minor deviation pending Phase 4.
+    /// in absolute/root coords, while centering uses the desktop's SIZE (faithful
+    /// to C++'s `deskTop->size.x/y`). When the desktop is inset by a menu/status
+    /// bar, the centered box can therefore sit off by the menu-bar offset.
     pub fn message_box(
         &mut self,
         msg: &str,
@@ -976,12 +968,12 @@ impl Program {
         }
     }
 
-    // -- input box (row 63, PART 2) ------------------------------------------
+    // -- input box -----------------------------------------------------------
 
     /// `inputBoxRect` — build and exec a single-line input dialog at an explicit
-    /// `Rect`. Faithful port of `msgbox.cpp::inputBoxRect` (D1 drop-`T`/`snake_case`;
-    /// D9 `execView`/`destroy` live here in [`Program`]; D10 the value currency
-    /// carries the scatter/gather). Construction is split out into the pure
+    /// `Rect`. Faithful port of `msgbox.cpp::inputBoxRect`, with `execView` /
+    /// `destroy` living here in [`Program`] and the typed value currency carrying
+    /// the scatter/gather. Construction is split out into the pure
     /// [`build_input_box`](crate::dialog::build_input_box) builder.
     ///
     /// `label` is the prompt drawn left of the field; `initial` is the starting
@@ -993,11 +985,10 @@ impl Program {
     /// contents (C++ `if (c != cmCancel) getData(s)`); on cancel, `text` is the
     /// unchanged `initial` (faithful — C++ leaves `s` untouched).
     ///
-    /// **Single-field shortcut (NOT the general D10 group-walk).** `inputBox` has
+    /// **Single-field shortcut (not the general group-walk).** `inputBox` has
     /// exactly one transferable field (the lone [`InputLine`](crate::widgets::InputLine)),
     /// so scatter = `set_value` on it and gather = `value()` on it. The general
-    /// `Dialog` gather/scatter group-walk stays deferred to its first multi-field
-    /// consumer.
+    /// `Dialog` gather/scatter group-walk is supplied by its multi-field consumers.
     pub fn input_box_rect(
         &mut self,
         bounds: Rect,
@@ -1009,7 +1000,7 @@ impl Program {
         let (mut d, input_id) = crate::dialog::build_input_box(bounds, title, label, limit);
 
         // Scatter (C++ `dialog->setData(s)`): seed the lone input line with the
-        // initial text via the D10 value currency.
+        // initial text via the typed value currency.
         if let Some(v) = d.find_mut(input_id) {
             v.set_value(crate::data::FieldValue::Text(initial.to_string()));
         }
@@ -1039,9 +1030,8 @@ impl Program {
     /// centered within `deskTop->size`).
     ///
     /// **Coordinate note:** like [`message_box`](Self::message_box), centering uses
-    /// the desktop's SIZE (faithful to C++'s `deskTop->size.x/y`); the result may be
-    /// off by the menu-bar offset once the desktop is inset in Phase 4. Minor
-    /// deviation pending Phase 4.
+    /// the desktop's SIZE (faithful to C++'s `deskTop->size.x/y`); when the desktop
+    /// is inset by a menu/status bar, the box can sit off by the menu-bar offset.
     pub fn input_box(
         &mut self,
         title: &str,
@@ -1100,13 +1090,13 @@ impl Program {
         sink.get()
     }
 
-    /// Install a new theme and force a full repaint (C8 theme editor).
+    /// Install a new theme and force a full repaint (theme editor).
     pub fn set_theme(&mut self, theme: crate::theme::Theme) {
         self.theme = theme;
         self.renderer.invalidate_all();
     }
 
-    /// Open the theme editor dialog (C8). On OK, installs the modified theme via
+    /// Open the theme editor dialog. On OK, installs the modified theme via
     /// [`set_theme`](Self::set_theme). On cancel, does nothing.
     ///
     /// Entry point for user-minted `cmColorBackground`-equivalent commands.
@@ -1217,7 +1207,7 @@ impl Program {
         None
     }
 
-    /// The unified `exec_view` body (row 57). Identical to the sync `exec_view`
+    /// The unified `exec_view` body. Identical to the sync `exec_view`
     /// except for two additions the view-triggered async-modal seam needs:
     ///
     /// * **`end_state` save/restore** for re-entrancy. A `THistory` lives in a
@@ -1233,9 +1223,9 @@ impl Program {
     ///   `get_selection`). It is a DIRECT `group` mutation, NOT a deferred queue
     ///   entry — the deferred drain in `pump_once` fires only when a `Some(ev)`
     ///   pump pass runs, and would never fire from here in a headless test.
-    /// * **the `gather`** seam (row 63, PART 2 — `inputBox`'s `getData`). If
+    /// * **the `gather`** seam (`inputBox`'s `getData`). If
     ///   `Some(gid)` and the result is not [`Command::CANCEL`], the value of the
-    ///   view with that id is read (`View::value`, the D10 currency) while the
+    ///   view with that id is read (`View::value`, the typed currency) while the
     ///   modal is still in the tree by id, and returned as the second tuple
     ///   element. Faithful to C++ `if (c != cmCancel) dialog->getData(s)`; on
     ///   cancel/`None` the result is `None` (the caller leaves `s` unchanged).
@@ -1263,10 +1253,9 @@ impl Program {
         // `application->execView(pD)` (msgbox.cpp:90/186 use exactly this). The
         // alternative C++ pattern, `TProgram::executeDialog`, uses
         // `deskTop->execView(pD)` (tprogram.cpp:119) — the desktop variant, which
-        // inserts into the desktop instead. Root-insert is fine for row 34. Revisit
-        // when the desktop is inset by a menu/status bar (Phase 4): a desktop-inset
-        // modal would then need to clip to the desktop region, compounding the
-        // `ModalFrame` (0,0)-coordinate caveat. Do NOT change the insert target now.
+        // inserts into the desktop instead. rstv root-inserts. When the desktop is
+        // inset by a menu/status bar, a desktop-inset modal would need to clip to
+        // the desktop region, compounding the `ModalFrame` (0,0)-coordinate caveat.
         // When `gather_self` is true we pre-mint the id and insert with that id so
         // the gather step below can read the modal's OWN `value()` by id.
         let (id, effective_gather) = if gather_self {
@@ -1278,8 +1267,8 @@ impl Program {
         };
 
         // The modal view's bounds in the root group's frame, for the ModalFrame
-        // hit-test. For row 31 the root group is at (0,0), so group-local ==
-        // absolute (the same ModalFrame coordinate caveat).
+        // hit-test. The root group is at (0,0), so group-local == absolute (the
+        // same ModalFrame coordinate caveat).
         let bounds = self
             .group
             .find_mut(id)
@@ -1292,7 +1281,7 @@ impl Program {
         //      TGroup::setState propagates sfActive/sfDragging/sfFocused, NEVER sfModal,
         //      so a direct write is the faithful port). The saveOptions/restore is moot
         //      — the view is dropped on remove (step 8). Clearing ofSelectable here
-        //      also means the step-8 `Group::remove` never fires the A2 stage-4
+        //      also means the step-8 `Group::remove` never fires the stage-4
         //      visible+selectable removal tail for the modal: its reset_current
         //      runs through the `was_current` leg instead (the modal was
         //      set_current'd in step 5), exactly the pre-stage-4 behavior.
@@ -1306,10 +1295,10 @@ impl Program {
         //    current (the desktop stays selected beneath). Build a throwaway
         //    Context over the disjoint fields (the pump's discipline).
         //
-        // 5a. THE FAITHFUL OPEN HOOK (kept under A2 — not a compensation). This
+        // 5a. THE FAITHFUL OPEN HOOK (not a compensation). This
         // VIRTUAL `reset_current` on the freshly-inserted modal is the C++
         // open-time `insertView → show → resetCurrent` for the modal itself, and
-        // it must stay even though the pump's settle_currency pass (A2) now
+        // it must stay even though the pump's settle_currency pass now
         // covers plain inserts, because:
         //   - it carries the VIRTUAL overrides' one-time init —
         //     `FileDialog::reset_current`'s initial `readDirectory` (filedlg.rs)
@@ -1370,14 +1359,14 @@ impl Program {
         let retval = loop {
             self.end_state = None;
             while self.end_state.is_none() {
-                // D9 DEVIATION (see this fn's doc): pump_once runs
+                // DEVIATION (see this fn's doc): pump_once runs
                 // program_handle_event each pass, so Alt-N + the cmQuit catch are
                 // live during the modal. C++ execView -> p->execute() (tgroup.cpp:205)
                 // dispatches to the dialog's handleEvent, NOT TProgram::handleEvent
                 // (where cmQuit->endModal + Alt-N live, tprogram.cpp:205) — so program
                 // handling is out of the modal dispatch path there. We keep ours.
                 //
-                // pump_and_drive (row 57): a THistory inside this modal dialog can
+                // pump_and_drive: a THistory inside this modal dialog can
                 // itself request a modal (the history popup), driven re-entrantly at
                 // top level here after each pump.
                 self.pump_and_drive();
@@ -1450,7 +1439,7 @@ impl Program {
         // The C++ tail `p->setState(sfModal, False); p->options = saveOptions;` is
         // **moot** here: the removed view is owned by the group and dropped on
         // `remove` (we keep no Box from it), so clearing sfModal / restoring options
-        // on a dropped object is unobservable — not ported (faithfulness note, D3).
+        // on a dropped object is unobservable, so it is intentionally omitted.
 
         // 9. setCommands(saveCommands): restore the command set. Restoring is not an
         //    app-visible toggle the way enable/disable is, so we do NOT set
@@ -1461,8 +1450,8 @@ impl Program {
         //    DEVIATION: C++ TView::setCommands DOES set commandSetChanged when the
         //    sets differ — and here they do differ (the modal enabled
         //    cmNext/cmPrev/cmClose/cmZoom), so C++ fires a post-modal
-        //    cmCommandSetChanged broadcast we omit. Deliberate, and moot at row 34
-        //    (no observer of the command set exists yet); align when one does.
+        //    cmCommandSetChanged broadcast that rstv omits. Deliberate: the
+        //    command set is restored wholesale on modal exit.
         self.disabled_commands = save_commands;
 
         // Restore the enclosing loop's end_state (re-entrancy — see the doc above).
@@ -1470,7 +1459,7 @@ impl Program {
         // leftover `self.end_state` must NOT leak out to end an outer modal/run loop.
         self.end_state = saved_end_state;
 
-        // TheTopView dropped (D8: no occlusion/exposed); no consumer.
+        // TheTopView dropped (no occlusion/exposed tracking); no consumer.
 
         (retval, gathered)
     }
@@ -1611,9 +1600,9 @@ impl Program {
         }
     }
 
-    /// One iteration of the loop — the heart of D9.
+    /// One iteration of the event loop.
     ///
-    /// Borrow discipline (the brief's #1 risk): `self` is destructured into field
+    /// Borrow discipline: `self` is destructured into field
     /// bindings at the top, so the disjoint fields backing [`Context`]
     /// (`out_events` / `timers` / `deferred`) can be borrowed alongside
     /// `group` / `captures`. The dispatch is a free function with explicit field
@@ -1644,7 +1633,7 @@ impl Program {
             clipboard_has_selection,
         } = self;
 
-        // 1. Resize check — the D9 realization of setScreenMode/cmScreenChanged.
+        // 1. Resize check — the realization of setScreenMode/cmScreenChanged.
         //    CrosstermBackend::size() queries the terminal live, so there is no
         //    Event::Resize variant (avoids enum churn).
         let (w, h) = renderer.backend().size();
@@ -1657,7 +1646,7 @@ impl Program {
         // 2. Sample the clock once for this pass.
         let now = clock.now_ms();
 
-        // 2b. Settle pending insert-time currency cascades (A2) BEFORE the event
+        // 2b. Settle pending insert-time currency cascades BEFORE the event
         //     pick, so the dispatched event sees C++-equivalent currency: in C++
         //     every insert of a visible+selectable view ran show()->resetCurrent
         //     inline, so the very next event already routed to the new currency.
@@ -1682,7 +1671,7 @@ impl Program {
             None => renderer.backend_mut().poll_event(timeout),
         };
 
-        // 3b. The evMouseAuto synthesizer (A3, see MouseAutoState): a real
+        // 3b. The evMouseAuto synthesizer (see MouseAutoState): a real
         //     picked event updates the held-button bookkeeping (BEFORE dispatch
         //     localizes/mutates it); an empty pick may instead synthesize an
         //     auto, which then dispatches exactly like a real event. Real
@@ -1710,10 +1699,9 @@ impl Program {
                 // collectExpiredTimers: each expired timer queues a typed
                 // `Event::Timer(id)` carrying its own [`TimerId`](crate::timer::TimerId) (the successor to
                 // `evBroadcast cmTimerExpired` with `message.infoPtr == TTimerId`).
-                // This is strictly more correct than the old code, which queued N
-                // indistinguishable `cmTimerExpired` broadcasts for N expired ids;
-                // now a widget can tell *which* timer fired. (timer-payload TODO
-                // RESOLVED.)
+                // This is strictly more correct than queuing N indistinguishable
+                // `cmTimerExpired` broadcasts for N expired ids: a widget can tell
+                // *which* timer fired from the carried id.
                 for id in timers.collect_expired(now) {
                     out_events.push_back(Event::Timer(id));
                 }
@@ -1728,7 +1716,7 @@ impl Program {
                 // lines: when a modal opens with a specific helpCtx, the status line
                 // switches to the matching def automatically.
                 //
-                // No explicit redraw is needed — D8 whole-tree redraw runs every
+                // No explicit redraw is needed — the whole-tree redraw runs every
                 // pump cycle after this arm, so set_help_ctx's internal state
                 // update is picked up on the next render.
                 if let Some(sl_id) = *status_line {
@@ -1771,7 +1759,7 @@ impl Program {
                         // Pre-route deferreds are FIRST-CLASS: the deferred drain at
                         // the tail of this arm runs even when the pre-route consumed
                         // (cleared) the event, so anything the status line queues here
-                        // (e.g. the mouse-track PushCapture, B2 statusline lesson)
+                        // (e.g. the mouse-track PushCapture, status-line pre-route)
                         // applies through the same drain as every other widget.
                         //
                         // Translate a mouse position into the status line's own frame
@@ -1792,7 +1780,7 @@ impl Program {
                     }
                 }
 
-                // Command filtering at the program boundary (D1): drop a command
+                // Command filtering at the program boundary: drop a command
                 // only when it is explicitly disabled (denylist — everything else,
                 // including unregistered custom commands, flows). Broadcasts/keys/
                 // mouse flow regardless.
@@ -1816,7 +1804,7 @@ impl Program {
                     {
                         let mut ctx = Context::new(out_events, timers, now, deferred);
                         // Per-pump refresh of the Context's disabled-command
-                        // SNAPSHOT (D1 denylist), backing ctx.command_enabled —
+                        // SNAPSHOT (denylist), backing ctx.command_enabled —
                         // an owned clone, so no aliasing with the deferred-apply
                         // arms that mutate the live set below.
                         ctx.set_disabled_commands(disabled_commands.clone());
@@ -1882,7 +1870,7 @@ impl Program {
                 // Apply the deferred queue AFTER dispatch — one drain, in
                 // insertion order. INVARIANT: the drain runs even when the
                 // pre-route consumed the event — pre-route deferreds are
-                // first-class (B2 statusline lesson: a status-line MouseDown that
+                // first-class (the status-line pre-route: a status-line MouseDown that
                 // arms a mouse track queues its PushCapture from the pre-route,
                 // where the `!ev.is_nothing()` dispatch gate above is skipped).
                 //
@@ -1932,7 +1920,7 @@ impl Program {
                             Deferred::ChangeBounds(id, r) => {
                                 if let Some(v) = group.find_mut(id) {
                                     v.change_bounds(r);
-                                    // B5: TScroller/TListViewer::changeBounds call
+                                    // TScroller/TListViewer::changeBounds call
                                     // setLimit/setStep after setBounds — realized as
                                     // this post-apply hook (view.rs on_bounds_changed).
                                     v.on_bounds_changed(&mut ctx);
@@ -1954,13 +1942,13 @@ impl Program {
                                 group.focus_descendant(id, &mut ctx);
                             }
                             // TGroup::endModal — set the loop end state; the
-                            // nested exec_view loop (row 34) observes it.
+                            // nested exec_view loop observes it.
                             Deferred::EndModal(cmd) => {
                                 *end_state = Some(cmd);
                             }
-                            // -- row 27: TScroller cross-view broker --------
+                            // -- TScroller cross-view broker --------
                             //
-                            // The pump is the broker: a scroller (a leaf, D3)
+                            // The pump is the broker: a scroller (a leaf view)
                             // can neither read nor mutate its window-frame
                             // sibling scrollbars, so the read/write happens here
                             // where the whole tree is reachable via `group`.
@@ -1990,7 +1978,7 @@ impl Program {
                                     s.apply_delta(Point::new(dx, dy));
                                 }
                             }
-                            // Outline viewer read-sync (row 89): like
+                            // Outline viewer read-sync: like
                             // SyncScrollerDelta — read both bars' `value`s,
                             // write the delta into the viewer's `OutlineViewerState`
                             // (downcast to `Outline`). Read-only, no write-back.
@@ -2048,13 +2036,13 @@ impl Program {
                             // skips !visible) and run the C++
                             // setState(sfVisible) currency tail — if the flag
                             // really changed and the child is selectable, the
-                            // owning group resetCurrents, BOTH directions (A2).
+                            // owning group resetCurrents, BOTH directions.
                             // Today's consumers (scrollbars / indicators) are
                             // non-selectable, so the tail is a no-op for them.
                             Deferred::SetVisible(id, visible) => {
                                 group.set_visible_descendant(id, visible, &mut ctx);
                             }
-                            // -- row 28: TListViewer read-sync broker -------
+                            // -- TListViewer read-sync broker -------
                             //
                             // Like SyncScrollerDelta, but the list base is a
                             // TRAIT (subclasses reuse its draw + override
@@ -2087,9 +2075,9 @@ impl Program {
                                     view.apply_list_scroll(hv, vv, &mut ctx);
                                 }
                             }
-                            // -- row 49: TMenuView command-graying broker --
+                            // -- TMenuView command-graying broker --
                             //
-                            // The menu view (a child, D3) cannot read the
+                            // The menu view (a child) cannot read the
                             // command set inline — the pump owns it. Resolve
                             // the menu view and call back through the defaulted
                             // View::update_menu_commands trait method with the
@@ -2103,7 +2091,7 @@ impl Program {
                                     v.update_menu_commands(disabled_commands);
                                 }
                             }
-                            // -- rows 50-52: the TMenuView modal layer ------
+                            // -- the TMenuView modal layer ------
                             //
                             // OpenMenuBox: build a MenuBox from the (cloned)
                             // submenu over `bounds` and insert it into the
@@ -2126,7 +2114,7 @@ impl Program {
                                     v.set_menu_current(current);
                                 }
                             }
-                            // -- row 57: the THistory view-triggered async-modal seam --
+                            // -- the THistory view-triggered async-modal seam --
                             //
                             // recordHistory(link->data) for the broadcast arm:
                             // read the link's current text and history_add it.
@@ -2134,7 +2122,7 @@ impl Program {
                                 record_history_for(group, link, history_id);
                             }
                             // OpenHistory: the THistory leaf holds only the link's
-                            // id (D3) and cannot call exec_view (top-level only), so
+                            // id and cannot call exec_view (top-level only), so
                             // it requested the open and the pump does everything
                             // reachable here (group + ctx + pending_modal, none
                             // aliased — ctx borrows out_events/timers/deferred, not
@@ -2157,20 +2145,21 @@ impl Program {
                                 if require_focus && !focused {
                                     // not focused — drop the request (no open).
                                 } else if let Some(bounds) = build_history_bounds(group, link) {
-                                    // link->focus() — DEVIATION: our focus is
-                                    // deferred (focus_descendant) with no inline
-                                    // success bool, so the C++ focus-abort
-                                    // (`if (!link->focus()) return`) is OUT (§0);
-                                    // request focus + proceed (same class as the
-                                    // row-39/41 deferred-focus TODOs).
+                                    // link->focus() — DEVIATION: focus here is
+                                    // requested through the deferred channel
+                                    // (focus_descendant) with no inline success
+                                    // bool, so the C++ focus-abort
+                                    // (`if (!link->focus()) return`) is dropped;
+                                    // request focus + proceed.
                                     group.focus_descendant(link, &mut ctx);
                                     // recordHistory(link->data): the link's CURRENT
                                     // text at OPEN, never the picked value (faithful
                                     // pin — the completion never re-records).
                                     record_history_for(group, link, history_id);
                                     // initHistoryWindow + stash for the outer drive.
-                                    // helpCtx propagation is OMITTED — no help-ctx-
-                                    // on-view plumbing yet (TODO(help-ctx propagation)).
+                                    // helpCtx propagation is intentionally omitted:
+                                    // rstv has no per-view help-context plumbing for
+                                    // the HistoryWindow to inherit.
                                     let hw = crate::widgets::HistoryWindow::new(bounds, history_id);
                                     *pending_modal = Some((
                                         Box::new(hw),
@@ -2179,7 +2168,7 @@ impl Program {
                                     ));
                                 }
                             }
-                            // -- row 66: the TEditor cross-view brokers ----
+                            // -- the TEditor cross-view brokers ----
                             //
                             // Read direction (TEditor::checkScrollBar):
                             // resolve each bar, read its `value`, then
@@ -2243,7 +2232,7 @@ impl Program {
                                     ed.insert_text(t.as_bytes(), false, &mut ctx);
                                 }
                             }
-                            // B3: clipboard paste into an InputLine
+                            // clipboard paste into an InputLine
                             // (tinputli.cpp cmPaste → TClipboard::requestText):
                             // read the backend clipboard, downcast the view to
                             // InputLine, and call paste_text — which inserts at
@@ -2260,7 +2249,7 @@ impl Program {
                                     il.paste_text(&t);
                                 }
                             }
-                            // -- C3: the internal-clipboard TEditor broker -----
+                            // -- the internal-clipboard TEditor broker -----
                             //
                             // Three variants: register, receive (copy into
                             // clipboard editor), and paste (copy out to dest
@@ -2328,10 +2317,10 @@ impl Program {
                                     ed.insert_from(&d, &mut ctx);
                                 }
                             }
-                            // -- row 77: cmFileFocused payload broker -------
+                            // -- cmFileFocused payload broker -------
                             //
                             // Resolve the payload-carrying cmFileFocused
-                            // broadcast (D4: source is the resolvable subject,
+                            // broadcast (source is the resolvable subject,
                             // not a value carrier). Read the focused SearchRec
                             // from the source FileList in its OWN find_mut and
                             // drop the borrow, THEN find_mut the subscriber and
@@ -2345,7 +2334,7 @@ impl Program {
                                     .and_then(|a| a.downcast_mut::<FileList>())
                                     .and_then(|fl| fl.focused_rec());
                                 // Two consumers share the broker: a FileInputLine
-                                // (row 77) and a FileInfoPane (row 78). Try each
+                                // and a FileInfoPane. Try each
                                 // downcast in turn; `rec` moves into the matching
                                 // arm (the two are mutually exclusive).
                                 if let Some(fil) = group
@@ -2362,9 +2351,9 @@ impl Program {
                                     fip.on_file_focused(rec);
                                 }
                             }
-                            // -- row 80: TDirListBox → chDirButton makeDefault --
+                            // -- TDirListBox → chDirButton makeDefault --
                             //
-                            // The dir list (a leaf, D3) gained/lost focus and
+                            // The dir list (a leaf view) gained/lost focus and
                             // wants its sibling chDirButton to grab/release the
                             // default look. Resolve the button, downcast, and call
                             // make_default(enable, ctx); its GRAB/RELEASE_DEFAULT
@@ -2379,7 +2368,7 @@ impl Program {
                                     b.make_default(enable, &mut ctx);
                                 }
                             }
-                            // -- A3: the MouseTrackCapture router (D9) --
+                            // -- the MouseTrackCapture router --
                             //
                             // The capture localized + forwarded a masked mouse
                             // event during the hold; deliver it straight to the
@@ -2399,7 +2388,7 @@ impl Program {
                                     v.handle_event(&mut ev, &mut ctx);
                                 }
                             }
-                            // -- colorpick: the color-picker drag broker (D3) --
+                            // -- colorpick: the color-picker drag broker --
                             //
                             // `ColorDragCapture` posts `ColorPickerDrag` on each
                             // `MouseMove`/`MouseUp`. Resolve `picker`, downcast to
@@ -2707,10 +2696,10 @@ impl Program {
                                 ));
                             }
 
-                            // -- C8: per-role color-picker seam (theme editor) --
+                            // -- per-role color-picker seam (theme editor) --
                             //
                             // A ThemeEditorBody leaf cannot exec a modal inline
-                            // (holds only &mut Context, D3). It queues this; the
+                            // (holds only &mut Context). It queues this; the
                             // pump builds a 60×23 "Select Color" dialog seeded with
                             // `current` and stashes it into pending_modal with a
                             // ThemeColorPick completion. pump_and_drive runs it at
@@ -2821,11 +2810,11 @@ impl Program {
 }
 
 // ---------------------------------------------------------------------------
-// program-level handle_event — ports TProgram::handleEvent (free fn, D9 borrows)
+// program-level handle_event — ports TProgram::handleEvent (free fn, disjoint borrows)
 // ---------------------------------------------------------------------------
 
 /// Extract the `i32` out of a [`FieldValue::Int`](crate::data::FieldValue::Int),
-/// or `None` for any other variant. Used by the row-27 `TScroller` read-broker to
+/// or `None` for any other variant. Used by the `TScroller` read-broker to
 /// read a scrollbar's `value` through the generic [`View::value`](crate::view::View::value)
 /// (the successor to C++ `hScrollBar->value`).
 fn field_int(v: crate::data::FieldValue) -> Option<i32> {
@@ -2837,7 +2826,7 @@ fn field_int(v: crate::data::FieldValue) -> Option<i32> {
 
 /// Extract the [`String`] out of a [`FieldValue::Text`](crate::data::FieldValue::Text),
 /// or `None` for any other variant. The text sibling of [`field_int`], used by the
-/// row-57 `THistory` brokers to read the linked input line's text through
+/// `THistory` brokers to read the linked input line's text through
 /// [`View::value`].
 fn field_text(v: crate::data::FieldValue) -> Option<String> {
     match v {
@@ -2846,7 +2835,7 @@ fn field_text(v: crate::data::FieldValue) -> Option<String> {
     }
 }
 
-/// `THistory::recordHistory(link->data)` (row 57): resolve `link`, read its text via
+/// `THistory::recordHistory(link->data)`: resolve `link`, read its text via
 /// [`View::value`], and `history_add` it to the channel. A free fn so it composes
 /// with the pump's destructured `group` borrow (no `&mut self`).
 fn record_history_for(group: &mut Group, link: ViewId, history_id: u8) {
@@ -2859,7 +2848,7 @@ fn record_history_for(group: &mut Group, link: ViewId, history_id: u8) {
     }
 }
 
-/// Build the history popup bounds (row 57), ported from `THistory::handleEvent`'s
+/// Build the history popup bounds, ported from `THistory::handleEvent`'s
 /// geometry block. The C++ formula runs in the link's **owner (dialog)** frame and
 /// intersects the dialog's extent; our `exec_view` root-inserts the modal and
 /// `ModalFrame` hit-tests in **root/absolute** coords (the ROOT-INSERT + (0,0)
@@ -2908,7 +2897,7 @@ fn centered_msgbox_rect_for(group: &Group, desktop: Option<ViewId>, msg: &str) -
     r
 }
 
-/// Run a [`ModalCompletion`] (row 57) as a DIRECT `group` mutation, while the modal
+/// Run a [`ModalCompletion`] as a DIRECT `group` mutation, while the modal
 /// is still in the tree by `modal_id`. NOT a deferred queue entry (that drain
 /// fires only when a `Some(ev)` pump pass runs inside `pump_once`, and would
 /// never fire from `exec_view`). Two sequential `find_mut` borrows — never simultaneous.
@@ -2930,7 +2919,7 @@ fn apply_modal_completion(
                     .map(|hw| hw.get_selection());
                 if let Some(s) = s {
                     // strnzcpy + selectAll(True): InputLine::set_value already does
-                    // `data = s; select_all(true, true)` (D10 flowback).
+                    // `data = s; select_all(true, true)` (value flowback).
                     if let Some(lv) = group.find_mut(link) {
                         lv.set_value(crate::data::FieldValue::Text(s));
                     }
@@ -3078,7 +3067,7 @@ fn apply_modal_completion(
             None
         }
 
-        // C8: per-role color picker result — downcast the in-tree ColorPicker,
+        // per-role color picker result — downcast the in-tree ColorPicker,
         // read color(), write it into the ThemeEditorBody's working theme.
         ModalCompletion::ThemeColorPick {
             editor_id,
@@ -3111,7 +3100,7 @@ fn apply_modal_completion(
             None
         }
 
-        // C8: theme editor dialog result — read the ThemeEditorBody's working
+        // theme editor dialog result — read the ThemeEditorBody's working
         // theme and write into the sink on OK.
         ModalCompletion::ThemeEdit { editor_id, sink } => {
             if result == Command::OK {
@@ -3129,7 +3118,7 @@ fn apply_modal_completion(
 
 /// `TProgram::eventWaitTimeout` — `min(20 ms, time_until_next_timer)`. With no
 /// timer it is just the 20 ms frame tick. Returned for `poll_event`; headless
-/// ignores it and never blocks (D11). A free function (not a method) so it
+/// ignores it and never blocks. A free function (not a method) so it
 /// composes with the pump's destructured borrows.
 fn event_wait_timeout(timers: &TimerQueue, now: u64) -> Option<Duration> {
     let frame = Duration::from_millis(EVENT_TIMEOUT_MS);
@@ -3153,13 +3142,11 @@ fn program_handle_event(
     app_commands: &mut VecDeque<Command>,
     renderer: &mut Renderer,
 ) {
-    // TODO(Phase 4: modal isolation): when menus + multiple windows + a modal
-    // coexist, program-level interception (this Alt-N block + the cmQuit catch
-    // below) should be SUPPRESSED while a modal is active — C++'s nested
-    // `p->execute()` (tgroup.cpp:205) structurally prevents it by dispatching to
-    // the dialog's handleEvent, not TProgram's. Our single loop (D9) runs this on
-    // every pump, including modal pumps (deviation documented on `exec_view`). No
-    // trigger exists yet (no menu/Alt-N source at row 34), so this is a breadcrumb.
+    // Modal-isolation note: program-level interception (this Alt-N block + the
+    // cmQuit catch below) is NOT suppressed while a modal is active. C++'s nested
+    // `p->execute()` (tgroup.cpp:205) structurally avoids it by dispatching to the
+    // dialog's handleEvent, not TProgram's; rstv's single loop runs this on every
+    // pump, including modal pumps (the deviation documented on `exec_view`).
     //
     // Alt+digit window selection (cmSelectWindowNum). Faithful TProgram::handleEvent
     // order: the Alt-N block runs BEFORE the group dispatch. The window NUMBER is an
@@ -3393,8 +3380,8 @@ mod tests {
                     Some(Desktop::init_background(r2))
                 })))
             },
-            |_r| None, // status line stubbed (Phase 4)
-            |_r| None, // menu bar stubbed (Phase 4)
+            |_r| None, // status line stubbed
+            |_r| None, // menu bar stubbed
         );
         // Drain the startup desktop-focus broadcast so tests start with a clean
         // queue (the RECEIVED_FOCUS that Program::new queues when it focuses the
@@ -3536,9 +3523,9 @@ mod tests {
         (program, id_vec)
     }
 
-    // -- row 30: cmTile routes through the pump to Desktop::tile --------------
+    // -- cmTile routes through the pump to Desktop::tile --------------
 
-    /// End-to-end breadcrumb: posting `cmTile` (as a menu item would) makes
+    /// End to end: posting `cmTile` (as a menu item would) makes
     /// `pump_once` lay the desktop's tileable windows into a grid AND clear the
     /// command event. Bite: windows must move to their `calc_tile_rect` cells (a
     /// missing/wrong wiring leaves them at their staggered ctor bounds), and no
@@ -3580,9 +3567,9 @@ mod tests {
         );
     }
 
-    // -- row 30: cmCascade routes through the pump to Desktop::cascade --------
+    // -- cmCascade routes through the pump to Desktop::cascade --------
 
-    /// End-to-end breadcrumb mirror of the cmTile test: posting `cmCascade` makes
+    /// End-to-end mirror of the cmTile test: posting `cmCascade` makes
     /// `pump_once` cascade the desktop's tileable windows AND clear the command.
     /// Bite: the first-visited (topmost, last-inserted) window must take offset
     /// `+ (n-1)` and the last `+ 0` (a reversed order or wrong start fails the exact
@@ -3622,7 +3609,7 @@ mod tests {
         );
     }
 
-    // -- 33d-2: Alt-N selects a numbered window ------------------------------
+    // -- Alt-N selects a numbered window ------------------------------
 
     #[test]
     fn alt_n_selects_numbered_window() {
@@ -3654,9 +3641,9 @@ mod tests {
         );
     }
 
-    // -- row 41: Deferred::FocusById wires through the pump ------------------
+    // -- Deferred::FocusById wires through the pump ------------------
 
-    /// The FOUNDATION seam end-to-end: a `Deferred::FocusById(id)` queued **during
+    /// End-to-end: a `Deferred::FocusById(id)` queued **during
     /// an event dispatch** (exactly when `TLabel::focusLink`'s `ctx.request_focus`
     /// runs — from inside `handle_event`) is drained by that same `pump_once` pass,
     /// resolved via `group.focus_descendant`, and focuses (selects) the named view.
@@ -3697,7 +3684,7 @@ mod tests {
 
     /// **The ONLY end-to-end test of the real `program.rs`
     /// [`ResolveFocusedFile`](crate::view::Deferred::ResolveFocusedFile) pump arm**
-    /// (the row-77 `cmFileFocused` payload broker). Every other test for this
+    /// (the `cmFileFocused` payload broker). Every other test for this
     /// chain is unit-level: filedlg's tests either count the broadcast/request or
     /// *emulate* the broker apply by hand (`file_focused_round_trip_through_broker`
     /// runs `find_mut(src).focused_rec()` + `on_file_focused` itself). This test
@@ -3846,11 +3833,11 @@ mod tests {
         );
     }
 
-    // -- row 80: Deferred::MakeButtonDefault wires through the pump -----------
+    // -- Deferred::MakeButtonDefault wires through the pump -----------
 
     /// **The end-to-end test of the real `program.rs`
     /// [`MakeButtonDefault`](crate::view::Deferred::MakeButtonDefault) pump arm**
-    /// (row 80: `TDirListBox::setState` → `chDirButton->makeDefault`). filedlg's
+    /// (`TDirListBox::setState` → `chDirButton->makeDefault`). filedlg's
     /// unit tests assert that `DirListBox::set_state` *queues* the variant; this
     /// drives the genuine production arm through `pump_once`: `group.find_mut(button)`
     /// downcasts the `Button` and calls `make_default(enable, ctx)`, whose
@@ -4236,9 +4223,9 @@ mod tests {
         );
     }
 
-    // -- A3: button mouse hold-tracking end-to-end through the pump ------------
+    // -- button mouse hold-tracking end-to-end through the pump ------------
 
-    /// **End-to-end test of the button mouse press-and-hold tracking (the A3
+    /// **End-to-end test of the button mouse press-and-hold tracking (the
     /// `MouseTrackCapture` seam + `Deferred::MouseTrack` pump arm).**
     ///
     /// A button is inserted into the desktop at `(5, 5, 15, 7)` so its absolute
@@ -4435,7 +4422,7 @@ mod tests {
         );
     }
 
-    /// B2 end-to-end: a held mouse button on a scrollbar's down-arrow steps the
+    /// End-to-end: a held mouse button on a scrollbar's down-arrow steps the
     /// value on the synthesizer's Borland cadence (440 ms then 110 ms), pauses
     /// when the held position moves off the arrow, and stops on MouseUp — all
     /// through real pumps (MouseDown via the backend queue arms the synthesizer;
@@ -4569,7 +4556,7 @@ mod tests {
         );
     }
 
-    // -- A3: the global evMouseAuto synthesizer ------------------------------
+    // -- the global evMouseAuto synthesizer ------------------------------
 
     /// Build a program with a 10×4 recording probe at the screen origin whose
     /// `event_mask.mouse_auto` is `mouse_auto_mask`, settle the startup queue,
@@ -4756,7 +4743,7 @@ mod tests {
         );
     }
 
-    /// End-to-end routing proof without any B2 widget: a probe with
+    /// End-to-end routing proof without any press-and-hold widget: a probe with
     /// `event_mask.mouse_auto = true` receives the synthesized autos through
     /// the normal positional routing (`Group::wants`); a probe without the
     /// opt-in does not.
@@ -4907,10 +4894,10 @@ mod tests {
         );
     }
 
-    // -- A2: the settle_currency cascade (insert-time show()->resetCurrent) ---
+    // -- the settle_currency cascade (insert-time show()->resetCurrent) ---
 
     /// Downcast the program's desktop child to the concrete [`Desktop`] (the
-    /// `as_any_mut` hatch) — the A2 tests' route to `current_child` /
+    /// `as_any_mut` hatch) — the currency tests' route to `current_child` /
     /// `insert_view`.
     fn desktop_concrete(program: &mut Program) -> &mut Desktop {
         let id = program.desktop().expect("a desktop exists");
@@ -4922,14 +4909,14 @@ mod tests {
             .expect("the desktop child downcasts to Desktop")
     }
 
-    /// NESTED-GAP BITE (A2). C++ runs `insertView → show() →
+    /// NESTED-GAP BITE. C++ runs `insertView → show() →
     /// setState(sfVisible) → owner->resetCurrent()` at EVERY level, so a
     /// ctor-built desktop holding a window that itself holds a selectable child
     /// has the full currency chain (desktop→window→child) before the first
     /// event. rstv's ctx-less inserts defer that to `Program::new`'s eager
     /// `settle_currency` pass, which runs POST-ORDER (children first) so the
     /// window's INTERNAL currency exists before the desktop's focus cascade
-    /// descends into it. Before A2 (base d4358bf) `Program::new` reset only the
+    /// descends into it. An earlier version reset only the
     /// DESKTOP's currency: the window became current+focused but its own
     /// `current` stayed `None` — the child unfocused, typing lost (this test
     /// fails there on every assertion past the first).
@@ -4996,7 +4983,7 @@ mod tests {
         );
     }
 
-    /// SETTLE-BEFORE-DISPATCH (A2). A plain ctx-less insert between pumps (the
+    /// SETTLE-BEFORE-DISPATCH. A plain ctx-less insert between pumps (the
     /// bare `Desktop::insert_view` seam — no focus_child, no reset_current
     /// anywhere) must be keyboard-live by the very next event: `pump_once`
     /// settles pending currency (step 2b) BEFORE the event pick, exactly as the
@@ -5027,7 +5014,7 @@ mod tests {
         );
     }
 
-    /// HIDE/SHOW CURRENCY (A2 stage 3). The C++ `TView::setState(sfVisible)`
+    /// HIDE/SHOW CURRENCY. The C++ `TView::setState(sfVisible)`
     /// tail `if (options & ofSelectable) owner->resetCurrent()` runs in BOTH
     /// directions (show and hide). `Deferred::SetVisible` routes through
     /// `set_visible_descendant`, which runs that tail in the OWNING group; a
@@ -5093,7 +5080,7 @@ mod tests {
         );
     }
 
-    // -- 33d-2: cmNext cycles windows ----------------------------------------
+    // -- cmNext cycles windows ----------------------------------------
 
     #[test]
     fn cm_next_cycles_to_findnext_window() {
@@ -5131,7 +5118,7 @@ mod tests {
         assert!(!win_selected(&mut program, w2));
     }
 
-    // -- 33d-2: cmPrev sends current to back ---------------------------------
+    // -- cmPrev sends current to back ---------------------------------
 
     #[test]
     fn cm_prev_sends_current_to_back_and_cycles() {
@@ -5355,20 +5342,20 @@ mod tests {
             "inside click also reaches the modal view"
         );
 
-        // end_modal surfaces the end state. NOTE: row 31 does NOT pop the frame
-        // here — `CaptureStack` (row 21) has no pop API; a handler self-pops only
-        // by returning `ConsumedPop` (proven generically by
+        // end_modal surfaces the end state. NOTE: end_modal does NOT pop the frame
+        // here — `CaptureStack` has no pop API; a handler self-pops only by
+        // returning `ConsumedPop` (proven generically by
         // `capture::tests::consumed_pop_removes_handler`). The blocking wrapper
         // that pushes the frame, runs the pump until end_modal, then pops it is
-        // `exec_view`/`executeDialog` at **row 34** (TDialog), built on this frame.
-        // So the frame is still on the stack after end_modal — the truthful state.
+        // `exec_view`, built on this frame. So the frame is still on the stack
+        // after end_modal — the truthful state.
         assert_eq!(program.capture_len(), 1, "modal frame still present");
         program.end_modal(Command::OK);
         assert_eq!(program.end_state(), Some(Command::OK));
         assert_eq!(
             program.capture_len(),
             1,
-            "row 31 does not pop the frame; exec_view (row 34) owns push+pop"
+            "end_modal does not pop the frame; exec_view owns push+pop"
         );
     }
 
@@ -5667,7 +5654,7 @@ mod tests {
         );
     }
 
-    // -- 9b. denylist command enablement (A1: the allowlist → denylist flip) --
+    // -- 9b. denylist command enablement (the allowlist → denylist flip) --
 
     /// (a) An arbitrary app-minted command is enabled by default — the heart of
     /// the denylist: no registration, no allowlist to extend.
@@ -5773,7 +5760,7 @@ mod tests {
         );
     }
 
-    /// (e) `Context::command_enabled` (the B1-unblocking snapshot query) reflects
+    /// (e) `Context::command_enabled` (the snapshot query) reflects
     /// the program's set: a `ctx.disable_command` deferred in pump N is visible
     /// to the Context snapshot in pump N+1 (snapshot semantics).
     #[test]
@@ -5825,7 +5812,7 @@ mod tests {
         );
     }
 
-    // -- 10. drag move round-trip (33d-1, mandatory) -------------------------
+    // -- 10. drag move round-trip -------------------------
 
     use crate::view::StateFlag;
     use crate::window::Window;
@@ -5972,7 +5959,7 @@ mod tests {
         );
     }
 
-    // -- 13. exec_view modal round-trips (row 34, FOUNDATION gate) -----------
+    // -- 13. exec_view modal round-trips -----------
 
     use crate::dialog::Dialog;
 
@@ -6078,7 +6065,7 @@ mod tests {
         assert_eq!(program.capture_len(), 0, "ModalFrame popped");
     }
 
-    /// A5 phase signal, end-to-end leg 1: a FOCUSED view that CONSUMES the
+    /// Phase signal, end-to-end leg 1: a FOCUSED view that CONSUMES the
     /// letter starves the post-process accelerator. Dialog = InputLine
     /// (current, eats letters) + a "~K~ick" button (ofPostProcess). Typing 'k'
     /// lands in the input line (proof: its text becomes "k"), so the post-loop
@@ -6141,7 +6128,7 @@ mod tests {
         assert!(btn.animation_timer.is_none(), "no press animation armed");
     }
 
-    /// A5 phase signal, end-to-end leg 2: when the FOCUSED view does NOT
+    /// Phase signal, end-to-end leg 2: when the FOCUSED view does NOT
     /// consume the letter, the post-process walk delivers it and the plain
     /// hotkey presses the (unfocused) button. Dialog = two buttons: "~K~ick"
     /// and "~M~ore" (inserted last → topmost → current; ignores a plain 'k'
@@ -6201,8 +6188,8 @@ mod tests {
     /// `group.valid(QUIT)` -> true (the dialog's `valid` defers to the group, no
     /// child vetoes QUIT), so `exec_view` returns `QUIT` and pops the frame.
     ///
-    /// **This asserts a DELIBERATE D9 DEVIATION, not faithful C++ behavior.** Under
-    /// our single loop, `program_handle_event` (the `cmQuit` catch) runs during the
+    /// **This asserts a DELIBERATE DEVIATION, not faithful C++ behavior.** Under
+    /// the single loop, `program_handle_event` (the `cmQuit` catch) runs during the
     /// modal pump, so `cmQuit` ends the modal with `QUIT`. In C++,
     /// `TGroup::execView` → `p->execute()` (`tgroup.cpp:205`) dispatches to the
     /// **dialog's** `handleEvent`, so the `cmQuit → endModal` catch in
@@ -6374,8 +6361,8 @@ mod tests {
         assert_eq!(program.capture_len(), 0, "ModalFrame popped after the loop");
     }
 
-    /// A `sfModal` window posts `cmCancel` on `cmClose` and is NOT removed (row 34
-    /// owns the actual modal teardown; only this branch is wired in 33d-1).
+    /// A `sfModal` window posts `cmCancel` on `cmClose` and is NOT removed
+    /// (`exec_view` owns the actual modal teardown).
     #[test]
     fn close_modal_window_posts_cancel_not_removed() {
         let (mut program, _screen, _clock) = program_with_desktop(80, 25);
@@ -6468,7 +6455,7 @@ mod tests {
         );
     }
 
-    // -- row 27: TScroller cross-view broker (pump-side apply) ----------------
+    // -- TScroller cross-view broker (pump-side apply) ----------------
     //
     // These drive the broker end-to-end through `pump_once`: the scroller and its
     // two bars are inserted into the ROOT group (so the pump's `group.find_mut`
@@ -6898,7 +6885,7 @@ mod tests {
         );
     }
 
-    // -- row 28: TListViewer read-sync broker + the TERMINATION property -------
+    // -- TListViewer read-sync broker + the TERMINATION property -------
     //
     // The list-viewer read-sync WRITES BACK (focus_item_num -> focusItem -> a
     // deferred v-bar setValue(focused)), unlike the scroller. The cycle
@@ -7213,12 +7200,12 @@ mod tests {
         );
     }
 
-    // -- row 49: TMenuView command-graying broker end-to-end -----------------
+    // -- TMenuView command-graying broker end-to-end -----------------
 
     /// A concrete, test-only menu view (the FakeList precedent: a *real*
     /// consumer of the broker, not a dead stub). It embeds [`MenuViewState`] and
-    /// wires `handle_event` + `update_menu_commands` to the row-49 free
-    /// functions, exactly as the row-50/51 menu views will. `as_any_mut` lets the
+    /// wires `handle_event` + `update_menu_commands` to the shared menu free
+    /// functions, exactly as the real menu views do. `as_any_mut` lets the
     /// test observe its menu's regrayed `disabled` flags through the tree.
     struct MenuProbe {
         mv: crate::menu::MenuViewState,
@@ -7393,7 +7380,7 @@ mod tests {
         );
     }
 
-    // -- rows 50-52: the TMenuView modal layer (MenuSession), end-to-end -------
+    // -- the TMenuView modal layer (MenuSession), end-to-end -------
 
     use crate::command::Command as Cmd;
     use crate::menu::{Menu, MenuBar, MenuBox, alt};
@@ -7862,7 +7849,7 @@ mod tests {
         ))
     }
 
-    // -- rows 50-52, Step-2 stage 2: the MenuSession MOUSE arms ----------------
+    // -- the MenuSession MOUSE arms ----------------
     //
     // Geometry for the `modal_menu` bar (computed from item_rect_local, mirrored in
     // these comments so the click points are auditable):
@@ -8223,7 +8210,7 @@ mod tests {
         );
     }
 
-    // -- row 52: TMenuPopup (popup_menu) ---------------------------------------
+    // -- TMenuPopup (popup_menu) ---------------------------------------
     //
     // A standalone popup menu (no bar). Geometry for `popup_data` opened at
     // `where_ = (5, 2)` on a 40×12 desktop (auto_place_popup, mirrored here so the
@@ -8410,7 +8397,7 @@ mod tests {
         );
     }
 
-    // -- row 52: TMenuPopup with a SUBMENU level (multi-level exit-click) -------
+    // -- TMenuPopup with a SUBMENU level (multi-level exit-click) -------
     //
     // A standalone popup containing a submenu, opened at `where_ = (5, 2)` on a
     // 40×12 desktop. Geometry (mirrored here so the click points are auditable):
@@ -8623,7 +8610,7 @@ mod tests {
         );
     }
 
-    // -- Phase 4: real menu bar + status line wired into Program --------------
+    // -- real menu bar + status line wired into Program --------------
     //
     // These exercise the FULL factory path (Program::new builds + inserts a real
     // MenuBar and StatusLine, seeds their initial command graying, and pump_once
@@ -8832,7 +8819,7 @@ mod tests {
             // normal routing would be gated out (the click is outside the modal ->
             // ModalFrame returns Consumed), so only the pre-route can deliver it.
             //
-            // Adapted for the B2 press-and-hold seam (post-on-release):
+            // Adapted for the press-and-hold seam (post-on-release):
             //   pump 1 (MouseDown): pre-route arms tracking + PushCapture applied;
             //                       ev cleared, no command yet.
             //   pump 2 (MouseUp):   MouseTrackCapture (top of stack) forwards the
@@ -9093,7 +9080,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Row 57 — THistory: the view-triggered async-modal seam
+    // History: the view-triggered async-modal seam
     // -----------------------------------------------------------------------
     mod history57 {
         use super::*;
@@ -9214,7 +9201,7 @@ mod tests {
         // hook) — the viewer is the popup's first visible+selectable child. The
         // first-event `select_child` workaround that used to live in
         // HistoryWindow::handle_event was redundant with that hook (this test
-        // stays green with it retired — A2) and has been removed.
+        // stays green with it retired) and has been removed.
         #[test]
         fn no_nav_first_event_dismisses_popup_bite() {
             clear_history();
@@ -9474,7 +9461,7 @@ mod tests {
         }
     }
 
-    // -- message box (row 63) ------------------------------------------------
+    // -- message box ------------------------------------------------
 
     mod msgbox {
         use super::*;
@@ -9520,7 +9507,7 @@ mod tests {
             );
         }
 
-        /// CLOBBER GUARD (A2 keystone). `exec_view`'s `initial_focus` (C++
+        /// CLOBBER GUARD. `exec_view`'s `initial_focus` (C++
         /// messageBox's `selectNext(False)`) must SURVIVE the pump's
         /// `settle_currency` pass: every explicit `set_current` clears the
         /// owning group's pending `currency_dirty` (including on the
@@ -9742,7 +9729,7 @@ mod tests {
             assert_eq!(program.capture_len(), 0, "frame popped after second dialog");
         }
 
-        // -- input box (row 63, PART 2) --------------------------------------
+        // -- input box --------------------------------------
 
         /// Cancel via Esc: `input_box_rect` returns `(CANCEL, initial)` — the
         /// initial string is left unchanged (faithful: C++ skips `getData` on cancel).
@@ -9817,7 +9804,7 @@ mod tests {
 
         /// REGRESSION: `cmFileOpen` (C++ stddlg.h 1001 — a `> 255` always-enabled
         /// command) must survive the pump's command filter, or the FileDialog
-        /// OK/Open button does nothing (the modal never ends). Under the D1
+        /// OK/Open button does nothing (the modal never ends). Under the
         /// denylist it is enabled by default like every command not explicitly
         /// disabled (the historic allowlist dropped it — the "OK does nothing"
         /// bug). Drives the REAL pump.
@@ -9903,7 +9890,7 @@ mod tests {
             );
         }
 
-        // -- color_dialog (Task 10, rstv-original extension) --------------------
+        // -- color_dialog (rstv-original extension) --------------------
 
         /// OK returns `Some(color)` — the initial color is returned unchanged when
         /// nothing is edited (the ModalCompletion::ColorPick sink is written on cmOK).
@@ -9946,7 +9933,7 @@ mod tests {
         }
     }
 
-    // -- C8: theme editor -------------------------------------------------------
+    // -- theme editor -------------------------------------------------------
     mod theme_editor_c8 {
         use super::*;
 
@@ -10024,7 +10011,7 @@ mod tests {
         }
     }
 
-    // -- the clipboard chain at pump level (backlog A6) ------------------------
+    // -- the clipboard chain at pump level ------------------------
     //
     // The editor broker unit tests (widgets/editor.rs "clipboard broker") prove
     // clipCopy/clipPaste QUEUE the right Deferred ops; these prove the pump
@@ -10124,7 +10111,7 @@ mod tests {
         }
     }
 
-    // -- C9: bracketed-paste ------------------------------------------------------
+    // -- bracketed-paste ------------------------------------------------------
     //
     // Proves that `Event::Paste` is routed to the focused editor and inserts
     // multi-char / multi-line text into the buffer (porting kbPaste /
@@ -10143,7 +10130,7 @@ mod tests {
             (program, handle, editor_id)
         }
 
-        /// C9: `Event::Paste` inserts multi-char text into the focused editor.
+        /// `Event::Paste` inserts multi-char text into the focused editor.
         #[test]
         fn bracketed_paste_inserts_into_editor() {
             let (mut program, handle, editor_id) = editor_program();
@@ -10163,7 +10150,7 @@ mod tests {
             );
         }
 
-        /// C9: multi-line paste inserts newlines faithfully.
+        /// Multi-line paste inserts newlines faithfully.
         #[test]
         fn bracketed_paste_with_newlines() {
             let (mut program, handle, editor_id) = editor_program();
@@ -10181,7 +10168,7 @@ mod tests {
         }
     }
 
-    // -- C2: editor right-click context menu -------------------------------------
+    // -- editor right-click context menu -------------------------------------
     //
     // Proves that a right-click MouseDown on the editor opens a 4-item popup
     // menu session (Cut / Copy / Paste / Undo), wiring `initContextMenu` +
@@ -10226,7 +10213,7 @@ mod tests {
         }
     }
 
-    // -- B1/B3: InputLine clipboard at pump level --------------------------------
+    // -- InputLine clipboard at pump level --------------------------------
     //
     // Proves that the Deferred::SetClipboard / Deferred::InputLinePaste brokers
     // are applied by the pump — observable through HeadlessHandle::clipboard /
@@ -10257,7 +10244,7 @@ mod tests {
                 .push_back(Event::KeyDown(KeyEvent::new(key, modifiers)));
         }
 
-        /// B3 copy path: type text into the focused InputLine, select-all, then
+        /// Copy path: type text into the focused InputLine, select-all, then
         /// send cmCopy — the Deferred::SetClipboard must land on the backend,
         /// visible through HeadlessHandle::clipboard.
         #[test]
@@ -10296,7 +10283,7 @@ mod tests {
             let _ = il_id; // keep id in scope
         }
 
-        /// B3 paste path: seed the backend clipboard, inject cmPaste —
+        /// Paste path: seed the backend clipboard, inject cmPaste —
         /// the Deferred::InputLinePaste broker must read it and insert into the
         /// InputLine.
         #[test]
@@ -10326,7 +10313,7 @@ mod tests {
             );
         }
 
-        /// B1 button graying at pump level: a button whose command is disabled via
+        /// Button graying at pump level: a button whose command is disabled via
         /// `program.disable_command` transitions to `disabled = true` after the idle
         /// pump broadcasts cmCommandSetChanged.
         #[test]
@@ -10360,7 +10347,7 @@ mod tests {
                 .expect("button found");
             assert!(
                 btn.state.state.disabled,
-                "button must be disabled after cmCommandSetChanged broadcast (B1)"
+                "button must be disabled after cmCommandSetChanged broadcast"
             );
         }
     }
@@ -10753,7 +10740,7 @@ mod tests {
         /// inline, user picks Yes → triggers OpenSaveAsDialog inline → user Cancels
         /// the FileDialog → close is vetoed → valid_end returns false.
         ///
-        /// This exercises the OpenSaveAsDialog arm of valid_end (the most novel C5
+        /// This exercises the OpenSaveAsDialog arm of valid_end (the most novel
         /// branch). The happy-path (Yes + save) is covered by
         /// `validate_modal_close`'s existing SaveAs tests.
         #[test]

@@ -1,6 +1,6 @@
 //! Presets surface — a scrolling list of {name, Color}: Default + 16 BIOS + 12 Rgb.
 
-// Scaffolding consumed progressively; allow until ColorPicker wires up presets.
+// Some palette/import items are not used by this surface.
 #![allow(dead_code, unused_imports)]
 
 use crate::color::{Color, Style};

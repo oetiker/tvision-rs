@@ -1,53 +1,43 @@
-//! `TScrollBar` — faithful Rust port of `tscrlbar.cpp` (row 25, MECHANICAL).
+//! A scroll bar: a draggable thumb, paging troughs, and step arrows, drawn into
+//! its own 1×N (vertical) or N×1 (horizontal) bounds. Orientation is inferred
+//! from the bounds at construction: `width == 1` means vertical, `height == 1`
+//! means horizontal.
 //!
-//! The scrollbar draws into its own 1×N (vertical) or N×1 (horizontal) bounds.
-//! Orientation is inferred from the bounds at construction time: `width == 1`
-//! means vertical, `height == 1` means horizontal (faithful to the C++).
+//! # Glyphs
 //!
-//! ## Glyph convention (D7, row 9)
+//! The arrow/page/thumb characters live in [`crate::theme::Glyphs`]
+//! (`sb_v_arrow_back`, `sb_v_arrow_fwd`, `sb_h_arrow_back`, `sb_h_arrow_fwd`,
+//! `sb_page`, `sb_thumb`, `sb_page_no_range`) and are read via `ctx.glyphs()`.
 //!
-//! The character tables that magiblot hardcodes as `static TScrollChars vChars`
-//! / `hChars` in `tvtext1.cpp` live in [`crate::theme::Glyphs`] instead:
-//! `sb_v_arrow_back`, `sb_v_arrow_fwd`, `sb_h_arrow_back`, `sb_h_arrow_fwd`,
-//! `sb_page`, `sb_thumb`, `sb_page_no_range`. Widgets read them via
-//! `ctx.glyphs()`.
+//! # Broadcasts
 //!
-//! ## D4 broadcast
+//! When the value changes, the bar broadcasts [`Command::SCROLL_BAR_CHANGED`],
+//! carrying its own [`ViewId`](crate::view::ViewId) as the broadcast `source`, so
+//! an owner with two bars can tell which bar fired. On mouse-down / keyboard
+//! action it likewise broadcasts [`Command::SCROLL_BAR_CLICKED`]. The bar only
+//! emits these; a scroller, list viewer, or editor consumes them (see the
+//! [scroller's read-sync](crate::widgets::Scroller)).
 //!
-//! When the value changes, `scroll_draw` broadcasts
-//! [`Command::SCROLL_BAR_CHANGED`] via `ctx.broadcast(…)`. The C++ equivalent
-//! is `message(owner, evBroadcast, cmScrollBarChanged, this)`; the `this`
-//! `infoPtr` payload is **no longer dropped** — it is carried as the broadcast's
-//! `source` (D4 amendment), so a scroller/editor with two bars can tell which bar
-//! fired (C++ `infoPtr == hScrollBar` becomes `source == self.h_scroll_bar`).
+//! # Press-and-hold auto-repeat
 //!
-//! The C++ also sends `cmScrollBarClicked` on mouse-down / keyboard action via
-//! `message(owner, evBroadcast, cmScrollBarClicked, this)`. We broadcast
-//! [`Command::SCROLL_BAR_CLICKED`] the same way, also carrying `source`.
+//! The bar supports two modal holds, each driven through the mouse-track capture:
 //!
-//! **This widget adds no receiver logic** — `source` is purely emitted here; it
-//! is consumed by a future two-bar owner (Batch B), not by the scrollbar itself.
+//! * **Arrow press-and-hold:** `MouseDown` on an arrow does the first step, then
+//!   calls [`Context::start_mouse_track`]. Each auto tick re-derives the part code
+//!   under the cursor; if it still matches the clicked part, it steps the value.
+//!   `MouseUp` clears tracking.
 //!
-//! ## Press-and-hold auto-repeat (D9 — the A3 MouseTrackCapture seam)
+//! * **Thumb drag:** `MouseDown` on the indicator (or outside the extent) does
+//!   the first recompute, then arms the capture. Each tracked move recomputes the
+//!   value from the thumb position. `MouseUp` clears tracking.
 //!
-//! The C++ `handleEvent` contains two nested `do { … } while(mouseEvent(…))`
-//! loops (one for arrows, one for thumb-drag). These are ported faithfully via
-//! the A3 seam:
+//! # Turbo Vision heritage
 //!
-//! * **Arrow press-and-hold** (`evMouseAuto`): `MouseDown` on an arrow does the
-//!   first step, then calls [`Context::start_mouse_track`] with
-//!   `TrackMask { mouse_auto: true, .. }`. The `MouseAuto` arm re-derives the
-//!   part code under the cursor; if it still matches the originally-clicked part,
-//!   it calls `set_value(value + scroll_step(part))`. `MouseUp` clears tracking.
-//!
-//! * **Thumb drag** (`evMouseMove`): `MouseDown` on the indicator (or outside the
-//!   extent) does the first recompute, then calls `start_mouse_track` with
-//!   `TrackMask { mouse_move: true, .. }`. The `MouseMove` arm continuously
-//!   recomputes the value from the thumb position. `MouseUp` clears tracking.
-//!
-//! (`ctrlToArrow` / WordStar Ctrl-letter navigation — formerly deferred here —
-//! landed with the A5 phase-signal row: [`ScrollBar::handle_event`] passes the
-//! key through `ctrl_to_arrow` before the nav switch, faithful to the C++.)
+//! Ports `TScrollBar` (`tscrlbar.cpp`/`scrlbar.h`). The hardcoded `vChars`/`hChars`
+//! tables become [`Glyphs`](crate::theme::Glyphs) fields (deviation D7); the owner
+//! up-pointer plus `infoPtr` payload becomes [`Context`] broadcasts carrying a
+//! resolvable [`ViewId`](crate::view::ViewId) `source` (deviations D3, D4); and
+//! `TStreamable` is dropped.
 
 use crate::capture::TrackMask;
 use crate::command::Command;
@@ -111,15 +101,16 @@ impl Part {
 // ScrollBar
 // ---------------------------------------------------------------------------
 
-/// `TScrollBar` — a single-axis scroll-bar widget (D2 View trait + ViewState).
-///
-/// Embed the pattern: `state: ViewState`, impl `View`, draw through `DrawCtx`,
-/// handle events through `Context`.
+/// A single-axis scroll-bar widget.
 ///
 /// Orientation is derived from bounds at construction (`size.x == 1` →
-/// vertical). Characters come from `ctx.glyphs()` (D7).
+/// vertical). Characters come from `ctx.glyphs()`.
+///
+/// # Turbo Vision heritage
+///
+/// Ports `TScrollBar` (`tscrlbar.cpp`).
 pub struct ScrollBar {
-    /// View state (geometry, flags, etc.) — the D2 composition target.
+    /// View state (geometry, flags, etc.) — the composition target.
     pub state: ViewState,
     /// Current scroll position. `0` when constructed.
     pub value: i32,
@@ -135,7 +126,7 @@ pub struct ScrollBar {
     vertical: bool,
     /// Absolute screen position of scrollbar-local `(0, 0)`, cached each `draw`
     /// so the mouse-tracking capture can convert absolute mouse coords to
-    /// bar-local (D3/D9 — the `Button::abs_origin` pattern).
+    /// bar-local (the `Button::abs_origin` pattern).
     abs_origin: Point,
     /// Whether a mouse hold-track is in flight. Guards the `MouseAuto` /
     /// `MouseMove` / `MouseUp` tracking arms against stray (untracked) events.
@@ -216,17 +207,11 @@ impl ScrollBar {
     // Value / range logic (ports setParams / setValue / setRange / setStep)
     // -----------------------------------------------------------------------
 
-    /// `TScrollBar::setParams` — update all parameters atomically.
+    /// Update all parameters atomically.
     ///
-    /// Faithful port: `aMax` is floored to `aMin`; `aValue` is clamped to
-    /// `[aMin, aMax]`. Triggers a draw and, if `value` changed, broadcasts
-    /// `cmScrollBarChanged`. Steps are set regardless of whether the range
-    /// changed (faithful to the C++ where `pgStep`/`arStep` are updated
-    /// unconditionally at the end).
-    ///
-    /// **D8 note:** `drawView()` in C++ triggers a damage-tracked repaint of
-    /// just this view; under D8 the whole tree is redrawn, so we skip the
-    /// `drawView` call and rely on the loop's render pass.
+    /// `a_max` is floored to `a_min`; `a_value` is clamped to `[a_min, a_max]`.
+    /// If `value` changed, broadcasts `cmScrollBarChanged`. Steps are set
+    /// unconditionally at the end, regardless of whether the range changed.
     pub fn set_params(
         &mut self,
         a_value: i32,
@@ -244,7 +229,6 @@ impl ScrollBar {
             self.value = a_value;
             self.min_value = a_min;
             self.max_value = a_max;
-            // drawView() would go here under C++ (D8: skip).
             if old_value != a_value {
                 self.scroll_draw(ctx);
             }
@@ -291,11 +275,8 @@ impl ScrollBar {
         );
     }
 
-    /// `TScrollBar::scrollDraw` — broadcast `cmScrollBarChanged` (D4).
-    ///
-    /// C++ equivalent: `message(owner, evBroadcast, cmScrollBarChanged, this)`.
-    /// The `this` payload is carried as the broadcast `source` (D4 amendment) so a
-    /// two-bar owner can tell which bar fired.
+    /// Broadcast `cmScrollBarChanged`, carrying this bar's id as the broadcast
+    /// `source` so a two-bar owner can tell which bar fired.
     fn scroll_draw(&self, ctx: &mut Context) {
         ctx.broadcast(Command::SCROLL_BAR_CHANGED, self.state().id());
     }
@@ -387,9 +368,9 @@ impl View for ScrollBar {
         &mut self.state
     }
 
-    /// `TScrollBar::value` exposed as the D10 transfer currency — the row-27
-    /// `TScroller` read-broker reads this through the trait (the pump resolves the
-    /// bar by id and reads `value`, the successor to C++ `hScrollBar->value`).
+    /// The bar's `value` exposed as the typed transfer currency — a scroller,
+    /// list viewer, or editor read-broker reads this through the trait (the pump
+    /// resolves the bar by id and reads `value`).
     fn value(&self) -> Option<FieldValue> {
         Some(FieldValue::Int(self.value))
     }
@@ -415,12 +396,10 @@ impl View for ScrollBar {
     /// - Index 2 (arrows):         `Role::ScrollBarControls`
     /// - Index 3 (thumb):          `Role::ScrollBarControls`
     ///
-    /// C++ `drawPos` writes into a `TDrawBuffer` then calls `writeBuf`; under
-    /// D8 we write directly through `DrawCtx`.
     fn draw(&mut self, ctx: &mut DrawCtx) {
-        // Cache absolute origin for the mouse-tracking capture (D3/D9 — the
-        // MouseTrackCapture converts abs mouse coords to bar-local via this value,
-        // mirroring the Button `abs_origin` pattern).
+        // Cache absolute origin for the mouse-tracking capture: the
+        // MouseTrackCapture converts absolute mouse coords to bar-local via this
+        // value, mirroring the Button `abs_origin` pattern.
         self.abs_origin = ctx.origin();
         let glyphs = *ctx.glyphs();
         let page_style = ctx.style(Role::ScrollBarPage);
@@ -518,7 +497,7 @@ impl View for ScrollBar {
 
                 // C++:173-179 — capture mouse, extent, pos, size before the
                 // loop (these become `s` / `p` / `extent` globals in C++).
-                let local = me.position; // already in view-local coords per D3
+                let local = me.position; // already in view-local coords
                 let mark = if self.vertical { local.y } else { local.x };
                 let pos = self.get_pos(); // C++ `p = getPos()`
                 let s = self.get_size() - 1; // C++ `s = getSize() - 1`
@@ -540,8 +519,8 @@ impl View for ScrollBar {
                 };
 
                 match click_part {
-                    // C++:182-191 — arrow branch: do first step (loop body runs once
-                    // before the first wait), then arm auto-repeat via the A3 seam.
+                    // Arrow branch: do the first step (the loop body runs once
+                    // before the first wait), then arm auto-repeat.
                     Some(
                         p @ (Part::LeftArrow | Part::RightArrow | Part::UpArrow | Part::DownArrow),
                     ) => {
@@ -583,7 +562,7 @@ impl View for ScrollBar {
                                 + i64::from(self.min_value);
                             self.set_value(new_val as i32, ctx);
                         }
-                        // Enter the drag loop: arm move-tracking via the A3 seam.
+                        // Enter the drag loop: arm move-tracking.
                         if let Some(id) = self.state.id() {
                             self.tracking = true;
                             self.tracked_part = None; // thumb branch: no part to re-match
@@ -604,11 +583,10 @@ impl View for ScrollBar {
             }
 
             // ------------------------------------------------------------------
-            // Mouse auto (evMouseAuto) — the arrow hold-loop body,
-            // tscrlbar.cpp:187-191. Guarded by `tracking` (mandatory A3 rule)
-            // AND `tracked_part.is_some()`: the C++ has two SEPARATE masked
-            // loops (auto-only for arrows, move-only for the thumb), so an auto
-            // event during a thumb track must fall through, not hit this arm.
+            // Mouse auto (evMouseAuto) — the arrow hold-loop body. Guarded by
+            // `tracking` AND `tracked_part.is_some()`: there are two SEPARATE
+            // masked loops (auto-only for arrows, move-only for the thumb), so an
+            // auto event during a thumb track must fall through, not hit this arm.
             // ------------------------------------------------------------------
             Event::MouseAuto(me) if self.tracking && self.tracked_part.is_some() => {
                 // C++:188: `mouse = makeLocal(event.mouse.where)` — position is
@@ -885,8 +863,8 @@ mod tests {
 
     #[test]
     fn broadcast_source_is_the_inserted_scrollbars_id() {
-        // D4 amendment: the `cmScrollBarChanged` broadcast must carry `source ==
-        // the emitting scrollbar's id` (the C++ `this`), not `None`. The id is
+        // The `cmScrollBarChanged` broadcast must carry `source == the emitting
+        // scrollbar's id` (the C++ `this`), not `None`. The id is
         // stamped at `Group::insert`, so the scrollbar must be inserted first.
         use crate::view::Group;
 
@@ -1357,7 +1335,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // A3 mouse-track seam — arrow hold-repeat (evMouseAuto)
+    // mouse-track — arrow hold-repeat (evMouseAuto)
     // -----------------------------------------------------------------------
 
     /// Mouse-down on the up-arrow does the first step AND arms tracking
@@ -1386,7 +1364,7 @@ mod tests {
         assert!(ev.is_nothing(), "mouse-down consumed");
         assert_eq!(sb.value, 9, "first step applied (10 - arStep=1 = 9)");
         assert!(sb.tracking, "tracking flag set");
-        // A PushCapture must have been deferred (the A3 seam).
+        // A PushCapture must have been deferred.
         assert!(
             deferred
                 .iter()
@@ -1516,7 +1494,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // A3 mouse-track seam — thumb drag (evMouseMove)
+    // mouse-track — thumb drag (evMouseMove)
     // -----------------------------------------------------------------------
 
     /// Mouse-down in the page/trough area arms a move-track (not auto-track).

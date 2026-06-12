@@ -1,26 +1,25 @@
-//! Keyboard keys and key-down events — deviations **D4** and **D5**.
+//! Keyboard keys and key-down events.
 //!
-//! Ports the `kb*` key-code family (`tkeys.h`), the `TKey` class
-//! (`tkeys.h` / `tkey.cpp`), and the `KeyDownEvent` struct (`system.h`).
+//! A keystroke is modeled the idiomatic, crossterm-shaped way: a closed [`Key`]
+//! enum of *physical* keys plus a *separate* [`KeyModifiers`] channel. There are
+//! deliberately **no** modifier-combined variants: `Ctrl+C` is `Key::Char('c')`
+//! plus `ctrl`, `Shift+Tab` is `Key::Tab` plus `shift`, and `Alt+F3` is
+//! `Key::F(3)` plus `alt`. A [`KeyEvent`] pairs a key with the modifiers active
+//! when it was pressed.
 //!
-//! **Decomposed model (matches magiblot's canonical `TKey`).** A survey of the
-//! C++ established that `TKey`'s *canonical* form is already decomposed into a
-//! base key code plus a separate modifier mask — `TKey` normalizes combined
-//! codes so that `kbCtrlA == TKey('A', kbCtrlShift)` and
-//! `kbShiftTab == TKey(kbTab, kbShift)` (see `tkey.cpp`). We therefore model a
-//! keystroke the same idiomatic, crossterm-shaped way: a closed [`Key`] enum of
-//! *physical* keys plus a *separate* [`KeyModifiers`] channel (the old
-//! `controlKeyState` bit-word). There are deliberately **no** modifier-combined
-//! variants: `Ctrl+C` is `Key::Char('c')` + `ctrl`, `Shift+Tab` is `Key::Tab` +
-//! `shift`, `Alt+F3` is `Key::F(3)` + `alt`. This decomposition is the whole
-//! point of the design.
+//! There is no "no key" value: the absence of a keystroke is the absence of a
+//! key event.
 //!
-//! `kbNoKey` (`0x0000`) has no variant: it is represented by the *absence* of a
-//! key event (no `KeyDownEvent` is produced at all).
+//! # Turbo Vision heritage
+//!
+//! Ports the `kb*` key-code family, the `TKey` class (`tkeys.h` / `tkey.cpp`),
+//! and `KeyDownEvent` (`system.h`). `TKey`'s canonical form is already
+//! decomposed into a base code plus a modifier mask (`kbCtrlA == TKey('A',
+//! kbCtrlShift)`, `kbShiftTab == TKey(kbTab, kbShift)`); rstv keeps that
+//! decomposition with the [`Key`] enum and a separate [`KeyModifiers`]
+//! (deviations D4 and D5).
 
-/// A physical key. Faithful to the *base* keys of the `kb*` family
-/// (`tkeys.h`), in the decomposed form `TKey` canonicalizes to — modifiers are
-/// carried separately in [`KeyModifiers`], never folded into a variant.
+/// A physical key.
 ///
 /// Only the base, modifier-free keys appear here. Combined `kb*` codes such as
 /// `kbCtrlA`, `kbShiftTab`, `kbAltF3` or `kbCtrlEnter` are *not* variants; they
@@ -65,8 +64,9 @@ pub enum Key {
     Delete,
 }
 
-/// The active keyboard modifiers — deviation **D5**, replacing the
-/// `controlKeyState` bit-word (`tkeys.h` `kb*Shift` masks, `system.h`).
+/// The active keyboard modifiers. Replaces the `controlKeyState` bit-word
+/// (`tkeys.h` `kb*Shift` masks, `system.h`) with a struct-of-bools (deviation
+/// D5).
 ///
 /// Only the three logical modifiers `TKey` itself tracks are modeled; the
 /// platform left/right-Ctrl, left/right-Alt and left/right-Shift distinctions
