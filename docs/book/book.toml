@@ -1,0 +1,25 @@
+[book]
+title = "tvision — Developer Guide"
+description = "Building TUI applications with the tvision crate (rstv)."
+authors = ["Tobias Oetiker"]
+language = "en"
+src = "src"
+
+[build]
+build-dir = "book"
+
+# NOTE: mermaid is registered programmatically by xtask (library preprocessor),
+# so it is intentionally NOT listed as a [preprocessor.mermaid] subprocess here.
+# The mermaid runtime JS is added via additional-js below.
+
+[output.html]
+additional-css = ["theme/tv.css"]
+additional-js = ["theme/mermaid.min.js", "theme/mermaid-init.js"]
+default-theme = "navy"
+preferred-dark-theme = "navy"
+git-repository-url = "https://github.com/oetiker/rstv"
+edit-url-template = "https://github.com/oetiker/rstv/edit/main/docs/book/{path}"
+site-url = "/rstv/"
+
+[output.html.fold]
+enable = true

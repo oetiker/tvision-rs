@@ -1,0 +1,18 @@
+/* Shared visual identity for the guide (and, via rustdoc-header.html, the API). */
+:root { --tv-blue: #0000aa; --tv-cyan: #00aaaa; --tv-yellow: #aaaa00; }
+
+/* Screenshot frames produced by the ANSI->HTML converter. */
+pre.tv-screen {
+  display: inline-block;
+  background: #0000aa;            /* matches Color::BIOS_RGB[1] */
+  color: #aaaaaa;                 /* matches Color::BIOS_RGB[7] */
+  padding: 0.5rem 0.75rem;
+  border-radius: 4px;
+  line-height: 1.15;
+  font-variant-ligatures: none;
+  border: 1px solid #000;
+}
+
+/* The Guide <-> API toggle injected into both surfaces. */
+.tv-doc-switch { display: inline-flex; gap: 0.5rem; font-weight: 600; }
+.tv-doc-switch a { text-decoration: none; }
