@@ -1320,6 +1320,7 @@ impl View for EventViewer {
 struct FileViewer {
     scroller: Scroller,
     lines: Vec<String>,
+    limit_set: bool,
 }
 
 impl FileViewer {
@@ -1328,6 +1329,7 @@ impl FileViewer {
         let mut fv = FileViewer {
             scroller,
             lines: vec![],
+            limit_set: false,
         };
         fv.read_file(path);
         fv
@@ -1347,6 +1349,23 @@ impl FileViewer {
 
 #[delegate(to = scroller)]
 impl View for FileViewer {
+    fn handle_event(&mut self, ev: &mut Event, ctx: &mut tvision::Context) {
+        // Publish the content extent on the first event — the ctor has no Context.
+        // Faithful to C++ TFileViewer::readFile calling setLimit(maxWidth, lineCount).
+        if !self.limit_set {
+            let max_w = self
+                .lines
+                .iter()
+                .map(|l| l.chars().count() as i32)
+                .max()
+                .unwrap_or(1);
+            let n = self.lines.len() as i32;
+            self.scroller.set_limit(max_w.max(1), n.max(1), ctx);
+            self.limit_set = true;
+        }
+        self.scroller.handle_event(ev, ctx);
+    }
+
     fn draw(&mut self, ctx: &mut DrawCtx) {
         let color = ctx.style(Role::ScrollerNormal);
         let ext = self.scroller.state().get_extent();
