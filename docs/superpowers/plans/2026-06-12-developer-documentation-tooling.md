@@ -1217,11 +1217,11 @@ mod tests {
         let tmp = std::env::temp_dir().join(format!("rstv_lc_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         write(&tmp.join("a.html"),
-            r#"<a href="b.html">ok</a>
+            r##"<a href="b.html">ok</a>
                <a href="missing.html">bad</a>
                <a href="api/x.html">cross</a>
                <a href="https://example.com">ext</a>
-               <a href="#frag">frag</a>"#);
+               <a href="#frag">frag</a>"##);
         write(&tmp.join("b.html"), "<p>b</p>");
         write(&tmp.join("api/x.html"), "<p>x</p>");
 
