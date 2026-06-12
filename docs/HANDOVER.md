@@ -14,9 +14,19 @@
 > When a row lands: add an IMPLEMENTATION-LOG section, tick the BACKLOG row,
 > update this file.
 
-## Current state (2026-06-11, latent-edge-notes cleanup committed)
+## Current state (2026-06-12, configurable keymap landed)
 
-**HEAD = `c4848d1`; 1157 lib tests green; clippy + fmt clean.**
+**Code HEAD = `5407109`; 1176 lib tests green; clippy + fmt clean.**
+
+Since the last handover two non-PORT-ORDER changes landed (both 2026-06-12, see
+IMPLEMENTATION-LOG): the **default theme pinned to canonical RGB**
+(`Color::BIOS_RGB`/`bios_rgb`), and a **configurable global keymap**
+(`src/keymap.rs`: WordStar default / CUA / Emacs presets, shared by `editor` +
+`input_line`, switchable live via tvedit's `Options ▸ Keyboard mapping`). The
+keymap fixed the editor's plain-Backspace no-op bug. **Possible follow-up:**
+extend the keymap to the remaining `ctrl_to_arrow` widgets (`cluster`,
+`list_viewer`, `scrollbar`, `history`, `outline`) for cross-widget uniformity
+under non-default presets.
 
 Phase A + Phase B + Phase C are fully complete (all rows ✅).
 Post-backlog latent edge notes resolved this session:

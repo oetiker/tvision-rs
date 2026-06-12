@@ -5,6 +5,68 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## Configurable global keymap — WordStar/CUA/Emacs presets (2026-06-12)
+
+**Extension feature** (not a PORT-ORDER row): a data-driven, process-global
+keymap shared by the editor and the single-line input field, modeled on VS
+Code's keybindings shape. Design spec
+[`docs/superpowers/specs/2026-06-12-configurable-keymap-design.md`](file:///home/oetiker/checkouts/rstv/docs/superpowers/specs/2026-06-12-configurable-keymap-design.md);
+plan
+[`docs/superpowers/plans/2026-06-12-configurable-keymap.md`](file:///home/oetiker/checkouts/rstv/docs/superpowers/plans/2026-06-12-configurable-keymap.md).
+
+**Why:** the editor's native WordStar/diamond bindings collide with modern
+expectations, and plain **Backspace did nothing** in the editor — a genuine
+faithfulness bug. In C++ `scanKeyMap`, the `kbCtrlH, cmBackSpace` entry has a
+zero high byte, so it matches on the low byte (`0x08`) alone; `kbBack` shares
+that low byte, so real Turbo Vision routes plain Backspace to `cmBackSpace` via
+the Ctrl-H entry. Our `match`-arm port split `Ctrl-H` from `Key::Backspace` and
+never wired plain Backspace → no-op.
+
+**What landed (new `src/keymap.rs`):**
+- `KeyStroke` (normalized: alphabetic `Char` → lowercase + shift-folded; cursor-pad
+  keys shift-folded so `shift+Left == Left` with selection handled separately;
+  `Insert`/`Delete` keep shift), `Chord` (1–2 strokes), `Keymap`
+  (`Chord → Command` + prefix set), `Resolve { Command, Prefix, None }`.
+- A VS Code-style chord-string parser (`"ctrl+k ctrl+c"`), pure/in-memory (no file
+  I/O — the config surface is the app-developer Rust API).
+- Process-global `OnceLock<RwLock<Keymap>>` seeded with `word_star()`;
+  `keymap::set_global` / `resolve_global`. A test-only `GlobalKeymapGuard`
+  (`pub(crate)`) serializes global-mutating tests and restores `word_star()` on
+  drop (poison-tolerant).
+- Three presets: `word_star()` (the **default**, a 1:1 transcription of the C++
+  `firstKeys`/`quickKeys`/`blockKeys` tables **plus** plain `backspace →
+  BACK_SPACE`), `cua()`, `emacs()`.
+
+**Adoption:**
+- `editor.rs`: deleted `scan_key_map`/`KeyMapResult`; `key_state: i32` →
+  `pending: Option<KeyStroke>`; `convert_event` resolves via `resolve_global`.
+- `input_line.rs`: dropped `ctrl_to_arrow`; the `KeyDown` arm resolves via
+  `resolve_global` and dispatches through a new `apply_input_command` with a
+  **repertoire/bubble rule** — commands outside the single-line set
+  (`NEW_LINE`, paging, `FIND`, …) are left unhandled so dialog Enter/Tab/Esc
+  still bubble. Clipboard ops factored into `do_cut`/`do_copy`/`do_paste`, shared
+  with the (unchanged) `Event::Command` arm. `keep_selection` exempts
+  `SELECT_ALL`/`CUT`/`COPY`/`PASTE` from the tail's selection-reset (so
+  paste-over-selection still replaces, copy keeps the selection).
+- `examples/tvedit.rs`: new `Options ▸ Keyboard mapping ▸ WordStar/CUA/Emacs`
+  submenu calling `set_global` live.
+
+**Intended divergences (bounded, no snapshot drift):** (1) editor plain Backspace
+now deletes (the fix); (2) input-line `Ctrl-A`/`Ctrl-F` now mean
+`SELECT_ALL`/`WORD_RIGHT` under the default (unification with the editor) instead
+of the old `ctrl_to_arrow` Home/End — no test covered those. Every other binding
+is a faithful transcription, so all snapshots stayed green.
+
+**Out of scope / follow-up:** the other `ctrl_to_arrow` widgets (`cluster`,
+`list_viewer`, `scrollbar`, `history`, `outline`) still use hardcoded
+Ctrl-letter→arrow remapping; extend them to the keymap later if cross-widget
+uniformity under non-default presets is wanted.
+
+**Commits:** `cbf3545`, `2965885`, `7347a1f`, `b25047e` (keymap primitive +
+presets); `e7b1c1d`, `473813a` (editor); `41b2d25`, `5bf372e` (input line);
+`5407109` (tvedit menu). Verified: `cargo test --workspace` 1176 lib tests green,
+clippy `--all-targets -D warnings` clean, `fmt --check` clean.
+
 ## Default theme pinned to canonical RGB (2026-06-12)
 
 **`fix(theme): pin default theme to canonical RGB instead of BIOS indices`**
