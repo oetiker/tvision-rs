@@ -36,6 +36,8 @@
 //! [`Command::CLOSE`](crate::Command::CLOSE) only if the button is released back
 //! over the close zone.
 //!
+//! **Guide:** [Windows & the desktop](../../../apps/windows.html).
+//!
 //! # Turbo Vision heritage
 //!
 //! Ports `TFrame` (`tframe.cpp` / `framelin.cpp`). The original frame's draw and

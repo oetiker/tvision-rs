@@ -10,6 +10,8 @@
 //! [`CaptureStack::dispatch`]; the [`tests`] module here hand-plays the loop to
 //! prove the protocol composes.
 //!
+//! **Guide:** [Event capture](../../../port/capture.html).
+//!
 //! # Turbo Vision heritage
 //! Turbo Vision implements modality, view dragging, and a pressed button's
 //! mouse-tracking by spinning *nested* blocking event loops (`tgroup.cpp`,

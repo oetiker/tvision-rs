@@ -26,6 +26,8 @@
 //! produces the usual convention: `default` is `Some(0)` (the first item) for a
 //! non-empty menu and `None` for an empty one.
 //!
+//! **Guide:** [Menus, status line & help](../../../apps/menus.html).
+//!
 //! # Turbo Vision heritage
 //! Ports `TMenuItem`, `TSubMenu`, and `TMenu` (`menus.h`/`menu.cpp`). The
 //! implicit `name`/`command`-tagged union becomes a 3-variant enum and the

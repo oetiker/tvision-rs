@@ -8,6 +8,8 @@
 //!
 //! [`Command`]: crate::command::Command
 //!
+//! **Guide:** [Menus, status line & help](../../../apps/menus.html).
+//!
 //! # Turbo Vision heritage
 //!
 //! Ports the `hc*` help-context family (`views.h`). Contexts were originally plain

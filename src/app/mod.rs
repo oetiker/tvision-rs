@@ -3,6 +3,8 @@
 //! modal dialogs; and [`Application`], a thin wrapper over it that adds
 //! window tiling/cascading and shell suspend.
 //!
+//! **Guide:** [The event loop in depth](../../../internals/event-loop.html).
+//!
 //! # Turbo Vision heritage
 //! Ports `TProgram` / `TApplication` (`tprogram.cpp`, `tapplica.cpp`). The
 //! `TApplication : TProgram` inheritance becomes embed-and-delegate composition

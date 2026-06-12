@@ -14,6 +14,8 @@
 //! * width 1 → 1 column;
 //! * width ≥ 2 → a *wide* lead cell + a trailing continuation cell (2 columns).
 //!
+//! **Guide:** [Drawing & backends](../../../internals/drawing.html).
+//!
 //! # Turbo Vision heritage
 //!
 //! Faithful port of the `TText` primitives (`ttext.h`, `ttext.cpp`). The original

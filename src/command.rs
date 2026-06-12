@@ -15,6 +15,8 @@
 //! views and apps mint their own the same way, via [`Command::custom`] with
 //! their own dotted prefix.
 //!
+//! **Guide:** [Commands & events](../../../apps/commands.html).
+//!
 //! # Turbo Vision heritage
 //!
 //! Ports the `cm*` command family and `TCommandSet` (`views.h`, `tcmdset.cpp`).

@@ -29,6 +29,8 @@
 //! focus-release and close, and the group's gather/scatter walk collects them — see
 //! [`FileDialog`](crate::dialog::FileDialog) for a worked example.
 //!
+//! **Guide:** [Dialogs & data](../../../apps/dialogs.html).
+//!
 //! # Turbo Vision heritage
 //! Ports `TDialog` (`tdialog.cpp`/`dialogs.h`), which derived from the window
 //! class. That inheritance becomes embed-and-delegate composition (deviation D2) —

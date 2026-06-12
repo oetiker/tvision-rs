@@ -11,6 +11,8 @@
 //! windows, `Cyan` and `Gray` for the alternate schemes dialogs use), which the
 //! frame turns into the matching [`Role`](crate::theme::Role) styles.
 //!
+//! **Guide:** [Windows & the desktop](../../../apps/windows.html).
+//!
 //! # Turbo Vision heritage
 //!
 //! Ports `TWindow` (`twindow.cpp`). The base-class container becomes an embedded

@@ -5,6 +5,8 @@
 //! tree paints into each frame, then diffs against the previous frame so only
 //! changed cells reach the terminal. The [`snapshot`](crate::screen::snapshot)
 //! module renders a `Buffer` to a deterministic golden string for tests.
+//!
+//! **Guide:** [Drawing & backends](../../../internals/drawing.html).
 
 mod buffer;
 mod cell;

@@ -9,6 +9,8 @@
 //! [`Backend`](crate::Backend), since it only matters when colours are flushed
 //! to a real terminal.
 //!
+//! **Guide:** [Theming & colors](../../../apps/theming.html).
+//!
 //! # Turbo Vision heritage
 //!
 //! magiblot packs fg/bg/style into a 64-bit `TColorAttr` whose fg/bg are each a

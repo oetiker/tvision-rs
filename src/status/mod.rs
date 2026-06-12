@@ -24,6 +24,8 @@
 //! case is an explicit membership set ([`HelpCtxRange::OneOf`]). It stays
 //! `Clone + PartialEq + Eq`, like [`Menu`](crate::menu::Menu).
 //!
+//! **Guide:** [Menus, status line & help](../../../apps/menus.html).
+//!
 //! # Turbo Vision heritage
 //!
 //! Ports `TStatusItem` and `TStatusDef` (`menus.h`, `tstatusl.cpp`). The singly

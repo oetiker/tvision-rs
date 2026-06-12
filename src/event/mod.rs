@@ -19,6 +19,8 @@
 //! Code that needs that pattern queries the tree owner directly via
 //! [`find_mut`](crate::view::View::find_mut) instead.
 //!
+//! **Guide:** [Commands & events](../../../apps/commands.html).
+//!
 //! # Turbo Vision heritage
 //!
 //! Replaces the single `TEvent` tagged union (`system.h`) with a Rust sum type

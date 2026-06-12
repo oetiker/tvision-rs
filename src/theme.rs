@@ -12,6 +12,8 @@
 //! normal/focused/disabled/pressed control quartet, the list-state matrix, and
 //! the per-widget families (buttons, labels, menus, the status line, …).
 //!
+//! **Guide:** [Theming & colors](../../../apps/theming.html).
+//!
 //! # Turbo Vision heritage
 //!
 //! The original framework resolved colours by walking an owner chain of

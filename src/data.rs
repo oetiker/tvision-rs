@@ -19,6 +19,8 @@
 //! dialog data transfer, so there is no `Bits` variant; the color picker likewise
 //! reports its color through a dedicated accessor rather than a `FieldValue`.
 //!
+//! **Guide:** [Dialogs & data](../../../apps/dialogs.html).
+//!
 //! # Turbo Vision heritage
 //!
 //! The original moved dialog data through an untyped getter/setter protocol: each

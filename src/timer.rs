@@ -23,6 +23,8 @@
 //!    test and gives `set_timer` the absolute expiry it needs for the
 //!    reschedule grid arithmetic.
 //!
+//! **Guide:** [The event loop in depth](../../../internals/event-loop.html).
+//!
 //! # Turbo Vision heritage
 //!
 //! Ports `TTimerQueue` (`ttimerqu.cpp`, `system.h`) and its time source

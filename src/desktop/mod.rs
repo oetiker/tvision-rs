@@ -4,6 +4,8 @@
 //! with a repeated pattern character. [`Desktop`] is the group-embedding
 //! desktop that owns a [`Background`], hosts the application's windows, and gives
 //! `Program` a named real desktop.
+//!
+//! **Guide:** [Windows & the desktop](../../../apps/windows.html).
 
 mod background;
 // The module file is named `desktop.rs` (matching the `Desktop` type) inside the

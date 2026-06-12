@@ -7,6 +7,8 @@
 //!
 //! [`DrawCtx`]: crate::view::DrawCtx
 //! [`Context`]: crate::view::Context
+//!
+//! **Guide:** [Controls](../../../apps/controls.html).
 
 mod button;
 mod cluster;

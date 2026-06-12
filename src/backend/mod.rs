@@ -18,6 +18,8 @@
 //! [`Renderer`] owns the back/front buffer pair and a boxed backend; it runs the
 //! draw cycle (reset → paint → diff → draw → flush → swap), painting the whole
 //! view tree each frame and relying on the diff to keep terminal output minimal.
+//!
+//! **Guide:** [Drawing & backends](../../../internals/drawing.html).
 
 mod clipboard;
 mod crossterm_backend;

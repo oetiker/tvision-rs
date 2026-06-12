@@ -4,6 +4,8 @@
 //! `Command` by name. Generalizes the C++ editor's `firstKeys`/`quickKeys`/
 //! `blockKeys` tables and `key_state` prefix machine. See
 //! `docs/superpowers/specs/2026-06-12-configurable-keymap-design.md`.
+//!
+//! **Guide:** [Keyboard & key mapping](../../../apps/keyboard.html).
 
 use crate::command::Command;
 use crate::event::{Key, KeyEvent, KeyModifiers};

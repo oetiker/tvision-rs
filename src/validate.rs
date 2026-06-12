@@ -25,6 +25,8 @@
 //! [`RangeValidator`] transfers an [`FieldValue::Int`]); the base returns
 //! `None`, leaving the input line to use its plain text value.
 //!
+//! **Guide:** [Controls](../../../apps/controls.html).
+//!
 //! # Turbo Vision heritage
 //!
 //! Ports `TValidator` and its subclasses (`tvalidator.cpp`). The abstract base
