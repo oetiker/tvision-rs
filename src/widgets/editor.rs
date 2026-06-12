@@ -6,13 +6,12 @@
 //!
 //! # The context-threading split (the central seam)
 //!
-//! In C++, `update(flags)` flushes inline whenever the editor is unlocked,
-//! including from the constructor. Here there is no [`Context`] at construction,
-//! so flag-set is **split from flush**:
+//! Redraw work needs a [`Context`], but a [`View`] has none at construction, so
+//! requesting a redraw is **split from performing it**:
 //!
 //! * The **core editing methods take no `Context`** — they mutate logical state
 //!   and only OR bits into [`update_flags`](Editor::update_flags). [`update`]
-//!   never flushes inline.
+//!   only records what changed; it never repaints inline.
 //! * `&mut Context` is threaded **only** into [`do_update`], [`unlock`],
 //!   `handle_event`, `set_state`, and the public ctx-taking entries
 //!   (`apply_scroll_delta`, `insert_text`). `unlock` flushes when the lock count
@@ -43,19 +42,18 @@
 //! The two mouse-down hold loops (drag-select and pan) become tracked event arms:
 //! the `MouseDown` arm runs the first loop iteration and arms the capture; the
 //! move/auto/wheel arms are the loop bodies; `MouseUp` clears. Which loop is in
-//! flight lives in [`EditorTrack`] (`Select` carries the live `selectMode`; `Pan`
-//! carries `lastMouse`). A wheel during a drag-select forwards to both scroll
+//! flight lives in [`EditorTrack`] (`Select` carries the live select mode; `Pan`
+//! carries the last mouse position). A wheel during a drag-select forwards to both scroll
 //! bars and self-posts a delta-sync, so the new offset lands on the next pump.
 //! Outside a hold, a wheel falls through unconsumed (the editor's event mask
 //! excludes the wheel).
 //!
 //! # Turbo Vision heritage
 //!
-//! Ports `TEditor` (`teditor1.cpp`, `teditor2.cpp`, `edits.cpp`). Owner
-//! up-pointers to the scroll bars and indicator become [`ViewId`] handles
-//! brokered by the event loop (deviation D3); byte indices into the buffer become
-//! grapheme-aware stepping (deviation D13); `getColor` becomes [`Role`]s; and
-//! `TStreamable` is dropped.
+//! Ports `TEditor` (`teditor1.cpp`, `teditor2.cpp`, `edits.cpp`). Up-pointers to
+//! the scroll bars and indicator become [`ViewId`] handles brokered by the event
+//! loop (deviation D3); raw byte indices become grapheme-aware stepping (deviation
+//! D13); color lookups become [`Role`]s; serialization is dropped.
 
 use crate::keymap::{self, KeyStroke, Resolve};
 use crate::theme::Role;
@@ -68,85 +66,82 @@ use crate::widgets::{Indicator, ScrollBar};
 // module-private flag constants (kept off Command — these are bit words)
 // ---------------------------------------------------------------------------
 
-/// `ufUpdate` — redraw the indicator/scrollbars/cursor only (no text repaint).
+/// Redraw the indicator/scrollbars/cursor only (no text repaint).
 const UF_UPDATE: u8 = 0x01;
-/// `ufLine` — repaint just the current line.
+/// Repaint just the current line.
 const UF_LINE: u8 = 0x02;
-/// `ufView` — repaint the whole view.
+/// Repaint the whole view.
 const UF_VIEW: u8 = 0x04;
 
-/// `smExtend` — extend the current selection to the new cursor position.
+/// Extend the current selection to the new cursor position.
 const SM_EXTEND: u8 = 0x01;
-/// `smDouble` — word-granular selection (double-click).
+/// Word-granular selection (double-click).
 const SM_DOUBLE: u8 = 0x02;
-/// `smTriple` — line-granular selection (triple-click).
+/// Line-granular selection (triple-click).
 const SM_TRIPLE: u8 = 0x04;
 
-// The `ef*` search-option flags. `pub(crate)` (the `editor` module is private and
-// only `Editor`/`Encoding`/`LineEnding` are re-exported; `search()` takes a plain
+// The search-option flags. `pub(crate)` (the `editor` module is private and only
+// `Editor`/`Encoding`/`LineEnding` are re-exported; `search()` takes a plain
 // `opts: u16`).
-/// `efCaseSensitive` — `search` matches case exactly.
+/// Match case exactly.
 pub(crate) const EF_CASE_SENSITIVE: u16 = 0x0001;
-/// `efWholeWordsOnly` — `search` rejects matches inside a larger word.
+/// Reject matches that fall inside a larger word.
 pub(crate) const EF_WHOLE_WORDS_ONLY: u16 = 0x0002;
-// The `ef*` flags that drive the find/replace dialogs.
-/// `efPromptOnReplace` — replace prompts before each substitution.
+// The flags that drive the find/replace dialogs.
+/// Prompt before each substitution.
 pub(crate) const EF_PROMPT_ON_REPLACE: u16 = 0x0004;
-/// `efReplaceAll` — replace every match.
+/// Replace every match.
 pub(crate) const EF_REPLACE_ALL: u16 = 0x0008;
-/// `efDoReplace` — the operation is a replace, not a find.
+/// The operation is a replace, not a find.
 pub(crate) const EF_DO_REPLACE: u16 = 0x0010;
-/// `efBackupFiles` — rename existing file to `<name>~` before saving.
+/// Rename the existing file to `<name>~` before saving.
 pub(crate) const EF_BACKUP_FILES: u16 = 0x0100;
 
-/// `maxLineLength` — the fixed `limit.x` content width (editors.h).
+/// The fixed content width (the maximum line length).
 const MAX_LINE_LENGTH: i32 = 256;
 
-/// Which `evMouseDown` hold loop is in flight (`TEditor::handleEvent`,
-/// teditor1.cpp:539-583) — the editor's track-kind discriminator (the scrollbar
-/// `tracked_part` discipline). `None` in [`Editor::track`] = no hold; the
-/// tracked `MouseMove`/`MouseAuto`/wheel/`MouseUp` arms are guarded on it
-/// (a stray event falls through unconsumed).
+/// Which mouse-button hold is in flight, mirroring the scroll-bar tracking
+/// discipline. `None` in [`Editor::track`] means no hold is active; the tracked
+/// `MouseMove`/`MouseAuto`/wheel/`MouseUp` arms are guarded on it, so a stray
+/// event falls through unconsumed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum EditorTrack {
-    /// The main drag-select loop (teditor1.cpp:553-583). `select_mode` is the
-    /// C++ loop-local `selectMode`: seeded by the press (smExtend/smDouble/
-    /// smTriple), then `selectMode |= smExtend` after EVERY iteration's
-    /// `setCurPtr` (:581) — so smDouble/smTriple persist for word/line-granular
-    /// drags.
+    /// A primary-button drag that extends the selection. `select_mode` is seeded
+    /// by the press (`SM_EXTEND`/`SM_DOUBLE`/`SM_TRIPLE`) and gains `SM_EXTEND`
+    /// after every move, so a word- or line-granular drag (double/triple-click)
+    /// keeps growing in that granularity.
     Select {
-        /// The live `selectMode` byte (`SM_*` bits).
+        /// The live select-mode byte (`SM_*` bits).
         select_mode: u8,
     },
-    /// The middle-button pan loop (teditor1.cpp:540-551). `last` is the C++
-    /// loop-local `lastMouse` (view-local): each tick scrolls by the mouse
-    /// delta and never touches cursor/selection.
+    /// A middle-button pan: each tick scrolls by the mouse delta and never
+    /// touches the cursor or selection.
     Pan {
-        /// The previous tick's view-local mouse position (`lastMouse`).
+        /// The previous tick's view-local mouse position.
         last: Point,
     },
 }
 
-/// `sfSearchFailed` sentinel — `scan`/`iScan` "not found". C++ uses `(uint)-1`.
+/// Sentinel returned by the buffer scan helpers to mean "not found".
 const SEARCH_FAILED: usize = usize::MAX;
 
 // ---------------------------------------------------------------------------
-// Line ending / encoding enums (TEditor::LineEndingType / Encoding)
+// Line ending / encoding enums
 // ---------------------------------------------------------------------------
 
-/// `TEditor::LineEndingType` — how line breaks are stored when text is inserted.
+/// How line breaks are stored when text is inserted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LineEnding {
-    /// `eolCrLf` — `"\r\n"`.
+    /// `"\r\n"`.
     CrLf,
-    /// `eolLf` — `"\n"`.
+    /// `"\n"`.
     Lf,
-    /// `eolCr` — `"\r"`.
+    /// `"\r"`.
     Cr,
 }
 
 impl LineEnding {
-    /// The byte sequence this line ending writes (`TEditor::getLineEnding`).
+    /// The byte sequence this line ending writes.
     fn bytes(self) -> &'static [u8] {
         match self {
             LineEnding::Lf => b"\n",
@@ -156,24 +151,25 @@ impl LineEnding {
     }
 }
 
-/// `TEditor::Encoding` — how multibyte characters are stepped over.
+/// How multibyte characters are stepped over.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Encoding {
-    /// `encDefault` — width-aware (grapheme) stepping.
+    /// Width-aware (grapheme) stepping.
     Default,
-    /// `encSingleByte` — every byte is one column.
+    /// Every byte is one column.
     SingleByte,
 }
 
-/// `TEditor::defaultLineEndingType`. C++ uses `eolCrLf` on DOS and `eolLf`
-/// elsewhere; we pick [`LineEnding::Lf`] (the modern-host default).
+/// The line ending used for newly inserted breaks: [`LineEnding::Lf`], the
+/// modern-host default.
 const DEFAULT_LINE_ENDING: LineEnding = LineEnding::Lf;
 
 // ---------------------------------------------------------------------------
 // getCharType / isWordBoundary / isWordChar (teditor2.cpp)
 // ---------------------------------------------------------------------------
 
-/// `getCharType` (teditor2.cpp) — word-boundary classification.
+/// Classify a byte for word-boundary detection (whitespace / line break /
+/// punctuation / word character).
 fn get_char_type(ch: u8) -> u8 {
     match ch {
         b'\t' | b' ' | 0 => 0,
@@ -183,13 +179,12 @@ fn get_char_type(ch: u8) -> u8 {
     }
 }
 
-/// `isWordBoundary(a, b)` — true when `a` and `b` are different char types.
+/// True when `a` and `b` fall in different character classes.
 fn is_word_boundary(a: u8, b: u8) -> bool {
     get_char_type(a) != get_char_type(b)
 }
 
-/// `isWordChar(ch)` — true unless `ch` is whitespace/punctuation (the
-/// `" !\"#$%&'()*+,-./:;<=>?@[\\]^`{|}~\0"` set in teditor2.cpp).
+/// True unless `ch` is whitespace or punctuation — i.e. it is part of a word.
 fn is_word_char(ch: u8) -> bool {
     !matches!(
         ch,
@@ -197,8 +192,7 @@ fn is_word_char(ch: u8) -> bool {
     )
 }
 
-/// `countLines(buf, count)` (edits.cpp) — number of line breaks in `buf`,
-/// counting `\r\n` as one.
+/// Number of line breaks in `buf`, counting `\r\n` as one.
 fn count_lines(buf: &[u8]) -> i32 {
     let mut lines = 0;
     let mut i = 0;
@@ -216,8 +210,8 @@ fn count_lines(buf: &[u8]) -> i32 {
     lines
 }
 
-/// `scan(block, size, str)` (edits.cpp) — case-sensitive substring search.
-/// Returns the byte offset of the first match, or [`SEARCH_FAILED`].
+/// Case-sensitive substring search. Returns the byte offset of the first match,
+/// or [`SEARCH_FAILED`].
 fn scan(block: &[u8], needle: &[u8]) -> usize {
     let len = needle.len();
     if len == 0 {
@@ -240,7 +234,7 @@ fn scan(block: &[u8], needle: &[u8]) -> usize {
     SEARCH_FAILED
 }
 
-/// `iScan(block, size, str)` (edits.cpp) — case-insensitive substring search.
+/// Case-insensitive substring search.
 fn i_scan(block: &[u8], needle: &[u8]) -> usize {
     let len = needle.len();
     if len == 0 {
@@ -350,102 +344,100 @@ pub struct Editor {
     /// The text buffer: `buf_len` logical bytes split by a `gap_len`-byte gap at
     /// `cur_ptr`. Always physically `buf_size` bytes long; gap bytes are stale.
     buffer: Vec<u8>,
-    /// `bufSize` — physical buffer capacity (never grows in the base; see
+    /// Physical buffer capacity (never grows in the base editor; see
     /// [`set_buf_size`](Editor::set_buf_size)).
     buf_size: usize,
-    /// `bufLen` — logical text length. Invariant: `buf_len + gap_len == buf_size`.
+    /// Logical text length. Invariant: `buf_len + gap_len == buf_size`.
     buf_len: usize,
-    /// `gapLen` — gap size at `cur_ptr`.
+    /// Gap size at `cur_ptr`.
     gap_len: usize,
-    /// `selStart` — selection start (logical offset).
+    /// Selection start (logical offset).
     sel_start: usize,
-    /// `selEnd` — selection end (logical offset).
+    /// Selection end (logical offset).
     sel_end: usize,
-    /// `curPtr` — cursor position (logical offset); the gap sits here physically.
+    /// Cursor position (logical offset); the gap sits here physically.
     cur_ptr: usize,
-    /// `curPos` — cursor `(col, row)` in display coordinates.
+    /// Cursor `(col, row)` in display coordinates.
     cur_pos: Point,
-    /// `delta` — viewport top-left (scroll offset) in display coordinates.
+    /// Viewport top-left (scroll offset) in display coordinates.
     delta: Point,
-    /// `limit` — content extent `(x = maxLineLength, y = line count)`.
+    /// Content extent `(x = max line length, y = line count)`.
     limit: Point,
-    /// `drawLine` — the display row `draw_ptr` corresponds to.
+    /// The display row that `draw_ptr` corresponds to.
     draw_line: i32,
-    /// `drawPtr` — logical offset of the start of line `draw_line`.
+    /// Logical offset of the start of line `draw_line`.
     draw_ptr: usize,
-    /// `delCount` — bytes deleted since the last undo checkpoint (undo accounting).
+    /// Bytes deleted since the last undo checkpoint (undo accounting).
     del_count: usize,
-    /// `insCount` — bytes inserted since the last undo checkpoint.
+    /// Bytes inserted since the last undo checkpoint.
     ins_count: usize,
-    /// `isValid` — buffer allocation succeeded.
+    /// Buffer allocation succeeded.
     is_valid: bool,
-    /// `canUndo` — undo is enabled (always true in the base editor).
+    /// Undo is enabled (always true in the base editor).
     can_undo: bool,
-    /// TFileEditor mode: setBufSize grows the buffer, and updateCommands enables
-    /// cmSave/cmSaveAs. False for base Editor / Memo (fixed buffer).
+    /// File-editor mode: the buffer grows on demand and the save commands are
+    /// enabled while focused. False for the plain editor / memo (fixed buffer).
     file_editor: bool,
-    /// Whether this editor IS the internal clipboard editor
-    /// (`TEditor::isClipboard()` = `clipboard == this`).
-    /// Set by the pump drain when `Deferred::RegisterClipboardEditor` is processed.
+    /// Whether this editor IS the internal clipboard editor. Set by the pump
+    /// drain when the register-clipboard-editor deferred effect is processed.
     pub(crate) is_clipboard: bool,
-    /// `modified` — the buffer has unsaved changes.
+    /// The buffer has unsaved changes.
     modified: bool,
-    /// `selecting` — a persistent selection is in progress (`startSelect`).
+    /// A persistent selection is in progress (selection mode toggled on).
     selecting: bool,
-    /// `overwrite` — overwrite (vs insert) mode.
+    /// Overwrite (vs insert) mode.
     overwrite: bool,
-    /// `autoIndent` — replicate leading whitespace on Enter.
+    /// Replicate leading whitespace on Enter.
     auto_indent: bool,
-    /// `lockCount` — nested update locks; flush happens when this returns to 0.
+    /// Nested update locks; flush happens when this returns to 0.
     lock_count: u8,
-    /// `updateFlags` — pending `uf*` redraw flags.
+    /// Pending redraw flags (`UF_*` bits).
     update_flags: u8,
     /// The pending first stroke of a two-key chord. Set when a key resolves to
-    /// `Resolve::Prefix`; combined with the next stroke and then cleared. Replaces
-    /// the C++ `keyState` i32 prefix machine (0 = idle, 1 = Ctrl-Q, 2 = Ctrl-K).
+    /// [`Resolve::Prefix`]; combined with the next stroke and then cleared.
+    /// Replaces a small prefix state machine (idle / Ctrl-Q / Ctrl-K).
     pending: Option<KeyStroke>,
-    /// `lineEndingType`.
+    /// Line ending used for newly inserted breaks.
     line_ending: LineEnding,
-    /// `encoding`.
+    /// Character-stepping encoding.
     encoding: Encoding,
-    /// `hScrollBar` — by id (`None` = absent).
+    /// Horizontal scroll bar, by id (`None` = absent).
     h_scroll_bar: Option<ViewId>,
-    /// `vScrollBar` — by id (`None` = absent).
+    /// Vertical scroll bar, by id (`None` = absent).
     v_scroll_bar: Option<ViewId>,
-    /// `indicator` — by id (`None` = absent).
+    /// Frame indicator, by id (`None` = absent).
     indicator: Option<ViewId>,
-    /// `findStr` — last search string.
-    ///
-    /// NOTE: C++ shares this statically across all editors; here it is
-    /// per-instance.
+    /// Last search string. Stored per-instance (each editor remembers its own).
     find_str: String,
-    /// `replaceStr` — last replacement string (per-instance; see [`find_str`]).
+    /// Last replacement string (per-instance; see [`find_str`]).
     replace_str: String,
-    /// `editorFlags` — the `ef*` search options (per-instance; see [`find_str`]).
+    /// The `EF_*` search options (per-instance; see [`find_str`]).
     editor_flags: u16,
     /// Absolute screen position of view-local `(0, 0)`, cached by `draw` so the
-    /// mouse-tracking capture can localize absolute mouse coords (the
-    /// `Button::abs_origin` pattern).
+    /// mouse-tracking capture can localize absolute mouse coords (the same
+    /// `abs_origin` pattern buttons use).
     abs_origin: Point,
-    /// Per-hold mouse-track state — `Some` while a hold loop is in flight (see
+    /// Per-hold mouse-track state — `Some` while a hold is in flight (see
     /// [`EditorTrack`]). Guards the tracked `MouseMove`/`MouseAuto`/wheel/
     /// `MouseUp` arms against stray events.
     track: Option<EditorTrack>,
     /// Cached answer from the "Replace this occurrence?" prompt
     /// ([`Context::request_message_box`] with `yes_no_cancel`). Set via
     /// [`View::set_modal_answer`]; consumed by [`do_search_replace`] on the
-    /// next `cmSearchAgain` dispatch to act on the user's choice before
-    /// searching for the next match.
+    /// next search-again dispatch to act on the user's choice before searching
+    /// for the next match.
     pending_replace_answer: Option<crate::command::Command>,
 }
 
 impl Editor {
-    /// `TEditor::TEditor(bounds, hScrollBar, vScrollBar, indicator, bufSize)`.
+    /// Build an editor over a `buf_size`-byte buffer, wired to the given scroll
+    /// bars and frame indicator (each optional, by id).
     ///
-    /// Faithful ctor: `growMode = gfGrowHiX | gfGrowHiY`, `options |=
-    /// ofSelectable`, `showCursor`, `initBuffer`, `setBufLen(0)`. The C++ flush in
-    /// `setBufLen → update` is dropped (no `Context`); initial state is consistent
-    /// for `draw`, and scrollbar params publish on the first flush.
+    /// The view grows with its parent on the right/bottom, is selectable, shows a
+    /// cursor, and starts with an empty buffer. No redraw is performed here (a
+    /// [`View`] has no [`Context`] at construction); the initial state is
+    /// consistent for the first `draw`, and scroll-bar params publish on the
+    /// first flush.
     pub fn new(
         bounds: Rect,
         h_scroll_bar: Option<ViewId>,
@@ -464,7 +456,7 @@ impl Editor {
             ..Default::default()
         };
         state.show_cursor();
-        // initBuffer: `buffer = new char[bufSize]`. We keep it physically full.
+        // Allocate the buffer at full physical size up front; gap bytes are stale.
         let buffer = vec![0u8; buf_size];
         let mut ed = Editor {
             state,
@@ -505,15 +497,15 @@ impl Editor {
             track: None,
             pending_replace_answer: None,
         };
-        // setBufLen(0) — flag-set only (no flush; ctor has no Context).
+        // Initialize logical length to 0 — flag-set only (no flush; no Context).
         ed.set_buf_len(0);
         ed
     }
 
     /// Construct an `Editor` in file-editor mode (growable buffer, save commands).
-    /// Mirrors `TFileEditor`'s `TEditor(bounds,...,0)` + the grow-on-load model: the
-    /// buffer starts empty and `set_buf_size` grows it. A growable empty buffer is
-    /// valid (unlike a fixed 0-size buffer, which would be `is_valid == false`).
+    /// The buffer starts empty and `set_buf_size` grows it on load. A growable
+    /// empty buffer is valid (unlike a fixed 0-size buffer, which would be
+    /// `is_valid == false`).
     pub(crate) fn new_file_editor(
         bounds: Rect,
         h_scroll_bar: Option<ViewId>,
@@ -528,45 +520,45 @@ impl Editor {
 
     // -- test/inspection accessors ------------------------------------------
 
-    /// Logical text length (`bufLen`).
+    /// Logical text length.
     pub fn buf_len(&self) -> usize {
         self.buf_len
     }
 
-    /// The cursor position (`curPtr`).
+    /// The cursor position (logical offset).
     pub fn cur_ptr(&self) -> usize {
         self.cur_ptr
     }
 
-    /// The content extent (`limit`).
+    /// The content extent (`(max line length, line count)`).
     pub fn limit(&self) -> Point {
         self.limit
     }
 
-    /// The scroll offset (`delta`).
+    /// The scroll offset (viewport top-left).
     pub fn delta(&self) -> Point {
         self.delta
     }
 
-    /// The cursor's logical position (`curPos`, zero-based row/col). Inspection
-    /// hook for tests asserting indicator/cursor wiring.
+    /// The cursor's display position (zero-based row/col). Inspection hook for
+    /// tests asserting indicator/cursor wiring.
     pub fn cur_pos(&self) -> Point {
         self.cur_pos
     }
 
-    /// Whether the buffer has unsaved changes (`modified`).
+    /// Whether the buffer has unsaved changes.
     pub fn modified(&self) -> bool {
         self.modified
     }
 
-    /// Reconstruct the logical text (test oracle): `bufChar(0..buf_len)`.
+    /// Reconstruct the logical text (test oracle).
     pub fn text(&self) -> Vec<u8> {
         (0..self.buf_len).map(|p| self.buf_char(p)).collect()
     }
 
-    // -- gap arithmetic (edits.cpp) -----------------------------------------
+    // -- gap arithmetic -----------------------------------------------------
 
-    /// `bufPtr(P)` — physical index of logical offset `P`.
+    /// Physical buffer index of logical offset `p`.
     fn buf_ptr(&self, p: usize) -> usize {
         if p < self.cur_ptr {
             p
@@ -575,14 +567,14 @@ impl Editor {
         }
     }
 
-    /// `bufChar(P)` — the byte at logical offset `P`.
+    /// The byte at logical offset `p`.
     fn buf_char(&self, p: usize) -> u8 {
         self.buffer[self.buf_ptr(p)]
     }
 
-    /// `getText(p, dest)` — copy up to `dest.len()` logical bytes from `p` into
-    /// `dest`; returns the count copied. Used to materialize a contiguous slice
-    /// across the gap for grapheme decoding.
+    /// Copy up to `dest.len()` logical bytes from `p` into `dest`; returns the
+    /// count copied. Used to materialize a contiguous slice across the gap for
+    /// grapheme decoding.
     fn get_text(&self, p: usize, dest: &mut [u8]) -> usize {
         if p < self.buf_len {
             let count = dest.len().min(self.buf_len - p);
@@ -604,10 +596,10 @@ impl Editor {
         buf
     }
 
-    // -- character navigation (edits.cpp) -----------------------------------
+    // -- character navigation -----------------------------------------------
 
-    /// `nextChar(P)` — advance one grapheme (or `\r\n` pair, or one byte if
-    /// `encSingleByte`).
+    /// Advance one grapheme from `p` (or a `\r\n` pair, or one byte under
+    /// single-byte encoding).
     fn next_char(&self, p: usize) -> usize {
         if p + 1 < self.buf_len {
             if self.buf_char(p) == b'\r' && self.buf_char(p + 1) == b'\n' {
@@ -631,7 +623,7 @@ impl Editor {
         }
     }
 
-    /// `prevChar(P)` — retreat one grapheme (or `\r\n` pair, or one byte).
+    /// Retreat one grapheme from `p` (or a `\r\n` pair, or one byte).
     fn prev_char(&self, p: usize) -> usize {
         if p > 1 {
             if self.buf_char(p - 2) == b'\r' && self.buf_char(p - 1) == b'\n' {
@@ -648,14 +640,13 @@ impl Editor {
             let back = prev_grapheme_byte_len(&chunk);
             p - back
         } else {
-            // p == 0 or p == 1 → 0 (C++ returns 0 for P <= 1).
+            // p == 0 or p == 1 → 0.
             0
         }
     }
 
-    /// `nextCharAndPos(p, pos)` — advance `p` over one char and `pos` over its
-    /// display width (tabs round up to the next multiple of 8). Returns false at
-    /// end of buffer.
+    /// Advance `p` over one char and `pos` over its display width (tabs round up
+    /// to the next multiple of 8). Returns false at end of buffer.
     fn next_char_and_pos(&self, p: &mut usize, pos: &mut i32) -> bool {
         if *p < self.buf_len {
             if self.encoding == Encoding::SingleByte {
@@ -687,7 +678,7 @@ impl Editor {
         }
     }
 
-    /// `charPos(p, target)` — display column of `target`, scanning from `p`.
+    /// Display column of `target`, scanning from `p`.
     fn char_pos(&self, mut p: usize, target: usize) -> i32 {
         let mut pos = 0;
         while p < target {
@@ -698,8 +689,8 @@ impl Editor {
         pos
     }
 
-    /// `charPtr(p, target)` — logical offset at display column `target` on the
-    /// line starting at `p` (stops at a line break).
+    /// Logical offset at display column `target` on the line starting at `p`
+    /// (stops at a line break).
     fn char_ptr(&self, mut p: usize, target: i32) -> usize {
         let mut pos = 0;
         let mut prev_p = p;
@@ -719,7 +710,7 @@ impl Editor {
         p
     }
 
-    /// `lineEnd(P)` — offset of the first line break at or after `P` (or buf_len).
+    /// Offset of the first line break at or after `p` (or `buf_len`).
     fn line_end(&self, p: usize) -> usize {
         let mut i = p;
         while i < self.buf_len {
@@ -732,7 +723,7 @@ impl Editor {
         self.buf_len
     }
 
-    /// `lineStart(P)` — offset of the start of the line containing `P`.
+    /// Offset of the start of the line containing `p`.
     fn line_start(&self, p: usize) -> usize {
         let mut i = p;
         while i > 0 {
@@ -750,17 +741,17 @@ impl Editor {
         0
     }
 
-    /// `nextLine(P)` — start of the line after `P`.
+    /// Start of the line after `p`.
     fn next_line(&self, p: usize) -> usize {
         self.next_char(self.line_end(p))
     }
 
-    /// `prevLine(P)` — start of the line before `P`.
+    /// Start of the line before `p`.
     fn prev_line(&self, p: usize) -> usize {
         self.line_start(self.prev_char(p))
     }
 
-    /// `nextWord(P)` — start of the next word.
+    /// Start of the next word.
     fn next_word(&self, mut p: usize) -> usize {
         if p < self.buf_len {
             let mut a = self.buf_char(p);
@@ -779,7 +770,7 @@ impl Editor {
         p
     }
 
-    /// `prevWord(P)` — start of the previous word.
+    /// Start of the previous word.
     fn prev_word(&self, mut p: usize) -> usize {
         if p > 0 {
             p = self.prev_char(p);
@@ -802,8 +793,8 @@ impl Editor {
         p
     }
 
-    /// `indentedLineStart(P)` — first non-whitespace offset on `P`'s line (or the
-    /// line start if that equals `P`).
+    /// First non-whitespace offset on `p`'s line (or the line start if that
+    /// equals `p`).
     fn indented_line_start(&self, p: usize) -> usize {
         let start_ptr = self.line_start(p);
         let mut dest_ptr = start_ptr;
@@ -818,7 +809,7 @@ impl Editor {
         if dest_ptr == p { start_ptr } else { dest_ptr }
     }
 
-    /// `lineMove(p, count)` — move `count` display lines, preserving column.
+    /// Move `count` display lines from `p`, preserving the column.
     fn line_move(&self, mut p: usize, mut count: i32) -> usize {
         let i0 = p;
         p = self.line_start(p);
@@ -840,7 +831,7 @@ impl Editor {
         p
     }
 
-    /// `getMousePtr(m)` — logical offset under the (global) mouse point.
+    /// Logical offset under the view-local mouse point.
     fn get_mouse_ptr(&self, mouse_local: Point) -> usize {
         let mx = mouse_local.x.max(0).min(self.state.size.x - 1);
         let my = mouse_local.y.max(0).min(self.state.size.y - 1);
@@ -850,14 +841,14 @@ impl Editor {
         )
     }
 
-    // -- selection / cursor (teditor2.cpp) ----------------------------------
+    // -- selection / cursor -------------------------------------------------
 
-    /// `hasSelection()`.
+    /// Whether a non-empty selection exists.
     pub(crate) fn has_selection(&self) -> bool {
         self.sel_start != self.sel_end
     }
 
-    /// `detectLineEndingType()` — infer the line ending from the first break.
+    /// Infer the line ending from the first break in the buffer.
     fn detect_line_ending_type(&self) -> LineEnding {
         for p in 0..self.buf_len {
             match self.buf_char(p) {
@@ -874,8 +865,8 @@ impl Editor {
         DEFAULT_LINE_ENDING
     }
 
-    /// `lengthWithConvertedLineEndings(p, length)` — length after rewriting all
-    /// breaks in `p[..length]` to [`line_ending`](Editor::line_ending).
+    /// Length of `p` after rewriting all of its line breaks to
+    /// [`line_ending`](Editor::line_ending).
     fn length_with_converted_line_endings(&self, p: &[u8]) -> usize {
         let le = self.line_ending.bytes().len();
         let mut new_len = 0;
@@ -894,9 +885,8 @@ impl Editor {
         new_len
     }
 
-    /// `copyAndConvertLineEndings(dest, src)` — write `src` into `dest` with
-    /// converted breaks. Writes exactly
-    /// `length_with_converted_line_endings(src)` bytes starting at `dest_off`.
+    /// Write `src` into the buffer at `dest_off` with its line breaks converted.
+    /// Writes exactly `length_with_converted_line_endings(src)` bytes.
     fn copy_and_convert_line_endings(&mut self, dest_off: usize, src: &[u8]) {
         let le = self.line_ending.bytes();
         let mut d = dest_off;
@@ -921,8 +911,8 @@ impl Editor {
         }
     }
 
-    /// `setBufLen(length)` — reset the buffer to `length` logical bytes (the gap
-    /// is everything after), zero cursor/selection/scroll, recompute `limit.y`.
+    /// Reset the buffer to `length` logical bytes (the gap is everything after),
+    /// zero cursor/selection/scroll, and recompute the line count.
     fn set_buf_len(&mut self, length: usize) {
         self.buf_len = length;
         self.gap_len = self.buf_size - length;
@@ -945,30 +935,28 @@ impl Editor {
         self.update(UF_VIEW);
     }
 
-    /// `setBufSize` — the base editor never grows (returns whether `new_size` already
-    /// fits). In **file-editor mode** (`TFileEditor::setBufSize`) it grows the buffer:
-    /// round `new_size` up to a 0x1000 boundary, resize the `Vec`, and move the
-    /// post-gap tail to the new end so the gap widens in place.
+    /// Ensure the buffer can hold `new_size` bytes. The plain editor never grows
+    /// (returns whether `new_size` already fits). In **file-editor mode** it grows
+    /// the buffer: round `new_size` up to a 0x1000 boundary, resize the `Vec`, and
+    /// move the post-gap tail to the new end so the gap widens in place.
     fn set_buf_size(&mut self, new_size: usize) -> bool {
         if new_size <= self.buf_size {
-            // C++ TFileEditor::setBufSize also reallocs to SHRINK when
-            // new_size < buf_size (memory reclaim). The shrink path is not
+            // A shrink path (reclaiming memory when new_size < buf_size) is not
             // modeled — memory is not reclaimed, but the logical text and all
             // invariants are unaffected.
             return true;
         }
         if !self.file_editor {
-            return false; // base TEditor / Memo: fixed buffer, cannot grow.
+            return false; // plain editor / memo: fixed buffer, cannot grow.
         }
-        // TFileEditor::setBufSize grow path. The C++ 16-bit ceilings and
-        // malloc-failure return have no analogue — Vec growth is infallible, so
-        // there is no out-of-memory path.
+        // Grow path. `Vec` growth is infallible, so there is no
+        // out-of-memory return.
         let rounded = (new_size + 0x0FFF) & !0x0FFF; // round up to 0x1000
         let old_size = self.buf_size;
         let n = self.buf_len - self.cur_ptr + self.del_count; // bytes after the gap
         self.buffer.resize(rounded, 0);
-        // Move the tail [old_size - n .. old_size] to [rounded - n .. rounded].
-        // copy_within is memmove — overlap-safe.
+        // Move the tail [old_size - n .. old_size] to [rounded - n .. rounded]
+        // (copy_within is overlap-safe).
         self.buffer.copy_within(old_size - n..old_size, rounded - n);
         self.buf_size = rounded;
         self.gap_len = self.buf_size - self.buf_len;
@@ -976,10 +964,9 @@ impl Editor {
     }
 
     /// Replace the whole buffer with `text` (used by [`Memo::set_value`]).
-    /// All-or-nothing: if `text`
-    /// does not fit the buffer and `setBufSize` fails (base/Memo fixed buffer — in
-    /// file-editor mode the buffer grows instead), it is a no-op. No `selectAll`
-    /// (C++ TMemo::setData, unlike TInputLine::setData, does not select).
+    /// All-or-nothing: if `text` does not fit the buffer and it cannot grow
+    /// (plain editor / memo have a fixed buffer; file-editor mode grows instead),
+    /// it is a no-op. The replaced text is left unselected.
     pub fn set_text(&mut self, text: &[u8]) {
         if self.set_buf_size(text.len()) {
             let start = self.buf_size - text.len();
@@ -988,8 +975,9 @@ impl Editor {
         }
     }
 
-    /// `setSelect(newStart, newEnd, curStart)` — move the gap to the chosen
-    /// endpoint and set the selection. The gap memmove is the load-bearing op.
+    /// Set the selection to `[new_start, new_end)` and place the cursor at the
+    /// start endpoint when `cur_start`, else the end. Moving the gap to the chosen
+    /// endpoint is the load-bearing operation.
     fn set_select(&mut self, new_start: usize, new_end: usize, cur_start: bool) {
         let p = if cur_start { new_start } else { new_end };
 
@@ -1004,7 +992,6 @@ impl Editor {
             if p > self.cur_ptr {
                 // Move text from after the gap to before it.
                 let l = p - self.cur_ptr;
-                // memmove(&buffer[curPtr], &buffer[curPtr+gapLen], l)
                 let src = self.cur_ptr + self.gap_len;
                 self.buffer.copy_within(src..src + l, self.cur_ptr);
                 let lines = count_lines(&self.buffer[self.cur_ptr..self.cur_ptr + l]);
@@ -1015,14 +1002,14 @@ impl Editor {
                 self.cur_ptr = p;
                 let lines = count_lines(&self.buffer[self.cur_ptr..self.cur_ptr + l]);
                 self.cur_pos.y -= lines;
-                // memmove(&buffer[curPtr+gapLen], &buffer[curPtr], l)
+                // Move text from before the gap to after it.
                 let dst = self.cur_ptr + self.gap_len;
                 self.buffer.copy_within(self.cur_ptr..self.cur_ptr + l, dst);
             }
             self.del_count = 0;
             self.ins_count = 0;
-            // setBufSize(bufLen) — no-op for the base (never shrinks); the
-            // file-editor shrink path is not modeled either (see set_buf_size).
+            // A shrink-to-fit here is a no-op (the buffer never shrinks; see
+            // set_buf_size).
         }
         self.draw_line = self.cur_pos.y;
         self.draw_ptr = self.line_start(p);
@@ -1032,8 +1019,8 @@ impl Editor {
         self.update(flags);
     }
 
-    /// `setCurPtr(p, selectMode)` — move the cursor to `p`, optionally extending
-    /// (and snapping to word/line granularity).
+    /// Move the cursor to `p`, optionally extending the selection (and snapping to
+    /// word/line granularity per `select_mode`).
     fn set_cur_ptr(&mut self, mut p: usize, select_mode: u8) {
         let mut anchor = if (select_mode & SM_EXTEND) == 0 {
             p
@@ -1064,26 +1051,26 @@ impl Editor {
         }
     }
 
-    /// `startSelect()` — begin a persistent selection.
+    /// Begin a persistent selection.
     fn start_select(&mut self) {
         self.hide_select();
         self.selecting = true;
     }
 
-    /// `hideSelect()` — collapse the selection to the cursor.
+    /// Collapse the selection to the cursor.
     fn hide_select(&mut self) {
         self.selecting = false;
         self.set_select(self.cur_ptr, self.cur_ptr, false);
     }
 
-    /// `toggleInsMode()` — flip overwrite mode + the block-cursor flag.
+    /// Flip overwrite mode and the block-cursor flag.
     fn toggle_ins_mode(&mut self) {
         self.overwrite = !self.overwrite;
         let ins = self.state.state.cursor_ins;
         self.state.state.cursor_ins = !ins;
     }
 
-    /// `toggleEncoding()` — flip the multibyte/single-byte encoding.
+    /// Flip between multibyte and single-byte encoding.
     fn toggle_encoding(&mut self) {
         self.encoding = if self.encoding == Encoding::Default {
             Encoding::SingleByte
@@ -1095,12 +1082,12 @@ impl Editor {
         self.set_select(self.sel_start, self.sel_end, cur_start);
     }
 
-    // -- insertion / deletion (teditor2.cpp) --------------------------------
+    // -- insertion / deletion -----------------------------------------------
 
-    /// `insertBuffer(p, offset, length, allowUndo, selectText)` — THE core edit.
+    /// THE core edit: replace a range with bytes from `p`, with optional undo and
+    /// optional selection of the inserted text.
     ///
-    /// `p` must **not** alias `self.buffer` (callers snapshot first; the base never
-    /// reallocates, so the C++ `p -= ptrdiff_t(buffer)` fixup is dropped).
+    /// `p` must **not** alias `self.buffer` — callers snapshot first.
     fn insert_buffer(
         &mut self,
         p: &[u8],
@@ -1195,25 +1182,25 @@ impl Editor {
         true
     }
 
-    /// `insertText(text, length, selectText)` — public insert (ctx-free core).
+    /// Insert `text` at the cursor (the ctx-free insert core), optionally
+    /// selecting the inserted bytes.
     fn insert_text_core(&mut self, text: &[u8], select_text: bool) -> bool {
         self.insert_buffer(text, 0, text.len(), self.can_undo, select_text)
     }
 
-    /// `deleteSelect()` — delete the current selection.
+    /// Delete the current selection.
     fn delete_select(&mut self) {
         self.insert_buffer(&[], 0, 0, self.can_undo, false);
     }
 
-    /// `TEditor::insertFrom(editor)` — insert another editor's selection bytes
-    /// into self. `select_text = self.is_clipboard` (the clipboard editor selects
-    /// the inserted content; a normal destination editor does not).
+    /// Insert `data` (another editor's selection bytes) into this editor. The
+    /// inserted text is selected only when this is the clipboard editor; a normal
+    /// destination editor leaves it unselected.
     ///
-    /// Called by the pump's `ClipboardEditorReceive` (dest = clipboard editor,
-    /// `is_clipboard = true` → `select_text = true`) and `ClipboardEditorPaste`
-    /// (dest = normal editor, `is_clipboard = false` → `select_text = false`).
-    /// After the insert the caller must call `flush_if_unlocked` to publish
-    /// updated scrollbar params.
+    /// Called by the pump's clipboard brokers: the cut/copy path (destination =
+    /// clipboard editor, selects the content) and the paste path (destination =
+    /// normal editor, no selection). After the insert the caller must call
+    /// `flush_if_unlocked` to publish updated scroll-bar params.
     pub(crate) fn insert_from(&mut self, data: &[u8], ctx: &mut Context) -> bool {
         let res = self.insert_buffer(data, 0, data.len(), self.can_undo, self.is_clipboard);
         self.flush_if_unlocked(ctx);
@@ -1221,8 +1208,8 @@ impl Editor {
     }
 
     /// Extract the current selection as a byte vec (for the clipboard broker).
-    /// The selection bytes are always physically contiguous in the gap buffer
-    /// (`curPtr` is at `selStart` or `selEnd`, so the gap never sits inside the
+    /// The selection bytes are always physically contiguous in the gap buffer (the
+    /// cursor sits at one selection endpoint, so the gap never lies inside the
     /// selection).
     pub(crate) fn selection_bytes(&self) -> Vec<u8> {
         let len = self.sel_end - self.sel_start;
@@ -1230,8 +1217,8 @@ impl Editor {
         self.buffer[start..start + len].to_vec()
     }
 
-    /// `deleteRange(startPtr, endPtr, delSelect)` — delete a range, honoring an
-    /// existing selection when `del_select`.
+    /// Delete the range `[start_ptr, end_ptr)`, honoring an existing selection
+    /// when `del_select`.
     fn delete_range(&mut self, start_ptr: usize, end_ptr: usize, del_select: bool) {
         if self.has_selection() && del_select {
             self.delete_select();
@@ -1243,7 +1230,8 @@ impl Editor {
         }
     }
 
-    /// `newLine()` — insert a line break with optional auto-indent.
+    /// Insert a line break, replicating the current line's leading indent when
+    /// auto-indent is on.
     fn new_line(&mut self) {
         let p = self.line_start(self.cur_ptr);
         let mut i = p;
@@ -1258,14 +1246,15 @@ impl Editor {
         self.insert_text_core(b"\n", false);
         if self.auto_indent {
             // Snapshot the indent run BEFORE inserting (source must not alias
-            // self.buffer). The run is physically contiguous (it precedes curPtr,
-            // and after the "\n" insert the gap is at the new curPtr, past it).
+            // self.buffer). The run is physically contiguous (it precedes the
+            // cursor, and after the "\n" insert the gap sits past the cursor).
             let indent: Vec<u8> = (p..p + (i - p)).map(|q| self.buf_char(q)).collect();
             self.insert_text_core(&indent, false);
         }
     }
 
-    /// `undo()` — single-level undo (restore the deleted text, drop the inserted).
+    /// Single-level undo: restore the most recently deleted text and drop the most
+    /// recently inserted.
     fn undo(&mut self) {
         if self.del_count != 0 || self.ins_count != 0 {
             self.sel_start = self.cur_ptr - self.ins_count;
@@ -1273,23 +1262,22 @@ impl Editor {
             let length = self.del_count;
             self.del_count = 0;
             self.ins_count = 0;
-            // Source = the deleted text, which lives in the gap at
-            // [curPtr+gapLen-length .. curPtr+gapLen). Snapshot first (no alias).
+            // Source = the deleted text, which lives in the gap just before its
+            // end. Snapshot first (no alias).
             let start = self.cur_ptr + self.gap_len - length;
             let snapshot: Vec<u8> = self.buffer[start..start + length].to_vec();
             self.insert_buffer(&snapshot, 0, length, false, true);
         }
     }
 
-    // -- search (teditor2.cpp / edits.cpp) ----------------------------------
+    // -- search -------------------------------------------------------------
 
     /// Find `needle` from the cursor; on a hit, select it and track the cursor.
     /// This is the low-level search primitive; the interactive Find / Replace
     /// dialogs drive it through [`do_search_replace`].
     ///
-    /// Context-free: the C++ `lock`/`trackCursor`/`unlock` flush is replaced by a
-    /// flag-set (`trackCursor` records the scroll target; the flush happens on the
-    /// next `handle_event` boundary).
+    /// Context-free: instead of flushing inline, this only records the scroll
+    /// target; the actual flush happens on the next `handle_event` boundary.
     pub fn search(&mut self, needle: &str, opts: u16) -> bool {
         let needle = needle.as_bytes();
         let mut pos = self.cur_ptr;
@@ -1321,14 +1309,14 @@ impl Editor {
         }
     }
 
-    // -- viewport (teditor2.cpp) --------------------------------------------
+    // -- viewport -----------------------------------------------------------
 
-    /// `cursorVisible()`.
+    /// Whether the cursor row is within the visible viewport.
     fn cursor_visible(&self) -> bool {
         self.cur_pos.y >= self.delta.y && self.cur_pos.y < self.delta.y + self.state.size.y
     }
 
-    /// `scrollTo(x, y)` — set `delta` (clamped) and flag a redraw.
+    /// Set the scroll offset (clamped to the content extent) and flag a redraw.
     fn scroll_to(&mut self, x: i32, y: i32) {
         let x = 0.max(x.min(self.limit.x - self.state.size.x));
         let y = 0.max(y.min(self.limit.y - self.state.size.y));
@@ -1339,12 +1327,10 @@ impl Editor {
         }
     }
 
-    /// One tick of the middle-button pan loop body (teditor1.cpp:543-548):
-    /// `mouse = makeLocal(event.mouse.where); TPoint d = delta + (lastMouse -
-    /// mouse); scrollTo(d.x, d.y); lastMouse = mouse;` — scroll by the mouse
-    /// delta, never touching cursor/selection. The C++ pan loop does not
-    /// lock(): `scrollTo`'s `update(ufView)` flushes inline at `lockCount == 0`,
-    /// which `flush_if_unlocked` mirrors.
+    /// One tick of the middle-button pan: scroll by `last - mouse` (the movement
+    /// since the previous tick) and remember the new position, never touching the
+    /// cursor or selection. The pan does not take an update lock, so the scroll's
+    /// view-repaint flushes immediately, which `flush_if_unlocked` mirrors.
     fn pan_tick(&mut self, last: Point, mouse: Point, ctx: &mut Context) {
         let d = Point::new(
             self.delta.x + last.x - mouse.x,
@@ -1355,7 +1341,7 @@ impl Editor {
         self.flush_if_unlocked(ctx);
     }
 
-    /// `trackCursor(center)` — scroll so the cursor is visible.
+    /// Scroll so the cursor is visible (centering it when `center`).
     fn track_cursor(&mut self, center: bool) {
         if center {
             self.scroll_to(
@@ -1370,11 +1356,12 @@ impl Editor {
         }
     }
 
-    /// `checkScrollBar` body — applied by the pump after reading bar values.
+    /// Adopt new scroll offsets read from the scroll bars (applied by the pump).
     ///
-    /// Public ctx-taking entry: the pump reads each scrollbar's `value`, then calls
+    /// Public ctx-taking entry: the pump reads each scroll bar's value, then calls
     /// this with `dx`/`dy` (`None` = no bar). For each present bar, if its value
-    /// differs from `delta`, adopt it and flag a `ufView` redraw; then flush.
+    /// differs from the current offset, adopt it and flag a full redraw; then
+    /// flush.
     pub fn apply_scroll_delta(&mut self, dx: Option<i32>, dy: Option<i32>, ctx: &mut Context) {
         if let Some(x) = dx
             && x != self.delta.x
@@ -1391,8 +1378,8 @@ impl Editor {
         self.flush_if_unlocked(ctx);
     }
 
-    /// `insertText` — public ctx-taking entry used by the clipboard-paste broker.
-    /// Inserts then flushes (the flush republishes scrollbar params next pump).
+    /// Public ctx-taking insert used by the clipboard-paste broker. Inserts then
+    /// flushes (the flush republishes scroll-bar params next pump).
     pub fn insert_text(&mut self, text: &[u8], select_text: bool, ctx: &mut Context) {
         self.lock();
         self.insert_text_core(text, select_text);
@@ -1401,19 +1388,19 @@ impl Editor {
         self.unlock(ctx);
     }
 
-    // -- update / lock / flush (teditor2.cpp) -------------------------------
+    // -- update / lock / flush ----------------------------------------------
 
-    /// `update(flags)` — flag-set only (no inline flush; see the module seam).
+    /// Record pending redraw flags; no inline flush (see the module seam).
     fn update(&mut self, flags: u8) {
         self.update_flags |= flags;
     }
 
-    /// `lock()`.
+    /// Take an update lock (deferring flushes until it is released).
     fn lock(&mut self) {
         self.lock_count += 1;
     }
 
-    /// `unlock()` — decrement; flush when the count returns to 0.
+    /// Release an update lock; flush when the count returns to 0.
     fn unlock(&mut self, ctx: &mut Context) {
         if self.lock_count > 0 {
             self.lock_count -= 1;
@@ -1437,10 +1424,10 @@ impl Editor {
         if self.update_flags == 0 {
             return;
         }
-        // setCursor(curPos.x - delta.x, curPos.y - delta.y)
+        // Cursor in view-local coords = content position minus the scroll offset.
         self.state
             .set_cursor(self.cur_pos.x - self.delta.x, self.cur_pos.y - self.delta.y);
-        // drawView / drawLines: dropped (whole-tree redraw).
+        // No explicit text repaint here: the whole tree is redrawn and diffed.
         let size = self.state.size;
         if let Some(h) = self.h_scroll_bar {
             ctx.request_scroll_bar_params(
@@ -1471,7 +1458,7 @@ impl Editor {
         self.update_flags = 0;
     }
 
-    /// `setCmdState(command, enable)` — enable iff `enable && active`, else disable.
+    /// Enable `command` iff `enable` and this editor is active, else disable it.
     fn set_cmd_state(&self, command: crate::command::Command, enable: bool, ctx: &mut Context) {
         if enable && self.state.state.active {
             ctx.enable_command(command);
@@ -1480,18 +1467,19 @@ impl Editor {
         }
     }
 
-    /// `updateCommands()` — gray/ungray the editing commands by current state.
+    /// Gray/ungray the editing commands according to the current state.
     fn update_commands(&self, ctx: &mut Context) {
         use crate::command::Command;
         let has_undo = self.del_count != 0 || self.ins_count != 0;
         self.set_cmd_state(Command::UNDO, has_undo, ctx);
-        // C++: `if (isClipboard() == False)` — the clipboard editor does not
-        // update cut/copy/paste (it is not a user-editable file editor).
+        // The clipboard editor does not update cut/copy/paste (it is not a
+        // user-editable file editor).
         if !self.is_clipboard {
             let has_sel = self.has_selection();
             self.set_cmd_state(Command::CUT, has_sel, ctx);
             self.set_cmd_state(Command::COPY, has_sel, ctx);
-            // C++: `clipboard == 0 || clipboard->hasSelection()`
+            // Paste is allowed when there is no clipboard editor, or it has a
+            // selection to paste.
             let paste_ok = ctx.clipboard_editor_id().is_none() || ctx.clipboard_has_selection();
             self.set_cmd_state(Command::PASTE, paste_ok, ctx);
         }
@@ -1500,14 +1488,14 @@ impl Editor {
         self.set_cmd_state(Command::REPLACE, true, ctx);
         self.set_cmd_state(Command::SEARCH_AGAIN, true, ctx);
         if self.file_editor {
-            // TFileEditor::updateCommands — cmSave/cmSaveAs always enabled when active.
+            // File editor: Save / Save As are always enabled while active.
             self.set_cmd_state(Command::SAVE, true, ctx);
             self.set_cmd_state(Command::SAVE_AS, true, ctx);
         }
     }
 
-    /// `TFileEditor::saveFile`'s `modified = False; update(ufUpdate)` tail — clear
-    /// the dirty flag and flag an indicator/cursor redraw.
+    /// Clear the dirty flag and request an indicator/cursor redraw (the tail of a
+    /// successful save).
     fn clear_modified(&mut self) {
         self.modified = false;
         self.update(UF_UPDATE);
@@ -1517,13 +1505,13 @@ impl Editor {
 
     /// Copy the selection to the internal or system clipboard.
     fn clip_copy(&mut self, ctx: &mut Context) -> bool {
-        // C++: `if (clipboard != this)` — the clipboard editor cannot copy from itself.
+        // The clipboard editor cannot copy from itself.
         if ctx.clipboard_editor_id() == self.state.id() && self.state.id().is_some() {
             return false;
         }
         if let Some(clipboard_id) = ctx.clipboard_editor_id() {
-            // Internal clipboard: snapshot selection bytes → ClipboardEditorReceive.
-            // C++: `clipboard->insertFrom(this)` — copy FROM self INTO clipboard editor.
+            // Internal clipboard: snapshot the selection bytes and hand them to
+            // the clipboard editor.
             let data = self.selection_bytes();
             ctx.clipboard_editor_receive(clipboard_id, data);
             self.selecting = false;
@@ -1543,7 +1531,7 @@ impl Editor {
         }
     }
 
-    /// `clipCut()` — copy then delete.
+    /// Cut: copy the selection, then delete it.
     fn clip_cut(&mut self, ctx: &mut Context) {
         if self.clip_copy(ctx) {
             self.delete_select();
@@ -1600,12 +1588,11 @@ impl Editor {
 
     // -- find/replace dialogs -----------------------------------------------
 
-    /// `doSearchReplace()` — one pass of the search/replace loop.
+    /// One pass of the search/replace loop.
     ///
-    /// Faithful to C++ `TEditor::doSearchReplace` except: the PromptOnReplace
-    /// dialog goes via the async `request_message_box` seam (not a synchronous
-    /// `editorDialog` call); `pending_replace_answer` stores the user's choice
-    /// between pump iterations.
+    /// The "Replace this occurrence?" prompt is asynchronous: it goes through the
+    /// `request_message_box` seam rather than a blocking dialog call, and
+    /// `pending_replace_answer` carries the user's choice between pump iterations.
     fn do_search_replace(&mut self, ctx: &mut Context) {
         use crate::command::Command;
         use crate::dialog::{MessageBoxButtons, MessageBoxKind};
@@ -1693,9 +1680,10 @@ impl Editor {
         }
     }
 
-    // -- formatLine / draw (edits.cpp / teditor1.cpp) -----------------------
+    // -- line formatting / draw ---------------------------------------------
 
-    /// `getColorAt(P)` — selected role inside the selection, else normal.
+    /// The color role at offset `p`: the selected role inside the selection, else
+    /// the normal role.
     fn color_at(&self, p: usize) -> Role {
         if self.sel_start <= p && p < self.sel_end {
             Role::ScrollerSelected
@@ -1704,8 +1692,8 @@ impl Editor {
         }
     }
 
-    /// `formatLine(b, linePtr, hScroll, width)` — render one display row into the
-    /// row at view-local `y`.
+    /// Render one display row (the line starting at `line_ptr`) into the row at
+    /// view-local `y`, honoring the horizontal scroll and width.
     fn format_line(&self, ctx: &mut DrawCtx, y: i32, line_ptr: usize, h_scroll: i32, width: i32) {
         let h_scroll = h_scroll.max(0);
         let width = width.max(0);
@@ -1756,7 +1744,8 @@ impl Editor {
         }
     }
 
-    /// `drawLines(y, count, linePtr)` — render `count` rows from `line_ptr`.
+    /// Render `count` rows starting at view-local `y`, from the line at
+    /// `line_ptr`.
     fn draw_lines(&self, ctx: &mut DrawCtx, y: i32, count: i32, mut line_ptr: usize) {
         for yy in y..y + count {
             self.format_line(ctx, yy, line_ptr, self.delta.x, self.state.size.x);
@@ -1778,13 +1767,13 @@ impl View for Editor {
         &mut self.state
     }
 
-    /// `TEditor::draw` — recompute `draw_ptr` for `delta.y`, then render the
-    /// viewport rows. NB: `draw_ptr`/`draw_line` are display caches; mutating them
-    /// in `draw` is faithful to the C++ (it does the same).
+    /// Recompute `draw_ptr` for the current vertical scroll, then render the
+    /// viewport rows. `draw_ptr`/`draw_line` are display caches, so mutating them
+    /// during drawing is intentional.
     fn draw(&mut self, ctx: &mut DrawCtx) {
-        // Cache the absolute origin for the mouse-tracking capture: the
-        // MouseTrackCapture localizes absolute mouse coords via this value,
-        // mirroring the Button `abs_origin` pattern.
+        // Cache the absolute origin for the mouse-tracking capture, which uses it
+        // to localize absolute mouse coords (the same `abs_origin` pattern
+        // buttons use).
         self.abs_origin = ctx.origin();
         if self.draw_line != self.delta.y {
             self.draw_ptr = self.line_move(self.draw_ptr, self.delta.y - self.draw_line);
@@ -1795,15 +1784,15 @@ impl View for Editor {
         self.draw_lines(ctx, 0, count, draw_ptr);
     }
 
-    /// `TEditor::handleEvent` — keyboard editing, command dispatch, single-click
-    /// mouse positioning, and the scrollbar-changed broadcast.
+    /// Handle keyboard editing, command dispatch, single-click mouse positioning,
+    /// and scroll-bar change notifications.
     fn handle_event(&mut self, ev: &mut crate::event::Event, ctx: &mut Context) {
         use crate::command::Command;
         use crate::event::Event;
 
         let center_cursor = !self.cursor_visible();
 
-        // selectMode: smExtend if a persistent selection is active or shift is held.
+        // Extend the selection if a persistent selection is active or shift is held.
         let mut select_mode: u8 = 0;
         let shift_held = match ev {
             Event::KeyDown(k) => k.modifiers.shift,
@@ -1816,30 +1805,27 @@ impl View for Editor {
             select_mode = SM_EXTEND;
         }
 
-        // convertEvent: keymap + the Ctrl-K/Ctrl-Q two-key prefix. Transforms a
-        // KeyDown into a Command in place (or clears it for a prefix key).
+        // Resolve the keymap and the Ctrl-K/Ctrl-Q two-key prefix, turning a
+        // KeyDown into a command in place (or clearing it for a prefix key).
         self.convert_event(ev);
 
         match ev {
-            // -- evMouseWheel (the distinct wheel event class) ----------------
-            // During a hold the capture forwards it under `mask.wheel` (the
-            // evMouseWheel slice of both loop masks, teditor1.cpp:551/:583).
-            // Outside a hold the C++ editor never receives evMouseWheel —
-            // absent from TEditor's eventMask (teditor1.cpp:195) — so an
+            // -- mouse wheel --------------------------------------------------
+            // During a hold the capture forwards the wheel under the loop's mask.
+            // Outside a hold the editor's event mask excludes the wheel, so an
             // untracked wheel falls through unconsumed.
             Event::MouseWheel(m) => {
                 let m = *m;
                 match self.track {
                     // The wheel iteration of the drag-select loop: forward the
                     // wheel to both scroll bars, then run the unconditional body.
-                    // The bars are siblings, so the wheel is delivered via
-                    // Deferred::MouseTrack (find_mut + handle_event). The C++ bar
-                    // answers with a synchronous cmScrollBarChanged that bypasses
-                    // the hold loop; the queue-borne broadcast here would be
-                    // swallowed by the modal capture, so the editor posts the
-                    // SyncEditorDelta itself. Both land on the next pump, so this
-                    // iteration's setCurPtr still sees the pre-scroll `delta`; the
-                    // next tick corrects it.
+                    // The bars are siblings, so the wheel is delivered through the
+                    // mouse-track deferred effect (resolve the bar, hand it the
+                    // event). The bar's resulting change notification would be
+                    // swallowed by the modal capture, so the editor self-posts a
+                    // delta-sync instead. Both land on the next pump, so this
+                    // iteration's cursor move still sees the pre-scroll `delta`;
+                    // the next tick corrects it.
                     Some(EditorTrack::Select { select_mode: sm }) => {
                         self.lock();
                         if let Some(v) = self.v_scroll_bar {
@@ -2010,15 +1996,14 @@ impl View for Editor {
                     None => unreachable!("guarded by track.is_some()"),
                 }
             }
-            // -- evMouseAuto (tracked) — a loop-body tick with the edge-scroll
+            // -- auto-repeat (tracked) — a loop-body tick with the edge-scroll
             // prelude. Guarded by `track`.
             Event::MouseAuto(m) if self.track.is_some() => {
                 let m = *m;
                 match self.track {
-                    // Drag-select auto body (teditor1.cpp:559-572): per-axis
-                    // out-of-bounds check against the view size, scrollTo(delta
-                    // ± 1), THEN the unconditional setCurPtr tail (:580-581) —
-                    // order preserved (getMousePtr reads the post-scroll delta).
+                    // Drag-select auto body: per-axis out-of-bounds check against
+                    // the view size, edge-scroll by one, THEN move the cursor.
+                    // Order matters — the cursor read sees the post-scroll delta.
                     Some(EditorTrack::Select { select_mode: sm }) => {
                         self.lock();
                         let mouse = m.position;
@@ -2142,11 +2127,10 @@ impl View for Editor {
                 if let Some(id) = self.state.id() {
                     ctx.request_sync_editor_delta(id, self.h_scroll_bar, self.v_scroll_bar);
                 }
-                // DEVIATION from C++ `clearEvent`: the TScroller (the direct
-                // analogue) deliberately does NOT clear cmScrollBarChanged — the
-                // codebase convention is to leave broadcasts live for siblings.
-                // Match it (return without clearing); functionally inert since the
-                // broadcast only concerns this editor's own bar.
+                // Do NOT consume the scroll-bar-changed broadcast: by codebase
+                // convention broadcasts are left live for sibling views (the
+                // scroller behaves the same way). Functionally inert here, since
+                // the broadcast only concerns this editor's own bar.
                 return;
             }
             _ => return,
@@ -2154,9 +2138,9 @@ impl View for Editor {
         ev.clear();
     }
 
-    /// `TEditor::setState` — after the base flips the flag, show/hide the
-    /// scrollbars + indicator on `sfActive` and re-gray commands; on `sfExposed`
-    /// the C++ unlocks (we have no exposed flag — see note).
+    /// Flip a state flag, then react: on a change of activity, show/hide the
+    /// scroll bars and indicator and re-gray the editing commands; on focus,
+    /// broadcast the focus gain/loss.
     fn set_state(&mut self, flag: StateFlag, enable: bool, ctx: &mut Context) {
         self.state.set_flag(flag, enable);
         if flag == StateFlag::Focused {
@@ -2180,15 +2164,14 @@ impl View for Editor {
             if let Some(i) = self.indicator {
                 ctx.request_set_visible(i, enable);
             }
-            // updateCommands runs whenever active changes; flag a redraw so the
-            // first flush publishes params/indicator too.
+            // Re-gray commands whenever activity changes; flag a redraw so the
+            // first flush publishes the scroll-bar params/indicator too.
             self.update(UF_VIEW);
             self.update_commands(ctx);
             self.flush_if_unlocked(ctx);
         }
-        // NOTE: the C++ `sfExposed` arm (`if (enable) unlock()`) has no analogue —
-        // there is no exposed flag here. The initial flush instead happens on the
-        // first active/event boundary.
+        // There is no "exposed" flag here; the initial flush instead happens on
+        // the first active/event boundary.
     }
 
     /// Geometry + clamp `delta` + flag a redraw. Scrollbar params republish on
@@ -2200,7 +2183,7 @@ impl View for Editor {
         self.update(UF_VIEW);
     }
 
-    /// `TEditor::valid` — the buffer allocated successfully.
+    /// The editor is valid when its buffer allocated successfully.
     fn valid(&mut self, _cmd: crate::command::Command, _ctx: &mut Context) -> bool {
         self.is_valid
     }
@@ -2212,17 +2195,17 @@ impl View for Editor {
         Some(self)
     }
 
-    /// Cache the user's answer to the "Replace this occurrence?" prompt
-    /// (the `answer_to` / `RouteModalAnswer` round-trip). Consumed by
-    /// [`do_search_replace`] on the next `cmSearchAgain` dispatch.
+    /// Cache the user's answer to the "Replace this occurrence?" prompt, routed
+    /// back from the message box. Consumed by [`do_search_replace`] on the next
+    /// search-again dispatch.
     fn set_modal_answer(&mut self, cmd: crate::command::Command) {
         self.pending_replace_answer = Some(cmd);
     }
 }
 
 impl Editor {
-    /// `convertEvent` — translate a `KeyDown` into a `Command` (or a cleared
-    /// prefix), routing through the process-global keymap.
+    /// Translate a `KeyDown` into a `Command` (or a cleared prefix), routing
+    /// through the process-global keymap.
     fn convert_event(&mut self, ev: &mut crate::event::Event) {
         use crate::event::Event;
         if let Event::KeyDown(k) = ev {
@@ -2243,8 +2226,8 @@ impl Editor {
         }
     }
 
-    /// The `evCommand` default-arm dispatch (the inner `switch` in handleEvent).
-    /// Returns false for an unhandled command (the C++ `default: unlock; return`).
+    /// Dispatch an editing command. Returns false for an unhandled command, so
+    /// the caller can fall through.
     fn handle_edit_command(
         &mut self,
         cmd: crate::command::Command,
@@ -2331,21 +2314,21 @@ impl Editor {
 /// the dialog rather than inserting), and it exposes its text as a typed
 /// [`FieldValue`] for dialog gather/scatter.
 ///
-/// A memo reuses the editor's draw and so its scroller colors; it does not carry
-/// the C++ memo-specific palette, which only differed in a dialog context.
+/// A memo reuses the editor's drawing and so its scroller colors; it carries no
+/// separate palette of its own.
 ///
 /// # Turbo Vision heritage
 ///
-/// Ports `TMemo` (`tmemo.cpp`). `getData`/`setData` become the typed value
-/// protocol (deviation D10) and `getPalette` is folded into the editor's colors.
+/// Ports `TMemo` (`tmemo.cpp`). Data exchange becomes the typed value protocol
+/// (deviation D10) and the palette is folded into the editor's colors.
 pub struct Memo {
     /// The shared editor engine (buffer, nav, edit, undo, draw, brokers).
     pub editor: Editor,
 }
 
 impl Memo {
-    /// `TMemo::TMemo(bounds, hScrollBar, vScrollBar, indicator, bufSize)` — forwards
-    /// straight to the [`Editor`] ctor.
+    /// Build a memo over a `buf_size`-byte buffer, wired to the given scroll bars
+    /// and frame indicator. Forwards straight to the [`Editor`] constructor.
     pub fn new(
         bounds: Rect,
         h_scroll_bar: Option<ViewId>,
@@ -2407,54 +2390,52 @@ impl View for Memo {
 /// async-modal-from-a-view mechanism: `valid` requests a message box, caches the
 /// answer in [`set_modal_answer`](View::set_modal_answer), then re-validates.
 ///
-/// Save-as (an explicit `cmSaveAs`, or saving an untitled buffer) opens a file
-/// dialog through [`Context::request_save_as_dialog`]: the loop builds and runs
-/// the dialog, the completion sets `file_name` plus [`pending_title_update`] and
-/// re-injects `cmSave`, which writes the file and broadcasts `cmUpdateTitle`
-/// (refreshing the hosting [`EditWindow`]'s frame title).
+/// Save-as (an explicit Save-As command, or saving an untitled buffer) opens a
+/// file dialog through [`Context::request_save_as_dialog`]: the loop builds and
+/// runs the dialog, the completion sets `file_name` plus [`pending_title_update`]
+/// and re-injects a Save command, which writes the file and broadcasts a
+/// title-update (refreshing the hosting [`EditWindow`]'s frame title).
 ///
 /// A read error is reported through a message box on the first event (the
 /// constructor has no [`Context`], so the error is cached at load time).
 /// Optional backup files (off by default) append `~` to the filename
-/// (`foo.txt` → `foo.txt~`), following the Unix convention rather than the C++
-/// `.bak` extension swap.
+/// (`foo.txt` → `foo.txt~`), following the Unix convention.
 ///
-/// Some C++ details have no analogue here: `std::fs::write` does not distinguish
-/// create-vs-write failure, so both report one "Error writing file …" box; buffer
-/// growth via the OS is fallible, so there is no out-of-memory path; and the
-/// command disable-on-close hook and `TStreamable` are dropped.
+/// A couple of details collapse on a modern host: `std::fs::write` does not
+/// distinguish create-vs-write failure, so both report one "Error writing file …"
+/// box, and buffer growth is infallible, so there is no out-of-memory path.
 ///
 /// # Turbo Vision heritage
 ///
-/// Ports `TFileEditor` (`tfiledtr.cpp`).
+/// Ports `TFileEditor` (`tfiledtr.cpp`). Data exchange uses the typed value
+/// protocol (deviation D10); serialization is dropped.
 pub struct FileEditor {
     /// The editor engine, in file-editor mode.
     pub editor: Editor,
-    /// `fileName` — the backing file, or `None` for an untitled buffer
-    /// (C++ `*fileName == EOS`).
+    /// The backing file, or `None` for an untitled buffer.
     pub file_name: Option<std::path::PathBuf>,
     /// The user's answer to the modified-save prompt, cached by
     /// [`View::set_modal_answer`] between the `valid()` that requested the box and
     /// the re-validate that consumes it (the async-modal-from-a-view round-trip).
     /// `None` until an answer is routed back; consumed (taken) on the next `valid`.
     pending_save_answer: Option<crate::command::Command>,
-    /// Set by the `SaveAsPick` modal completion (after the user picks a save-as
-    /// filename) so the next successful `cmSave` broadcasts `cmUpdateTitle` to
-    /// refresh the hosting `EditWindow`'s frame title. Faithful to C++ `saveAs`'s
-    /// `message(owner, evBroadcast, cmUpdateTitle, 0)` — but deferred to the
-    /// re-injected `cmSave` so the broadcast fires from a full `ctx`.
+    /// Set by the save-as dialog completion (after the user picks a filename) so
+    /// the next successful save broadcasts a title-update to refresh the hosting
+    /// [`EditWindow`]'s frame title. The broadcast is deferred to the re-injected
+    /// save so it fires from a full [`Context`].
     pub pending_title_update: bool,
     /// Error message from `load_file` to display on the first `handle_event` call.
     /// Set when a real I/O error (not NotFound) occurs during `load_file`, which is
-    /// called from the ctor and has no `Context`. Shown via `request_message_box`
-    /// on the first `handle_event` (the established deferred-ctor-work pattern).
+    /// called from the constructor and has no [`Context`]. Shown via
+    /// `request_message_box` on the first `handle_event` (the established pattern
+    /// for work deferred out of a constructor).
     pending_load_error: Option<String>,
 }
 
 impl FileEditor {
-    /// `TFileEditor::TFileEditor(bounds, hScroll, vScroll, indicator, fileName)`.
-    /// An empty `file_name` ⇒ untitled. A non-empty one is loaded immediately
-    /// (`is_valid` reflects load success, faithful to the C++ `isValid = loadFile()`).
+    /// Build a file editor wired to the given scroll bars and frame indicator.
+    /// A `None` `file_name` is untitled; a given one is loaded immediately, and
+    /// `is_valid` reflects whether the load succeeded.
     pub fn new(
         bounds: Rect,
         h_scroll_bar: Option<ViewId>,
@@ -2470,8 +2451,8 @@ impl FileEditor {
             pending_load_error: None,
         };
         if let Some(path) = file_name {
-            // C++ fexpand: make absolute relative to CWD, resolve . and .., but do
-            // NOT require the path to exist. std::path::absolute matches this
+            // Make the path absolute relative to the CWD, resolving . and .., but
+            // do NOT require it to exist. std::path::absolute matches this
             // contract (stable since Rust 1.79); fall back to the original path if
             // the CWD cannot be determined (the only failure mode).
             let path = std::path::absolute(&path).unwrap_or(path);
@@ -2483,8 +2464,8 @@ impl FileEditor {
         fe
     }
 
-    /// `TFileEditor::loadFile` — read the whole file into the buffer.
-    /// Missing/unopenable file ⇒ empty buffer, success (C++ returns True).
+    /// Read the whole file into the buffer.
+    /// Missing/unopenable file ⇒ empty buffer, success.
     /// A real read error ⇒ false; stores `pending_load_error` for display on first `handle_event`.
     pub fn load_file(&mut self) -> bool {
         let Some(path) = self.file_name.clone() else {
@@ -2493,8 +2474,7 @@ impl FileEditor {
         };
         match std::fs::read(&path) {
             Ok(bytes) => {
-                // set_text grows via set_buf_size then setBufLen — identical to the
-                // C++ read-into-buffer[bufSize-fSize] + setBufLen(fSize).
+                // set_text grows the buffer to fit and places the bytes at the end.
                 self.editor.set_text(&bytes);
                 true
             }
@@ -2503,9 +2483,9 @@ impl FileEditor {
                 true
             }
             Err(e) => {
-                // edReadError: store for display on first handle_event (ctor has no ctx).
-                // Faithful to C++ ("Error reading file %s."); OS detail omitted
-                // because the dialog sizer doesn't handle embedded newlines.
+                // Store the read error for display on first handle_event (the
+                // constructor has no ctx). OS detail is omitted because the dialog
+                // sizer doesn't handle embedded newlines.
                 let _ = e;
                 let msg = format!("Error reading file {}.", path.display());
                 self.pending_load_error = Some(msg);
@@ -2514,17 +2494,15 @@ impl FileEditor {
         }
     }
 
-    /// `TFileEditor::saveFile` — write the buffer's logical text to `file_name`.
-    /// On a write failure, pops an informational error `messageBox` via the
-    /// async-modal-from-a-view seam ([`Context::request_message_box`]).
+    /// Write the buffer's logical text to `file_name`. On a write failure, pops an
+    /// error message box ([`Context::request_message_box`]).
     pub fn save_file(&mut self, ctx: &mut Context) -> bool {
         let Some(path) = self.file_name.clone() else {
             return false;
         };
-        // efBackupFiles: rename existing file to <name>~ before writing the new
-        // content. DEVIATION from C++ (which uses ".bak"): append "~" to the
-        // full filename following the Unix convention (user-directed).
-        // No filename component: silently skip (matches C++ fnsplit/fnmerge no-op).
+        // Backup-files option: rename the existing file to <name>~ before writing
+        // the new content, appending "~" to the full filename (Unix convention).
+        // No filename component: silently skip.
         if (self.editor.editor_flags() & EF_BACKUP_FILES) != 0
             && let Some(name) = path.file_name()
         {
@@ -2534,20 +2512,17 @@ impl FileEditor {
             let _ = std::fs::remove_file(&backup); // Windows: rename fails if dest exists
             let _ = std::fs::rename(&path, &backup); // ignore — original may not exist (first save)
         }
-        // The logical text = front [0..curPtr] then tail [curPtr+gapLen..][..bufLen-curPtr].
-        // Use the editor's text() helper (gap-skipping) — equivalent and simpler.
+        // The logical text skips the gap; the editor's text() helper does that.
         let bytes = self.editor.text();
         match std::fs::write(&path, &bytes) {
             Ok(()) => {
-                self.editor.clear_modified(); // modified = False; update(ufUpdate)
+                self.editor.clear_modified();
                 true
             }
             Err(_) => {
-                // DEVIATION: C++ distinguishes edCreateError ("Error creating file
-                // {fileName}.") vs edWriteError ("Error writing file {fileName}.")
-                // by whether the file open succeeded before the write. `std::fs::write`
-                // opens+writes atomically and does not cleanly separate the two, so we
-                // emit the write message for both. Documented merge.
+                // A failed write reports one "Error writing file …" box. `std::fs::write`
+                // opens and writes atomically, so a create failure and a write failure
+                // cannot be distinguished here.
                 let msg = format!("Error writing file {}.", path.display());
                 ctx.request_message_box(
                     msg,
@@ -2561,19 +2536,17 @@ impl FileEditor {
         }
     }
 
-    /// `TFileEditor::save` — save to the existing file, or (untitled) saveAs.
+    /// Save to the existing file, or — if untitled — start a save-as.
     ///
-    /// C++ `save()`: `if( *fileName == EOS ) return saveAs(); else return saveFile();`.
-    /// The untitled branch is asynchronous in rstv: C++ `saveAs` runs a *nested*
-    /// modal `FileDialog` inline (`execDialog`) and returns the saved bool; a
-    /// FileEditor leaf holds only `&mut Context` and cannot exec a nested modal, so
-    /// it **requests** the dialog ([`Context::request_save_as_dialog`]) and returns
-    /// `false` for now. The real save happens after the dialog closes: the
-    /// `SaveAsPick` completion sets `file_name` + re-injects `cmSave`, which re-runs
-    /// `save()` — now with a non-empty `file_name` → `save_file`.
+    /// The untitled branch is asynchronous: a leaf view holds only `&mut Context`
+    /// and cannot run a nested modal dialog inline, so it **requests** the save-as
+    /// dialog ([`Context::request_save_as_dialog`]) and returns `false` for now.
+    /// The real save happens after the dialog closes: the completion sets
+    /// `file_name` and re-injects a Save command, which re-runs this method — now
+    /// with a non-empty `file_name`, so it writes the file.
     ///
-    /// For the modal-close path, `validate_modal_close` drives the `OpenSaveAsDialog`
-    /// inline and calls `pump_once` to service the re-injected `cmSave`.
+    /// For the modal-close path, `validate_modal_close` drives the save-as dialog
+    /// inline and pumps once to service the re-injected Save.
     pub fn save(&mut self, ctx: &mut Context) -> bool {
         if self.file_name.is_some() {
             self.save_file(ctx)
@@ -2588,16 +2561,17 @@ impl FileEditor {
 
 #[crate::delegate(to = editor)]
 impl View for FileEditor {
-    /// Concrete-reach hatch: the pump (the `OpenSaveAsDialog` / `SaveAsPick` brokers)
-    /// and `EditWindow::handle_event` downcast a group child back to `&mut FileEditor`
+    /// Concrete-reach hatch: the pump's save-as brokers and
+    /// `EditWindow::handle_event` downcast a group child back to `&mut FileEditor`
     /// to set `file_name` / read `pending_title_update`. WITHOUT this override the
     /// `#[delegate(to = editor)]` macro would forward `as_any_mut` to the inner
-    /// `Editor`, so the downcast would silently miss (return the inner `Editor`'s Any).
+    /// [`Editor`], so the downcast would silently miss (returning the inner
+    /// editor's `Any`).
     fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
         Some(self)
     }
 
-    /// `TFileEditor::handleEvent` — base editor first, then cmSave / cmSaveAs.
+    /// Run the editor first, then handle the Save / Save-As commands.
     fn handle_event(&mut self, ev: &mut crate::event::Event, ctx: &mut Context) {
         use crate::command::Command;
         use crate::event::Event;
@@ -2611,9 +2585,9 @@ impl View for FileEditor {
             );
         }
         self.editor.handle_event(ev, ctx);
-        // cmSaveAs (C++ `case cmSaveAs: saveAs();`): always open the FileDialog to
-        // pick a (possibly new) name, regardless of whether the buffer is titled.
-        // The SaveAsPick completion sets the picked name + re-injects cmSave.
+        // Save-As: always open the file dialog to pick a (possibly new) name,
+        // regardless of whether the buffer is titled. The completion sets the
+        // picked name and re-injects a Save.
         if let Event::Command(cmd) = ev
             && *cmd == Command::SAVE_AS
         {
@@ -2627,14 +2601,13 @@ impl View for FileEditor {
             && *cmd == Command::SAVE
         {
             let ok = self.save(ctx);
-            // C++ saveFile's update(ufUpdate) flushes inline; publish modified=false
-            // to the indicator and re-gray the save commands now (the inner editor
-            // already flushed with modified still true, since cmSave isn't an edit).
+            // Publish modified=false to the indicator and re-gray the save commands
+            // now (the inner editor already flushed with modified still true, since
+            // a Save is not itself an edit).
             self.editor.flush_if_unlocked(ctx);
-            // After a successful saveAs (the SaveAsPick completion set the flag and
-            // re-injected this cmSave), broadcast cmUpdateTitle so the hosting
-            // EditWindow refreshes its frame title (C++ saveAs's
-            // `message(owner, evBroadcast, cmUpdateTitle, 0)`).
+            // After a successful save-as (the completion set the flag and re-injected
+            // this Save), broadcast a title-update so the hosting EditWindow
+            // refreshes its frame title.
             if ok && self.pending_title_update {
                 self.pending_title_update = false;
                 ctx.broadcast(Command::UPDATE_TITLE, View::state(self).id());
@@ -2643,17 +2616,18 @@ impl View for FileEditor {
         }
     }
 
-    /// `TFileEditor::valid` (`tfiledtr.cpp`) — `cmValid` reflects buffer validity;
-    /// for any other command, a **modified** buffer prompts a Yes/No/Cancel save
-    /// dialog via the async-modal-from-a-view seam, and the answer decides the bool:
-    /// Yes→`save`, No→`clear_modified`+allow, Cancel→veto.
+    /// Validity check. For the plain validity command this reflects buffer
+    /// validity; for any other command, a **modified** buffer first prompts a
+    /// Yes/No/Cancel save dialog, and the answer decides the result: Yes → save,
+    /// No → clear the dirty flag and allow, Cancel → veto.
     ///
-    /// The prompt is asynchronous: the first `valid` call requests the box
-    /// ([`Context::request_message_box`] with `answer_to = self`, `then_command =
-    /// cmClose`) and returns `false` (veto for now). When the user picks, the pump
-    /// routes the answer back through [`View::set_modal_answer`] (caching it in
-    /// `pending_save_answer`) and re-posts `cmClose`, which re-runs this `valid`;
-    /// this time `pending_save_answer` is `Some` and the cached choice is applied.
+    /// The prompt is asynchronous: the first call requests the box
+    /// ([`Context::request_message_box`], routing the answer back to this view and
+    /// re-posting the close command) and returns `false` (veto for now). When the
+    /// user picks, the pump routes the answer back through
+    /// [`View::set_modal_answer`] (caching it in `pending_save_answer`) and
+    /// re-posts the close, which re-runs this check; this time the cached choice is
+    /// applied.
     fn valid(&mut self, cmd: crate::command::Command, ctx: &mut Context) -> bool {
         use crate::command::Command;
         if cmd == Command::VALID {
@@ -2664,10 +2638,10 @@ impl View for FileEditor {
             return match answer {
                 Command::YES => self.save(ctx),
                 Command::NO => {
-                    self.editor.clear_modified(); // modified = False; return True
+                    self.editor.clear_modified();
                     true
                 }
-                // cmCancel (or anything else, e.g. an OK-only box) → veto the close.
+                // Cancel (or anything else, e.g. an OK-only box) → veto the close.
                 _ => false,
             };
         }
@@ -2707,8 +2681,8 @@ impl View for FileEditor {
 /// Reach the inner [`Editor`] engine of a group child that may be a plain
 /// [`Editor`], a [`Memo`], or a [`FileEditor`].
 ///
-/// `FileEditor::as_any_mut` returns the `FileEditor` itself (so the saveAs brokers
-/// can downcast to it), NOT the inner `Editor`. The editor cross-view brokers
+/// `FileEditor::as_any_mut` returns the `FileEditor` itself (so the save-as
+/// brokers can downcast to it), NOT the inner `Editor`. The editor cross-view brokers
 /// (`SyncEditorDelta` / `EditorPaste`) target the inserted view's id — which, in an
 /// `EditWindow`, IS a `FileEditor` — yet they need the inner `Editor`. This helper
 /// bridges that: it tries the `FileEditor` downcast first (peeling to its
@@ -2731,9 +2705,10 @@ pub(crate) fn editor_mut(v: &mut dyn View) -> Option<&mut Editor> {
 /// [`Indicator`]. An embed-and-delegate wrapper over [`Window`]; the constructor
 /// wires the editor to the (initially hidden) scroll bars and indicator by id.
 ///
-/// The C++ close hook hid the window when it hosted the internal clipboard
-/// editor; the clipboard editor is never hosted in an `EditWindow`, so closing is
-/// always the plain window close.
+/// When a close is requested while this window hosts the internal clipboard
+/// editor, the window hides instead of closing. The clipboard editor is never
+/// hosted in an `EditWindow` in practice, so closing is normally the plain window
+/// close.
 ///
 /// # Turbo Vision heritage
 ///
@@ -2743,16 +2718,17 @@ pub struct EditWindow {
     pub window: crate::window::Window,
     /// The inserted [`FileEditor`]'s id (for reachability / tests).
     pub editor_id: ViewId,
-    /// The (initially hidden) horizontal scrollbar — C++ `hScrollBar` member.
+    /// The (initially hidden) horizontal scroll bar.
     pub h_scroll_bar_id: ViewId,
-    /// The (initially hidden) vertical scrollbar — C++ `vScrollBar` member.
+    /// The (initially hidden) vertical scroll bar.
     pub v_scroll_bar_id: ViewId,
-    /// The (initially hidden) indicator — C++ `indicator` member.
+    /// The (initially hidden) indicator.
     pub indicator_id: ViewId,
 }
 
 impl EditWindow {
-    /// `TEditWindow::TEditWindow(bounds, fileName, aNumber)`.
+    /// Build an edit window hosting `file_name` (or untitled) with window number
+    /// `number`.
     ///
     /// Inserts the (hidden) scroll bars and indicator FIRST to obtain their
     /// [`ViewId`]s, then constructs the [`FileEditor`] wired to those ids, then
@@ -2765,7 +2741,7 @@ impl EditWindow {
         };
         let mut window = crate::window::Window::new(bounds, Some(title), number);
 
-        // options |= ofTileable (faithful to C++).
+        // Edit windows participate in tiling.
         View::state_mut(&mut window).options.tileable = true;
 
         let size = View::state(&window).size;
@@ -2821,27 +2797,22 @@ impl EditWindow {
     )
 )]
 impl View for EditWindow {
-    /// `TEditWindow::handleEvent` — `TWindow::handleEvent` first, then refresh the
-    /// frame title on a `cmUpdateTitle` broadcast (the hosted [`FileEditor`]'s
-    /// `saveAs` fires it after a rename).
+    /// Run the window first, then refresh the frame title on a title-update
+    /// broadcast (the hosted [`FileEditor`] fires it after a save-as rename).
     ///
-    /// C++ `TEditWindow::getTitle` reads `editor->fileName` live and `cmUpdateTitle`
-    /// just `frame->drawView()`s; rstv stores the title, so we recompute it from the
-    /// editor's current `file_name` (or "Untitled") and re-push it to the frame via
+    /// The title is stored, so it is recomputed from the editor's current
+    /// `file_name` (or "Untitled") and re-pushed to the frame via
     /// [`Window::set_title`](crate::window::Window).
     ///
-    /// We do NOT clear the event (the C++ clears it). C++'s `saveAs` uses a narrow
-    /// `message(owner, …)` to the editor's own window; rstv's `ctx.broadcast`
-    /// **fans out to every window**. Under fan-out, clearing on the first window
-    /// dispatched would starve the others — so every EditWindow refreshes its own
-    /// title from its own editor (idempotent for windows that did not save,
-    /// order-independent) and the event stays live (a source filter could gate +
-    /// clear, but is unneeded here).
+    /// The event is left live (not consumed). The title-update is a broadcast that
+    /// fans out to every window; consuming it on the first window dispatched would
+    /// starve the others. Instead, every edit window refreshes its own title from
+    /// its own editor — idempotent for windows that did not save, and
+    /// order-independent — so the broadcast can safely reach them all.
     fn handle_event(&mut self, ev: &mut crate::event::Event, ctx: &mut crate::view::Context) {
         use crate::command::Command;
         use crate::event::Event;
-        // C++ `TEditWindow::close()`: hide instead of close when hosting the
-        // clipboard editor. `if (editor->isClipboard() == True) hide();`
+        // Hide instead of close when this window hosts the clipboard editor.
         if let Event::Command(ref cmd) = *ev
             && *cmd == Command::CLOSE
             && ctx.clipboard_editor_id() == Some(self.editor_id)
@@ -2870,10 +2841,9 @@ impl View for EditWindow {
         }
     }
 
-    /// `TEditWindow::sizeLimits` — minimum window size is {24, 6}
-    /// (`minEditWinSize`). `calc_bounds` is in the skip list so an
-    /// owner-driven resize routes through this override (via the trait default
-    /// of `calc_bounds`) instead of the Window's 16×6 floor.
+    /// The minimum window size is 24×6. `calc_bounds` is in the skip list so a
+    /// parent-driven resize routes through this override (via the trait default of
+    /// `calc_bounds`) instead of the window's 16×6 floor.
     fn size_limits(&self, owner_size: Point) -> (Point, Point) {
         let (_min, max) = View::size_limits(&self.window, owner_size);
         (Point::new(24, 6), max)
@@ -3371,9 +3341,9 @@ mod tests {
         assert!(ev.is_nothing(), "consumed");
     }
 
-    /// Regression: Shift+Tab (`kbShiftTab`, charCode 0) is NOT insertable — it
-    /// must not write a `\t`. C++ inserts only `kbTab` (charCode 9); `kbShiftTab`
-    /// falls through and bubbles to the dialog for backward focus navigation.
+    /// Regression: Shift+Tab is NOT insertable — it must not write a `\t`. Only a
+    /// plain Tab inserts; Shift+Tab falls through and bubbles to the dialog for
+    /// backward focus navigation.
     #[test]
     fn shift_tab_does_not_insert_tab() {
         let mut e = ed();
@@ -3411,9 +3381,9 @@ mod tests {
         assert_eq!(e.cur_ptr, 2, "cursor moved left one char");
     }
 
-    /// Regression: Ctrl-Del must map to cmDelWord (delete word to the right), not
-    /// cmClear — the WordStar preset binds `ctrl+delete → DEL_WORD` and omits the
-    /// dead `cmClear` binding per the keymap design.
+    /// Regression: Ctrl-Del must delete the word to the right, not clear the
+    /// selection — the WordStar preset binds `ctrl+delete → DEL_WORD` and omits the
+    /// dead clear binding per the keymap design.
     #[test]
     fn ctrl_del_deletes_word_to_the_right() {
         let _g = crate::keymap::GlobalKeymapGuard::new(crate::keymap::Keymap::word_star());
@@ -3440,7 +3410,7 @@ mod tests {
         check_invariant(&e);
     }
 
-    /// cmSelectAll selects the whole buffer.
+    /// Select-All selects the whole buffer.
     #[test]
     fn select_all_selects_whole_buffer() {
         let mut e = ed();
@@ -3825,7 +3795,7 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
-    /// Missing file ⇒ valid, empty buffer (C++ "can't open ⇒ empty, True").
+    /// A missing file loads as a valid, empty buffer.
     #[test]
     fn file_editor_load_missing_file() {
         let path = tmp_path("missing_does_not_exist");
@@ -4006,7 +3976,7 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
-    /// cmSave via handle_event writes the file and clears the event.
+    /// A Save command via handle_event writes the file and clears the event.
     #[test]
     fn file_editor_handle_save_command() {
         let path = tmp_path("handle_save_command");
@@ -4048,8 +4018,8 @@ mod tests {
         assert!(fe.editor.modified(), "still modified — nothing was saved");
     }
 
-    /// valid: cmValid reflects is_valid; a modified buffer requests the save prompt
-    /// (the async-modal-from-a-view seam) and vetoes (false) until the answer routes;
+    /// valid: the plain validity command reflects is_valid; a modified buffer
+    /// requests the save prompt and vetoes (false) until the answer routes back;
     /// an unmodified buffer allows close.
     #[test]
     fn file_editor_valid() {
@@ -4067,10 +4037,11 @@ mod tests {
         );
     }
 
-    // -- saveAs: the view-triggered FileDialog ---------------------------------
+    // -- save-as: the view-triggered file dialog -------------------------------
 
-    /// `cmSaveAs` on a FileEditor requests the save-as `FileDialog` (the deferred
-    /// push), regardless of whether the buffer is titled, and clears the event.
+    /// A Save-As command on a FileEditor requests the save-as file dialog (the
+    /// deferred push), regardless of whether the buffer is titled, and clears the
+    /// event.
     #[test]
     fn save_as_requests_dialog() {
         let mut group = Group::new(Rect::new(0, 0, 40, 10));
@@ -4090,8 +4061,8 @@ mod tests {
         );
     }
 
-    /// An untitled `save()` (the `*fileName == EOS` branch, reached via `cmSave`)
-    /// also requests the dialog — it cannot save without a name.
+    /// Saving an untitled buffer also requests the dialog — it cannot save without
+    /// a name.
     #[test]
     fn untitled_save_requests_dialog() {
         let mut group = Group::new(Rect::new(0, 0, 40, 10));
@@ -4118,9 +4089,10 @@ mod tests {
         );
     }
 
-    /// After `SaveAsPick` set `file_name` + `pending_title_update`, the re-injected
-    /// `cmSave` saves to the new file AND broadcasts `cmUpdateTitle` (the EditWindow
-    /// title refresh). Drives the editor through a real `cmSave` over a temp path.
+    /// After the save-as dialog completion set `file_name` + `pending_title_update`,
+    /// the re-injected Save writes the new file AND broadcasts a title-update (the
+    /// EditWindow title refresh). Drives the editor through a real Save over a temp
+    /// path.
     #[test]
     fn save_as_then_save_writes_and_broadcasts_title() {
         let dir = std::env::temp_dir();
@@ -4173,7 +4145,7 @@ mod tests {
         }
     }
 
-    /// `EditWindow::handle_event` refreshes its frame title on a `cmUpdateTitle`
+    /// `EditWindow::handle_event` refreshes its frame title on a title-update
     /// broadcast, recomputing it from the hosted editor's current `file_name`.
     #[test]
     fn edit_window_updates_title_on_broadcast() {
@@ -4247,7 +4219,7 @@ mod tests {
     /// 3. Construction invariants: editor child is visible+selectable; the
     ///    scrollbars/indicator start hidden (load-bearing — `reset_current`
     ///    picks the first visible+selectable child, so a stray-visible scrollbar
-    ///    would steal currency from the editor); ofTileable is set.
+    ///    would steal currency from the editor); the window is tileable.
     #[test]
     fn edit_window_child_visibility_invariant() {
         let mut ew = EditWindow::new(Rect::new(0, 0, 40, 15), None, 0);
@@ -4349,7 +4321,7 @@ mod tests {
         })
     }
 
-    /// An `evMouseWheel` event (crossterm ScrollUp/Down → `Event::MouseWheel`).
+    /// A mouse-wheel event (crossterm ScrollUp/Down → `Event::MouseWheel`).
     fn wheel_down_at(x: i32, y: i32, wheel: MouseWheel) -> Event {
         Event::MouseWheel(MouseEvent {
             position: Point::new(x, y),
@@ -4375,10 +4347,9 @@ mod tests {
         e
     }
 
-    /// `MouseDown` (left) on an inserted editor: first loop iteration positions
-    /// the cursor, the track state carries `selectMode | smExtend`
-    /// (teditor1.cpp:580-581), and the PushCapture deferred names this editor's
-    /// id.
+    /// A left press on an inserted editor: the first iteration positions the
+    /// cursor, the track state carries the select mode with `SM_EXTEND` set, and
+    /// the push-capture deferred names this editor's id.
     #[test]
     fn track_mouse_down_arms_select_capture() {
         let mut e = ed();
@@ -4411,8 +4382,8 @@ mod tests {
         assert_eq!(pushes, vec![Some(id)], "one PushCapture naming the editor");
     }
 
-    /// A double-click press seeds `smDouble` into the live track selectMode
-    /// (the C++ loop-local persists across iterations → word-granular drag).
+    /// A double-click press seeds word-granular mode into the live track select
+    /// mode, which persists across drag iterations for a word-granular drag.
     #[test]
     fn track_double_click_persists_sm_double() {
         let mut e = ed();
@@ -4445,8 +4416,8 @@ mod tests {
         );
     }
 
-    /// `MouseMove` while drag-tracking extends the selection over the real
-    /// buffer text (the loop body, teditor1.cpp:580-581) and does NOT scroll.
+    /// A move while drag-tracking extends the selection over the real buffer text
+    /// and does NOT scroll.
     #[test]
     fn track_move_extends_selection() {
         let mut e = ed();
@@ -4473,9 +4444,9 @@ mod tests {
         assert!(e.track.is_some(), "still tracking after the move");
     }
 
-    /// `MouseAuto` below the view edge-scrolls down by one (`delta.y + 1`,
-    /// teditor1.cpp:566-571) THEN extends the selection to the post-scroll
-    /// mouse position (the unconditional setCurPtr tail).
+    /// Auto-repeat below the view edge-scrolls down by one THEN extends the
+    /// selection to the post-scroll mouse position (the unconditional cursor-move
+    /// tail).
     #[test]
     fn track_auto_below_edge_scrolls_then_extends() {
         let mut e = tall_ed();
@@ -4506,8 +4477,8 @@ mod tests {
         );
     }
 
-    /// `MouseAuto` above the view edge-scrolls up by one (`delta.y - 1`,
-    /// teditor1.cpp:564-565) then extends backwards.
+    /// Auto-repeat above the view edge-scrolls up by one then extends the
+    /// selection backwards.
     #[test]
     fn track_auto_above_edge_scrolls_then_extends() {
         let mut e = tall_ed();
@@ -4539,12 +4510,10 @@ mod tests {
         );
     }
 
-    /// An `evMouseWheel` event during the drag-select hold forwards to BOTH
-    /// scrollbars (teditor1.cpp:574-579 — `vScrollBar->handleEvent(ev);
-    /// hScrollBar->handleEvent(ev)`) via `Deferred::MouseTrack`, self-posts the
-    /// `SyncEditorDelta` broker (the C++ cmScrollBarChanged answer is a direct
-    /// message() the modal capture would swallow), and still runs the
-    /// unconditional setCurPtr tail.
+    /// A mouse wheel during the drag-select hold forwards to BOTH scroll bars (via
+    /// the mouse-track deferred effect), self-posts a delta-sync (the bar's change
+    /// notification would otherwise be swallowed by the modal capture), and still
+    /// runs the unconditional cursor-move tail.
     #[test]
     fn track_wheel_in_hold_forwards_to_bars_and_syncs() {
         let hbar = ViewId::next();
@@ -4593,8 +4562,8 @@ mod tests {
         assert_eq!((e.sel_start, e.sel_end), (2, 8), "setCurPtr tail ran");
     }
 
-    /// An `evMouseWheel` event with NO hold in flight falls through unconsumed —
-    /// C++ TEditor's eventMask excludes evMouseWheel (teditor1.cpp:195).
+    /// A mouse wheel with NO hold in flight falls through unconsumed — the
+    /// editor's event mask excludes the wheel outside a hold.
     #[test]
     fn track_wheel_outside_hold_falls_through() {
         let mut e = ed();
@@ -4613,9 +4582,9 @@ mod tests {
         assert!(cx.deferred.is_empty(), "nothing armed, nothing forwarded");
     }
 
-    /// Middle-button `MouseDown` arms the pan track (teditor1.cpp:540-542):
-    /// `lastMouse` recorded, capture pushed, NO body on the press (a `while`
-    /// loop, not `do{}while`) — cursor and selection untouched.
+    /// A middle-button press arms the pan track: the mouse position is recorded
+    /// and the capture pushed, but nothing scrolls on the press itself — the
+    /// cursor and selection are untouched.
     #[test]
     fn track_middle_down_arms_pan() {
         let mut e = tall_ed();
@@ -4649,9 +4618,8 @@ mod tests {
         assert_eq!(pushes, vec![Some(id)], "one PushCapture naming the editor");
     }
 
-    /// `MouseMove` while panning scrolls by the mouse delta
-    /// (teditor1.cpp:543-548) and never touches cursor/selection — the
-    /// kind-discrimination guard in the other direction.
+    /// A move while panning scrolls by the mouse delta and never touches the
+    /// cursor or selection — the track-kind guard in the other direction.
     #[test]
     fn track_pan_move_scrolls_without_selection() {
         let mut e = tall_ed();
@@ -4684,8 +4652,8 @@ mod tests {
         assert!(!e.has_selection(), "pan never selects");
     }
 
-    /// An `evMouseWheel` event during the pan hold runs the same pan body (the
-    /// loop mask is evMouse, teditor1.cpp:542) — no scrollbar forwarding.
+    /// A mouse wheel during the pan hold runs the same pan body — no scroll-bar
+    /// forwarding.
     #[test]
     fn track_pan_wheel_tick_pans() {
         let mut e = tall_ed();
@@ -4715,8 +4683,8 @@ mod tests {
         );
     }
 
-    /// `MouseUp` clears the track (both loops just exit; no post-loop code,
-    /// teditor1.cpp:551/:583-584).
+    /// A release clears the track (both holds just end; there is no post-hold
+    /// work).
     #[test]
     fn track_up_clears_track() {
         for arm in [mouse_down_at(2, 0), middle_down_at(2, 0)] {
@@ -4782,8 +4750,8 @@ mod tests {
     }
 
     /// The forwarded track events reach the inner Editor through a FileEditor
-    /// wrapper (the Deferred::MouseTrack apply calls the wrapper's
-    /// handle_event, which delegates to the editor — teditwnd hosting path).
+    /// wrapper (the mouse-track deferred apply calls the wrapper's handle_event,
+    /// which delegates to the editor — the edit-window hosting path).
     ///
     /// NOTE: this drives handle_event directly (handler-level), bypassing the
     /// pump's Deferred::MouseTrack drain; the deferred-apply path

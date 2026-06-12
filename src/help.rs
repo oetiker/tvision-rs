@@ -10,7 +10,7 @@
 //!
 //! # Turbo Vision heritage
 //!
-//! Ports the `hc*` help-context family (`views.h`). C++ contexts were plain
+//! Ports the `hc*` help-context family (`views.h`). Contexts were originally plain
 //! `int`s used to index a help file's topic table; here the identity is a
 //! namespaced `&'static str` instead (deviation D1).
 
@@ -24,8 +24,8 @@
 ///
 /// # Turbo Vision heritage
 ///
-/// Faithful to the `hc*` family (`views.h`), which were plain `int`s; here the
-/// identity is a namespaced `&'static str` (deviation D1).
+/// Ports the `hc*` family (`views.h`), which were plain `int`s; here the identity
+/// is a namespaced `&'static str` (deviation D1).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct HelpCtx(&'static str);
 
@@ -48,9 +48,9 @@ impl HelpCtx {
         self.0
     }
 
-    /// `hcNoContext` — also the zero/default context.
+    /// No help topic — also the zero/default context.
     pub const NO_CONTEXT: HelpCtx = HelpCtx("tv.no_context");
-    /// `hcDragging` — active while a view is being dragged (see
+    /// The context active while a view is being dragged (see
     /// [`ViewState::get_help_ctx`](crate::view::ViewState::get_help_ctx)).
     pub const DRAGGING: HelpCtx = HelpCtx("tv.dragging");
 }

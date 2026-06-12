@@ -27,12 +27,11 @@
 //!
 //! # Turbo Vision heritage
 //!
-//! Ports `TValidator` and its subclasses (`tvalidator.cpp` etc.). C++
-//! `TValidator` is an abstract base class whose concrete subclasses gate a
-//! `TInputLine`; inheritance becomes this trait (deviation D2). The old
-//! untyped `transfer(void*, TVTransfer)` hook becomes the typed
-//! `transfer_get`/`transfer_set` pair (deviation D10), and the streaming
-//! machinery (`read`/`write`/`name`) is dropped (deviation D12).
+//! Ports `TValidator` and its subclasses (`tvalidator.cpp`). The abstract base
+//! and its subclass hierarchy become this trait plus concrete impls (deviation
+//! D2); the untyped value-transfer hook becomes the typed
+//! `transfer_get`/`transfer_set` pair (deviation D10); and the streaming
+//! machinery is dropped (deviation D12).
 
 use crate::data::FieldValue;
 use crate::view::Context;
@@ -50,36 +49,35 @@ use regex_automata::{
 ///
 /// # Turbo Vision heritage
 ///
-/// Ports the abstract `TValidator` base class; inheritance becomes this trait
-/// (deviation D2).
+/// Ports the abstract `TValidator` base class (`tvalidator.cpp`); the subclass
+/// hierarchy becomes this trait (deviation D2).
 pub trait Validator {
-    /// `TValidator::isValidInput` — check (and optionally auto-fill/modify) `s`
-    /// *as it is being typed*. May mutate `s` in place (e.g. a picture validator
-    /// inserting literal characters). `suppress_fill` (`noAutoFill` /
-    /// `voFill`-suppression) asks it not to auto-fill. Default: accept, no
+    /// Check (and optionally auto-fill/modify) `s` *as it is being typed*. May
+    /// mutate `s` in place (e.g. a picture validator inserting literal
+    /// characters). `suppress_fill` asks it not to auto-fill. Default: accept, no
     /// change. Object-safe: `&self`, `s: &mut String`.
     fn is_valid_input(&self, _s: &mut String, _suppress_fill: bool) -> bool {
         true
     }
 
-    /// `TValidator::isValid` — the final-form check, run when the field must be
-    /// fully valid (the modal-OK / focus-release path). Default: accept.
+    /// The final-form check, run when the field must be fully valid (the modal-OK
+    /// / focus-release path). Default: accept.
     fn is_valid(&self, _s: &str) -> bool {
         true
     }
 
-    /// `TValidator::error` — report an invalid final value. Concrete validators
-    /// pop up a message box via the async-modal-from-a-view seam
-    /// ([`Context::request_message_box`], `answer_to`/`then_command` both `None` —
-    /// informational, OK-only); the abstract base is a no-op.
+    /// Report an invalid final value. Concrete validators pop up a message box via
+    /// the async-modal-from-a-view seam ([`Context::request_message_box`],
+    /// `answer_to`/`then_command` both `None` — informational, OK-only); the base
+    /// is a no-op.
     ///
     /// This is a [`Validator`] method, not a [`View`](crate::view::View) method.
     fn error(&self, _ctx: &mut Context) {}
 
-    /// `TValidator::validate` — **non-virtual in C++**: report the error and fail
-    /// iff [`is_valid`](Validator::is_valid) is false, else succeed. Kept as a
-    /// provided method (it dispatches through the overridable `is_valid`/`error`).
-    /// Threads `&mut Context` so a failing validator's `error` can request its box.
+    /// Report the error and fail iff [`is_valid`](Validator::is_valid) is false,
+    /// else succeed. A provided method that dispatches through the overridable
+    /// `is_valid`/`error`. Threads `&mut Context` so a failing validator's `error`
+    /// can request its box.
     fn validate(&self, s: &str, ctx: &mut Context) -> bool {
         if self.is_valid(s) {
             true
@@ -89,18 +87,16 @@ pub trait Validator {
         }
     }
 
-    /// Whether the validator's status is `vsOk` (`TValidator::status == vsOk`) —
-    /// consulted by `TInputLine::valid(cmValid)`. The abstract base never sets a
-    /// non-OK status, so the default is `true`; `TPXPictureValidator`
-    /// overrides to report a syntax error (`vsSyntax`).
+    /// Whether the validator's status is OK — consulted when the field must
+    /// commit. The base never enters a non-OK status, so the default is `true`;
+    /// [`PXPictureValidator`] overrides to report a malformed mask.
     fn is_status_ok(&self) -> bool {
         true
     }
 
-    /// Report the field's value as a typed [`FieldValue`] (the successor to
-    /// `TValidator::transfer(…, vtGetData)`). `Some(typed value)` only when the
-    /// validator has transfer enabled (C++ `options & voTransfer`); `None` means
-    /// "I don't transfer — the input line keeps its text value". Base: `None`.
+    /// Report the field's value as a typed [`FieldValue`]. `Some(typed value)`
+    /// only when the validator has transfer enabled; `None` means "I don't
+    /// transfer — the input line keeps its text value". Base: `None`.
     ///
     /// This is a [`Validator`]-trait method, not a
     /// [`View`](crate::view::View)-trait method.
@@ -108,10 +104,9 @@ pub trait Validator {
         None
     }
 
-    /// Format a typed value back to the field's text (the successor to
-    /// `TValidator::transfer(…, vtSetData)`). `Some(text)` only when
+    /// Format a typed value back to the field's text. `Some(text)` only when
     /// transfer-enabled AND `v` is the type this validator handles; `None` → the
-    /// input line falls back to its Text path. Base: `None`.
+    /// input line falls back to its text path. Base: `None`.
     ///
     /// Like [`transfer_get`](Validator::transfer_get), this is a
     /// [`Validator`]-trait method, not a [`View`](crate::view::View)-trait method.
@@ -130,18 +125,15 @@ pub trait Validator {
 ///
 /// # Turbo Vision heritage
 ///
-/// Ports `TFilterValidator`, whose `isValid`/`isValidInput` use
-/// `strspn(s, validChars) == strlen(s)` — a per-byte test where rstv tests per
-/// Unicode `char` (identical for the ASCII charsets these validators carry).
-/// `validChars` becomes an owned `String`, and the streaming machinery is
-/// dropped (deviation D12).
+/// Ports `TFilterValidator` (`tvalidator.cpp`), which tests membership per byte
+/// where rstv tests per Unicode `char` (identical for the ASCII charsets these
+/// validators carry). The streaming machinery is dropped (deviation D12).
 pub struct FilterValidator {
     valid_chars: String,
 }
 
 impl FilterValidator {
-    /// `TFilterValidator(TStringView aValidChars)` — build a filter from the
-    /// set of accepted characters.
+    /// Build a filter from the set of accepted characters.
     pub fn new(valid_chars: impl Into<String>) -> Self {
         Self {
             valid_chars: valid_chars.into(),
@@ -150,19 +142,19 @@ impl FilterValidator {
 }
 
 impl Validator for FilterValidator {
-    /// `TFilterValidator::isValid` — every char of `s` must be in `valid_chars`.
+    /// Every char of `s` must be in `valid_chars`.
     fn is_valid(&self, s: &str) -> bool {
         s.chars().all(|c| self.valid_chars.contains(c))
     }
 
-    /// `TFilterValidator::isValidInput` — same check applied while typing;
-    /// `suppress_fill` is ignored (Filter never auto-fills).
+    /// Same check applied while typing; `suppress_fill` is ignored (a filter never
+    /// auto-fills).
     fn is_valid_input(&self, s: &mut String, _suppress_fill: bool) -> bool {
         self.is_valid(s)
     }
 
-    /// `TFilterValidator::error` — `messageBox(mfError|mfOKButton, …)` via the
-    /// async-modal-from-a-view seam (informational, OK-only).
+    /// Report an invalid character via the async-modal-from-a-view seam
+    /// (informational, OK-only).
     fn error(&self, ctx: &mut Context) {
         ctx.request_message_box(
             "Invalid character in input".to_string(),
@@ -180,15 +172,15 @@ impl Validator for FilterValidator {
 ///
 /// # Turbo Vision heritage
 ///
-/// Ports `TLookupValidator`, an abstract intermediate class that routes
-/// `isValid` through a virtual `lookup(s)` (its own `lookup` accepts all). That
-/// virtual indirection collapses here: each concrete lookup validator folds
-/// `lookup()` directly into its `is_valid` (deviation D2), so this type realises
-/// only the base's own accept-all behavior.
+/// Ports `TLookupValidator` (`tvalidator.cpp`), an abstract intermediate that
+/// routed validity through a virtual lookup step. That indirection collapses
+/// here: each concrete lookup validator folds the lookup directly into its
+/// `is_valid` (deviation D2), so this type realises only the base's own
+/// accept-all behavior.
 pub struct LookupValidator;
 
 impl LookupValidator {
-    /// Construct the accept-all lookup base (analogous to `TLookupValidator()`).
+    /// Construct the accept-all lookup base.
     pub fn new() -> Self {
         Self
     }
@@ -208,38 +200,33 @@ impl Validator for LookupValidator {}
 ///
 /// # Turbo Vision heritage
 ///
-/// Ports `TStringLookupValidator`, whose `lookup(s)` used
-/// `TStringCollection::firstThat(stringMatch, …)` (`strcmp == 0`). The virtual
-/// `lookup()` collapses into `is_valid` (deviation D2), the `TStringCollection*`
-/// becomes an owned `Vec<String>`, and the streaming machinery is dropped
-/// (deviation D12).
+/// Ports `TStringLookupValidator` (`tvalidator.cpp`). The lookup folds into
+/// `is_valid` (deviation D2), the string collection becomes an owned
+/// `Vec<String>`, and the streaming machinery is dropped (deviation D12).
 pub struct StringLookupValidator {
     strings: Vec<String>,
 }
 
 impl StringLookupValidator {
-    /// `TStringLookupValidator(TStringCollection* aStrings)` — build from a list
-    /// of accepted strings.
+    /// Build from a list of accepted strings.
     pub fn new(strings: Vec<String>) -> Self {
         Self { strings }
     }
 
-    /// `TStringLookupValidator::newStringList` — replace the accepted-string list.
-    /// C++ `destroy(strings)` cleanup is moot; the old `Vec` is dropped here.
+    /// Replace the accepted-string list; the old `Vec` is dropped here.
     pub fn new_string_list(&mut self, strings: Vec<String>) {
         self.strings = strings;
     }
 }
 
 impl Validator for StringLookupValidator {
-    /// `TStringLookupValidator::lookup` (collapsed into `is_valid`) —
-    /// accepts `s` iff it exactly matches (`strcmp == 0`) some entry in the list.
+    /// Accepts `s` iff it exactly matches some entry in the list.
     fn is_valid(&self, s: &str) -> bool {
         self.strings.iter().any(|x| x == s)
     }
 
-    /// `TStringLookupValidator::error` — `messageBox(mfError|mfOKButton, …)` via the
-    /// async-modal-from-a-view seam (informational, OK-only).
+    /// Report a non-member value via the async-modal-from-a-view seam
+    /// (informational, OK-only).
     fn error(&self, ctx: &mut Context) {
         ctx.request_message_box(
             "Input is not in list of valid strings".to_string(),
@@ -262,44 +249,39 @@ impl Validator for StringLookupValidator {
 ///
 /// # Turbo Vision heritage
 ///
-/// Ports `TRangeValidator : public TFilterValidator`. The charset is selected
-/// by the sign of `min` (`"+0123456789"` unsigned, `"+-0123456789"` signed).
-/// `isValid` overrides the filter's (charset gate, then `sscanf("%ld")`, then
-/// range), while `isValidInput` is inherited unchanged (charset-only while
-/// typing — a partial out-of-range number is accepted as input). Inheritance
-/// becomes embed-and-delegate composition over a `FilterValidator` field
-/// (deviation D2); the untyped `transfer` becomes the typed
-/// `transfer_get`/`transfer_set` pair over [`FieldValue::Int`] (deviation D10);
-/// and the streaming machinery is dropped (deviation D12). The
-/// `options & voTransfer` bit becomes a single `transfer_enabled` bool.
+/// Ports `TRangeValidator` (`tvalidator.cpp`), a filter subclass. The charset is
+/// selected by the sign of `min`. Its final check adds a parse + range test on
+/// top of the charset gate, while the while-typing check is the plain charset
+/// filter (so a partial out-of-range number is accepted as input). Inheritance
+/// becomes embed-and-delegate over a [`FilterValidator`] field (deviation D2);
+/// the untyped value-transfer becomes the typed `transfer_get`/`transfer_set`
+/// pair over [`FieldValue::Int`] (deviation D10); and the streaming machinery is
+/// dropped (deviation D12).
 pub struct RangeValidator {
     /// Embedded filter — the sign-selected digit charset.
     filter: FilterValidator,
     min: i32,
     max: i32,
-    /// C++ `options & voTransfer`; default OFF (C++ `options` defaults to 0).
+    /// Whether the field also transfers its value; default OFF.
     transfer_enabled: bool,
 }
 
-/// Parse the leading numeric value of a range-validator field — the successor
-/// to C++ `sscanf(s, "%ld")`.
+/// Parse the leading numeric value of a range-validator field.
 ///
-/// ## sscanf vs `str::parse`
-/// C++ `sscanf("%ld")` parses a *leading* optional-sign+digits run and **ignores
-/// trailing junk** (`"12+3"` → `12`). Rust `str::parse::<i32>()` is **stricter**:
-/// it rejects trailing junk and a lone `"+"`/`"-"`. Because the charset filter
-/// already restricts the field to `[+-0-9]`, clean numeric input behaves
-/// identically; the only divergence is pathological mid-string sign/junk (e.g.
-/// `"12+3"`), which `sscanf` truncate-accepts and we reject — an acceptable,
-/// stricter simplification. We `.trim()` first (whitespace is not in the charset,
-/// so this only matters for direct callers) and never panic.
+/// Rust's `str::parse::<i32>()` is stricter than a `%ld`-style scan: it rejects
+/// trailing junk and a lone `"+"`/`"-"`. Because the charset filter already
+/// restricts the field to `[+-0-9]`, clean numeric input behaves the same; the
+/// only divergence is pathological mid-string sign/junk (e.g. `"12+3"`), which a
+/// leading-run scan truncate-accepts and we reject — an acceptable, stricter
+/// simplification. We `.trim()` first (whitespace is not in the charset, so this
+/// only matters for direct callers) and never panic.
 fn parse_long(s: &str) -> Option<i32> {
     s.trim().parse::<i32>().ok()
 }
 
 impl RangeValidator {
-    /// `TRangeValidator(aMin, aMax)`. `min >= 0` → `"+0123456789"` (unsigned),
-    /// else `"+-0123456789"` (signed). Transfer is OFF by default.
+    /// `min >= 0` → `"+0123456789"` (unsigned), else `"+-0123456789"` (signed).
+    /// Transfer is OFF by default.
     pub fn new(min: i32, max: i32) -> Self {
         let chars = if min >= 0 {
             "+0123456789"
@@ -314,8 +296,8 @@ impl RangeValidator {
         }
     }
 
-    /// Enable/disable the typed `transfer` (C++ `options |= voTransfer`). Default
-    /// OFF — until enabled, [`transfer_get`](Validator::transfer_get) /
+    /// Enable/disable typed value transfer. Default OFF — until enabled,
+    /// [`transfer_get`](Validator::transfer_get) /
     /// [`transfer_set`](Validator::transfer_set) return `None` and the input line
     /// keeps its text value.
     pub fn set_transfer(&mut self, enabled: bool) {
@@ -324,32 +306,29 @@ impl RangeValidator {
 }
 
 impl Validator for RangeValidator {
-    /// `TRangeValidator::isValid` — charset gate (`TFilterValidator::isValid`)
-    /// first, then parse, then the `[min, max]` range check.
+    /// Charset gate first, then parse, then the `[min, max]` range check.
     fn is_valid(&self, s: &str) -> bool {
         self.filter.is_valid(s) && parse_long(s).is_some_and(|v| v >= self.min && v <= self.max)
     }
 
-    /// **Inherited** `TFilterValidator::isValidInput` — charset-only while typing,
-    /// **no** range check (Range does not override `isValidInput`). So a partial,
-    /// out-of-range number is accepted as input; the range is enforced only at
-    /// [`is_valid`](RangeValidator::is_valid) (final check).
+    /// Charset-only while typing, **no** range check (delegated straight to the
+    /// embedded filter). So a partial, out-of-range number is accepted as input;
+    /// the range is enforced only at [`is_valid`](RangeValidator::is_valid) (the
+    /// final check).
     fn is_valid_input(&self, s: &mut String, suppress_fill: bool) -> bool {
         self.filter.is_valid_input(s, suppress_fill)
     }
 
-    /// `TRangeValidator::transfer(…, vtGetData)` — when transfer is enabled,
-    /// the field text as [`FieldValue::Int`]. A failed parse falls back to
-    /// `Int(0)`: C++ leaves `value` uninitialized on a failed `sscanf`, but
-    /// transfer only runs on already-valid data, so this is unreachable-but-safe.
+    /// When transfer is enabled, report the field text as [`FieldValue::Int`]. A
+    /// failed parse falls back to `Int(0)`; transfer only runs on already-valid
+    /// data, so that fallback is unreachable-but-safe.
     fn transfer_get(&self, s: &str) -> Option<FieldValue> {
         self.transfer_enabled
             .then(|| FieldValue::Int(parse_long(s).unwrap_or(0)))
     }
 
-    /// `TRangeValidator::transfer(…, vtSetData)` — format an [`Int`] back to
-    /// text (`sprintf("%ld")`). `None` when transfer is disabled or `v` is not an
-    /// `Int` (the input line then takes its Text path).
+    /// Format an [`Int`] back to text. `None` when transfer is disabled or `v` is
+    /// not an `Int` (the input line then takes its text path).
     ///
     /// [`Int`]: FieldValue::Int
     fn transfer_set(&self, v: &FieldValue) -> Option<String> {
@@ -362,9 +341,8 @@ impl Validator for RangeValidator {
         }
     }
 
-    /// `TRangeValidator::error` — C++ pops
-    /// `messageBox(mfError|mfOKButton, "Value not in the range %ld to %ld", min, max)`
-    /// via the async-modal-from-a-view seam (informational, OK-only).
+    /// Report an out-of-range value, naming the bounds, via the
+    /// async-modal-from-a-view seam (informational, OK-only).
     fn error(&self, ctx: &mut Context) {
         ctx.request_message_box(
             format!("Value not in the range {} to {}", self.min, self.max),
@@ -378,10 +356,9 @@ impl Validator for RangeValidator {
 
 // ── PXPictureValidator ───────────────────────────────────────────────────────
 
-/// `TPicResult` — the result of running a Paradox picture mask against an input.
-///
-/// Mirrors the C++ enum `TPicResult {prComplete, prIncomplete, prEmpty, prError,
-/// prSyntax, prAmbiguous, prIncompNoFill}` (`include/tvision/validate.h`).
+/// The result of running a Paradox picture mask against an input: complete,
+/// incomplete, empty, a runtime error, a malformed mask, an ambiguous match, or
+/// incomplete-with-no-fill.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum PicResult {
     Complete,
@@ -393,43 +370,41 @@ enum PicResult {
     IncompNoFill,
 }
 
-/// `isNumber(char)` — ASCII digit.
+/// ASCII digit.
 fn is_number(ch: u8) -> bool {
     ch.is_ascii_digit()
 }
 
-/// `isLetter(char)` — C++ does `ch &= 0xdf; return 'A' <= ch <= 'Z'`. The `& 0xdf`
-/// folds the ASCII case bit, so both `a..z` and `A..Z` qualify. Ported as the
-/// same bit trick to stay byte-faithful.
+/// ASCII letter. Implemented as `(ch & 0xdf).is_ascii_uppercase()`: clearing
+/// `0x20` folds the case bit, so both `a..z` and `A..Z` qualify. Kept as the bit
+/// trick to stay byte-faithful to the mask engine.
 fn is_letter(ch: u8) -> bool {
     (ch & 0xdf).is_ascii_uppercase()
 }
 
-/// `isSpecial(char, const char* special)` — membership of `ch` in the byte set
-/// `special` (C++ `memchr`).
+/// Membership of `ch` in the byte set `special`.
 fn is_special(ch: u8, special: &[u8]) -> bool {
     special.contains(&ch)
 }
 
-/// `isComplete(TPicResult)` — `prComplete || prAmbiguous`.
+/// A complete match: fully complete or an accepted ambiguous match.
 fn is_complete(r: PicResult) -> bool {
     matches!(r, PicResult::Complete | PicResult::Ambiguous)
 }
 
-/// `isIncomplete(TPicResult)` — `prIncomplete || prIncompNoFill`.
+/// An incomplete match, with or without fill.
 fn is_incomplete(r: PicResult) -> bool {
     matches!(r, PicResult::Incomplete | PicResult::IncompNoFill)
 }
 
-/// C++ `uppercase(char)` — ASCII uppercase fold.
+/// ASCII uppercase fold.
 fn uppercase(ch: u8) -> u8 {
     ch.to_ascii_uppercase()
 }
 
-/// Read `pic[i]` faithfully to the C++ `char*`: an in-range byte, or the NUL
-/// terminator (`0`) when `i` is at/past the end. C++ relies on the trailing NUL
-/// to stop scans (e.g. `pic[index]` after `index++` reaching `strlen(pic)`, or
-/// `pic[j+1]` in `checkComplete`); replicating it keeps every `pic[...]` read
+/// Read mask byte `pic[i]`: an in-range byte, or `0` (a NUL terminator) when `i`
+/// is at/past the end. The mask engine relies on a trailing NUL to stop its
+/// scans, so synthesising one for out-of-range reads keeps every mask access
 /// panic-free and bit-faithful.
 fn pic_at(pic: &[u8], i: i32) -> u8 {
     if i < 0 {
@@ -438,9 +413,8 @@ fn pic_at(pic: &[u8], i: i32) -> u8 {
     pic.get(i as usize).copied().unwrap_or(0)
 }
 
-/// `toGroupEnd(int& i, int termCh)` — advance `i` past one character or one
-/// balanced picture group (`[...]` / `{...}`), stopping at `termCh`. A free
-/// function reading only `pic` (C++ member fn touches no `jndex`/`input`); kept
+/// Advance `i` past one character or one balanced picture group (`[...]` /
+/// `{...}`), stopping at `term_ch`. A free function reading only the mask; kept
 /// free so callers can pass either a local cursor or `self.index` without an
 /// aliasing borrow of `self` (see `skip_to_comma`).
 fn to_group_end(pic: &[u8], i: &mut i32, term_ch: i32) {
@@ -465,9 +439,8 @@ fn to_group_end(pic: &[u8], i: &mut i32, term_ch: i32) {
     }
 }
 
-/// `Boolean TPXPictureValidator::syntaxCheck()` — free function (reads only the
-/// mask). Rejects an empty mask, a mask ending in `;`, or unbalanced
-/// `[]`/`{}` nesting.
+/// Validate the mask's own syntax. Rejects an empty mask, a mask ending in `;`,
+/// or unbalanced `[]`/`{}` nesting.
 fn syntax_check(pic: &[u8]) -> bool {
     if pic.is_empty() {
         return false;
@@ -493,28 +466,27 @@ fn syntax_check(pic: &[u8]) -> bool {
     brk_level == 0 && brc_level == 0
 }
 
-/// The transient picture scanner — the per-`picture()`-call scratch state.
+/// The transient picture scanner — per-match-call scratch state.
 ///
-/// In C++ `index`/`jndex` are member variables only because threading them
-/// through the ~6 mutually-recursive helpers by hand is tedious; they are reset
-/// to 0 at the top of every `picture()` call, i.e. they are **per-call scratch**,
-/// not persistent validator state. Our [`Validator`] methods are `&self`
-/// (object-safe), so the scanning state lives here, created fresh per call.
+/// The two cursors (`index` into the mask, `jndex` into the input) are reset to 0
+/// at the start of every match and are pure per-call scratch, not persistent
+/// validator state. The [`Validator`] methods are `&self` (object-safe), so this
+/// scratch lives in a fresh `Picture` created per call rather than in the
+/// validator.
 ///
-/// ## Byte-faithful to the C++ `char*` machine
-/// C++ operates on `char*` byte-by-byte (`uppercase`, `& 0xdf`, `input[jndex]=ch`).
-/// We port at the **byte level** (`&[u8]` / `Vec<u8>`); picture masks and the
-/// inputs to such fields are ASCII, so this is exact. Multibyte UTF-8 in such a
-/// field is out of scope (same posture as `FilterValidator`'s byte-vs-char note).
+/// ## Byte-level by design
+/// The scanner works byte-by-byte (`& 0xdf` case fold, in-place input writes), so
+/// it is ported over `&[u8]` / `Vec<u8>`. Picture masks and the inputs to such
+/// fields are ASCII, making this exact; multibyte UTF-8 in such a field is out of
+/// scope (same posture as [`FilterValidator`]'s byte-vs-char note).
 struct Picture<'a> {
-    /// The mask (C++ `pic`).
+    /// The mask.
     pic: &'a [u8],
-    /// The working input buffer (C++ `input`); mutated in place and may GROW via
-    /// autofill.
+    /// The working input buffer; mutated in place and may GROW via autofill.
     input: Vec<u8>,
-    /// C++ `index` — cursor into `pic`.
+    /// Cursor into the mask.
     index: i32,
-    /// C++ `jndex` — cursor into `input`.
+    /// Cursor into the input.
     jndex: i32,
 }
 
@@ -528,13 +500,13 @@ impl<'a> Picture<'a> {
         }
     }
 
-    /// `pic[index]` faithful read (NUL past end).
+    /// Read a mask byte (`0` past the end).
     fn pic_at(&self, i: i32) -> u8 {
         pic_at(self.pic, i)
     }
 
-    /// `input[jndex]` faithful read (NUL past end). Used where C++ may touch the
-    /// terminator.
+    /// Read an input byte (`0` past the end or before the start). Used where the
+    /// scan may touch the terminator.
     fn input_at(&self, j: i32) -> u8 {
         if j < 0 {
             return 0;
@@ -542,18 +514,18 @@ impl<'a> Picture<'a> {
         self.input.get(j as usize).copied().unwrap_or(0)
     }
 
-    /// `consume(char ch, char* input)` — write `ch` into `input[jndex]`, advance
-    /// both cursors. (`scan`'s `jndex >= strlen(input)` guard ensures `jndex` is
-    /// in range before any call, so the index-assign is safe.)
+    /// Write `ch` into the input at `jndex`, then advance both cursors. (The
+    /// scanner's end-of-input guard ensures `jndex` is in range before any call,
+    /// so the write is safe.)
     fn consume(&mut self, ch: u8) {
         self.input[self.jndex as usize] = ch;
         self.index += 1;
         self.jndex += 1;
     }
 
-    /// `skipToComma(int termCh)` — advance `index` over groups until a comma
-    /// separator or `termCh`; step past the comma. Returns whether `index <
-    /// termCh` (i.e. there is another alternative to try).
+    /// Advance `index` over groups until a comma separator or `term_ch`, then step
+    /// past the comma. Returns whether `index < term_ch` (i.e. there is another
+    /// alternative to try).
     fn skip_to_comma(&mut self, term_ch: i32) -> bool {
         loop {
             // `to_group_end` mutates a cursor; copy `self.index` across the call
@@ -571,17 +543,16 @@ impl<'a> Picture<'a> {
         self.index < term_ch
     }
 
-    /// `calcTerm(int termCh)` — the end index of the group starting at `index`.
+    /// The end index of the group starting at `index`.
     fn calc_term(&self, term_ch: i32) -> i32 {
         let mut k = self.index;
         to_group_end(self.pic, &mut k, term_ch);
         k
     }
 
-    /// `iteration(char* input, int inTerm)` — the `*[n]<group>` repeat operator.
-    /// `index` points at the `*`. Reads the optional repeat count, then runs the
-    /// group exactly `itr` times (count given) or greedily (count 0 → "any
-    /// number").
+    /// The `*[n]<group>` repeat operator. `index` points at the `*`. Reads the
+    /// optional repeat count, then runs the group exactly `itr` times (count
+    /// given) or greedily (count 0 → "any number").
     fn iteration(&mut self, in_term: i32) -> PicResult {
         let mut itr = 0i32;
         let mut rslt = PicResult::Error;
@@ -628,8 +599,8 @@ impl<'a> Picture<'a> {
         rslt
     }
 
-    /// `group(char* input, int inTerm)` — a `{...}` (required) or `[...]`
-    /// (optional) bracketed picture group. `index` points at the opening bracket.
+    /// A `{...}` (required) or `[...]` (optional) bracketed picture group. `index`
+    /// points at the opening bracket.
     fn group(&mut self, in_term: i32) -> PicResult {
         let term_ch = self.calc_term(in_term);
         self.index += 1;
@@ -642,9 +613,9 @@ impl<'a> Picture<'a> {
         rslt
     }
 
-    /// `checkComplete(TPicResult rslt, int termCh)` — on an incomplete result,
-    /// see whether all that remains in the mask is optional (`[...]` groups or
-    /// unbounded `*` iterations); if so the input is ambiguously complete.
+    /// On an incomplete result, see whether all that remains in the mask is
+    /// optional (`[...]` groups or unbounded `*` iterations); if so the input is
+    /// ambiguously complete.
     fn check_complete(&mut self, rslt: PicResult, term_ch: i32) -> PicResult {
         let mut rslt = rslt;
         let mut j = self.index;
@@ -677,8 +648,8 @@ impl<'a> Picture<'a> {
         rslt
     }
 
-    /// `scan(char* input, int termCh)` — match the input against one comma-free
-    /// run of the mask (up to `termCh` or a `,`), consuming input as it goes.
+    /// Match the input against one comma-free run of the mask (up to `term_ch` or
+    /// a `,`), consuming input as it goes.
     fn scan(&mut self, term_ch: i32) -> PicResult {
         let r_scan = PicResult::Error;
         let mut rslt = PicResult::Empty;
@@ -742,13 +713,12 @@ impl<'a> Picture<'a> {
                     }
                 }
                 _ => {
-                    // Literal arm. C++ (tvalidat.cpp:438-451): a `;`-escape
-                    // advances past the `;` to the escaped literal; the typed
-                    // char must match the mask literal case-insensitively (a
-                    // typed space matches any literal — it gets overwritten);
-                    // otherwise the run fails. The byte CONSUMED is always
-                    // `pic[index]` (the MASK byte), so the buffer is normalized
-                    // to the mask's literal — NOT the typed `ch`.
+                    // Literal arm: a `;`-escape advances past the `;` to the
+                    // escaped literal; the typed char must match the mask literal
+                    // case-insensitively (a typed space matches any literal — it
+                    // gets overwritten); otherwise the run fails. The byte CONSUMED
+                    // is always the MASK byte, so the buffer is normalized to the
+                    // mask's literal — NOT the typed `ch`.
                     if self.pic_at(self.index) == b';' {
                         self.index += 1;
                     }
@@ -773,9 +743,9 @@ impl<'a> Picture<'a> {
         }
     }
 
-    /// `process(char* input, int termCh)` — try each comma-separated alternative
-    /// in the mask run, backtracking on error/incomplete; tracks the best
-    /// (farthest-consuming) incomplete to disambiguate.
+    /// Try each comma-separated alternative in the mask run, backtracking on
+    /// error/incomplete; tracks the best (farthest-consuming) incomplete to
+    /// disambiguate.
     fn process(&mut self, term_ch: i32) -> PicResult {
         let mut incomp = false;
         let mut old_i = self.index;
@@ -828,10 +798,10 @@ impl<'a> Picture<'a> {
         }
     }
 
-    /// `picture(char* input, Boolean autoFill)` — the top-level driver. Resets
-    /// the cursors, runs `process`, applies the trailing-input/autofill logic,
-    /// and maps the internal `Ambiguous`/`IncompNoFill` results to their public
-    /// `Complete`/`Incomplete` equivalents.
+    /// The top-level match driver. Resets the cursors, runs the alternative
+    /// matcher, applies the trailing-input/autofill logic, and maps the internal
+    /// `Ambiguous`/`IncompNoFill` results to their public `Complete`/`Incomplete`
+    /// equivalents.
     fn run(&mut self, auto_fill: bool) -> PicResult {
         if !syntax_check(self.pic) {
             return PicResult::Syntax;
@@ -859,8 +829,8 @@ impl<'a> Picture<'a> {
                 if self.pic_at(self.index) == b';' {
                     self.index += 1;
                 }
-                // C++ writes input[end]=pic[index]; input[end+1]=0 — i.e. append
-                // one byte (Vec carries its own length, so no NUL is stored).
+                // Append one mask byte to the input (the Vec carries its own
+                // length, so no NUL terminator is stored).
                 self.input.push(self.pic_at(self.index));
                 self.index += 1;
                 reprocess = true;
@@ -889,40 +859,39 @@ impl<'a> Picture<'a> {
 /// any other character is a literal. On an invalid final value, `error` pops up
 /// an OK-only message box.
 ///
-/// The matching engine is a recursive state machine. C++ keeps the scan cursors
-/// `index`/`jndex` as member variables purely to thread them through the
-/// mutually-recursive helpers — per-call scratch, not validator state. Because
-/// the [`Validator`] methods are `&self` (object-safe), rstv keeps that scratch
-/// in a transient [`Picture`] created fresh per call. Operation is byte-level.
+/// The matching engine is a recursive state machine. Its scan cursors are pure
+/// per-call scratch, not validator state, so — because the [`Validator`] methods
+/// are `&self` (object-safe) — that scratch lives in a transient [`Picture`]
+/// created fresh per call. Operation is byte-level.
 ///
 /// # Turbo Vision heritage
 ///
 /// Ports `TPXPictureValidator`, with the matching engine taken verbatim from
-/// `tvalidat.cpp`. The streaming machinery is dropped (deviation D12). C++
-/// `isValid` copies the input into a 256-byte stack buffer; rstv lets the
+/// `tvalidat.cpp`. The streaming machinery is dropped (deviation D12). Where the
+/// original copies the input into a fixed 256-byte stack buffer, rstv lets the
 /// backing `String` grow instead (real inputs are length-bounded by the field).
-/// C++ guards a null `pic`; here `pic` is always a (possibly empty) `String`,
-/// and an empty or invalid mask yields the same `Syntax`/`Empty` results, so no
-/// null check is needed.
+/// No null-mask guard is needed: `pic` is always a (possibly empty) `String`,
+/// and an empty or malformed mask yields the same `Syntax`/`Empty` results.
 pub struct PXPictureValidator {
-    /// The mask (C++ `pic`, owned).
+    /// The mask, owned.
     pic: String,
-    /// C++ `options & voFill` — auto-fill literals while typing.
+    /// Auto-fill literals while typing.
     auto_fill: bool,
-    /// C++ `status == vsOk` (`false` ⇒ `vsSyntax`). Set in [`new`](Self::new).
+    /// Whether the mask is well-formed (`false` on a syntax error). Set in
+    /// [`new`](Self::new).
     status_ok: bool,
 }
 
 impl PXPictureValidator {
-    /// `TPXPictureValidator(TStringView aPic, Boolean autoFill)`.
+    /// Build a validator from a mask and an auto-fill flag.
     ///
-    /// Runs `picture("", False)` on EMPTY input as a syntax probe: for a
-    /// well-formed mask, empty input yields `prEmpty`, so status stays OK; any
-    /// other result means the mask syntax is bad and status becomes `vsSyntax`.
+    /// Runs the matcher on EMPTY input as a syntax probe: a well-formed mask
+    /// yields `Empty`, so status stays OK; any other result means the mask syntax
+    /// is bad and status goes not-OK.
     pub fn new(pic: impl Into<String>, auto_fill: bool) -> Self {
         let pic = pic.into();
         let mut p = Picture::new(pic.as_bytes(), Vec::new());
-        // C++: status = vsSyntax iff picture(s, False) != prEmpty.
+        // status_ok iff the empty-input probe yields Empty (a well-formed mask).
         let status_ok = p.run(false) == PicResult::Empty;
         Self {
             pic,
@@ -933,10 +902,10 @@ impl PXPictureValidator {
 }
 
 impl Validator for PXPictureValidator {
-    /// `isValidInput(char* s, Boolean suppressFill)` — `doFill = voFill &&
-    /// !suppressFill`; returns `picture(s, doFill) != prError`. MUTATES `s` in
-    /// place (autofill of literals + uppercase transforms — the whole point of a
-    /// picture validator).
+    /// Run the mask while typing (auto-filling unless `suppress_fill`); returns
+    /// whether the result is not an error. MUTATES `s` in place — autofill of
+    /// literals plus uppercase transforms is the whole point of a picture
+    /// validator.
     fn is_valid_input(&self, s: &mut String, suppress_fill: bool) -> bool {
         let do_fill = self.auto_fill && !suppress_fill;
         let mut p = Picture::new(self.pic.as_bytes(), s.as_bytes().to_vec());
@@ -945,21 +914,21 @@ impl Validator for PXPictureValidator {
         r != PicResult::Error
     }
 
-    /// `isValid(const char* s)` — returns `picture(copy_of_s, False) ==
-    /// prComplete`. No write-back (C++ scans a stack copy).
+    /// The final check: the input fully matches the mask. Runs the matcher on a
+    /// copy, with no write-back.
     fn is_valid(&self, s: &str) -> bool {
         let mut p = Picture::new(self.pic.as_bytes(), s.as_bytes().to_vec());
         p.run(false) == PicResult::Complete
     }
 
-    /// `TValidator::status == vsOk` — overrides the base; `vsSyntax` ⇒ `false`.
+    /// Whether the mask itself is well-formed — overrides the base accept-all to
+    /// report a malformed mask.
     fn is_status_ok(&self) -> bool {
         self.status_ok
     }
 
-    /// `error()` — C++ `messageBox(mfError|mfOKButton, "Error in picture
-    /// format.\n %s", pic)` via the async-modal-from-a-view seam (informational,
-    /// OK-only).
+    /// Report a malformed picture mask, quoting it, via the
+    /// async-modal-from-a-view seam (informational, OK-only).
     fn error(&self, ctx: &mut Context) {
         ctx.request_message_box(
             format!("Error in picture format.\n {}", self.pic),
@@ -1097,8 +1066,8 @@ impl RegexValidator {
 impl Validator for RegexValidator {
     /// The whole input matches the pattern (a complete, valid value).
     ///
-    /// Equivalent to `prComplete` in the picture-validator model: both start
-    /// and end anchors must be satisfied.
+    /// The regex analogue of [`PicResult::Complete`] in the picture validator:
+    /// both the start and end anchors must be satisfied.
     fn is_valid(&self, s: &str) -> bool {
         let (dead, st) = self.walk(s);
         if dead {
@@ -1111,7 +1080,7 @@ impl Validator for RegexValidator {
     /// The input is still a prefix of some complete match — "could it become
     /// valid if the user keeps typing?".
     ///
-    /// Equivalent to `prIncomplete` (or better) in the picture-validator model:
+    /// Equivalent to "incomplete (or better)" in the picture-validator model:
     /// rejects only when the DFA has reached a dead state (no continuation can
     /// ever lead to a match). Does **not** mutate `s` — unlike
     /// [`PXPictureValidator`], there is no autofill.
@@ -1120,7 +1089,7 @@ impl Validator for RegexValidator {
     }
 
     /// Report an invalid final value via the async-modal-from-a-view seam
-    /// (informational, OK-only). rstv-original (no C++ counterpart).
+    /// (informational, OK-only).
     fn error(&self, ctx: &mut Context) {
         ctx.request_message_box(
             format!("Input does not match pattern: {}", self.pattern),
@@ -1372,7 +1341,7 @@ mod tests {
 
     #[test]
     fn range_is_valid_input_is_charset_only_not_range_checked() {
-        // DISCRIMINATING: isValidInput is INHERITED from TFilterValidator — it
+        // DISCRIMINATING: the while-typing check is the embedded filter's — it
         // checks charset only, NOT the range. "999" is accepted as input even
         // though is_valid("999") is false for range 1..=10. Would fail if someone
         // "helpfully" range-checked during typing.
@@ -1427,9 +1396,9 @@ mod tests {
 
     // ── PXPictureValidator ────────────────────────────────────────────────────
     //
-    // Golden vectors hand-traced against `tvalidat.cpp`. If a port disagrees with
-    // one, the port (or the trace) is wrong — re-read the C++, don't weaken the
-    // assertion.
+    // Golden vectors hand-traced against the reference engine (`tvalidat.cpp`).
+    // If the implementation disagrees with one, the implementation (or the trace)
+    // is wrong — re-check against the reference, don't weaken the assertion.
 
     /// Mask "###" (three required digits), autoFill=false.
     #[test]
@@ -1521,18 +1490,16 @@ mod tests {
     }
 
     /// Optional group: "#####[-####]" zip+4. Five required digits then an
-    /// optional `[-####]` (a literal dash plus four required digits). Traced
-    /// against the C++ engine (and confirmed against the prompt's stated intent):
-    /// - "12345" → five digits then the optional `[...]` group; `checkComplete`
-    ///   skips the trailing all-optional remainder → prAmbiguous → prComplete.
+    /// optional `[-####]` (a literal dash plus four required digits):
+    /// - "12345" → five digits then the optional `[...]` group; the trailing
+    ///   all-optional remainder is skipped → complete.
     /// - "12345-678" → the dash plus only three of four required digits → the
-    ///   group is incomplete → prIncomplete (not complete).
-    /// - "12345-6789" → dash + all four digits consumed → prComplete.
+    ///   group is incomplete (not complete).
+    /// - "12345-6789" → dash + all four digits consumed → complete.
     ///
-    /// NOTE: the prompt sketched this with a 3-digit lead (`"###[-####]"`), but
-    /// that mask only accepts 3 digits or 3-dash-4 (8 chars); the 5-digit ZIP
-    /// (`"#####[-####]"`) is what yields the prompt's intended
-    /// complete/incomplete/complete trio, so the mask is corrected here.
+    /// NOTE: a 3-digit lead (`"###[-####]"`) only accepts 3 digits or 3-dash-4
+    /// (8 chars); the 5-digit ZIP (`"#####[-####]"`) is what yields the intended
+    /// complete/incomplete/complete trio, so that is the mask used here.
     #[test]
     fn pic_optional_zip_plus_four() {
         let v = PXPictureValidator::new("#####[-####]", false);
@@ -1542,9 +1509,9 @@ mod tests {
     }
 
     /// Literal letter in the mask: the buffer is normalized to the MASK's case,
-    /// not the typed case. C++ `scan`'s default arm always `consume(pic[index])`
-    /// (tvalidat.cpp:450) — the matched literal byte, regardless of how it was
-    /// typed (case-insensitive match). Mask "N##", typed "n12" → buffer "N12".
+    /// not the typed case. The scanner consumes the mask's literal byte
+    /// regardless of how it was typed (the match is case-insensitive). Mask
+    /// "N##", typed "n12" → buffer "N12".
     #[test]
     fn pic_literal_letter_normalizes_to_mask_case() {
         let v = PXPictureValidator::new("N##", false);

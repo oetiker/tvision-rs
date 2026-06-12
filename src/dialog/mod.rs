@@ -2,17 +2,17 @@
 //!
 //! [`Dialog`] is the view you run modally: hand it to
 //! [`exec_view`](crate::app::Program::exec_view) and it returns the command that
-//! closed it (`cmOK`/`cmCancel`/…). It **embeds a
-//! [`Window`](crate::window::Window)** exactly as `Window` embeds a
+//! closed it ([`Command::OK`](crate::command::Command::OK), `CANCEL`, …). It
+//! **embeds a [`Window`](crate::window::Window)** exactly as `Window` embeds a
 //! [`Group`](crate::view::Group), and forwards almost the whole
 //! [`View`](crate::view::View) trait to that window. The dialog's *own* behaviour
 //! is just three things it overrides:
 //!
 //! * **`handle_event`** — let the window handle the event first, then the dialog
-//!   keys (Esc → post `cmCancel`, Enter → broadcast `cmDefault`) and the
-//!   modal-result commands (`cmOK`/`cmCancel`/`cmYes`/`cmNo` → end the modal loop
-//!   while the dialog is modal).
-//! * **`valid`** — `cmCancel` is *always* valid (cancelling a dialog can never be
+//!   keys (Esc → post a Cancel command, Enter → broadcast Default) and the
+//!   modal-result commands (OK / Cancel / Yes / No → end the modal loop while the
+//!   dialog is modal).
+//! * **`valid`** — Cancel is *always* valid (cancelling a dialog can never be
 //!   vetoed); every other command defers to the embedded group, so a control with
 //!   a failing validator can keep the dialog open.
 //! * **constructor field overrides** — no grow-with-owner, decoration flags
@@ -26,14 +26,14 @@
 //!
 //! Data-bearing dialogs work today: child controls (input lines, clusters, …)
 //! carry typed values, optional [`Validator`](crate::validate::Validator)s gate
-//! `cmReleasedFocus`/close, and the group's gather/scatter walk collects them — see
+//! focus-release and close, and the group's gather/scatter walk collects them — see
 //! [`FileDialog`](crate::dialog::FileDialog) for a worked example.
 //!
 //! # Turbo Vision heritage
-//! Ports `TDialog` (`tdialog.cpp`/`dialogs.h`). C++ `TDialog : TWindow`
-//! inheritance becomes embed-and-delegate composition (deviation D2) — the dialog
-//! holds a `Window` and forwards to it; the single modal loop and the downward
-//! end-modal request are deviation D9.
+//! Ports `TDialog` (`tdialog.cpp`/`dialogs.h`), which derived from the window
+//! class. That inheritance becomes embed-and-delegate composition (deviation D2) —
+//! the dialog holds a [`Window`](crate::window::Window) and forwards to it; the
+//! single modal loop and the downward end-modal request are deviation D9.
 
 mod colorpick;
 #[allow(clippy::module_inception)]

@@ -12,20 +12,20 @@
 //! about no particular view. [`Event::Timer`] carries *which* [`TimerId`]
 //! expired.
 //!
+//! One primitive is deliberately not reproduced: a synchronous, return-valued
+//! message round-trip (the kind used for "may I close?" vetoes). A view here is
+//! borrowed downward by the event loop and cannot synchronously call back into a
+//! sibling and read a return value, so there is no event that carries a reply.
+//! Code that needs that pattern queries the tree owner directly via
+//! [`find_mut`](crate::view::View::find_mut) instead.
+//!
 //! # Turbo Vision heritage
 //!
 //! Replaces the single `TEvent` tagged union (`system.h`) with a Rust sum type
-//! (deviation D4). C++ `MessageEvent` carried a `command` plus a `void* infoPtr`
-//! union used three ways; here a command event carries only the [`Command`], the
+//! (deviation D4). The original message event carried a command plus an untyped
+//! pointer used three ways; here a command event carries only the [`Command`], the
 //! "which view" case becomes [`Event::Broadcast`]'s resolvable [`ViewId`]
 //! `source`, and the timer-id case becomes the typed [`Event::Timer`] variant.
-//!
-//! One C++ primitive is deliberately not reproduced: the synchronous,
-//! return-valued `message()` round-trip (the `cmCanCloseForm` veto and
-//! friends). A view here is borrowed downward by the event loop and cannot
-//! synchronously call back into a sibling and read a return value, so there is
-//! no event that carries a reply. Code that needs that pattern queries the tree
-//! owner directly via [`find_mut`](crate::view::View::find_mut) instead.
 
 mod key;
 
@@ -39,79 +39,65 @@ use crate::view::{Point, ViewId};
 
 /// An event a [`View`](crate::view::View) handles, matched arm-by-arm.
 ///
-/// `evNothing` and any *consumed* event are both [`Event::Nothing`] (see
-/// [`Event::clear`], the `clearEvent` equivalent). The mouse wheel is its own
-/// variant [`Event::MouseWheel`] (distinct from `MouseDown`); wheel direction
-/// rides on the [`MouseEvent::wheel`] field.
+/// A consumed event and "no event" are both [`Event::Nothing`] (see
+/// [`Event::clear`]). The mouse wheel is its own variant [`Event::MouseWheel`]
+/// (distinct from `MouseDown`); wheel direction rides on the
+/// [`MouseEvent::wheel`] field.
 ///
 /// # Turbo Vision heritage
 ///
-/// Replaces the `TEvent` tagged union (`what` bitmask + `union { mouse; keyDown;
-/// message; }`; `system.h`) with a real Rust sum type, matched arm-by-arm
-/// instead of masked (deviation D4).
+/// Replaces the `TEvent` tagged union (a bitmask tag plus a `union` of
+/// mouse/key/message records; `system.h`) with a real Rust sum type, matched
+/// arm-by-arm instead of masked (deviation D4).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
-    /// `evMouseDown` — a mouse button was pressed.
+    /// A mouse button was pressed.
     MouseDown(MouseEvent),
-    /// `evMouseUp` — a mouse button was released.
+    /// A mouse button was released.
     MouseUp(MouseEvent),
-    /// `evMouseMove` — the mouse moved (opt-in; see [`EventMask::mouse_move`]).
+    /// The mouse moved (opt-in; see [`EventMask::mouse_move`]).
     MouseMove(MouseEvent),
-    /// `evMouseAuto` — auto-repeat while a button is held (opt-in; see
-    /// [`EventMask::mouse_auto`]).
+    /// Auto-repeat while a button is held (opt-in; see [`EventMask::mouse_auto`]).
     MouseAuto(MouseEvent),
-    /// `evMouseWheel` — the mouse wheel was rotated. A **distinct event class**
-    /// from `evMouseDown` (faithful to `views.h:199`,
-    /// `positionalEvents = evMouse & ~evMouseWheel`): the wheel is **not**
-    /// positional and **not** focused, so a [`crate::view::Group`] broadcasts it
-    /// to every child (`forEach`/`TGroup::handleEvent` `else` branch) until one
-    /// consumes it — the active window's scrollbar gets it regardless of cursor
-    /// position. Carries a [`MouseEvent`] whose [`MouseEvent::wheel`] is
+    /// The mouse wheel was rotated. A **distinct event class** from `MouseDown`:
+    /// the wheel is **not** positional and **not** focused, so a
+    /// [`crate::view::Group`] broadcasts it to every child until one consumes it —
+    /// the active window's scrollbar gets it regardless of cursor position.
+    /// Carries a [`MouseEvent`] whose [`MouseEvent::wheel`] is
     /// `Up`/`Down`/`Left`/`Right`.
     MouseWheel(MouseEvent),
-    /// `evKeyDown` — a key was pressed. Reuses [`key::KeyEvent`].
+    /// A key was pressed. Reuses [`key::KeyEvent`].
     KeyDown(KeyEvent),
-    /// `evCommand` — a command targeted at a specific receiver.
+    /// A command targeted at a specific receiver.
     Command(Command),
-    /// `evBroadcast` — a command broadcast to interested views. `source` names
-    /// *which view this broadcast is about* (e.g. which scrollbar changed), as a
-    /// resolvable [`ViewId`] (the successor to the C++ `message.infoPtr`). `None`
-    /// for broadcasts about no particular view (pump-internal
-    /// `cmCommandSetChanged`).
+    /// A command broadcast to interested views. `source` names *which view this
+    /// broadcast is about* (e.g. which scrollbar changed), as a resolvable
+    /// [`ViewId`]. `None` for broadcasts about no particular view.
     Broadcast {
         command: Command,
         source: Option<ViewId>,
     },
-    /// The successor to `evBroadcast cmTimerExpired`: a timer fired, carrying
-    /// *which* [`TimerId`] expired.
+    /// A timer fired, carrying *which* [`TimerId`] expired.
     ///
-    /// In C++ the timer-expiry broadcast was `evBroadcast` with
-    /// `message.command == cmTimerExpired` and `message.infoPtr ==` the
-    /// `TTimerId`. That `infoPtr` is an **integer** payload (the timer id), not a
-    /// view subject, so it gets its own typed variant rather than reusing
-    /// [`Event::Broadcast`]'s `source` field (which is for the view-subject case
-    /// only). Routed **broadcast-class** (delivered to all views), faithful to
-    /// `evBroadcast`.
+    /// The timer id is an integer payload, not a view subject, so it gets its own
+    /// typed variant rather than reusing [`Event::Broadcast`]'s `source` field
+    /// (which is for the view-subject case only). Delivered to all views.
     Timer(TimerId),
-    /// `evNothing`, or an event that a handler has consumed via
-    /// [`Event::clear`].
+    /// No event, or an event that a handler has consumed via [`Event::clear`].
     Nothing,
     /// Terminal bracketed-paste — the whole pasted string as delivered by the
-    /// terminal. Replaces the C++ `kbPaste`-flagged `evKeyDown` stream (tevent.cpp
-    /// `setPasteText`/`getPasteEvent`). Routed identically to `evKeyDown` —
-    /// delivered only to the focused view, not broadcast.
+    /// terminal. Routed identically to a key press — delivered only to the focused
+    /// view, not broadcast.
     Paste(String),
 }
 
 impl Event {
-    /// Consume this event by setting it to [`Event::Nothing`]. This is the
-    /// `clearEvent` equivalent; the porting recipe maps `clearEvent(event)`
-    /// onto `event.clear()`.
+    /// Consume this event by setting it to [`Event::Nothing`].
     pub fn clear(&mut self) {
         *self = Event::Nothing;
     }
 
-    /// Whether this is [`Event::Nothing`] (`evNothing` / a consumed event).
+    /// Whether this is [`Event::Nothing`] (no event / a consumed event).
     pub fn is_nothing(&self) -> bool {
         matches!(self, Event::Nothing)
     }
@@ -127,60 +113,64 @@ impl Event {
 /// (deviation D5); and `controlKeyState` reuses [`key::KeyModifiers`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MouseEvent {
-    /// Cursor position, in the relevant coordinate space (`where`).
+    /// Cursor position, in the relevant coordinate space.
     pub position: Point,
-    /// Buttons currently down (`buttons`).
+    /// Buttons currently down.
     pub buttons: MouseButtons,
-    /// Wheel direction, if any (`wheel`).
+    /// Wheel direction, if any.
     pub wheel: MouseWheel,
-    /// Click/move flags (`eventFlags`).
+    /// Click/move flags.
     pub flags: MouseEventFlags,
-    /// Modifiers held during the event (`controlKeyState`; reuses
-    /// [`key::KeyModifiers`]).
+    /// Modifiers held during the event (reuses [`key::KeyModifiers`]).
     pub modifiers: KeyModifiers,
 }
 
-/// The mouse buttons currently down. Ports the `buttons` `mb*` bit-word
-/// (`system.h`) as a struct-of-bools (deviation D5).
+/// The mouse buttons currently down — a struct of three named `bool` flags.
+///
+/// # Turbo Vision heritage
+/// The `mb*` button bit-word becomes a struct-of-bools (deviation D5).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MouseButtons {
-    /// Left button (`mbLeftButton`).
+    /// Left button.
     pub left: bool,
-    /// Right button (`mbRightButton`).
+    /// Right button.
     pub right: bool,
-    /// Middle button (`mbMiddleButton`).
+    /// Middle button.
     pub middle: bool,
 }
 
-/// Mouse event flags: double/triple click and moved. Ports the `eventFlags`
-/// `me*` bit-word (`system.h`) as a struct-of-bools (deviation D5).
+/// Mouse event flags: double/triple click and moved — a struct of named `bool`
+/// flags.
 ///
 /// There is no wheel flag here — wheel state lives on [`MouseEvent::wheel`],
 /// because the wheel is an event *class*, not a flag.
+///
+/// # Turbo Vision heritage
+/// The `me*` event-flag bit-word becomes a struct-of-bools (deviation D5).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MouseEventFlags {
-    /// The press completed a double click (`meDoubleClick`).
+    /// The press completed a double click.
     pub double_click: bool,
-    /// The press completed a triple click (`meTripleClick`).
+    /// The press completed a triple click.
     pub triple_click: bool,
-    /// The mouse moved (`meMouseMoved`).
+    /// The mouse moved.
     pub mouse_moved: bool,
 }
 
-/// Mouse wheel direction; [`MouseWheel::None`] means no wheel motion. Ports the
-/// `wheel` `mw*` closed set (`system.h`) as an enum.
+/// Mouse wheel direction; [`MouseWheel::None`] means no wheel motion — a closed
+/// enum.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum MouseWheel {
     /// No wheel motion.
     #[default]
     None,
-    /// Wheel scrolled up (`mwUp`).
+    /// Wheel scrolled up.
     Up,
-    /// Wheel scrolled down (`mwDown`).
+    /// Wheel scrolled down.
     Down,
-    /// Wheel scrolled left (`mwLeft`).
+    /// Wheel scrolled left.
     Left,
-    /// Wheel scrolled right (`mwRight`).
+    /// Wheel scrolled right.
     Right,
 }
 
@@ -192,13 +182,13 @@ pub enum MouseWheel {
 ///
 /// # Turbo Vision heritage
 ///
-/// The surviving slice of the `ushort eventMask` bit-word (`TView::eventMask`),
-/// trimmed to the two opt-ins worth keeping (deviation D4).
+/// The surviving slice of the `eventMask` bit-word (`TView::eventMask`), trimmed
+/// to the two opt-ins worth keeping (deviation D4).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct EventMask {
-    /// Deliver [`Event::MouseMove`] (continuous tracking; `evMouseMove`).
+    /// Deliver [`Event::MouseMove`] (continuous tracking).
     pub mouse_move: bool,
-    /// Deliver [`Event::MouseAuto`] (auto-repeat while held; `evMouseAuto`).
+    /// Deliver [`Event::MouseAuto`] (auto-repeat while held).
     pub mouse_auto: bool,
 }
 

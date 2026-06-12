@@ -25,8 +25,9 @@
 //! **read** nor **mutate** its window-frame sibling scroll bars. The pump is the
 //! broker: the list stores its bars as [`Option<ViewId>`] handles and a cached
 //! [`indent`](ListViewerState::indent) (the live horizontal-bar `value` the draw
-//! needs, refreshed by the read-sync). On a `cmScrollBarChanged` broadcast naming
-//! one of its bars as `source`, the list requests
+//! needs, refreshed by the read-sync). On a
+//! [`SCROLL_BAR_CHANGED`](crate::command::Command::SCROLL_BAR_CHANGED) broadcast
+//! naming one of its bars as `source`, the list requests
 //! [`Deferred::SyncListViewer`](crate::view::Deferred::SyncListViewer); the pump
 //! reads both bars' `value`s and calls back through
 //! [`View::apply_list_scroll`](crate::view::View::apply_list_scroll) →
@@ -36,7 +37,7 @@
 //!
 //! Unlike a plain scroller, this read-sync **writes back**: `apply_scroll`'s
 //! vertical-bar branch runs `focus_item_num` → [`focus_item`] → a vertical-bar
-//! `set_value(focused)`. That would re-broadcast `cmScrollBarChanged` and
+//! `set_value(focused)`. That would re-broadcast the changed signal and
 //! re-enter the sync — except
 //! [`ScrollBar::set_params`](crate::widgets::ScrollBar::set_params) is
 //! **change-guarded** (re-broadcasts only on an actual value change), so the
@@ -60,19 +61,18 @@
 //!
 //! The scroll-bar step republish on a bounds change is not wired, because nothing
 //! currently resizes a list viewer's bounds. A future resize consumer must apply
-//! the `changeBounds` step formula directly — vertical bar `set_step(size.y, …)`
-//! and horizontal bar `set_step(size.x / num_cols, …)`, both preserving the
-//! existing arrow step — and must NOT reuse [`update_steps`], which reproduces
-//! the *constructor* formula instead.
+//! the resize step formula directly — vertical bar `set_step(size.y, …)` and
+//! horizontal bar `set_step(size.x / num_cols, …)`, both preserving the existing
+//! arrow step — and must NOT reuse [`update_steps`], which reproduces the
+//! *constructor* formula instead.
 //!
 //! # Turbo Vision heritage
 //!
-//! Ports `TListViewer` (`tlstview.cpp`). C++ abstract-class inheritance becomes a
-//! trait plus a state struct plus generic free functions (deviation D2), because
-//! the base's `draw` must call back into the subclass's `get_text`. Owner
-//! up-pointers to the sibling scroll bars become [`ViewId`] handles brokered by
-//! the event loop (deviation D3); `getPalette` becomes [`Role`]s; and
-//! `TStreamable` is dropped.
+//! Ports `TListViewer` (`tlstview.cpp`). The abstract-class inheritance becomes a
+//! trait plus a state struct plus generic free functions (D2), because the base's
+//! draw must call back into the subclass's `get_text`. Owner back-pointers to the
+//! sibling scroll bars become [`ViewId`] handles brokered by the event loop (D3),
+//! and the palette becomes [`Role`]s.
 
 use crate::capture::TrackMask;
 use crate::command::Command;
@@ -80,28 +80,26 @@ use crate::event::{Event, Key, ctrl_to_arrow};
 use crate::theme::Role;
 use crate::view::{Context, DrawCtx, Point, StateFlag, View, ViewId, ViewState};
 
-/// The empty-list placeholder text (`TListViewer::emptyText`, `tlstview.cpp`).
+/// The empty-list placeholder text.
 const EMPTY_TEXT: &str = "<empty>";
 
-/// `mouseAutosToSkip = 4` — number of `evMouseAuto` ticks to skip (count reaches
-/// this threshold) before stepping the focus by one item when the mouse is
-/// outside the view (tlstview.cpp:219). Faithful.
+/// Number of auto-repeat ticks to accumulate before stepping the focus by one
+/// item when the mouse is held outside the view.
 const MOUSE_AUTOS_TO_SKIP: i32 = 4;
 
-/// Per-hold tracking state — initialized by `MouseDown` and cleared by `MouseUp`
-/// (the successor of the C++ hold-loop locals `count` and `oldItem`).
+/// Per-hold tracking state — initialized by `MouseDown` and cleared by `MouseUp`.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct LvTrack {
-    /// `count` — accumulated `evMouseAuto` ticks since the last step/reset
-    /// (re-initialised to 0 each time `count == mouseAutosToSkip`).
+    /// Accumulated auto-repeat ticks since the last step/reset (re-initialised to
+    /// 0 each time it reaches [`MOUSE_AUTOS_TO_SKIP`]).
     count: i32,
-    /// `oldItem` — the focused item at the START of the current tick; used to
-    /// decide whether a `focusItemNum` + redraw is needed (C++ `if newItem != oldItem`).
+    /// The focused item at the START of the current tick; used to decide whether
+    /// a re-focus + redraw is needed (only when the new item differs).
     old_item: i32,
 }
 
 // ---------------------------------------------------------------------------
-// ListViewerState — the non-virtual data members (TListViewer's fields)
+// ListViewerState — the data members
 // ---------------------------------------------------------------------------
 
 /// The shared state of every list-viewer. A concrete list widget embeds one and
@@ -109,25 +107,25 @@ pub(crate) struct LvTrack {
 ///
 /// # Turbo Vision heritage
 ///
-/// The data half of `TListViewer` (`tlstview.cpp`) — its non-virtual fields.
+/// The data half of `TListViewer` (`tlstview.cpp`) — its instance fields.
 pub struct ListViewerState {
     /// View state (geometry, flags, …) — the `View` composition target.
     pub state: ViewState,
-    /// `numCols` (`>= 1`): the number of columns the items are laid out in.
+    /// The number of columns (`>= 1`) the items are laid out in.
     pub num_cols: i32,
-    /// `topItem`: the item index drawn at the top-left cell.
+    /// The item index drawn at the top-left cell.
     pub top_item: i32,
-    /// `focused`: the currently focused (cursor) item index.
+    /// The currently focused (cursor) item index.
     pub focused: i32,
-    /// `range`: the number of items (the list length).
+    /// The number of items (the list length).
     pub range: i32,
     /// **Cached** horizontal-bar `value` — `draw` cannot reach the sibling bar,
     /// so the value is cached here and refreshed by the read-sync
     /// ([`apply_scroll`]).
     pub indent: i32,
-    /// The horizontal scrollbar, by id (`None` if absent). TV's `hScrollBar`.
+    /// The horizontal scrollbar, by id (`None` if absent).
     pub h_scroll_bar: Option<ViewId>,
-    /// The vertical scrollbar, by id (`None` if absent). TV's `vScrollBar`.
+    /// The vertical scrollbar, by id (`None` if absent).
     pub v_scroll_bar: Option<ViewId>,
     /// Absolute screen position of this view's `(0, 0)`, cached by the last
     /// `draw` call — feeds the [`MouseTrackCapture`] origin for localizing
@@ -140,13 +138,11 @@ pub struct ListViewerState {
 }
 
 impl ListViewerState {
-    /// Construct list-viewer state — ports `TListViewer::TListViewer`'s field
-    /// initialization (the bar `setStep` calls cannot run here without a `Context`;
-    /// the consumer calls [`update_steps`] after insertion — see its docs).
+    /// Construct list-viewer state.
     ///
-    /// Sets `first_click` and `selectable`; starts at the top with an empty
-    /// range. Opting into the broadcast class has no analogue here, because
-    /// broadcasts are delivered unconditionally (same note as the scroller).
+    /// The bar step sizes cannot be published here without a `Context`; the
+    /// consumer calls [`update_steps`] after insertion. Sets `first_click` and
+    /// `selectable`; starts at the top with an empty range.
     pub fn new(
         bounds: crate::view::Rect,
         num_cols: i32,
@@ -181,27 +177,25 @@ impl ListViewerState {
 // ListRoles — the per-class color quintet
 // ---------------------------------------------------------------------------
 
-/// The role quintet [`draw`] resolves its color matrix through. In the C++ each
-/// color resolved through the class's own palette string, so a subclass
-/// recolored itself by overriding `getPalette` (a history viewer returns
-/// `cpHistoryViewer` instead of `cpListViewer`). Here that surfaces as a
-/// different role quintet returned from [`ListViewer::list_roles`].
+/// The role quintet [`draw`] resolves its color matrix through. A subclass can
+/// recolor the whole list by returning a different quintet from
+/// [`ListViewer::list_roles`] (a history viewer does exactly this).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ListRoles {
-    /// `getColor(1)` — a normal item of an active list (also the `<empty>` fill).
+    /// A normal item of an active list (also the `<empty>` fill).
     pub normal_active: Role,
-    /// `getColor(2)` — a normal item of an inactive list.
+    /// A normal item of an inactive list.
     pub normal_inactive: Role,
-    /// `getColor(3)` — the focused (cursor) item of an active list.
+    /// The focused (cursor) item of an active list.
     pub focused: Role,
-    /// `getColor(4)` — a selected item.
+    /// A selected item.
     pub selected: Role,
-    /// `getColor(5)` — the inter-column divider.
+    /// The inter-column divider.
     pub divider: Role,
 }
 
 impl ListRoles {
-    /// The base `cpListViewer` family — `TListViewer::getPalette`.
+    /// The base list-viewer role family.
     pub const LIST_VIEWER: ListRoles = ListRoles {
         normal_active: Role::ListNormalActive,
         normal_inactive: Role::ListNormalInactive,
@@ -235,8 +229,8 @@ impl ListRoles {
 ///
 /// # Turbo Vision heritage
 ///
-/// The trait half of `TListViewer` (`tlstview.cpp`): the overridable virtuals
-/// (`getText`/`isSelected`/`selectItem`/`getPalette`), with the data members in
+/// The trait half of `TListViewer` (`tlstview.cpp`): the overridable hooks
+/// (item text / selection / commit / palette), with the data members in
 /// [`ListViewerState`] and the shared logic in this module's free functions.
 pub trait ListViewer: View {
     /// Borrow the embedded [`ListViewerState`].
@@ -244,38 +238,37 @@ pub trait ListViewer: View {
     /// Mutably borrow the embedded [`ListViewerState`].
     fn lv_mut(&mut self) -> &mut ListViewerState;
 
-    /// `TListViewer::getText` — the text for `item`. Base returns empty (C++
-    /// `*dest = EOS`); `TListBox` & friends override.
+    /// The text for `item`. The default returns empty; concrete list widgets
+    /// (e.g. a list box) override it.
     fn get_text(&self, _item: i32) -> String {
         String::new()
     }
 
-    /// The role quintet [`draw`] colors items with. Base: the `cpListViewer`
-    /// family; `HistoryViewer` overrides with its `cpHistoryViewer` remap.
+    /// The role quintet [`draw`] colors items with. Default: the base list-viewer
+    /// family; a history viewer overrides with its recolored quintet.
     fn list_roles(&self) -> ListRoles {
         ListRoles::LIST_VIEWER
     }
 
-    /// `TListViewer::isSelected` — whether `item` is "selected" (drawn in the
-    /// selected color). Base: `item == focused`; multi-select subclasses override.
+    /// Whether `item` is "selected" (drawn in the selected color). Default:
+    /// `item == focused`; multi-select subclasses override.
     fn is_selected(&self, item: i32) -> bool {
         item == self.lv().focused
     }
 
-    /// The user committed to `item` (double-click / Space / Enter). Base
-    /// broadcasts `cmListItemSelected` with this view as the subject; subclasses
-    /// override to act.
+    /// The user committed to `item` (double-click / Space / Enter). The default
+    /// broadcasts [`Command::LIST_ITEM_SELECTED`] with this view as the subject;
+    /// subclasses override to act.
     fn select_item(&mut self, _item: i32, ctx: &mut Context) {
         let source = self.lv().state.id();
         ctx.broadcast(Command::LIST_ITEM_SELECTED, source);
     }
 
-    /// Faithful hook for `TListViewer::focusItem`'s virtual tail. The base
-    /// [`focus_item`] free fn calls this after moving `focused` (and adjusting
-    /// `top_item`), so an override fires on EVERY focus change (keyboard, mouse,
-    /// scrollbar-at-apply-time, `readDirectory`). Default: no-op
-    /// (behaviour-preserving for all existing impls). `TFileList` overrides it to
-    /// broadcast `cmFileFocused`.
+    /// A hook that runs after the focus moves. The base [`focus_item`] free fn
+    /// calls this after moving `focused` (and adjusting `top_item`), so an
+    /// override fires on EVERY focus change (keyboard, mouse, scrollbar sync, …).
+    /// Default: no-op. A file list overrides it to broadcast that the focused
+    /// file changed.
     fn on_focus_changed(&mut self, _ctx: &mut Context) {}
 }
 
@@ -283,11 +276,11 @@ pub trait ListViewer: View {
 // Shared logic — free functions generic over <L: ListViewer + ?Sized>
 // ---------------------------------------------------------------------------
 
-/// `TListViewer::focusItemNum` — clamp `item` into the valid range, then focus it
-/// (only when the list is non-empty).
+/// Clamp `item` into the valid range, then focus it (only when the list is
+/// non-empty).
 ///
-/// Faithful: `item < 0 → 0`; `item >= range && range > 0 → range - 1`; then
-/// `if range != 0 { focus_item(item) }`.
+/// `item < 0 → 0`; `item >= range && range > 0 → range - 1`; then focus it only
+/// when the range is non-empty.
 pub fn focus_item_num<L: ListViewer + ?Sized>(this: &mut L, mut item: i32, ctx: &mut Context) {
     if item < 0 {
         item = 0;
@@ -299,17 +292,17 @@ pub fn focus_item_num<L: ListViewer + ?Sized>(this: &mut L, mut item: i32, ctx: 
     }
 }
 
-/// `TListViewer::focusItem` — set `focused = item`, push the new value to the
-/// v-bar, and adjust `top_item` so the focused item is visible.
+/// Set `focused = item`, push the new value to the vertical bar, and adjust
+/// `top_item` so the focused item is visible.
 ///
 /// Sets `focused = item`; if a vertical bar exists, requests `set_value(item)`
-/// on it. Then the `top_item` adjust block (guarded by `size.y > 0`, the
-/// single-column vs multi-column cases).
+/// on it. Then the `top_item` adjust block (guarded by `size.y > 0`, with
+/// separate single-column and multi-column cases).
 pub fn focus_item<L: ListViewer + ?Sized>(this: &mut L, item: i32, ctx: &mut Context) {
     this.lv_mut().focused = item;
     if let Some(v) = this.lv().v_scroll_bar {
-        // vScrollBar->setValue(item) — the write-back the termination property
-        // relies on (no-op when the bar's value already == item; ScrollBar::
+        // Push the value to the bar — the write-back the termination property
+        // relies on (a no-op when the bar's value already == item, since
         // set_params is change-guarded).
         ctx.request_scroll_bar_params(v, Some(item), None, None, None, None);
     }
@@ -333,13 +326,13 @@ pub fn focus_item<L: ListViewer + ?Sized>(this: &mut L, item: i32, ctx: &mut Con
         }
     }
 
-    // `TFileList::focusItem`'s virtual tail (default: no-op). Fires AFTER the
-    // `focused`/`top_item` move, so an override sees the settled position.
+    // The post-focus hook (default: no-op). Fires AFTER the `focused`/`top_item`
+    // move, so an override sees the settled position.
     this.on_focus_changed(ctx);
 }
 
-/// `TListViewer::setRange` — set the list length, resetting `focused` if it now
-/// falls past the end, and (re)publish the v-bar's range.
+/// Set the list length, resetting `focused` if it now falls past the end, and
+/// (re)publish the vertical bar's range.
 ///
 /// Sets `range = a_range`; if `focused` now falls past the end it resets to 0;
 /// if a vertical bar exists, requests `set_params(focused, 0, a_range - 1, …)`,
@@ -355,14 +348,13 @@ pub fn set_range<L: ListViewer + ?Sized>(this: &mut L, a_range: i32, ctx: &mut C
     }
 }
 
-/// The body of the `cmScrollBarChanged` read-sync — ports both branches of
-/// `TListViewer::handleEvent`'s `cmScrollBarChanged` case, called by the pump
-/// (the read broker) after it resolves both bars and reads their `value`s.
+/// The body of the scroll-bar-changed read-sync, called by the pump (the read
+/// broker) after it resolves both bars and reads their `value`s.
 ///
 /// The horizontal-bar branch refreshes the cached
 /// [`indent`](ListViewerState::indent); the vertical-bar branch runs
-/// `focus_item_num(bar value)`. Reading both each sync is harmless — the
-/// vertical-bar write-back is a no-op in steady state.
+/// [`focus_item_num`] on the bar's value. Reading both each sync is harmless —
+/// the vertical-bar write-back is a no-op in steady state.
 pub fn apply_scroll<L: ListViewer + ?Sized>(
     this: &mut L,
     h: Option<i32>,
@@ -377,23 +369,20 @@ pub fn apply_scroll<L: ListViewer + ?Sized>(
     }
 }
 
-/// The list-viewer **ctor** `setStep` — (re)publish each bar's page/arrow step.
-/// Exposed as a `Context`-taking entry the consumer/test calls **after insertion**
-/// (the no-`Context` ctor cannot reach the bars — the same constraint the scroller
-/// hit).
+/// The list-viewer **construction** step formula — (re)publish each bar's
+/// page/arrow step. Exposed as a `Context`-taking entry the consumer/test calls
+/// **after insertion** (the no-`Context` constructor cannot reach the bars — the
+/// same constraint the scroller hit).
 ///
-/// Faithful to the **ctor** (`TListViewer::TListViewer`, tlstview.cpp):
-/// - v-bar: `numCols == 1` → `pgStep = size.y - 1`, `arStep = 1`; else
-///   `pgStep = size.y * numCols`, `arStep = size.y`. `setStep(pgStep, arStep)`.
-/// - h-bar: `setStep(size.x / numCols, 1)`.
+/// - vertical bar: single column → page step `size.y - 1`, arrow step 1; else
+///   page step `size.y * num_cols`, arrow step `size.y`.
+/// - horizontal bar: page step `size.x / num_cols`, arrow step 1.
 ///
-/// **This is the CTOR formula, NOT the resize formula.** `TListViewer::changeBounds`
-/// (tlstview.cpp:71-74) uses a **different** `setStep`: vbar `setStep(size.y,
-/// <preserve arStep>)` (plain `size.y`) and hbar `setStep(size.x/numCols, <preserve
-/// arStep>)`, both **preserving the live arStep**. A future resize consumer must
-/// apply that `changeBounds` formula directly — do **NOT** call `update_steps` for a
-/// resize. Nothing resizes a list viewer in rstv today, so that `changeBounds`
-/// path is intentionally unported until a resize consumer needs it.
+/// **This is the CONSTRUCTION formula, NOT the resize formula.** The resize path
+/// ([`on_bounds_changed`]) uses a **different** step: a plain `size.y` page step
+/// for the vertical bar, and it **preserves the live arrow step** for both bars.
+/// A future resize consumer must use that formula directly — do **NOT** call
+/// `update_steps` for a resize.
 pub fn update_steps<L: ListViewer + ?Sized>(this: &L, ctx: &mut Context) {
     let size = this.lv().state.size;
     let num_cols = this.lv().num_cols;
@@ -410,16 +399,16 @@ pub fn update_steps<L: ListViewer + ?Sized>(this: &L, ctx: &mut Context) {
     }
 }
 
-/// `TListViewer::changeBounds` resize-step formula — called from
-/// `View::on_bounds_changed` for concrete ListViewer implementors.
+/// The resize-step formula — called from `on_bounds_changed` for concrete
+/// `ListViewer` implementors.
 ///
-/// Faithful: after the new bounds are applied, re-publish each scrollbar's
-/// `pgStep` preserving `arStep` (tlstview.cpp:68-75):
-///   vbar `pgStep = size.y` (plain height, not `size.y - 1` — the resize formula).
-///   hbar `pgStep = size.x / numCols`.
+/// After the new bounds are applied, re-publish each scrollbar's page step while
+/// preserving its arrow step: the vertical bar uses a plain `size.y` page step
+/// and the horizontal bar uses `size.x / num_cols`.
 ///
-/// **Differs from the ctor formula** (`update_steps`): resize uses `size.y` for
-/// vbar (not `size.y - 1` / `size.y * numCols`) and does NOT touch `arStep`.
+/// **Differs from the construction formula** ([`update_steps`]): resize uses
+/// `size.y` for the vertical bar (not `size.y - 1` / `size.y * num_cols`) and
+/// does NOT touch the arrow step.
 pub fn on_bounds_changed<L: ListViewer + ?Sized>(this: &L, ctx: &mut Context) {
     let lv = this.lv();
     let size = lv.state.size;
@@ -430,8 +419,8 @@ pub fn on_bounds_changed<L: ListViewer + ?Sized>(this: &L, ctx: &mut Context) {
             None,         // preserve value
             None,         // preserve min
             None,         // preserve max
-            Some(size.y), // pgStep = size.y (resize formula, tlstview.cpp:72)
-            None,         // preserve arStep
+            Some(size.y), // page step = size.y (resize formula)
+            None,         // preserve arrow step
         );
     }
     if let Some(h) = lv.h_scroll_bar {
@@ -440,8 +429,8 @@ pub fn on_bounds_changed<L: ListViewer + ?Sized>(this: &L, ctx: &mut Context) {
             None,                    // preserve value
             None,                    // preserve min
             None,                    // preserve max
-            Some(size.x / num_cols), // pgStep = size.x / numCols (tlstview.cpp:74)
-            None,                    // preserve arStep
+            Some(size.x / num_cols), // page step = size.x / num_cols
+            None,                    // preserve arrow step
         );
     }
 }
@@ -639,13 +628,11 @@ pub fn handle_event<L: ListViewer + ?Sized>(this: &mut L, ev: &mut Event, ctx: &
         }
 
         // -------------------------------------------------------------------
-        // evMouseUp (tracked) — post-loop: focusItemNum(newItem) + clear track.
+        // Tracked mouse-up — post-loop: re-focus the settled item + clear track.
         //
-        // C++ tlstview.cpp:274-278: `focusItemNum(newItem); drawView(); if
-        // double-click && range > newItem: selectItem(newItem); clearEvent`.
-        // We do `focusItemNum(focused)` (the last-known focused item, mirroring
-        // the C++ post-loop `newItem` which equals `focused` after the last
-        // loop iteration) then clear the track. Double-click is NOT re-checked
+        // We do `focus_item_num(focused)` (the last-known focused item, which
+        // equals the settled position after the final loop iteration) then clear
+        // the track. Double-click is NOT re-checked
         // here: this MouseUp POPS the capture (ConsumedPop), so the hold is
         // already over before any second down can arrive — the second down of a
         // double-click re-enters the MouseDown arm as a fresh event and fires
@@ -713,11 +700,11 @@ pub fn handle_event<L: ListViewer + ?Sized>(this: &mut L, ev: &mut Event, ctx: &
         }
 
         // -------------------------------------------------------------------
-        // evBroadcast — own-bar cmScrollBarClicked → select; cmScrollBarChanged
-        // → request a read-sync (the source filter, like the scroller).
+        // Broadcast — own-bar clicked → select; own-bar changed → request a
+        // read-sync (the source filter, like the scroller).
         // -------------------------------------------------------------------
         Event::Broadcast { command, source } => {
-            // (options & ofSelectable) guard, faithful to the C++.
+            // Only a selectable list reacts.
             if !this.lv().state.options.selectable {
                 return;
             }
@@ -770,19 +757,19 @@ pub fn draw<L: ListViewer + ?Sized>(this: &mut L, ctx: &mut DrawCtx) {
     let roles = this.list_roles();
     let (normal, selected, focused_color) = if active {
         (
-            ctx.style(roles.normal_active), // getColor(1)
-            ctx.style(roles.selected),      // getColor(4)
-            Some(ctx.style(roles.focused)), // getColor(3)
+            ctx.style(roles.normal_active), // normal item
+            ctx.style(roles.selected),      // selected item
+            Some(ctx.style(roles.focused)), // focused item
         )
     } else {
         (
-            ctx.style(roles.normal_inactive), // getColor(2)
-            ctx.style(roles.selected),        // getColor(4)
-            None,                             // focusedColor unused
+            ctx.style(roles.normal_inactive), // normal item (inactive list)
+            ctx.style(roles.selected),        // selected item
+            None,                             // focused color unused
         )
     };
-    let divider_color = ctx.style(roles.divider); // getColor(5)
-    let empty_color = ctx.style(roles.normal_active); // getColor(1)
+    let divider_color = ctx.style(roles.divider);
+    let empty_color = ctx.style(roles.normal_active);
 
     let size = lv.state.size;
     let indent = lv.indent; // the CACHE (not a live h-bar read).
@@ -799,10 +786,9 @@ pub fn draw<L: ListViewer + ?Sized>(this: &mut L, ctx: &mut DrawCtx) {
             let cur_col = j * col_width;
 
             let color = if active && focused == item && range > 0 {
-                // focused cell: drawn in the focused color; the hardware cursor for
-                // this cell is surfaced (&self) via `focused_cursor`, not set here
-                // (C++ does `setCursor(curCol+1, i)` inline — our &self draw +
-                // top-down cursor walk derives it on demand).
+                // Focused cell: drawn in the focused color; the hardware cursor for
+                // this cell is surfaced via `focused_cursor`, not set here (the
+                // read-only draw plus a top-down cursor walk derives it on demand).
                 focused_color.unwrap_or(normal)
             } else if item < range && this.is_selected(item) {
                 selected
@@ -810,7 +796,7 @@ pub fn draw<L: ListViewer + ?Sized>(this: &mut L, ctx: &mut DrawCtx) {
                 normal
             };
 
-            // b.moveChar(curCol, ' ', color, colWidth).
+            // Fill the cell with the chosen color.
             ctx.fill(
                 crate::view::Rect::new(cur_col, i, cur_col + col_width, i + 1),
                 ' ',
@@ -818,35 +804,32 @@ pub fn draw<L: ListViewer + ?Sized>(this: &mut L, ctx: &mut DrawCtx) {
             );
 
             if item < range {
-                // b.moveStr(curCol+1, text, color, colWidth, indent) — the
-                // moveStr `begin` offset is the indent column-skip (put_str_part).
-                // The C++ `if (indent < 255)` guard caps a 255-wide text buffer;
-                // our get_text returns an owned String, so the guard is moot.
+                // Draw the item text from column +1, skipping `indent` leading
+                // columns (the horizontal scroll offset).
                 let text = this.get_text(item);
                 ctx.put_str_part(cur_col + 1, i, &text, indent, color);
             } else if i == 0 && j == 0 {
-                // b.moveStr(curCol+1, emptyText, getColor(1)).
+                // Past the end of an empty list: the placeholder text.
                 ctx.put_str(cur_col + 1, i, EMPTY_TEXT, empty_color);
             }
 
-            // b.moveChar(curCol+colWidth-1, '\xB3', getColor(5), 1) — the divider.
+            // The inter-column divider at the right edge of the cell.
             let vbar = ctx.glyphs().frame_v;
             ctx.put_char(cur_col + col_width - 1, i, vbar, divider_color);
         }
     }
-    // The C++ `if (!focusedVis) setCursor(-1,-1)` (hide the cursor when no focused
-    // cell is visible) is realized by `focused_cursor` returning `None`, which a
-    // concrete widget surfaces via `cursor_request` — not a mutation here (draw is
-    // &self under our top-down cursor walk).
+    // Hiding the cursor when no focused cell is visible is realized by
+    // `focused_cursor` returning `None`, which a concrete widget surfaces via
+    // `cursor_request` — not a mutation here (drawing is read-only under the
+    // top-down cursor walk).
 }
 
 /// The view-local cursor position the focused cell sits at, or `None` if no
-/// focused cell is visible — the `setCursor(curCol+1, i)` / `setCursor(-1,-1)`
-/// outcome of [`draw`], computed `&self`-only so a concrete widget can surface it
-/// via [`View::cursor_request`](crate::view::View::cursor_request).
+/// focused cell is visible. Computed `&self`-only so a concrete widget can
+/// surface it via [`View::cursor_request`](crate::view::View::cursor_request).
 ///
-/// (C++ `draw` calls `setCursor` as a side effect; under our `&self` draw +
-/// top-down cursor walk the position is derived on demand instead.)
+/// The cursor position is derived on demand here — under the read-only `&self`
+/// draw and top-down cursor walk, `draw` does not place the cursor itself.
 pub fn focused_cursor<L: ListViewer + ?Sized>(this: &L) -> Option<Point> {
     let lv = this.lv();
     let st = &lv.state.state;
@@ -870,15 +853,15 @@ pub fn focused_cursor<L: ListViewer + ?Sized>(this: &L) -> Option<Point> {
 }
 
 // ---------------------------------------------------------------------------
-// SortedSearch — TSortedListBox's type-to-search hooks (a sub-trait)
+// SortedSearch — the type-to-search hooks (a sub-trait)
 // ---------------------------------------------------------------------------
 
-/// The `kbShift` mask = `kbLeftShift | kbRightShift` = `0x01 | 0x02`. The
-/// incremental-search state machine captures it at the `searchPos -1↔0`
-/// transition; file/dir subclasses (`FileList`) test `shift_state() & KB_SHIFT`.
+/// The shift mask = left-shift | right-shift = `0x01 | 0x02`. The
+/// incremental-search state machine captures it at the `search_pos -1↔0`
+/// transition; file/dir subclasses test `shift_state() & KB_SHIFT`.
 pub const KB_SHIFT: u8 = 0x03;
 
-/// Case-insensitive equality of the first `n` chars — C++ `equal` / `strnicmp`.
+/// Case-insensitive equality of the first `n` chars.
 fn ci_prefix_eq(a: &[char], b: &[char], n: usize) -> bool {
     if a.len() < n || b.len() < n {
         return false;
@@ -889,34 +872,34 @@ fn ci_prefix_eq(a: &[char], b: &[char], n: usize) -> bool {
         .all(|(x, y)| x.eq_ignore_ascii_case(y))
 }
 
-/// `TSortedListBox`'s type-to-search hooks — the polymorphic parts of the
-/// incremental-search state machine. The shared machine is [`sorted_handle_event`]
-/// + [`sorted_cursor`]; concrete widgets (SortedListBox, FileList) implement these.
+/// The type-to-search hooks — the polymorphic parts of the incremental-search
+/// state machine. The shared machine is [`sorted_handle_event`] +
+/// [`sorted_cursor`]; concrete widgets (a sorted list box, a file list)
+/// implement these.
 pub trait SortedSearch: ListViewer {
-    /// `searchPos` — index of the last matched char in the focused item's text;
-    /// -1 = no active search.
+    /// The index of the last matched char in the focused item's text; -1 = no
+    /// active search.
     fn search_pos(&self) -> i32;
     fn set_search_pos(&mut self, pos: i32);
-    /// `shiftState` — `kbShift` bits captured at the searchPos -1↔0 transition.
-    /// The base SortedListBox never reads it; file/dir subclasses' `search` does.
+    /// The shift bits captured at the `search_pos -1↔0` transition. A plain
+    /// sorted list box never reads it; file/dir subclasses' `search` does.
     fn shift_state(&self) -> u8;
     fn set_shift_state(&mut self, s: u8);
-    /// `getKey(curString)` + `list()->search(key, value)` fused: given the prepared
-    /// prefix chars `cur` (already truncated by the state machine), return the
-    /// insertion index in `0..=range` of the first item NOT LESS than the key.
+    /// Given the prepared prefix chars `cur` (already truncated by the state
+    /// machine), return the insertion index in `0..=range` of the first item NOT
+    /// LESS than the key.
     fn search(&self, cur: &[char]) -> i32;
 }
 
-/// `TSortedListBox::handleEvent` — incremental type-to-search state machine.
-/// Reusable verbatim by every `SortedSearch` widget (SortedListBox, FileList).
+/// The incremental type-to-search state machine. Reusable verbatim by every
+/// [`SortedSearch`] widget (a sorted list box, a file list).
 ///
-/// TRAP 1: `cur` is re-seeded from the FOCUSED ITEM'S text every keystroke,
-/// not from an accumulated typed-chars buffer. `searchPos` indexes into `cur`.
+/// PITFALL 1: `cur` is re-seeded from the FOCUSED ITEM'S text every keystroke,
+/// not from an accumulated typed-chars buffer. `search_pos` indexes into `cur`.
 ///
-/// TRAP 2: exact sequence: save `old_value = focused` → delegate to base
-/// [`handle_event`] (`TListBox::handleEvent` == `TListViewer::handleEvent`, since
-/// TListBox does not override it) → reset `search_pos = -1` if `focused` changed
-/// OR a `cmReleasedFocus` broadcast → THEN gate on `ev` still being a `KeyDown`.
+/// PITFALL 2: exact sequence: save `old_value = focused` → delegate to the base
+/// [`handle_event`] → reset `search_pos = -1` if `focused` changed OR a
+/// released-focus broadcast arrived → THEN gate on `ev` still being a `KeyDown`.
 pub fn sorted_handle_event<L: SortedSearch + ?Sized>(
     this: &mut L,
     ev: &mut Event,
@@ -925,7 +908,7 @@ pub fn sorted_handle_event<L: SortedSearch + ?Sized>(
     let old_value = this.lv().focused;
     handle_event(this, ev, ctx); // (1) base first
 
-    // (2) reset search on focus change OR a cmReleasedFocus broadcast.
+    // (2) reset search on focus change OR a released-focus broadcast.
     let released = matches!(ev,
         Event::Broadcast { command, .. } if *command == Command::RELEASED_FOCUS);
     if old_value != this.lv().focused || released {
@@ -1028,17 +1011,15 @@ pub fn sorted_handle_event<L: SortedSearch + ?Sized>(
     }
 }
 
-/// Cursor advanced past the matched prefix (C++ `setCursor(cursor.x+searchPos+1, …)`).
+/// The cursor advanced past the matched prefix.
 ///
 /// [`focused_cursor`] returns `x = col*col_width + 1` (the text-start column).
-/// Adding `(search_pos+1)` positions just after the matched prefix.
+/// Adding `(search_pos + 1)` positions the cursor just after the matched prefix.
 /// With `search_pos == -1` the offset is 0 — no advance.
 ///
-/// We derive the cursor ABSOLUTELY from `search_pos` (`base.x + search_pos + 1`)
-/// rather than tracking C++'s incremental `setCursor(cursor.x + (searchPos -
-/// oldPos), …)` accumulation. The result is identical: `base.x` is the
-/// text-start column re-derived each frame (no accumulated cursor state to keep
-/// in sync), so a fresh `base.x + search_pos + 1` equals C++'s running total.
+/// The cursor is derived ABSOLUTELY from `search_pos` (`base.x + search_pos +
+/// 1`) rather than accumulated incrementally: `base.x` is the text-start column
+/// re-derived each frame, so there is no running cursor state to keep in sync.
 pub fn sorted_cursor<L: SortedSearch + ?Sized>(this: &L) -> Option<Point> {
     let base = focused_cursor(this)?;
     Some(Point::new(base.x + (this.search_pos() + 1).max(0), base.y))
@@ -1164,7 +1145,7 @@ mod tests {
         assert_eq!(l.lv.num_cols, 1);
         // range is set by the FakeList ctor from items (empty -> 0).
         assert_eq!(l.lv.range, 0);
-        // No evBroadcast mask analogue.
+        // No special broadcast mask bit (broadcasts are always delivered).
         assert_eq!(l.lv.state.event_mask, crate::event::EventMask::default());
     }
 

@@ -1,16 +1,17 @@
 //! # rstv — a text-user-interface framework for Rust
 //!
-//! rstv is an idiomatic Rust port of [magiblot/tvision](https://github.com/magiblot/tvision)
-//! (modern C++ Turbo Vision). It gives you the classic Turbo Vision experience —
-//! overlapping windows, modal dialogs, menus, a status line, validated input
-//! fields, scrollers and list boxes — built on a retained view tree and a single
-//! event loop, rendered to the terminal through a pluggable [`Backend`].
+//! rstv is an idiomatic Rust port of [magiblot/tvision](https://github.com/magiblot/tvision),
+//! a modern revival of Turbo Vision. It gives you the classic Turbo Vision
+//! experience — overlapping windows, modal dialogs, menus, a status line,
+//! validated input fields, scrollers and list boxes — built on a retained view
+//! tree and a single event loop, rendered to the terminal through a pluggable
+//! [`Backend`].
 //!
 //! ## House style: the `tv::` namespace
 //!
 //! Add the crate to `Cargo.toml` aliased as `tv`, and reach everything through
-//! the `tv::` path — the path *is* the namespace the old C++ `T` prefix was
-//! faking:
+//! the `tv::` path — the path *is* the namespace, so types drop the `T` prefix
+//! the original used in their names:
 //!
 //! ```toml
 //! # Cargo.toml
@@ -47,11 +48,11 @@
 //!
 //! # Turbo Vision heritage
 //!
-//! rstv ports Borland's Turbo Vision as modernized by magiblot/tvision. The
-//! pervasive translation choices — C++ inheritance becomes the [`View`] trait
-//! plus [`ViewState`] composition, raw pointers become [`ViewId`] handles, flag
-//! words become structs of bools, and the palette becomes a [`Theme`] keyed by
-//! [`Role`] — are summarized in the project's guide.
+//! rstv ports Borland's Turbo Vision as modernized by magiblot/tvision (a C++
+//! codebase). The pervasive translation choices — inheritance becomes the
+//! [`View`] trait plus [`ViewState`] composition, raw pointers become [`ViewId`]
+//! handles, flag words become structs of bools, and the palette becomes a
+//! [`Theme`] keyed by [`Role`] — are summarized in the project's guide.
 
 // Lets proc-macro-generated `::tvision::Type` paths resolve inside this crate.
 extern crate self as tvision;

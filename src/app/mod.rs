@@ -4,7 +4,7 @@
 //! window tiling/cascading and shell suspend.
 //!
 //! # Turbo Vision heritage
-//! Ports `TProgram` / `TApplication` (`tprogram.cpp`, `tapplica.cpp`). C++
+//! Ports `TProgram` / `TApplication` (`tprogram.cpp`, `tapplica.cpp`). The
 //! `TApplication : TProgram` inheritance becomes embed-and-delegate composition
 //! (deviation D2) — one type holds the other and forwards to it.
 

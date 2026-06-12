@@ -3,7 +3,7 @@
 //! and delegates all draw/event/nav logic to the shared list-viewer functions via
 //! the [`ListViewer`] trait. Only [`get_text`](ListViewer::get_text) is
 //! overridden; `is_selected` and `select_item` inherit the base behavior
-//! (`item == focused` / broadcast `cmListItemSelected`).
+//! (`item == focused`, and the base broadcasts that an item was selected).
 //!
 //! # Population wiring
 //!
@@ -28,33 +28,32 @@
 //!
 //! # Turbo Vision heritage
 //!
-//! Ports `TListBox` (`tlistbox.cpp`). The list-record `getData`/`setData` become
-//! the typed value protocol (deviation D10); mouse press-and-hold, auto-scroll,
-//! and resize handling all live in the shared list-viewer base; and `TStreamable`
-//! is dropped.
+//! Ports `TListBox` (`tlistbox.cpp`). The list-record get/set hooks become the
+//! typed value protocol (D10); mouse press-and-hold, auto-scroll, and resize
+//! handling all live in the shared list-viewer base.
 
 use crate::data::FieldValue;
 use crate::event::Event;
 use crate::view::{Context, DrawCtx, Point, StateFlag, View, ViewId, ViewState};
 use crate::widgets::list_viewer::{self, ListViewer, ListViewerState};
 
-/// `TListBox` — a concrete list viewer over a `Vec<String>`.
+/// A concrete list viewer over a `Vec<String>`.
 ///
-/// Reuses all of `TListViewer`'s draw/event/nav logic via the [`ListViewer`]
-/// trait and overrides only [`get_text`](ListViewer::get_text). See the module
-/// doc for population wiring notes.
+/// Reuses all of the shared list-viewer draw/event/nav logic via the
+/// [`ListViewer`] trait and overrides only [`get_text`](ListViewer::get_text).
+/// See the module doc for population wiring notes.
 pub struct ListBox {
     lv: ListViewerState,
     items: Vec<String>,
 }
 
 impl ListBox {
-    /// Construct a new, empty list box — ports `TListBox::TListBox`.
+    /// Construct a new, empty list box.
     ///
-    /// Faithful: `ListViewerState::new(bounds, num_cols, h, v)` (options set,
-    /// `topItem = focused = range = 0`), `items = Vec::new()`. No `Context`
-    /// here — publish the v-bar range + steps with [`new_list`](Self::new_list)
-    /// + [`list_viewer::update_steps`](list_viewer::update_steps) after insertion.
+    /// Builds the shared list-viewer state and an empty item list; the top item,
+    /// focus, and range all start at 0. No `Context` here — publish the vertical
+    /// bar's range + steps with [`new_list`](Self::new_list) +
+    /// [`list_viewer::update_steps`](list_viewer::update_steps) after insertion.
     pub fn new(
         bounds: crate::view::Rect,
         num_cols: i32,
@@ -67,8 +66,7 @@ impl ListBox {
         }
     }
 
-    /// Replace the item collection and (re)publish the v-bar range — ports
-    /// `TListBox::newList`.
+    /// Replace the item collection and (re)publish the vertical bar's range.
     ///
     /// Replaces `self.items`; calls `set_range(len)` (publishes the vertical-bar
     /// params); calls `focus_item(0)` iff `range > 0`. The old items drop on
@@ -87,7 +85,7 @@ impl ListBox {
         }
     }
 
-    /// The current item collection (`TListBox::list()`).
+    /// The current item collection.
     pub fn list(&self) -> &[String] {
         &self.items
     }
@@ -102,15 +100,14 @@ impl ListViewer for ListBox {
         &mut self.lv
     }
 
-    /// `TListBox::getText` — return the text for `item` from the owned Vec.
+    /// Return the text for `item` from the owned Vec.
     ///
-    /// Faithful: `items->at(item)` → `self.items.get(item as usize)`;
-    /// out-of-bounds (including the `items == 0 → EOS` case) → empty string.
+    /// An out-of-bounds index (including an empty list) returns an empty string.
     fn get_text(&self, item: i32) -> String {
         self.items.get(item as usize).cloned().unwrap_or_default()
     }
-    // is_selected / select_item: inherit the base (item == focused / broadcast
-    // cmListItemSelected). TListBox does NOT override these.
+    // is_selected / select_item: inherit the base (item == focused, and the base
+    // broadcasts that an item was selected). Not overridden here.
 }
 
 impl View for ListBox {
@@ -182,38 +179,38 @@ fn ci_cmp(a: &str, b: &str) -> core::cmp::Ordering {
         .cmp(b.chars().map(|c| c.to_ascii_lowercase()))
 }
 
-/// `TSortedListBox` (`stddlg.cpp`) — a list viewer with type-to-search incremental
-/// search over a case-insensitively sorted string list. A **direct `ListViewer`
-/// impl** (like [`ListBox`]); the search state machine lives as the
+/// A list viewer with incremental type-to-search over a case-insensitively
+/// sorted string list. A **direct `ListViewer` impl** (like [`ListBox`]); the
+/// search state machine lives as the
 /// [`sorted_handle_event`](crate::widgets::list_viewer::sorted_handle_event) /
 /// [`sorted_cursor`](crate::widgets::list_viewer::sorted_cursor) free functions
 /// over the [`SortedSearch`](crate::widgets::list_viewer::SortedSearch) sub-trait,
 /// which this widget implements.
 ///
-/// ## Deviations / deferrals
-/// * No `TSortedCollection`: rstv models the list as an owned `Vec<String>`.
-///   `new_list` keeps it CASE-INSENSITIVELY SORTED so the binary search and the
-///   case-insensitive prefix-confirm cohere — a deliberate rstv choice (C++ leaves
-///   ordering to the injected collection's `compare`; the file/dir subclasses
-///   (rows 72/74/75) will set their own).
-/// * `getKey` is identity here (C++ virtual; file/dir subclasses override) — folded
-///   into the `SortedSearch::search` impl. FileList overrides `search` for its own
-///   getKey + ordering.
-/// * `shiftState` (C++ captures `controlKeyState` on the `searchPos -1↔0`
-///   transition) is captured but UNUSED in the base — FileList reads it.
-/// * `curString`'s 256-byte cap → `Vec<char>` (no cap).
+/// ## Design notes
+/// * The list is an owned `Vec<String>`; `new_list` keeps it CASE-INSENSITIVELY
+///   SORTED so the binary search and the case-insensitive prefix-confirm cohere.
+///   File/dir subclasses can impose their own ordering.
+/// * The search key here is the typed prefix itself; a file/dir subclass
+///   overrides `search` to supply its own key derivation and ordering.
+/// * The shift bits are captured but UNUSED in this base — a file list reads them.
+///
+/// # Turbo Vision heritage
+///
+/// Ports `TSortedListBox` (`stddlg.cpp`); the injected sorted collection becomes
+/// the owned, case-insensitively sorted `Vec<String>`.
 pub struct SortedListBox {
     lv: ListViewerState,
     items: Vec<String>,
-    /// `searchPos` — index of the last matched char in the focused item's text;
-    /// -1 = no active search.
+    /// The index of the last matched char in the focused item's text; -1 = no
+    /// active search.
     search_pos: i32,
-    /// `shiftState` — captured per C++; UNUSED in the base (FileList reads it).
+    /// Captured shift bits; UNUSED in this base (a file list reads them).
     shift_state: u8,
 }
 
 impl SortedListBox {
-    /// `TSortedListBox::TSortedListBox` — show the cursor at column 1.
+    /// Construct a sorted list box, showing the cursor at column 1.
     pub fn new(
         bounds: crate::view::Rect,
         num_cols: i32,
@@ -231,8 +228,8 @@ impl SortedListBox {
         }
     }
 
-    /// `TSortedListBox::newList` — sort the items CASE-INSENSITIVELY, (re)publish
-    /// the v-bar range + focus, reset the search. Mirrors [`ListBox::new_list`].
+    /// Sort the items CASE-INSENSITIVELY, (re)publish the vertical bar's range +
+    /// focus, and reset the search. Mirrors [`ListBox::new_list`].
     pub fn new_list(&mut self, mut items: Vec<String>, ctx: &mut Context) {
         items.sort_by(|a, b| ci_cmp(a, b));
         self.items = items;
@@ -244,7 +241,7 @@ impl SortedListBox {
         self.search_pos = -1;
     }
 
-    /// The current item collection (`TListBox::list()`).
+    /// The current item collection.
     pub fn list(&self) -> &[String] {
         &self.items
     }
@@ -265,12 +262,12 @@ impl ListViewer for SortedListBox {
         &mut self.lv
     }
 
-    /// `getText` — return the text for `item` from the owned Vec.
+    /// Return the text for `item` from the owned Vec.
     fn get_text(&self, item: i32) -> String {
         self.items.get(item as usize).cloned().unwrap_or_default()
     }
-    // is_selected / select_item: inherit the base (item == focused / broadcast
-    // cmListItemSelected). TSortedListBox does NOT override these.
+    // is_selected / select_item: inherit the base (item == focused, and the base
+    // broadcasts that an item was selected). Not overridden here.
 }
 
 impl list_viewer::SortedSearch for SortedListBox {
@@ -290,10 +287,9 @@ impl list_viewer::SortedSearch for SortedListBox {
         self.shift_state = s;
     }
 
-    /// `getKey(cur)` is identity here, so the search key IS `cur`; then
-    /// `list()->search(key, value)` — first index `i` in `0..range` whose item is
-    /// `>= key` case-insensitively (the C++ insertion point). Returns `range` if
-    /// none. Binary search over `get_text(i)`.
+    /// The search key IS the typed prefix `cur`. Returns the first index `i` in
+    /// `0..range` whose item is `>= key` case-insensitively (the insertion
+    /// point), or `range` if none. Binary search over `get_text(i)`.
     fn search(&self, cur: &[char]) -> i32 {
         let key: String = cur.iter().collect();
         let range = self.lv.range;
@@ -323,9 +319,9 @@ impl View for SortedListBox {
         list_viewer::draw(self, ctx);
     }
 
-    /// `TSortedListBox::handleEvent` — the incremental type-to-search state machine,
-    /// shared verbatim via the [`sorted_handle_event`](list_viewer::sorted_handle_event)
-    /// free function over the `SortedSearch` sub-trait.
+    /// The incremental type-to-search state machine, shared verbatim via the
+    /// [`sorted_handle_event`](list_viewer::sorted_handle_event) free function
+    /// over the `SortedSearch` sub-trait.
     fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
         list_viewer::sorted_handle_event(self, ev, ctx);
     }

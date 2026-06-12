@@ -8,10 +8,11 @@
 //! is empty.
 //!
 //! # Turbo Vision heritage
-//! Ports `TScreenCell` + `TCellChar` (`scrncell.h`). C++ packs the text inline as
-//! up to 15 UTF-8 bytes; here it is an owned `String`. The colour is a typed
-//! [`Style`] rather than a packed `TColorAttr` (deviation D6), and the inline
-//! grapheme model carries combining marks and ZWJ sequences (deviation D13).
+//! Ports `TScreenCell` + `TCellChar` (`scrncell.h`). The original packs the text
+//! inline as up to 15 UTF-8 bytes; here it is an owned `String`. The colour is a
+//! typed [`Style`] rather than a packed attribute byte (deviation D6), and the
+//! inline grapheme model carries combining marks and ZWJ sequences (deviation
+//! D13).
 
 use crate::color::Style;
 
@@ -24,19 +25,17 @@ use crate::color::Style;
 pub struct Cell {
     /// The grapheme cluster shown in this cell. Empty for a wide-char trail.
     symbol: String,
-    /// Colour attributes (`TColorAttr`).
+    /// Colour attributes.
     style: Style,
-    /// `TCellChar::fWide` — this cell holds the lead of a double-width grapheme.
+    /// This cell holds the lead of a double-width grapheme.
     wide: bool,
-    /// `TCellChar::fTrail` — this cell is the trailing half of the preceding
-    /// double-width grapheme.
+    /// This cell is the trailing half of the preceding double-width grapheme.
     trail: bool,
 }
 
 impl Default for Cell {
-    /// A blank cell: a single space with the default style. (Turbo Vision
-    /// zero-inits to a NUL byte; a space is the conventional on-screen blank and
-    /// matches the ratatui-derived buffer shape.)
+    /// A blank cell: a single space with the default style. (A space is the
+    /// conventional on-screen blank and matches the ratatui-derived buffer shape.)
     fn default() -> Self {
         Cell {
             symbol: String::from(" "),
@@ -59,8 +58,7 @@ impl Cell {
         }
     }
 
-    /// `TCellChar::moveChar` — set the text to a single `char`, clearing the
-    /// wide/trail flags.
+    /// Set the text to a single `char`, clearing the wide/trail flags.
     pub fn set_char(&mut self, ch: char) {
         self.symbol.clear();
         self.symbol.push(ch);
@@ -68,8 +66,8 @@ impl Cell {
         self.trail = false;
     }
 
-    /// `TCellChar::moveMultiByteChar` — set the text to a grapheme cluster,
-    /// flagging it `wide` if it is a double-width glyph.
+    /// Set the text to a grapheme cluster, flagging it `wide` if it is a
+    /// double-width glyph.
     pub fn set_str(&mut self, s: &str, wide: bool) {
         self.symbol.clear();
         self.symbol.push_str(s);
@@ -77,8 +75,8 @@ impl Cell {
         self.trail = false;
     }
 
-    /// `TCellChar::moveWideCharTrail` — mark this cell as the trailing half of a
-    /// double-width glyph (empty symbol, `trail` set).
+    /// Mark this cell as the trailing half of a double-width glyph (empty symbol,
+    /// `trail` set).
     pub fn set_wide_trail(&mut self) {
         self.symbol.clear();
         self.wide = false;
@@ -98,14 +96,12 @@ impl Cell {
         self.style = style;
     }
 
-    /// `TScreenCell::isWide` / `TCellChar::isWide` — this cell leads a
-    /// double-width glyph.
+    /// Whether this cell leads a double-width glyph.
     pub fn is_wide(&self) -> bool {
         self.wide
     }
 
-    /// `TCellChar::isWideCharTrail` — this cell is the trailing half of a
-    /// double-width glyph.
+    /// Whether this cell is the trailing half of a double-width glyph.
     pub fn is_wide_trail(&self) -> bool {
         self.trail
     }

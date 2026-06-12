@@ -56,10 +56,11 @@
 //! `KeyEventKind::Press` and `Repeat` are translated; `Release` is ignored.
 //!
 //! # Turbo Vision heritage
-//! Replaces the platform driver behind `TScreen` / `THardwareInfo` and the
-//! Unix terminal I/O of `unixcon.cpp` / `termio.cpp` with a crossterm-backed
-//! [`Backend`]. Terminal setup that C++ does in the `TApplication` constructor
-//! chain is RAII here: construction sets the terminal up, `Drop` tears it down.
+//! Replaces the platform driver behind `TScreen` / `THardwareInfo` and the Unix
+//! terminal I/O of `unixcon.cpp` / `termio.cpp` with a crossterm-backed
+//! [`Backend`]. Terminal setup that the original did in the application
+//! constructor chain is RAII here: construction sets the terminal up, `Drop` tears
+//! it down.
 
 use std::io::{self, Stdout, Write as _};
 use std::time::Duration;

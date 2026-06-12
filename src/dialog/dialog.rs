@@ -20,9 +20,9 @@ use crate::window::{Window, WindowFlags, WindowPalette};
 /// [module docs](super) for the overview.
 ///
 /// # Turbo Vision heritage
-/// Ports `TDialog` (`tdialog.cpp`/`dialogs.h`). The C++ `TDialog : TWindow`
-/// inheritance is embed-and-delegate composition (deviation D2): the dialog holds
-/// a `Window` and forwards to it.
+/// Ports `TDialog` (`tdialog.cpp`/`dialogs.h`), which derived from the window
+/// class. That inheritance is embed-and-delegate composition (deviation D2): the
+/// dialog holds a [`Window`] and forwards to it.
 pub struct Dialog {
     /// The embedded window. The dialog *is-a* window: its state, draw, frame, and
     /// most event routing are the window's.
@@ -56,8 +56,8 @@ impl Dialog {
     /// Insert a child view into the dialog's embedded window/group.
     ///
     /// Exposed publicly so that example/application code can assemble custom
-    /// dialogs with child views — the C++ equivalent is calling `insert()` from
-    /// a `TDialog` subclass or directly passing children to `execDialog`.
+    /// dialogs by adding their fields, buttons, and labels before running the
+    /// dialog modally.
     pub fn insert_child(&mut self, view: Box<dyn View>) -> ViewId {
         self.window.insert_child(view)
     }
@@ -65,8 +65,8 @@ impl Dialog {
     /// Reach a direct child of the dialog's embedded window/group by id.
     ///
     /// Mirrors [`Window::child_mut`]; used by `FileDialog` to run a child's
-    /// post-insert, ctx-bearing init (e.g. `FileList::read_directory`) and to read
-    /// it back via `as_any_mut` + downcast.
+    /// post-insert, context-bearing init (e.g. reading a directory listing) and to
+    /// read it back via `as_any_mut` + downcast.
     pub fn child_mut(&mut self, id: ViewId) -> Option<&mut dyn View> {
         self.window.child_mut(id)
     }
@@ -74,8 +74,8 @@ impl Dialog {
     /// Override the decoration flags after construction.
     ///
     /// Mirrors [`Window::set_flags`]; used by `FileDialog` and `ChDirDialog` to
-    /// add `wfGrow` on top of the Dialog defaults (`move | close`). Re-pushes to
-    /// the frame child so the grow handle draws immediately.
+    /// add the grow flag on top of the Dialog defaults (`move | close`). Re-pushes
+    /// to the frame child so the grow handle draws immediately.
     pub(crate) fn set_flags(&mut self, flags: crate::window::WindowFlags) {
         self.window.set_flags(flags);
     }
@@ -83,7 +83,7 @@ impl Dialog {
     /// Read the current decoration flags.
     ///
     /// Mirrors [`Window::flags`]; exposed so `FileDialog` / `ChDirDialog` tests
-    /// can assert the `wfGrow` bit is set post-construction.
+    /// can assert the grow flag is set post-construction.
     pub(crate) fn flags(&self) -> crate::window::WindowFlags {
         self.window.flags()
     }
@@ -102,44 +102,36 @@ impl Dialog {
     )
 )]
 impl View for Dialog {
-    /// `TDialog::handleEvent` — delegate to `TWindow::handleEvent` **first**
-    /// (faithful order), then the dialog's own keys + modal-result commands:
-    /// ```cpp
-    /// TWindow::handleEvent(event);
-    /// switch (event.what) {
-    ///   case evKeyDown:
-    ///     case kbEsc:   -> evCommand cmCancel,  putEvent, clearEvent
-    ///     case kbEnter: -> evBroadcast cmDefault, putEvent, clearEvent
-    ///   case evCommand:
-    ///     case cmOK/cmCancel/cmYes/cmNo:
-    ///        if (state & sfModal) { endModal(command); clearEvent; }
-    /// }
-    /// ```
+    /// Lets the embedded window route the event first, then applies the dialog's
+    /// own keys and modal-result commands:
     ///
-    /// C++ clears the event then `putEvent`s the new one; `ctx.post`/`ctx.broadcast`
-    /// enqueue for a *later* pump, so clearing first then posting is equivalent.
-    /// Each arm self-guards: if the window delegation consumed the event it is
-    /// already `Nothing` and none of the matches fire.
+    /// * **Esc** posts a [`Command::CANCEL`] command.
+    /// * **Enter** broadcasts [`Command::DEFAULT`] so the default button fires.
+    /// * An [`Command::OK`] / `CANCEL` / `YES` / `NO` command, when this dialog is
+    ///   running modally, ends the modal loop with that command as the result.
+    ///
+    /// Each arm self-guards: if the window routing already consumed the event it is
+    /// now [`Event::Nothing`] and none of the matches fire.
     fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
-        // TWindow::handleEvent FIRST (faithful order).
+        // Let the embedded window route the event first.
         self.window.handle_event(ev, ctx);
 
         match *ev {
-            // kbEsc -> post cmCancel, clear. (putEvent == ctx.post.)
+            // Esc -> post a Cancel command, then consume the key.
             Event::KeyDown(k) if k.key == Key::Esc => {
                 ev.clear();
                 ctx.post(Command::CANCEL);
             }
-            // kbEnter -> broadcast cmDefault, clear. source = None (the C++
-            // infoPtr is 0 here: the broadcast concerns no particular view).
+            // Enter -> broadcast Default so the default button fires. `source` is
+            // None: the broadcast concerns no particular view.
             Event::KeyDown(k) if k.key == Key::Enter => {
                 ev.clear();
                 ctx.broadcast(Command::DEFAULT, None);
             }
-            // cmOK/cmCancel/cmYes/cmNo while sfModal -> endModal(command), clear.
-            // The sfModal check is folded into the guard, so a non-modal result
-            // command is left live for normal routing (the discriminating no-modal
-            // case in `ok_does_not_end_modal_when_not_modal`).
+            // OK/Cancel/Yes/No while modal -> end the modal loop with this result.
+            // The modal check is folded into the guard, so a non-modal result
+            // command is left live for normal routing (see the no-modal case in
+            // `ok_does_not_end_modal_when_not_modal`).
             Event::Command(c)
                 if matches!(
                     c,
@@ -153,10 +145,10 @@ impl View for Dialog {
         }
     }
 
-    /// `cmCancel` is **always** valid (cancelling a dialog can never be vetoed);
-    /// otherwise defer to the embedded group, which aggregates the children — a
-    /// control with a failing [`Validator`](crate::validate::Validator) vetoes the
-    /// close through this path.
+    /// [`Command::CANCEL`] is **always** valid (cancelling a dialog can never be
+    /// vetoed); otherwise defer to the embedded group, which aggregates the
+    /// children — a control with a failing
+    /// [`Validator`](crate::validate::Validator) vetoes the close through this path.
     fn valid(&mut self, cmd: Command, ctx: &mut Context) -> bool {
         if cmd == Command::CANCEL {
             true
@@ -196,7 +188,7 @@ mod tests {
     }
 
     /// A child view whose `valid` is always false — proves `Dialog::valid` bypasses
-    /// the group for `cmCancel` but defers to it for other commands.
+    /// the group for Cancel but defers to it for other commands.
     struct AlwaysInvalid {
         st: ViewState,
     }
@@ -225,7 +217,7 @@ mod tests {
     #[test]
     fn new_ports_dialog_ctor_defaults() {
         let d = Dialog::new(Rect::new(0, 0, 40, 12), Some("Setup".into()));
-        // flags = wfMove | wfClose (NOT grow, NOT zoom).
+        // flags = move | close (NOT grow, NOT zoom).
         assert_eq!(
             d.window.flags(),
             WindowFlags {
@@ -272,7 +264,7 @@ mod tests {
         let mut deferred: Vec<Deferred> = Vec::new();
         let mut d = Dialog::new(Rect::new(0, 0, 24, 8), Some("Setup".into()));
         // Select -> active frame (double-line border + icons), so the absence of a
-        // zoom icon is meaningful (an active wfZoom window would show one).
+        // zoom icon is meaningful (an active zoomable window would show one).
         with_ctx(&mut out, &mut timers, &mut deferred, |ctx| {
             View::set_state(&mut d, StateFlag::Selected, true, ctx)
         });
@@ -288,7 +280,7 @@ mod tests {
         insta::assert_snapshot!(screen.snapshot());
     }
 
-    // -- 2. Esc posts cmCancel -----------------------------------------------
+    // -- 2. Esc posts a Cancel command ---------------------------------------
 
     #[test]
     fn esc_posts_cm_cancel_and_clears() {
@@ -307,7 +299,7 @@ mod tests {
         );
     }
 
-    // -- 3. Enter broadcasts cmDefault ---------------------------------------
+    // -- 3. Enter broadcasts Default -----------------------------------------
 
     #[test]
     fn enter_broadcasts_cm_default_and_clears() {
@@ -319,7 +311,7 @@ mod tests {
         with_ctx(&mut out, &mut timers, &mut deferred, |ctx| {
             d.handle_event(&mut ev, ctx)
         });
-        assert!(ev.is_nothing(), "Enter consumed (clearEvent)");
+        assert!(ev.is_nothing(), "Enter consumed");
         assert!(
             out.iter().any(|e| matches!(
                 e,
@@ -328,11 +320,11 @@ mod tests {
                     source: None
                 }
             )),
-            "Enter broadcasts cmDefault with no subject view"
+            "Enter broadcasts Default with no subject view"
         );
     }
 
-    // -- 4. cmOK/cmCancel end the modal iff sfModal --------------------------
+    // -- 4. OK/Cancel end the modal iff the dialog is modal -------------------
 
     #[test]
     fn ok_ends_modal_when_modal() {
@@ -345,19 +337,19 @@ mod tests {
         with_ctx(&mut out, &mut timers, &mut deferred, |ctx| {
             d.handle_event(&mut ev, ctx)
         });
-        assert!(ev.is_nothing(), "cmOK consumed while modal");
+        assert!(ev.is_nothing(), "OK consumed while modal");
         assert!(
             deferred
                 .iter()
                 .any(|x| matches!(x, Deferred::EndModal(Command::OK))),
-            "cmOK while sfModal queues EndModal(OK)"
+            "OK while modal queues EndModal(OK)"
         );
     }
 
     #[test]
     fn ok_does_not_end_modal_when_not_modal() {
         let mut d = Dialog::new(Rect::new(0, 0, 30, 10), Some("D".into()));
-        // sfModal NOT set.
+        // modal flag NOT set.
         assert!(!d.state().state.modal);
         let mut out = VecDeque::new();
         let mut timers = TimerQueue::new();
@@ -389,7 +381,7 @@ mod tests {
         let mut out = VecDeque::new();
         let mut timers = TimerQueue::new();
         let mut deferred = Vec::new();
-        // cmCancel bypasses the child and is always valid.
+        // Cancel bypasses the child and is always valid.
         assert!(
             with_ctx(&mut out, &mut timers, &mut deferred, |ctx| View::valid(
                 &mut d,

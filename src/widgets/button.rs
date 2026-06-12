@@ -1,8 +1,8 @@
 //! A clickable command button: a 2+-row box with a centered (or
 //! left-justified) title, a drop shadow, and an `~`-marked hotkey. Pressing it
-//! (mouse, Alt+hotkey, focused-Space, or — for the default button — `cmDefault`)
-//! fires its [`command`](Button::command), either posted as an `Event::Command`
-//! or broadcast.
+//! (mouse, Alt+hotkey, focused-Space, or — for the default button — the
+//! [`Command::DEFAULT`] broadcast) fires its [`command`](Button::command), either
+//! posted as an `Event::Command` or broadcast.
 //!
 //! # Model
 //!
@@ -14,7 +14,7 @@
 //!
 //! # The press animation
 //!
-//! A keyboard / `cmDefault` press does not fire immediately: it flips the button
+//! A keyboard / [`Command::DEFAULT`] press does not fire immediately: it flips the button
 //! to its pressed look (`down = true`), arms a one-shot 100 ms timer
 //! ([`Context::set_timer`]), and stores the [`TimerId`]. When that timer's
 //! [`Event::Timer`] arrives (it reaches every view), the button compares the id
@@ -46,12 +46,12 @@
 //!
 //! # Command-enabled graying
 //!
-//! When a `cmCommandSetChanged` broadcast arrives, the button grays itself out if
-//! its command is currently disabled (`state.disabled = !ctx.command_enabled(command)`).
-//! Initial disabled state is established the same way, by the first
-//! command-set-changed broadcast on the opening idle pass — no separate
-//! constructor step is needed. A disabled default button does not flash on
-//! `cmDefault`.
+//! When a [`Command::COMMAND_SET_CHANGED`] broadcast arrives, the button grays
+//! itself out if its command is currently disabled
+//! (`state.disabled = !ctx.command_enabled(command)`). Initial disabled state is
+//! established the same way, by the first command-set-changed broadcast on the
+//! opening idle pass — no separate constructor step is needed. A disabled default
+//! button does not flash on the default-command broadcast.
 //!
 //! # Plain-letter accelerator
 //!
@@ -65,17 +65,16 @@
 //!
 //! # Turbo Vision heritage
 //!
-//! Ports `TButton` (`tbutton.cpp`/`dialogs.h`). C++ inheritance becomes the
-//! `View` trait plus `ViewState` composition (deviation D2); the `bf*` flag word
-//! becomes [`ButtonFlags`] (deviation D5); the view-local commands `cmGrabDefault`
-//! / `cmReleaseDefault` become namespaced [`Command::custom`] consts
+//! Ports `TButton` (`tbutton.cpp`/`dialogs.h`). Inheritance becomes the `View`
+//! trait plus `ViewState` composition (deviation D2); the C++ button flag word
+//! becomes [`ButtonFlags`] (deviation D5); the view-local grab/release-default
+//! commands become namespaced [`Command::custom`] consts
 //! ([`Button::GRAB_DEFAULT`] / [`Button::RELEASE_DEFAULT`]). The owner up-pointer
-//! is replaced by [`Context`]: `message(owner, evBroadcast, …, this)` carries
-//! `this` as the broadcast `source`, the resolvable [`ViewId`] successor to
-//! `infoPtr`. `getColor` AttrPairs become explicit (lo, hi) [`Role`] pairs chosen
-//! per state (see [`Button::state_roles`]); the typed [`Event::Timer(id)`] payload
-//! replaces `evBroadcast cmTimerExpired` with `infoPtr == animationTimer`; and
-//! `TStreamable` is dropped.
+//! is replaced by [`Context`], and a broadcast carries the firing button's
+//! resolvable [`ViewId`] as its `source` (deviations D3, D4). The palette
+//! AttrPairs become explicit (lo, hi) [`Role`] pairs chosen per state (see
+//! [`Button::state_roles`]); the typed [`Event::Timer(id)`] payload replaces the
+//! C++ timer-expired broadcast.
 //!
 //! [`ViewId`]: crate::view::ViewId
 
@@ -87,31 +86,31 @@ use crate::timer::TimerId;
 use crate::view::{Context, DrawCtx, Options, Phase, Point, Rect, StateFlag, View, ViewState};
 use std::time::Duration;
 
-/// `animationDurationMs` — the press-flash duration before the command fires.
+/// The press-flash duration before the command fires.
 const ANIMATION_DURATION_MS: u64 = 100;
 
 // ---------------------------------------------------------------------------
-// ButtonFlags — struct-of-bools for the `bf*` word (dialogs.h)
+// ButtonFlags — struct-of-bools for the button decoration/behavior flags
 // ---------------------------------------------------------------------------
 
-/// Button flags — the `bf*` family as a struct-of-bools.
+/// Button flags — the decoration/behavior flags as a struct-of-bools.
 ///
-/// `bfNormal == 0` is the all-false default. Build with [`ButtonFlags::new`] or
-/// struct-update syntax (`ButtonFlags { default: true, ..Default::default() }`).
+/// All-false is the default. Build with [`ButtonFlags::new`] or struct-update
+/// syntax (`ButtonFlags { default: true, ..Default::default() }`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ButtonFlags {
-    /// `bfDefault` — this is the default button (fires on `cmDefault` / Enter).
+    /// This is the default button (fires on the default command / Enter).
     pub default: bool,
-    /// `bfLeftJust` — the title is left-justified rather than centered.
+    /// The title is left-justified rather than centered.
     pub left_just: bool,
-    /// `bfBroadcast` — the command is broadcast instead of posted.
+    /// The command is broadcast instead of posted.
     pub broadcast: bool,
-    /// `bfGrabFocus` — a mouse-down selects (focuses) the button.
+    /// A mouse-down selects (focuses) the button.
     pub grab_focus: bool,
 }
 
 impl ButtonFlags {
-    /// All-false flags (`bfNormal`).
+    /// All-false flags.
     pub fn new() -> Self {
         Self::default()
     }
@@ -121,20 +120,20 @@ impl ButtonFlags {
 // Button
 // ---------------------------------------------------------------------------
 
-/// `TButton` — a clickable command button.
+/// A clickable command button.
 pub struct Button {
     /// View state (geometry, flags, cursor) — the composition target.
     pub state: ViewState,
-    /// `title` — the button label, with `~` marking the hotkey letter.
+    /// The button label, with `~` marking the hotkey letter.
     pub title: String,
-    /// `command` — the command fired when the button is pressed.
+    /// The command fired when the button is pressed.
     pub command: Command,
-    /// `flags` — the decoration/behavior flags.
+    /// The decoration/behavior flags.
     pub flags: ButtonFlags,
-    /// `amDefault` — whether the button currently acts as the default (toggled by
-    /// `cmGrabDefault`/`cmReleaseDefault`; initialized from `bfDefault`).
+    /// Whether the button currently acts as the default (toggled by the
+    /// grab/release-default commands; initialized from the `default` flag).
     pub am_default: bool,
-    /// `animationTimer` — the in-flight press-flash timer, if armed.
+    /// The in-flight press-flash timer, if armed.
     pub animation_timer: Option<TimerId>,
     /// The pressed appearance, read each redraw. `true` during the press flash.
     pub down: bool,
@@ -153,13 +152,11 @@ pub struct Button {
 }
 
 impl Button {
-    /// `cmGrabDefault` — sent by a focused non-default button to ask the
-    /// current default button to relinquish the default look. A view-local,
-    /// namespaced command.
+    /// Sent by a focused non-default button to ask the current default button to
+    /// relinquish the default look. A view-local, namespaced command.
     pub const GRAB_DEFAULT: Command = Command::custom("tv.button.grab_default");
-    /// `cmReleaseDefault` (62) — the inverse of [`GRAB_DEFAULT`](Self::GRAB_DEFAULT):
-    /// a non-default button losing focus asks the default button to take the
-    /// default look back.
+    /// The inverse of [`GRAB_DEFAULT`](Self::GRAB_DEFAULT): a non-default button
+    /// losing focus asks the default button to take the default look back.
     pub const RELEASE_DEFAULT: Command = Command::custom("tv.button.release_default");
 
     /// Build a button from `bounds`, `title`, `command`, `flags`.
@@ -204,7 +201,7 @@ impl Button {
     ///
     /// * disabled → `(ButtonDisabled, ButtonDisabled)`
     /// * active + selected → `(ButtonSelected, ButtonSelectedShortcut)`
-    /// * active + amDefault → `(ButtonDefault, ButtonDefaultShortcut)`
+    /// * active + acting-as-default → `(ButtonDefault, ButtonDefaultShortcut)`
     /// * else → `(ButtonNormal, ButtonNormalShortcut)`
     fn state_roles(&self) -> (Role, Role) {
         let s = &self.state.state;
@@ -219,8 +216,8 @@ impl Button {
         }
     }
 
-    /// Fire the button. Broadcasts `cmRecordHistory` first (history with no
-    /// subject → `source = None`), then either broadcasts the command (when the
+    /// Fire the button. Broadcasts [`Command::RECORD_HISTORY`] first (history with
+    /// no subject → `source = None`), then either broadcasts the command (when the
     /// `broadcast` flag is set, with `source = self id`) or posts it as an
     /// `Event::Command` (which carries no source).
     ///
@@ -238,7 +235,8 @@ impl Button {
     }
 
     /// Grab/release the default look. Only a **non**-default button does anything:
-    /// it broadcasts `cmGrabDefault`/`cmReleaseDefault` (so the real default button
+    /// it broadcasts [`GRAB_DEFAULT`](Self::GRAB_DEFAULT) /
+    /// [`RELEASE_DEFAULT`](Self::RELEASE_DEFAULT) (so the real default button
     /// relinquishes/retakes the look) and toggles its own `am_default`.
     ///
     /// `pub(crate)` so the pump's
@@ -262,7 +260,7 @@ impl Button {
 
     /// Arm the press flash: flip to the pressed look and start the one-shot
     /// animation timer if one is not already running. Shared by the keyboard and
-    /// `cmDefault` paths.
+    /// default-command paths.
     fn start_animation(&mut self, ctx: &mut Context) {
         self.down = true;
         if self.animation_timer.is_none() {
@@ -288,20 +286,21 @@ impl View for Button {
         Some(self)
     }
 
-    /// `TButton::draw` → `drawState(down)`. Builds each row explicitly so the
-    /// shadow column / row land exactly as the C++ `TDrawBuffer` ops produced.
+    /// Paint the button, building each row explicitly so the shadow column and
+    /// row land exactly.
     ///
-    /// Geometry (C++): `s = size.x - 1` (last column), `T = size.y/2 - 1` (the
-    /// title row). Body rows are `y in 0..=size.y-2`; the bottom row (`size.y-1`)
-    /// is the all-shadow stripe.
+    /// Geometry: `s = size.x - 1` (last column), `t = size.y / 2 - 1` (the title
+    /// row). Body rows are `y in 0..=size.y-2`; the bottom row (`size.y-1`) is the
+    /// all-shadow stripe.
     ///
-    /// Normal (`!down`): each body row is filled with spaces in `cButton`, col 0
-    /// gets the shadow attr, the right column `s` gets the shadow attr + a shadow
-    /// glyph (`▄` on the top row, `█` below). The title is drawn at `i+l` with
-    /// `i = 1`. The bottom row is 2 shadow spaces then `▀` across in `cShadow`.
+    /// Normal (`!down`): each body row is filled with spaces in the button color,
+    /// col 0 gets the shadow style, and the right column `s` gets the shadow style
+    /// plus a shadow glyph (`▄` on the top row, `█` below). The title is drawn at
+    /// `i+l` with `i = 1`. The bottom row is 2 shadow spaces then `▀` across in the
+    /// shadow color.
     ///
     /// Pressed (`down`): the body shifts right by one — cols 0..=1 take the shadow
-    /// attr, the right-column shadow glyph vanishes (`ch = ' '`), the title is
+    /// style, the right-column shadow glyph vanishes (`ch = ' '`), the title is
     /// drawn with `i = 2`. The bottom row is all shadow spaces.
     fn draw(&mut self, ctx: &mut DrawCtx) {
         // Cache the absolute origin for the mouse-tracking capture: the
@@ -375,7 +374,9 @@ impl View for Button {
         ctx.fill(Rect::new(2, last, s + 1, last + 1), bottom_ch, c_shadow);
     }
 
-    /// `TButton::handleEvent` — see the per-branch mapping in the module docs.
+    /// Handle the button's events — mouse hold-tracking, keyboard/hotkey presses,
+    /// default-look grab/release, and command-set graying. See the module docs for
+    /// the per-branch behavior.
     fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
         // C++ clickRect = getExtent() shrunk by (a.x+1, b.x-1, b.y-1).
         let ext = self.state.get_extent();
@@ -507,13 +508,13 @@ impl View for Button {
 
     /// Flip the propagating flag (replicating the trait-default body, since Rust
     /// has no `super` for a default method) then, for [`StateFlag::Focused`], run
-    /// [`make_default`](Button::make_default). The C++ redraw on
-    /// select/activate is unneeded here (whole-tree redraw).
+    /// [`make_default`](Button::make_default). No explicit redraw is needed on
+    /// select/activate (the whole tree is redrawn each pass).
     ///
     /// Replicate-then-extend (the `Group::set_state` shape): flip the flag and, on
-    /// `Focused`, emit the base focus broadcast (`cmReceivedFocus`/
-    /// `cmReleasedFocus`, `source = self`) — *then* `make_default`. So focusing a
-    /// non-default button queues `RECEIVED_FOCUS` **then** `GRAB_DEFAULT`.
+    /// `Focused`, emit the base focus broadcast ([`Command::RECEIVED_FOCUS`] /
+    /// [`Command::RELEASED_FOCUS`], `source = self`) — *then* `make_default`. So
+    /// focusing a non-default button queues `RECEIVED_FOCUS` **then** `GRAB_DEFAULT`.
     fn set_state(&mut self, flag: StateFlag, enable: bool, ctx: &mut Context) {
         // Base behaviour (replicated from the View::set_state default).
         self.state.set_flag(flag, enable);
@@ -532,21 +533,21 @@ impl View for Button {
         }
     }
 
-    /// `TButton`'s opt-out for the relocated mouse-down auto-select: only a
-    /// `bfGrabFocus` button is selected by a click (C++ calls
-    /// `TView::handleEvent`'s base body only when `bfGrabFocus`).
+    /// Opt-in for the mouse-down auto-select: only a button with the `grab_focus`
+    /// flag is selected (focused) by a click; the group consults this hook to
+    /// decide whether a click should focus the button.
     fn grabs_focus_on_click(&self) -> bool {
         self.flags.grab_focus
     }
 }
 
-/// C++ `cstrlen` — display width of a `~`-marked control string, **ignoring**
-/// the `~` markers (which are not printed columns).
+/// Display width of a `~`-marked control string, **ignoring** the `~` markers
+/// (which are not printed columns).
 ///
-/// Zero-alloc: iterates chars, skips `~`, and sums each char's display width
-/// (matching C++'s `cstrlen` loop). Uses `UnicodeWidthChar` directly — the same
-/// primitive that `crate::text` uses — so behavior is identical for all inputs,
-/// including consecutive or trailing `~`.
+/// Zero-alloc: iterates chars, skips `~`, and sums each char's display width.
+/// Uses `UnicodeWidthChar` directly — the same primitive that `crate::text` uses
+/// — so behavior is identical for all inputs, including consecutive or trailing
+/// `~`.
 fn cstrlen(s: &str) -> i32 {
     s.chars()
         .filter(|&c| c != '~')
@@ -1342,7 +1343,7 @@ mod tests {
         assert!(!b.am_default, "non-default button stays non-default");
     }
 
-    // -- behavior: set_state / makeDefault ----------------------------------
+    // -- behavior: set_state / make_default ---------------------------------
 
     /// Focusing a NON-default button: base focus broadcast (RECEIVED_FOCUS,
     /// source=self) THEN GRAB_DEFAULT (source=self), in that order; am_default

@@ -7,19 +7,18 @@
 //! the renderer.
 //!
 //! ### No `0 = retain` sentinel
-//! Turbo Vision's `TDrawBuffer::moveChar` overloads a `0` char/attribute to mean
-//! "keep what is already there" — a packed-byte trick. In rstv's typed cell model
-//! there is no such sentinel: [`move_char`](DrawBuffer::move_char) always writes
-//! both the char and the style. For the rare "change only the attribute / only
-//! the char of a cell" cases, use [`put_attribute`](DrawBuffer::put_attribute) /
+//! [`move_char`](DrawBuffer::move_char) always writes both the char and the
+//! style. For the rare "change only the attribute / only the char of a cell"
+//! cases, use [`put_attribute`](DrawBuffer::put_attribute) /
 //! [`put_char`](DrawBuffer::put_char).
 //!
 //! # Turbo Vision heritage
-//! Ports `TDrawBuffer` (`drawbuf.h`, `drivers.cpp`). C++ allocates a fixed
-//! `capacity` sized to the screen; here it is a `Vec<Cell>` of an explicit width.
-//! The packed `0 = retain` sentinel of `moveChar` is dropped in favour of the
-//! typed cell model (deviation D6); text drawing routes through the shared
-//! Unicode-aware text primitives (deviation D13).
+//! Ports `TDrawBuffer` (`drawbuf.h`, `drivers.cpp`), which allocated a fixed
+//! capacity sized to the screen; here it is a `Vec<Cell>` of an explicit width.
+//! The original packed a `0` char/attribute to mean "keep what is already there";
+//! that sentinel is dropped in favour of the typed cell model (deviation D6).
+//! Text drawing routes through the shared Unicode-aware text primitives
+//! (deviation D13).
 
 use crate::color::Style;
 use crate::screen::Cell;
@@ -40,7 +39,7 @@ impl DrawBuffer {
         }
     }
 
-    /// The buffer's capacity in columns (`TDrawBuffer::capacity`).
+    /// The buffer's capacity in columns.
     pub fn capacity(&self) -> usize {
         self.data.len()
     }
@@ -50,24 +49,22 @@ impl DrawBuffer {
         &self.data
     }
 
-    /// `TDrawBuffer::putChar` — set the char of a single cell, keeping its style.
+    /// Set the char of a single cell, keeping its style.
     pub fn put_char(&mut self, indent: usize, ch: char) {
         if indent < self.data.len() {
             self.data[indent].set_char(ch);
         }
     }
 
-    /// `TDrawBuffer::putAttribute` — set the style of a single cell, keeping its
-    /// char.
+    /// Set the style of a single cell, keeping its char.
     pub fn put_attribute(&mut self, indent: usize, style: Style) {
         if indent < self.data.len() {
             self.data[indent].set_style(style);
         }
     }
 
-    /// `TDrawBuffer::moveChar` — fill `count` cells from `indent` with `ch` and
-    /// `style`, clipped to capacity. (See the module note on the dropped
-    /// `0 = retain` sentinel.)
+    /// Fill `count` cells from `indent` with `ch` and `style`, clipped to
+    /// capacity. (See the module note on the dropped `0 = retain` sentinel.)
     pub fn move_char(&mut self, indent: usize, ch: char, style: Style, count: usize) {
         let cap = self.data.len();
         if count == 0 || indent >= cap {
@@ -86,9 +83,9 @@ impl DrawBuffer {
         }
     }
 
-    /// `TDrawBuffer::moveStr` (full form) — write `text` at column `indent`,
-    /// starting from column `str_indent` of `text`, with a fixed `style`, writing
-    /// at most `max_width` columns. Returns the number of cells written.
+    /// Write `text` at column `indent`, starting from column `str_indent` of
+    /// `text`, with a fixed `style`, writing at most `max_width` columns. Returns
+    /// the number of cells written.
     pub fn move_str_part(
         &mut self,
         indent: usize,
@@ -115,15 +112,15 @@ impl DrawBuffer {
         )
     }
 
-    /// `TDrawBuffer::moveStr` (common form) — write `text` at `indent` with
-    /// `style`, unbounded width, from the start of `text`.
+    /// Write `text` at `indent` with `style`, unbounded width, from the start of
+    /// `text`.
     pub fn move_str(&mut self, indent: usize, text: &str, style: Style) -> usize {
         self.move_str_part(indent, text, style, self.data.len(), 0)
     }
 
-    /// `TDrawBuffer::moveCStr` (full form) — write a *control string*: `text` is
-    /// drawn with `lo`, and each `~` toggles between `lo` and `hi` (the classic
-    /// hotkey-highlight markup). Returns the number of cells written.
+    /// Write a *control string*: `text` is drawn with `lo`, and each `~` toggles
+    /// between `lo` and `hi` (the classic hotkey-highlight markup). Returns the
+    /// number of cells written.
     pub fn move_cstr_part(
         &mut self,
         indent: usize,
@@ -145,7 +142,7 @@ impl DrawBuffer {
         let dest = &mut self.data[..end];
         let attrs = [lo, hi];
         let mut cur = lo;
-        let mut toggle = 1usize; // first '~' selects attrs[1] (hi), as in C++
+        let mut toggle = 1usize; // first '~' selects attrs[1] (hi)
         let mut i = indent;
         let mut j = 0usize; // byte offset into text
         let mut w = 0usize; // columns consumed while skipping str_indent
@@ -181,17 +178,16 @@ impl DrawBuffer {
         i - indent
     }
 
-    /// `TDrawBuffer::moveCStr` (common form) — full-width, from the start.
+    /// Write a control string at full width, from the start.
     pub fn move_cstr(&mut self, indent: usize, text: &str, lo: Style, hi: Style) -> usize {
         self.move_cstr_part(indent, text, lo, hi, self.data.len(), 0)
     }
 
-    /// `TDrawBuffer::moveBuf` — copy a run of pre-built cells into the buffer at
-    /// `indent`, clipped to capacity.
+    /// Copy a run of pre-built cells into the buffer at `indent`, clipped to
+    /// capacity.
     ///
-    /// The C++ `moveBuf` reinterprets a raw byte buffer as a string; in the
-    /// typed cell model the meaningful operation is copying cells, so this takes a
-    /// `&[Cell]`.
+    /// In the typed cell model the meaningful operation is copying cells, so this
+    /// takes a `&[Cell]` rather than a raw byte buffer.
     pub fn move_buf(&mut self, indent: usize, src: &[Cell]) {
         let cap = self.data.len();
         if indent >= cap {

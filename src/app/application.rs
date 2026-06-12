@@ -1,20 +1,19 @@
 //! [`Application`], the thin application wrapper over [`Program`].
 //!
 //! `Application` adds the application-level window commands on top of [`Program`]:
-//! `cmTile` / `cmCascade` tile or cascade the desktop's windows (handled in the
-//! program's command dispatch, laying windows into [`get_tile_rect`]'s rectangle),
-//! and `cmDosShell` suspends the terminal. The C++ subsystem init/teardown
-//! (`TAppInit`) is subsumed by the [`Backend`](crate::backend::Backend) +
-//! [`Renderer`](crate::backend::Renderer) construction path, and C++'s
-//! `initHistory`/`doneHistory` are moot here: the history store is a
-//! `thread_local!` `Vec` that auto-initializes and auto-drops (see `history.rs`).
-//! The module is thin: one [`get_tile_rect`] helper plus forwarding delegations
-//! to the embedded program.
+//! the tile and cascade commands lay the desktop's windows out (into
+//! [`get_tile_rect`]'s rectangle), and the shell command suspends the terminal.
+//! Subsystem init and teardown are handled by the
+//! [`Backend`](crate::backend::Backend) +
+//! [`Renderer`](crate::backend::Renderer) construction path. History needs no
+//! explicit setup: the store is a `thread_local!` `Vec` that auto-initializes and
+//! auto-drops (see `history.rs`). The module is thin: one [`get_tile_rect`] helper
+//! plus forwarding delegations to the embedded program.
 //!
 //! [`get_tile_rect`]: Application::get_tile_rect
 //!
 //! # Turbo Vision heritage
-//! Ports `TApplication` (`tapplica.cpp`). C++ `TApplication : TProgram`
+//! Ports `TApplication` (`tapplica.cpp`); the `TApplication : TProgram`
 //! inheritance becomes embed-and-delegate composition (deviation D2): the type
 //! holds a [`Program`] and forwards to it.
 
@@ -35,11 +34,11 @@ use crate::view::{Rect, View, ViewId};
 /// [`Application::pump_once`].
 ///
 /// # Turbo Vision heritage
-/// Ports `TApplication` (`tapplica.cpp`); its ctor is the factory mixin
-/// `TProgInit(initStatusLine, initMenuBar, initDeskTop)`. C++ inheritance from
-/// `TProgram` becomes embed-and-delegate composition (deviation D2).
-/// `initHistory`/`doneHistory` are moot — the store is a `thread_local!` `Vec`
-/// that auto-initializes and auto-drops (see `history.rs`).
+/// Ports `TApplication` (`tapplica.cpp`); its constructor is the factory mixin
+/// that wires up the status line, menu bar, and desktop. The inheritance from
+/// `TProgram` becomes embed-and-delegate composition (deviation D2). History
+/// needs no explicit setup — the store is a `thread_local!` `Vec` that
+/// auto-initializes and auto-drops (see `history.rs`).
 pub struct Application {
     /// The embedded program. `Application` forwards every public operation
     /// through this field — see the forwarding methods below.
@@ -47,12 +46,11 @@ pub struct Application {
 }
 
 impl Application {
-    /// `TApplication::TApplication` — construct the application.
+    /// Construct the application.
     ///
-    /// Ports the C++ factory-mixin ctor faithfully: forwards `create_desktop`,
-    /// `create_status_line`, and `create_menu_bar` to [`Program::new`] unchanged.
-    /// `TAppInit` (hardware/mouse/screen subsystem init) is subsumed by our backend
-    /// construction path; no equivalent is needed here.
+    /// Forwards `create_desktop`, `create_status_line`, and `create_menu_bar` to
+    /// [`Program::new`] unchanged. Hardware/mouse/screen subsystem init is handled
+    /// by the backend construction path; no equivalent is needed here.
     pub fn new(
         backend: Box<dyn Backend>,
         clock: Box<dyn Clock>,
@@ -133,9 +131,9 @@ impl Application {
         &mut self.program
     }
 
-    // -- TApplication::getTileRect -------------------------------------------
+    // -- tile/cascade layout rectangle ---------------------------------------
 
-    /// `TApplication::getTileRect` — the rectangle tile/cascade lay windows into:
+    /// The rectangle the tile/cascade commands lay windows into:
     /// the **desktop child's extent** (`(0,0,w,h)` in desktop-local coords), so it
     /// stays correct when the desktop is inset under a menu/status bar.
     /// Returns `None` if no desktop was created.

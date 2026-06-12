@@ -6,9 +6,9 @@
 //!
 //! * [`DrawCtx`] — the clipped, themed writer a view paints through during
 //!   `draw()`. It works in *view-local* coordinates; the ctx translates them to
-//!   absolute screen coordinates and clips. It re-expresses the C++ `DrawBuffer`
-//!   write ops on top of the [`Buffer`] and the [`text`](crate::text) primitives
-//!   — never re-deriving wide-char logic.
+//!   absolute screen coordinates and clips. Its write ops are built on top of the
+//!   [`Buffer`] and the [`text`](crate::text) primitives — never re-deriving
+//!   wide-char logic.
 //! * [`Context`] — the event/update context handlers and `handle_event` reach
 //!   for. It exposes the `ctx.*` call surface (post / broadcast / timer
 //!   scheduling / deferred capture push). It is built over loop-owned state as
@@ -52,28 +52,27 @@ pub enum Deferred {
     /// current dispatch, so the pushed handler sees the *next* event, never the
     /// current one.
     PushCapture(Box<dyn CaptureHandler>),
-    /// Enable a command in the program's command set (`enableCommand`).
+    /// Enable a command in the program's command set.
     EnableCommand(Command),
-    /// Disable a command in the program's command set (`disableCommand`).
+    /// Disable a command in the program's command set.
     DisableCommand(Command),
     /// Apply new bounds to the view named by `ViewId` (drag move/grow). No ctx
     /// needed at apply time (`change_bounds` takes none).
     ChangeBounds(ViewId, Rect),
-    /// Flip a propagating state flag on the view (drag end → `sfDragging` off).
+    /// Flip a propagating state flag on the view (e.g. clear `dragging` at drag end).
     SetState(ViewId, StateFlag, bool),
-    /// Remove the view from whichever group owns it (`cmClose`).
+    /// Remove the view from whichever group owns it (the close command).
     Close(ViewId),
-    /// Focus (select) the view named by `ViewId` within its owning group
-    /// (`TLabel::focusLink` → `link->focus()`). The pump resolves it via
+    /// Focus (select) the view named by `ViewId` within its owning group (a label
+    /// focusing its linked control). The pump resolves it via
     /// [`View::focus_descendant`](crate::view::View::focus_descendant), which walks
-    /// to the owning group and runs `focus_child` (the `ofSelectable` gate lives in
+    /// to the owning group and runs `focus_child` (the selectable gate lives in
     /// that group walk, not at the request site). A view (the label) holds only the
     /// link's [`ViewId`], so it cannot select a sibling inline.
     FocusById(ViewId),
-    /// Request the (modal) loop end with `command` (`TGroup::endModal`). The pump
-    /// applies it by setting `Program::end_state`; the nested `exec_view` loop then
-    /// observes it. The downward replacement for a view calling `endModal` up
-    /// its owner chain.
+    /// Request the (modal) loop end with `command`. The pump applies it by setting
+    /// `Program::end_state`; the nested `exec_view` loop then observes it. The
+    /// downward replacement for a view ending its own modal loop.
     ///
     /// This touches **loop state** (`end_state`) — a fourth disjoint target
     /// alongside the capture stack / command set / view tree — so the
@@ -82,7 +81,7 @@ pub enum Deferred {
     /// affects the result.
     EndModal(Command),
 
-    // -- the TScroller cross-view scrollbar broker --------------
+    // -- the scroller cross-view scrollbar broker ---------------
     //
     // All three touch the **view tree** family (same as `ChangeBounds`/`SetState`/
     // `Close`/`FocusById`), so the insertion-order drain stays order-equivalent:
@@ -92,13 +91,13 @@ pub enum Deferred {
     // **mutate** its window-frame sibling scrollbars; the pump — which owns the
     // whole tree — is the cross-view broker, performing every read/write at
     // deferred-apply time via `group.find_mut(id)`.
-    /// **Read direction** (`TScroller::scrollDraw`): resolve the `h`/`v` scrollbars,
-    /// read each `value` (via [`View::value`](crate::view::View::value) →
+    /// **Read direction**: resolve the `h`/`v` scrollbars, read each `value` (via
+    /// [`View::value`](crate::view::View::value) →
     /// [`FieldValue::Int`](crate::data::FieldValue::Int)), and push the resulting
     /// delta into `scroller` (the pump downcasts it to `Scroller` and calls
-    /// `apply_delta`, which does the `setCursor` adjust + `delta = d`). The scroller
-    /// requests this from `handle_event` when a `cmScrollBarChanged` broadcast names
-    /// one of its bars as `source`.
+    /// `apply_delta`, which adjusts the cursor and stores the new delta). The
+    /// scroller requests this from its event handler when a scrollbar-changed
+    /// broadcast names one of its bars as `source`.
     SyncScrollerDelta {
         /// The scroller whose `delta`/`cursor` to update.
         scroller: ViewId,
@@ -107,13 +106,11 @@ pub enum Deferred {
         /// The vertical scrollbar to read `value` from (`None` = no v bar → 0).
         v: Option<ViewId>,
     },
-    /// **Write direction** (`TScrollBar::setParams`/`setValue`, driven by
-    /// `TScroller::setLimit`/`scrollTo`). The pump resolves `id`, downcasts to
-    /// `ScrollBar`, fills each `None` field from the bar's **live** value
-    /// (preserve-where-`None`), then calls `set_params` — which clamps and may
-    /// re-broadcast `cmScrollBarChanged`. One flexible variant serves the
-    /// `TScroller`, `TListViewer`, and `TEditor` (`setRange`/`setStep`/`setValue`
-    /// shapes).
+    /// **Write direction**: update a scrollbar's value and/or range/step. The pump
+    /// resolves `id`, downcasts to `ScrollBar`, fills each `None` field from the
+    /// bar's **live** value (preserve-where-`None`), then calls `set_params` —
+    /// which clamps and may re-broadcast that its value changed. One flexible
+    /// variant serves scrollers, list viewers, and editors.
     ScrollBarSetParams {
         /// The scrollbar to update.
         id: ViewId,
@@ -128,32 +125,32 @@ pub enum Deferred {
         /// New arrow step, or `None` to preserve `arrow_step`.
         arrow_step: Option<i32>,
     },
-    /// **Visibility direction** (`TScroller::showSBar` → `TView::show`/`hide`). The
-    /// pump resolves `id` and sets `state.state.visible` (no downcast —
-    /// `state_mut` is on the trait; the painter skips `!visible` children). There is
-    /// no propagating `StateFlag::Visible` (no occlusion tracking — the whole
-    /// tree is redrawn each frame, so `sfVisible` carries no side effects),
-    /// so visibility is set directly on the [`ViewState`](crate::view::ViewState).
+    /// **Visibility direction**: show/hide a scroller's scrollbar. The pump
+    /// resolves `id` and sets `state.state.visible` (no downcast — `state_mut` is
+    /// on the trait; the painter skips `!visible` children). There is no
+    /// propagating `StateFlag::Visible` (no occlusion tracking — the whole tree is
+    /// redrawn each frame, so visibility carries no side effects), so it is set
+    /// directly on the [`ViewState`](crate::view::ViewState).
     SetVisible(ViewId, bool),
 
-    // -- the TListViewer cross-view scrollbar read-sync ----------
-    /// **Read direction for `TListViewer`** (the `cmScrollBarChanged` handler).
-    /// Resolve the `h`/`v` scrollbars, read each `value`
+    // -- the list-viewer cross-view scrollbar read-sync ----------
+    /// **Read direction for a list viewer**: on a scrollbar-changed broadcast,
+    /// resolve the `h`/`v` scrollbars, read each `value`
     /// (via [`View::value`](crate::view::View::value) →
     /// [`FieldValue::Int`](crate::data::FieldValue::Int)), then call
     /// [`View::apply_list_scroll`](crate::view::View::apply_list_scroll) on the
-    /// `list` view (the trait method — NOT a downcast: `ListViewer` is a trait, so
-    /// `dyn View → dyn ListViewer` cannot be downcast, unlike the scroller).
+    /// `list` view (the trait method — NOT a downcast: list viewers are a shared
+    /// trait, so a `dyn View →` concrete downcast cannot work, unlike the scroller).
     ///
     /// **Termination (the centerpiece property):** unlike
     /// [`SyncScrollerDelta`](Self::SyncScrollerDelta), this read-sync **writes
-    /// back** — `apply_list_scroll`'s `focus_item_num` calls `focusItem`, which
-    /// requests a `setValue(focused)` on the v-bar (another
-    /// [`ScrollBarSetParams`](Self::ScrollBarSetParams)). That terminates because
+    /// back** — `apply_list_scroll`'s item-focus call requests a value update on
+    /// the v-bar (another [`ScrollBarSetParams`](Self::ScrollBarSetParams)). That
+    /// terminates because
     /// [`ScrollBar::set_params`](crate::widgets::ScrollBar::set_params) is
-    /// **change-guarded**: it re-broadcasts `cmScrollBarChanged` only on an actual
-    /// value change, so writing back the already-current value is a silent no-op
-    /// (steady state: quiescent; after a clamp: one extra round then quiescent).
+    /// **change-guarded**: it re-broadcasts only on an actual value change, so
+    /// writing back the already-current value is a silent no-op (steady state:
+    /// quiescent; after a clamp: one extra round then quiescent).
     ///
     /// Touches the **view-tree** family (same as the scroller broker ops), so the
     /// insertion-order drain stays order-equivalent.
@@ -166,15 +163,15 @@ pub enum Deferred {
         v: Option<ViewId>,
     },
 
-    // -- the TOutlineViewer scrollbar read-sync ------------------
-    /// **Read-direction sync for `TOutlineViewer`** (ports the `cmScrollBarChanged`
-    /// case of `TOutlineViewer::handleEvent`, inherited from `TScroller`). The pump
-    /// resolves both bars, reads each `value` (via [`View::value`] →
-    /// [`FieldValue::Int`](crate::data::FieldValue::Int)), and writes the resulting
-    /// `(dx, dy)` into `viewer`'s `delta` (the pump downcasts it to `Outline` and
-    /// calls `apply_delta`). Like [`SyncScrollerDelta`](Self::SyncScrollerDelta) this
-    /// is **read-only** — it writes nothing back to the bars, so it terminates with
-    /// no change-guard needed (unlike [`SyncListViewer`](Self::SyncListViewer)).
+    // -- the outline-viewer scrollbar read-sync ------------------
+    /// **Read-direction sync for an outline viewer** (on a scrollbar-changed
+    /// broadcast). The pump resolves both bars, reads each `value` (via
+    /// [`View::value`] → [`FieldValue::Int`](crate::data::FieldValue::Int)), and
+    /// writes the resulting `(dx, dy)` into `viewer`'s `delta` (the pump downcasts
+    /// it to `Outline` and calls `apply_delta`). Like
+    /// [`SyncScrollerDelta`](Self::SyncScrollerDelta) this is **read-only** — it
+    /// writes nothing back to the bars, so it terminates with no change-guard
+    /// needed (unlike [`SyncListViewer`](Self::SyncListViewer)).
     ///
     /// Touches the **view-tree** family (same as the scroller/list broker ops), so
     /// the insertion-order drain stays order-equivalent.
@@ -187,13 +184,13 @@ pub enum Deferred {
         v: Option<ViewId>,
     },
 
-    // -- the TMenuView command-graying broker --------------------
-    /// **Command-graying broker for `TMenuView`** (ports `updateMenu`, triggered
-    /// by the `cmCommandSetChanged` broadcast). Resolve the menu view by `id` and
-    /// call [`View::update_menu_commands`](crate::view::View::update_menu_commands)
-    /// with the pump's **live** [`CommandSet`](crate::command::CommandSet), which
-    /// regrays the menu tree (`disabled = !commandEnabled(command)` per command
-    /// item, recursing submenus).
+    // -- the menu command-graying broker -------------------------
+    /// **Command-graying broker for a menu view** (triggered by a
+    /// command-set-changed broadcast). Resolve the menu view by `id` and call
+    /// [`View::update_menu_commands`](crate::view::View::update_menu_commands) with
+    /// the pump's **live** [`CommandSet`](crate::command::CommandSet), which
+    /// re-grays the menu tree (an item is disabled iff its command is disabled,
+    /// recursing submenus).
     ///
     /// A broker — **not** a `&CommandSet` read-accessor on [`Context`] — because
     /// the command set lives on `Program` and the apply-phase `Context` is alive
@@ -211,7 +208,7 @@ pub enum Deferred {
     /// the insertion-order drain stays order-equivalent.
     UpdateMenu(ViewId),
 
-    // -- the internal-clipboard TEditor broker -----------------------
+    // -- the internal-clipboard editor broker ------------------------
     //
     // All three variants touch the **view-tree** family (same as `ChangeBounds` /
     // `SetState` / `Close` / `FocusById`), so the insertion-order drain stays
@@ -220,33 +217,31 @@ pub enum Deferred {
     // `&mut Context` and so cannot read or mutate the clipboard editor (a
     // sibling / other window's child) inline; the pump — which owns the whole
     // tree — is the cross-view broker.
-    /// **Register an internal-clipboard editor** (`TEditor::clipboard = editor`).
-    /// The pump stores the ID on `Program::clipboard_editor_id`, marks the editor
-    /// `is_clipboard = true`, and sets the hosting `EditWindow`'s title to
-    /// "Clipboard". Touches the **view-tree** family + `clipboard_editor_id`
-    /// (loop state), so the insertion-order drain stays order-equivalent.
+    /// **Register an editor as the internal clipboard.** The pump stores the id on
+    /// `Program::clipboard_editor_id`, marks the editor `is_clipboard = true`, and
+    /// sets the hosting edit window's title to "Clipboard". Touches the
+    /// **view-tree** family + `clipboard_editor_id` (loop state), so the
+    /// insertion-order drain stays order-equivalent.
     RegisterClipboardEditor {
         /// The editor to register as the internal clipboard.
         editor_id: ViewId,
-        /// The `EditWindow` whose title to set to "Clipboard".
+        /// The edit window whose title to set to "Clipboard".
         window_id: ViewId,
     },
-    /// **Copy source bytes into the clipboard editor**
-    /// (`clipboard->insertFrom(source)` from `clipCopy()`). The pump finds the
-    /// clipboard editor and calls `insert_from(&data)` (which calls `insert_buffer`
-    /// with `select_text = is_clipboard`, i.e. `true` for the clipboard editor).
-    /// Touches the **view-tree** family.
+    /// **Copy source bytes into the clipboard editor** (a copy from another
+    /// editor). The pump finds the clipboard editor and calls `insert_from(&data)`
+    /// (which selects the inserted text for the clipboard editor). Touches the
+    /// **view-tree** family.
     ClipboardEditorReceive {
         /// The clipboard editor that receives the data.
         clipboard_id: ViewId,
         /// The raw bytes to insert (the source editor's selection snapshot).
         data: Vec<u8>,
     },
-    /// **Paste the clipboard editor's selection into the destination editor**
-    /// (`insertFrom(clipboard)` from `clipPaste()`). The pump reads the clipboard
-    /// editor's selection bytes (step 1), then calls `insert_from(&data)` on the
-    /// dest editor (step 2, two separate `find_mut` calls). Touches the
-    /// **view-tree** family.
+    /// **Paste the clipboard editor's selection into the destination editor.** The
+    /// pump reads the clipboard editor's selection bytes (step 1), then calls
+    /// `insert_from(&data)` on the dest editor (step 2, two separate `find_mut`
+    /// calls). Touches the **view-tree** family.
     ClipboardEditorPaste {
         /// The destination editor to paste into.
         dest_id: ViewId,
@@ -254,18 +249,17 @@ pub enum Deferred {
         clipboard_id: ViewId,
     },
 
-    // -- the TMenuView modal layer (MenuSession) ------------
-    /// **Open a menu box** — the deferred realization of `execute()`'s submenu
-    /// open (`tmnuview.cpp:382`, `topMenu()->newSubView(r, current->subMenu)` →
-    /// `owner->execView(target)`). The [`MenuSession`](crate::menu::MenuSession)
-    /// capture handler **pre-mints** `id` from [`ViewId::next`](crate::view::ViewId)
-    /// so it already knows the box id with no insert-time callback; the pump
-    /// builds a [`MenuBox`](crate::menu::MenuBox) from `menu` over `bounds` and
+    // -- the menu modal layer (MenuSession) ------------
+    /// **Open a menu box** — the deferred realization of opening a submenu. The
+    /// [`MenuSession`](crate::menu::MenuSession) capture handler **pre-mints** `id`
+    /// from [`ViewId::next`](crate::view::ViewId) so it already knows the box id
+    /// with no insert-time callback; the pump builds a
+    /// [`MenuBox`](crate::menu::MenuBox) from `menu` over `bounds` and
     /// [`Group::insert_with_id`](crate::view::Group::insert_with_id)s it into the
     /// root group, stamping that id. **No focus move** — the box is never current
-    /// (Clean Architecture A; the session owns every event). `menu` is a clone of
-    /// the submenu subtree (clone-at-open is faithful — `execute()` has no
-    /// evBroadcast case, so `disabled` is frozen for the box's lifetime).
+    /// (the session owns every event). `menu` is a clone of the submenu subtree
+    /// (clone-at-open is fine — an open menu receives no broadcasts, so its
+    /// disabled state is frozen for the box's lifetime).
     ///
     /// Touches the **view-tree** family (same as `Close`/the broker ops), so the
     /// insertion-order drain stays order-equivalent. The activation site queues
@@ -279,53 +273,53 @@ pub enum Deferred {
         /// The box bounds in the root group's frame.
         bounds: Rect,
     },
-    /// **Set a menu view's highlight cache** (`TMenuView::current` ← index). The
+    /// **Set a menu view's highlight cache** (the highlighted item index). The
     /// pump resolves `id` and calls
     /// [`View::set_menu_current`](crate::view::View::set_menu_current) (a trait
     /// method, mirroring the `update_menu_commands` broker — no downcast). This is
     /// the write-only display cache the bar/box `draw` reads to pick the selected
     /// colour; the [`MenuSession`](crate::menu::MenuSession) owns the authoritative
-    /// `current` and pushes it here whenever navigation moves the highlight.
+    /// highlight and pushes it here whenever navigation moves it.
     ///
     /// Touches the **view-tree** family, so the insertion-order drain stays
     /// order-equivalent.
     SetMenuCurrent(ViewId, Option<usize>),
 
-    // -- the THistory view-triggered async-modal seam ----------
-    /// **View-triggered modal open** (`THistory`; msgbox 63 will add sibling
-    /// completions). Built at apply time because the trigger view holds only the
-    /// link's id: the pump reads the link, records history, builds the
-    /// `THistoryWindow`, and stashes it into `Program::pending_modal` — it does
-    /// **not** call `exec_view` here (the apply phase is inside the `pump_once`
-    /// destructure; a view cannot call `exec_view`, which is top-level only). The
-    /// OUTER driver loop runs `exec_view` at top level after `pump_once` returns.
+    // -- the history view-triggered async-modal seam -----------
+    /// **View-triggered modal open** (the history drop-down). Built at apply time
+    /// because the trigger view holds only the link's id: the pump reads the link,
+    /// records history, builds the history window, and stashes it into
+    /// `Program::pending_modal` — it does **not** call `exec_view` here (the apply
+    /// phase is inside the `pump_once` destructure; a view cannot call `exec_view`,
+    /// which is top-level only). The OUTER driver loop runs `exec_view` at top
+    /// level after `pump_once` returns.
     ///
     /// Touches the **view-tree** family + **loop state** (`pending_modal`), like
     /// the other tree ops + `EndModal`, so the insertion-order drain stays
     /// order-equivalent (no dispatch co-queues a conflicting op on the same state).
     OpenHistory {
-        /// The linked `TInputLine` whose text/bounds/focus drive the open + flowback.
+        /// The linked input line whose text/bounds/focus drive the open + flowback.
         link: ViewId,
         /// The history channel id.
         history_id: u8,
-        /// True for the keyboard trigger (gate on the link being focused, faithful
-        /// to `(link->state & sfFocused)`); false for the mouse trigger.
+        /// True for the keyboard trigger (gate on the link being focused); false
+        /// for the mouse trigger.
         require_focus: bool,
     },
-    /// **recordHistory(link->data)** for the broadcast arm (`cmReleasedFocus` on
-    /// the link / `cmRecordHistory`): resolve the link, read its text,
+    /// **Record the link's current text into history** (on the link losing focus or
+    /// an explicit record request): resolve the link, read its text,
     /// `history_add(id, text)`. Touches no loop-owned state beyond the read of the
     /// view tree (a pure side effect on the process-global history store), so it is
     /// order-equivalent with every other family.
     RecordHistory { link: ViewId, history_id: u8 },
 
-    // -- the TEditor cross-view brokers --------------------------
-    /// **Read direction for `TEditor`** (the `cmScrollBarChanged` handler →
-    /// `checkScrollBar`). Resolve the `h`/`v` scrollbars, read each `value`
+    // -- the editor cross-view brokers ---------------------------
+    /// **Read direction for an editor** (on a scrollbar-changed broadcast).
+    /// Resolve the `h`/`v` scrollbars, read each `value`
     /// (via [`View::value`](crate::view::View::value)), downcast `editor` to
-    /// [`Editor`](crate::widgets::Editor) and call `apply_scroll_delta(dx, dy)` —
-    /// the body of C++ `checkScrollBar` (`if value != delta { delta = value;
-    /// update(ufView) }`). The editor is **not** a `Scroller`, so it cannot reuse
+    /// [`Editor`](crate::widgets::Editor) and call `apply_scroll_delta(dx, dy)`
+    /// (which updates the delta and redraws only on a change). The editor is **not**
+    /// a `Scroller`, so it cannot reuse
     /// [`SyncScrollerDelta`](Self::SyncScrollerDelta). Touches the **view-tree**
     /// family, so the insertion-order drain stays order-equivalent.
     SyncEditorDelta {
@@ -336,48 +330,44 @@ pub enum Deferred {
         /// The vertical scrollbar to read `value` from (`None` = no v bar).
         v: Option<ViewId>,
     },
-    /// **Indicator write** (`TEditor::doUpdate` → `indicator->setValue`). Resolve
-    /// `indicator`, downcast to [`Indicator`](crate::widgets::Indicator), and call
-    /// `set_value(location, modified)`. The editor (a leaf) cannot mutate its
-    /// sibling indicator inline. Touches the **view-tree** family.
+    /// **Indicator write**: update an editor's position/modified indicator.
+    /// Resolve `indicator`, downcast to [`Indicator`](crate::widgets::Indicator),
+    /// and call `set_value(location, modified)`. The editor (a leaf) cannot mutate
+    /// its sibling indicator inline. Touches the **view-tree** family.
     IndicatorSetValue {
         /// The indicator to update.
         indicator: ViewId,
-        /// The cursor position to display (`curPos`).
+        /// The cursor position to display.
         location: Point,
         /// Whether the buffer has unsaved changes.
         modified: bool,
     },
-    /// **Copy text to the system clipboard** (`TEditor::clipCopy`, the
-    /// `clipboard == 0` branch → `TClipboard::setText`). The pump calls
+    /// **Copy text to the system clipboard.** The pump calls
     /// `renderer.backend_mut().set_clipboard(&s)`. Touches the backend only, so it
     /// is order-equivalent with every family.
     SetClipboard(String),
-    /// **Paste from the system clipboard** (`TEditor::clipPaste`, the
-    /// `clipboard == 0` branch → `TClipboard::requestText`). The pump reads
+    /// **Paste from the system clipboard into an editor.** The pump reads
     /// `renderer.backend_mut().get_clipboard()`, downcasts `editor` to
     /// [`Editor`](crate::widgets::Editor), and inserts the text. Touches the
     /// **view-tree** family + the backend.
     EditorPaste(ViewId),
-    /// **Paste from the system clipboard into an `InputLine`** (the
-    /// `TInputLine::handleEvent cmPaste` arm → `TClipboard::requestText`).
-    /// The pump reads `renderer.backend_mut().get_clipboard()`, downcasts the
-    /// view named by `id` to [`InputLine`](crate::widgets::InputLine) via
-    /// `as_any_mut`, and calls
+    /// **Paste from the system clipboard into an input line.** The pump reads
+    /// `renderer.backend_mut().get_clipboard()`, downcasts the view named by `id`
+    /// to [`InputLine`](crate::widgets::InputLine) via `as_any_mut`, and calls
     /// [`paste_text`](crate::widgets::InputLine::paste_text) — which inserts at
     /// the cursor, replacing any selection and clamping to `max_len`. Touches
     /// the **view-tree** family + the backend (same as
     /// [`EditorPaste`](Self::EditorPaste)).
     InputLinePaste(ViewId),
 
-    // -- the payload-carrying-broadcast (cmFileFocused) broker -
-    /// **Resolve a `cmFileFocused` broadcast's `TSearchRec` payload** (the
-    /// `TFileInputLine`/`TFileInfoPane` consumers). rstv's
+    // -- the payload-carrying-broadcast (file-focused) broker --
+    /// **Resolve a file-focused broadcast's directory-entry payload** (the file
+    /// input line / info pane consumers). rstv's
     /// [`Event::Broadcast`](crate::event::Event::Broadcast) is payload-less
     /// (`source` is the resolvable subject, NOT a value carrier), so this is the
     /// resolve-by-source broker — the same shape as
     /// [`SyncListViewer`](Self::SyncListViewer)'s read+write, but reading a
-    /// `SearchRec` rather than a scrollbar value.
+    /// directory entry rather than a scrollbar value.
     ///
     /// The producer ([`FileList`](crate::dialog::FileList)) broadcasts
     /// `FILE_FOCUSED { source = its own id }`; the consumer (a leaf holding only
@@ -392,21 +382,20 @@ pub enum Deferred {
     /// Touches the **view-tree** family (same as the scroller/list broker ops), so
     /// the insertion-order drain stays order-equivalent.
     ResolveFocusedFile {
-        /// The consumer view to write the focused record into (`TFileInputLine`).
+        /// The consumer view to write the focused record into (the file input line).
         subscriber: ViewId,
-        /// The producer view (`TFileList`) whose focused `SearchRec` to read.
+        /// The producer view (the file list) whose focused entry to read.
         source: ViewId,
     },
 
-    // -- the TDirListBox → chDirButton makeDefault broker ---------
+    // -- the directory-list → change-dir button default broker ---
     /// **Make a sibling [`Button`](crate::widgets::Button) the default** on a
-    /// dir-list focus change (`TDirListBox::setState` →
-    /// `((TChDirDialog*)owner)->chDirButton->makeDefault(enable)`). The dir list
-    /// is a leaf holding only `&mut Context`, so it cannot reach its sibling
-    /// button inline; it queues this and the pump resolves `button`, downcasts to
+    /// directory-list focus change. The directory list is a leaf holding only
+    /// `&mut Context`, so it cannot reach its sibling button inline; it queues this
+    /// and the pump resolves `button`, downcasts to
     /// [`Button`](crate::widgets::Button), and calls
-    /// [`make_default`](crate::widgets::Button::make_default) (which re-broadcasts
-    /// `cmGrabDefault`/`cmReleaseDefault` so the real default button relinquishes /
+    /// [`make_default`](crate::widgets::Button::make_default) (which re-broadcasts a
+    /// grab/release-default notification so the real default button relinquishes /
     /// retakes the look — that re-broadcast settling on the next pump is expected,
     /// like the other write-back brokers).
     ///
@@ -471,7 +460,8 @@ pub enum Deferred {
         /// box closes. `None` = informational (OK-only) — no routing.
         answer_to: Option<ViewId>,
         /// After routing the answer, re-post this focused command so the original
-        /// action (e.g. cmClose) re-runs `valid()` with the cached answer. `None`
+        /// action (e.g. [`Command::CLOSE`](crate::command::Command::CLOSE)) re-runs
+        /// `valid()` with the cached answer. `None`
         /// for informational boxes and for the inline modal-close path (which
         /// re-validates inline).
         then_command: Option<crate::command::Command>,
@@ -485,29 +475,33 @@ pub enum Deferred {
     /// it here. The pump builds the `FileDialog` ("Save file as", FD_OK_BUTTON) and
     /// stashes it into `Program::pending_modal` with a `SaveAsPick { editor_id }`
     /// completion, which the outer `pump_and_drive` runs at top level. On accept the
-    /// completion sets the chosen filename on the editor and re-injects `cmSave`.
+    /// completion sets the chosen filename on the editor and re-injects
+    /// [`Command::SAVE`](crate::command::Command::SAVE).
     OpenSaveAsDialog {
         /// The [`FileEditor`](crate::widgets::FileEditor) to save the picked name to.
         editor_id: ViewId,
     },
 
-    // -- find/replace dialogs (edFind/edReplace seam) ---------------------
-    /// Request the pump to open the Find dialog (edFind) for the given editor.
+    // -- find/replace dialogs (the find/replace editor seam) --------------
+    /// Request the pump to open the Find dialog
+    /// ([`Command::FIND`](crate::command::Command::FIND)) for the given editor.
     /// An [`Editor`](crate::widgets::Editor) leaf holds only `&mut Context`, so
     /// it cannot exec the dialog inline; it requests it here. The pump builds
     /// the dialog and stashes it into `Program::pending_modal` with a
     /// `FindPick { editor_id }` completion, which the outer `pump_and_drive`
     /// runs at top level. On accept the completion reads back the search string
-    /// + options and re-injects `cmSearchAgain`.
+    /// plus options and re-injects
+    /// [`Command::SEARCH_AGAIN`](crate::command::Command::SEARCH_AGAIN).
     OpenFindDialog {
         /// The [`Editor`](crate::widgets::Editor) to update.
         editor_id: ViewId,
     },
 
-    /// Request the pump to open the Replace dialog (edReplace) for the given
+    /// Request the pump to open the Replace dialog
+    /// ([`Command::REPLACE`](crate::command::Command::REPLACE)) for the given
     /// editor. Mirror of [`OpenFindDialog`](Self::OpenFindDialog) but for the
     /// find+replace variant. On accept the completion sets `EF_DO_REPLACE` and
-    /// re-injects `cmSearchAgain`.
+    /// re-injects [`Command::SEARCH_AGAIN`](crate::command::Command::SEARCH_AGAIN).
     OpenReplaceDialog {
         /// The [`Editor`](crate::widgets::Editor) to update.
         editor_id: ViewId,
@@ -536,22 +530,21 @@ pub enum Deferred {
     // -- the mouse hold-tracking router (MouseTrackCapture seam) -------
     /// **Deliver a localized mouse event to the tracked view** while a mouse
     /// button is held. Posted only by
-    /// [`MouseTrackCapture`](crate::capture::MouseTrackCapture) — the
-    /// successor of the C++ `do { … } while (mouseEvent(event, mask))` blocking
-    /// hold-loop (`tview.cpp:636-643`) — for each masked `MouseMove` /
-    /// `MouseAuto` / `evMouseWheel` event and for the terminating `MouseUp`. The
-    /// pump resolves `view` via `group.find_mut` and calls
+    /// [`MouseTrackCapture`](crate::capture::MouseTrackCapture), for each masked
+    /// `MouseMove` / `MouseAuto` / `MouseWheel` event and for the terminating
+    /// `MouseUp`. The pump resolves `view` via `group.find_mut` and calls
     /// `handle_event(&mut event, …)` directly (the apply-time analogue of the
     /// outside-modal redirect): the widget's `MouseMove`/`MouseAuto`/`MouseUp`
-    /// arms ARE the C++ loop body / post-loop code, so no widget downcast is
-    /// needed here (decisive for trait-object viewers like `ListViewer` /
-    /// `Outline`). `event` is already **view-local** (the capture subtracted
-    /// the origin cached at push time). Touches the **view-tree** family, so
-    /// the insertion-order drain stays order-equivalent.
+    /// arms do the per-event work, so no widget downcast is needed here (decisive
+    /// for trait-object viewers like [`ListViewer`](crate::widgets::ListViewer) /
+    /// [`Outline`](crate::widgets::Outline)). `event` is already **view-local**
+    /// (the capture subtracted the origin cached at push time). Touches the
+    /// **view-tree** family, so the insertion-order drain stays order-equivalent.
     ///
-    /// Direct delivery deliberately bypasses the `Group::wants` event-mask gate
-    /// — faithful: the C++ hold loop reads events straight off the queue, not
-    /// through the tracked view's `eventMask`.
+    /// Direct delivery deliberately bypasses the `Group::wants` event-mask gate:
+    /// the hold reads events straight off the queue, not through the tracked
+    /// view's [`event_mask`](crate::view::ViewState::event_mask) — faithfully
+    /// reproducing the original blocking hold loop, which read input directly.
     MouseTrack {
         /// The view being mouse-tracked (the one that pushed the capture).
         view: ViewId,
@@ -565,20 +558,21 @@ pub enum Deferred {
 // DrawCtx — the downward draw context
 // ---------------------------------------------------------------------------
 
-/// `shadowSize` (tview.cpp:35) — the drop-shadow offset: 2 columns right,
-/// 1 row down.
+/// The drop-shadow offset: 2 columns right, 1 row down.
+///
+/// # Turbo Vision heritage
+/// Ports `shadowSize` (`tview.cpp:35`).
 pub const SHADOW_SIZE: Point = Point::new(2, 1);
 
-/// True iff `bg` counts as black for the shadow transform — the C++ test
-/// `getBack(attr).toBIOS(false) != 0` in `applyShadow` (tvwrite.cpp), where
-/// `TColorDesired::toBIOS(false)` (colors.h:416) maps BIOS → `b & 0xF` and
-/// **Default → 0 (black)**. The xterm-256/RGB quantization ladder lives in the
-/// backend, so this is a documented simplification: only the exact
-/// black values (`Indexed(0)`/`Indexed(16)`, `Rgb(0,0,0)`) count as black;
-/// near-black values the ladder would quantize to BIOS 0 do not.
+/// True iff `bg` counts as black for the shadow transform — i.e. its BIOS index
+/// reduces to 0, with the default color treated as black. The xterm-256/RGB
+/// quantization ladder lives in the backend, so this is a documented
+/// simplification: only the exact black values (`Indexed(0)`/`Indexed(16)`,
+/// `Rgb(0,0,0)`) count as black; near-black values the ladder would quantize to
+/// BIOS 0 do not.
 fn bg_is_black(bg: Color) -> bool {
     match bg {
-        Color::Default => true, // toBIOS(false) maps Default → 0 (see fn-level doc)
+        Color::Default => true, // the default background reduces to black (see fn-level doc)
         Color::Bios(b) => b & 0xF == 0,
         Color::Indexed(i) => i == 0 || i == 16,
         Color::Rgb(r, g, b) => (r, g, b) == (0, 0, 0),
@@ -595,9 +589,9 @@ fn bg_is_black(bg: Color) -> bool {
 /// range.
 ///
 /// # Turbo Vision heritage
-/// The successor to C++ `TDrawBuffer` plus the `owner`-relative coordinate math
-/// in `TView::writeLine`/`writeBuf` (`tvwrite.cpp`). A view receives this context
-/// downward instead of reaching up through an `owner` pointer (deviation D3).
+/// The successor to `TDrawBuffer` plus the owner-relative coordinate math in
+/// `TView::writeLine`/`writeBuf` (`tvwrite.cpp`). A view receives this context
+/// downward instead of reaching up through an owner pointer (deviation D3).
 pub struct DrawCtx<'a> {
     buffer: &'a mut Buffer,
     /// Absolute clip rect, already intersected with the buffer's `(0,0,w,h)`.
@@ -720,10 +714,9 @@ impl<'a> DrawCtx<'a> {
     }
 
     /// Write `s` at view-local `(x, y)` with a fixed `style`, starting from
-    /// display column `text_indent` of `s` (skipping that many leading columns)
-    /// — ports `TDrawBuffer::moveStr`'s `begin` parameter, used by
-    /// `TInputLine::draw` to render a horizontally-scrolled field. Width-aware and
-    /// clipped exactly like [`put_str`](Self::put_str). Returns columns written.
+    /// display column `text_indent` of `s` (skipping that many leading columns) —
+    /// used to render a horizontally-scrolled input field. Width-aware and clipped
+    /// exactly like [`put_str`](Self::put_str). Returns columns written.
     ///
     /// A glyph straddling the `text_indent` boundary degrades to a space (the
     /// `move_str_part` left-edge straddle), via [`text::draw_str`].
@@ -751,10 +744,10 @@ impl<'a> DrawCtx<'a> {
     }
 
     /// Write `s` at view-local `(x, y)`, toggling between `lo` and `hi` styles at
-    /// each `~` (the `~` itself is not drawn) — ports `TDrawBuffer::moveCStr`'s
-    /// attribute-pair toggle (used by frame icons; reused by buttons/labels/menus
-    /// for hotkey highlighting). Starts in `lo`. Clipped exactly like
-    /// [`put_char`](Self::put_char). Returns the number of columns advanced.
+    /// each `~` (the `~` itself is not drawn) — the attribute-pair toggle used by
+    /// frame icons and reused by buttons/labels/menus for hotkey highlighting.
+    /// Starts in `lo`. Clipped exactly like [`put_char`](Self::put_char). Returns
+    /// the number of columns advanced.
     ///
     /// Faithful to [`DrawBuffer::move_cstr_part`](crate::screen::DrawBuffer): the
     /// first `~` flips `lo` → `hi`, the next flips back, and so on; the `~`
@@ -797,25 +790,28 @@ impl<'a> DrawCtx<'a> {
         }
     }
 
-    /// Cast a drop shadow for the view at view-local rect `area_local` — the
-    /// realization of the C++ shadow pass (`applyShadow`, tvwrite.cpp).
+    /// Cast a drop shadow for the view at view-local rect `area_local`.
     ///
     /// The shadow region is `(area_local translated by SHADOW_SIZE) minus
-    /// area_local` — the classic TV offset-L: a 2-column strip down the right
+    /// area_local` — the classic offset-L: a 2-column strip down the right
     /// edge (starting 1 row below the top, extending 1 row past the bottom) plus
     /// a 1-row strip along the bottom (starting 2 columns right of the left
     /// edge). Each cell in the region (clipped to `self.clip`) keeps its glyph
     /// and gets the shadow attribute: the theme's [`Role::Shadow`] style, or its
-    /// [`reversed`](Style::reversed) form when the cell's background is black
-    /// (`reverseAttribute(shadowAttr)` — so the shadow stays visible on black).
-    /// Cells already marked `no_shadow` are left untouched (no double-shadow
-    /// where two shadows overlap); transformed cells get `no_shadow = true`.
-    /// The cell's own style modifiers survive (C++ `setStyle(attr, style |
-    /// slNoShadow)` re-applies the original style word onto the shadow attr).
+    /// [`reversed`](Style::reversed) form when the cell's background is black (so
+    /// the shadow stays visible on black). Cells already marked `no_shadow` are
+    /// left untouched (no double-shadow where two shadows overlap); transformed
+    /// cells get `no_shadow = true`. The cell's own style modifiers survive — the
+    /// recolor re-applies the original style word onto the shadow attribute.
     ///
     /// Under whole-tree redraw the buffer is reset each frame, so `no_shadow`
     /// markers never go stale; later (higher) siblings simply paint over the
     /// shadow cells they occlude.
+    ///
+    /// # Turbo Vision heritage
+    /// Ports the shadow pass `applyShadow` (`tvwrite.cpp`); the on-black reverse is
+    /// `reverseAttribute(shadowAttr)` and the modifier-preserving recolor is
+    /// `setStyle(attr, style | slNoShadow)`.
     pub fn cast_shadow(&mut self, area_local: Rect) {
         if self.clip.is_empty() {
             return;
@@ -846,8 +842,8 @@ impl<'a> DrawCtx<'a> {
             }
             for ay in s.a.y..s.b.y {
                 for ax in s.a.x..s.b.x {
-                    // Per-cell like C++ TVWrite: a strip boundary may split a
-                    // wide-char pair, recoloring only one of its two cells.
+                    // Per-cell recolor: a strip boundary may split a wide-char
+                    // pair, recoloring only one of its two cells.
                     let cell = self.buffer.get_mut(ax as u16, ay as u16);
                     let old = cell.style();
                     if old.modifiers.no_shadow {
@@ -897,18 +893,18 @@ impl<'a> DrawCtx<'a> {
 /// loop owns the backing `VecDeque` / [`TimerQueue`] / pending-capture `Vec` and
 /// constructs a fresh `Context` per dispatch.
 ///
-/// `query(ViewId, …) -> Option<T>` / `message(ViewId, …)` are **tree-owner**
-/// primitives (Group/Program over `find_mut`), *not* `Context` methods — a
-/// `Context` deliberately holds no tree to route through. rstv has no consumer
-/// for a synchronous return-valued query (the C++ `cmCanCloseForm` veto is
+/// A synchronous return-valued query to a view by id, or a direct message to one,
+/// are **tree-owner** primitives (Group/Program over `find_mut`), *not* `Context`
+/// methods — a `Context` deliberately holds no tree to route through. rstv has no
+/// consumer for a synchronous return-valued query (the close-the-form veto is
 /// realized differently), so these are intentionally absent here.
 ///
 /// # Turbo Vision heritage
-/// The downward-passed successor to the data C++ views read through their `owner`
-/// pointer — `owner->size`, `owner->phase`, `putEvent`, `enableCommand`,
-/// `TView::message` — gathered into one context handed down the tree instead of
-/// reached for upward (deviation D3). Broadcasts carry a `ViewId` subject rather
-/// than the `infoPtr` pointer (deviation D4).
+/// The downward-passed successor to the data a view reads through its owner
+/// pointer — the owner's size and dispatch phase, event put-back, command
+/// enable/disable, and broadcasts — gathered into one context handed down the tree
+/// instead of reached for upward (deviation D3). Broadcasts carry a `ViewId`
+/// subject rather than a raw pointer (deviation D4).
 pub struct Context<'a> {
     /// Posted commands / broadcasts, drained by the loop after dispatch.
     out_events: &'a mut VecDeque<Event>,
@@ -924,8 +920,8 @@ pub struct Context<'a> {
     /// channel — adding a capability adds a variant, not a field.
     deferred: &'a mut Vec<Deferred>,
     /// The size of the view's owner (the group currently routing to it), so a child
-    /// can reach `owner->size` / `owner->getExtent()` without an up-pointer.
-    /// Used by `TWindow::zoom`/`sizeLimits` and the drag limits.
+    /// can reach its owner's size/extent without an up-pointer. Used by a window's
+    /// zoom / size-limit logic and the drag limits.
     ///
     /// **Transient routing state**, NOT a loop-owned channel: each
     /// `Group::handle_event` sets it to its own size before delivering to children
@@ -935,20 +931,18 @@ pub struct Context<'a> {
     /// capture its limits at *push time* (inside the window's `handle_event`, where
     /// `owner_size` is correctly set), never read them at drag time.
     owner_size: Point,
-    /// The focused-dispatch phase for the view currently being routed to —
-    /// the downward realization of the C++ `owner->phase` read
-    /// (`TGroup::phase`, set in `tgroup.cpp:362-371`; read by the plain-letter
-    /// accelerators in `tbutton.cpp:219` / `tcluster.cpp:263` /
-    /// `tlabel.cpp:94`). C++ exposes `owner->phase`; rstv has no up-pointer,
-    /// so the phase rides the `Context` like [`owner_size`](Self::owner_size):
-    /// **transient routing state**, set/restored by `Group::route_event` around
-    /// each leg of the focused-events walk, valid only during group-routed
-    /// dispatch. Defaults to [`Phase::Focused`] (the `TGroup` ctor init,
-    /// `tgroup.cpp:28`).
+    /// The focused-dispatch phase for the view currently being routed to — the
+    /// downward realization of reading the owner's dispatch phase (set by the group
+    /// during the focused-events walk, read by the plain-letter accelerators in
+    /// buttons, clusters, and labels). With no up-pointer, the phase rides the
+    /// `Context` like [`owner_size`](Self::owner_size): **transient routing
+    /// state**, set/restored by `Group::route_event` around each leg of the
+    /// focused-events walk, valid only during group-routed dispatch. Defaults to
+    /// [`Phase::Focused`].
     phase: Phase,
     /// An owned **snapshot** of the program's disabled-command set (denylist),
     /// backing [`command_enabled`](Self::command_enabled) — the read-only
-    /// `TView::commandEnabled` for views, which hold no `&Program`. Owned (a
+    /// command-enabled query for views, which hold no `&Program`. Owned (a
     /// cheap clone — the set typically holds ≤ a dozen entries), NOT a
     /// `&CommandSet`: the pump's deferred-apply `Context` is alive while the
     /// `EnableCommand`/`DisableCommand` arms mutate the live set `&mut`, so a
@@ -961,15 +955,15 @@ pub struct Context<'a> {
     /// Snapshot of the registered internal-clipboard editor ID — `None` when
     /// no internal clipboard is wired (= use OS clipboard). Refreshed once per
     /// `pump_once` pass via [`set_clipboard_snapshot`](Self::set_clipboard_snapshot).
-    /// Mirrors `TEditor::clipboard` (a process-global static in C++). Snapshot
+    /// Mirrors the process-global clipboard-editor reference. Snapshot
     /// semantics: a `RegisterClipboardEditor` deferred in the SAME dispatch
     /// becomes visible on the next pump.
     clipboard_editor_id: Option<ViewId>,
     /// Whether the clipboard editor currently has a non-empty selection (snapshot).
-    /// Drives the `update_commands` paste-enabled logic:
-    /// `clipboard == 0 || clipboard->hasSelection()` from C++. `false` when no
-    /// internal clipboard is registered (snapshot default = OS clipboard = paste
-    /// always enabled via the `clipboard_editor_id.is_none()` branch).
+    /// Drives the paste-enabled logic: paste is enabled when there is no internal
+    /// clipboard, or the clipboard editor has a selection. `false` when no internal
+    /// clipboard is registered (snapshot default = OS clipboard = paste always
+    /// enabled via the `clipboard_editor_id.is_none()` branch).
     clipboard_has_selection: bool,
 }
 
@@ -1003,8 +997,8 @@ impl<'a> Context<'a> {
         self.disabled_commands = snapshot;
     }
 
-    /// Whether `cmd` is currently enabled (`TView::commandEnabled`, view-side,
-    /// denylist: enabled iff not in the disabled set) — answered from the
+    /// Whether `cmd` is currently enabled (view-side, denylist: enabled iff not in
+    /// the disabled set) — answered from the
     /// per-pump **snapshot** (see the field doc): a `ctx.enable_command` /
     /// `ctx.disable_command` requested during this dispatch is deferred and
     /// becomes visible here on the *next* pump. Lets a widget self-gray (e.g. a
@@ -1021,8 +1015,9 @@ impl<'a> Context<'a> {
     }
 
     /// Whether the clipboard editor has a non-empty selection (from the pump
-    /// snapshot). Drives the paste-enabled logic in `update_commands`:
-    /// `clipboard == 0 || clipboard->hasSelection()`.
+    /// snapshot). Drives the paste-enabled logic in `update_commands`: paste is
+    /// enabled when there is no internal clipboard editor, or the registered one
+    /// has a selection.
     pub fn clipboard_has_selection(&self) -> bool {
         self.clipboard_has_selection
     }
@@ -1048,18 +1043,16 @@ impl<'a> Context<'a> {
     }
 
     /// Copy `data` into the clipboard editor — **deferred**
-    /// ([`Deferred::ClipboardEditorReceive`]). `TEditor::clipCopy`'s
-    /// `clipboard->insertFrom(this)` path: the pump finds the clipboard editor
-    /// and calls `insert_from(&data)` (select_text = true because
-    /// `is_clipboard = true`).
+    /// ([`Deferred::ClipboardEditorReceive`]). The pump finds the clipboard editor
+    /// and calls `insert_from(&data)` (which selects the inserted text, since this
+    /// is the clipboard editor).
     pub fn clipboard_editor_receive(&mut self, clipboard_id: ViewId, data: Vec<u8>) {
         self.deferred
             .push(Deferred::ClipboardEditorReceive { clipboard_id, data });
     }
 
     /// Paste from the clipboard editor into `dest_id` — **deferred**
-    /// ([`Deferred::ClipboardEditorPaste`]). `TEditor::clipPaste`'s
-    /// `insertFrom(clipboard)` path: the pump reads the clipboard editor's
+    /// ([`Deferred::ClipboardEditorPaste`]). The pump reads the clipboard editor's
     /// selection bytes, then calls `insert_from(&data)` on the dest editor.
     pub fn clipboard_editor_paste(&mut self, dest_id: ViewId, clipboard_id: ViewId) {
         self.deferred.push(Deferred::ClipboardEditorPaste {
@@ -1074,7 +1067,7 @@ impl<'a> Context<'a> {
     }
 
     /// Broadcast a command (`Event::Broadcast`) into the loop's queue. `source`
-    /// names the view the broadcast is about (the `infoPtr` successor), or `None`
+    /// names the view the broadcast is about (the resolvable subject), or `None`
     /// if it concerns no particular view.
     pub fn broadcast(&mut self, command: Command, source: Option<ViewId>) {
         self.out_events
@@ -1103,8 +1096,8 @@ impl<'a> Context<'a> {
     }
 
     /// Request `cmd` be enabled in the program's command set — **deferred**
-    /// ([`Deferred::EnableCommand`]). Realizes `TView::enableCommand` from a view
-    /// that has no up-pointer to the program.
+    /// ([`Deferred::EnableCommand`]). Lets a view enable a command without an
+    /// up-pointer to the program.
     pub fn enable_command(&mut self, cmd: Command) {
         self.deferred.push(Deferred::EnableCommand(cmd));
     }
@@ -1125,15 +1118,15 @@ impl<'a> Context<'a> {
 
     /// Request a propagating state flag be flipped on the view named by `id` —
     /// **deferred** ([`Deferred::SetState`]; see [`request_bounds`](Self::request_bounds)).
-    /// The loop resolves `id` via `find_mut` and calls `set_state` (drag end →
-    /// `sfDragging` off).
+    /// The loop resolves `id` via `find_mut` and calls `set_state` (e.g. clearing
+    /// the dragging flag at drag end).
     pub fn request_set_state(&mut self, id: ViewId, flag: StateFlag, enable: bool) {
         self.deferred.push(Deferred::SetState(id, flag, enable));
     }
 
     /// Request the view named by `id` be removed from whichever group owns it —
     /// **deferred** ([`Deferred::Close`]; see [`request_bounds`](Self::request_bounds)).
-    /// The loop resolves it via `remove_descendant` (`cmClose`).
+    /// The loop resolves it via `remove_descendant` (the close command).
     pub fn request_close(&mut self, id: ViewId) {
         self.deferred.push(Deferred::Close(id));
     }
@@ -1141,10 +1134,10 @@ impl<'a> Context<'a> {
     /// Request the view named by `id` be focused (selected) within its owning
     /// group — **deferred** ([`Deferred::FocusById`]; see
     /// [`request_close`](Self::request_close)). The loop resolves it via
-    /// [`View::focus_descendant`](crate::view::View::focus_descendant)
-    /// (`TLabel::focusLink`). The `ofSelectable` gate is applied during that group
-    /// walk, so the caller (the label) need not — and cannot, holding only the id —
-    /// check it.
+    /// [`View::focus_descendant`](crate::view::View::focus_descendant) (a label
+    /// focusing its linked control). The selectable gate is applied during that
+    /// group walk, so the caller (the label) need not — and cannot, holding only
+    /// the id — check it.
     pub fn request_focus(&mut self, id: ViewId) {
         self.deferred.push(Deferred::FocusById(id));
     }
@@ -1153,15 +1146,16 @@ impl<'a> Context<'a> {
     /// **deferred** ([`Deferred::MakeButtonDefault`]). The pump resolves `button`,
     /// downcasts to [`Button`](crate::widgets::Button), and calls
     /// [`make_default`](crate::widgets::Button::make_default). A leaf view (the
-    /// `TChDirDialog` dir list, on a focus change) holds only `&mut Context` and
-    /// cannot poke its sibling button inline; it requests the change here.
+    /// change-directory dialog's directory list, on a focus change) holds only
+    /// `&mut Context` and cannot poke its sibling button inline; it requests the
+    /// change here.
     pub fn make_button_default(&mut self, button: ViewId, enable: bool) {
         self.deferred
             .push(Deferred::MakeButtonDefault { button, enable });
     }
 
     /// Request the (modal) loop end with `cmd` — **deferred** ([`Deferred::EndModal`]).
-    /// `TGroup::endModal` from a view with no up-pointer to the program: the
+    /// Ends the modal loop from a view with no up-pointer to the program: the
     /// pump sets `Program::end_state` and the nested `exec_view` loop observes it.
     ///
     /// **View-side, deferred.** This is the path a [`View`](crate::view::View)
@@ -1172,7 +1166,7 @@ impl<'a> Context<'a> {
         self.deferred.push(Deferred::EndModal(cmd));
     }
 
-    /// Request the `TScroller` `scroller` re-read its scrollbars' values and update
+    /// Request the scroller `scroller` re-read its scrollbars' values and update
     /// its `delta`/`cursor` — **deferred** ([`Deferred::SyncScrollerDelta`]). The
     /// scroller (a leaf) cannot read its window-frame sibling bars itself; the
     /// pump brokers the read. `h`/`v` are the bar [`ViewId`]s (`None` = no bar).
@@ -1188,8 +1182,7 @@ impl<'a> Context<'a> {
 
     /// Request the scrollbar `id` have its parameters set — **deferred**
     /// ([`Deferred::ScrollBarSetParams`]). Each `None` field is preserved from the
-    /// bar's live value at apply time (`TScrollBar::setParams`/`setValue` driven by
-    /// `TScroller::setLimit`/`scrollTo`). The scroller (a leaf) cannot mutate its
+    /// bar's live value at apply time. The scroller (a leaf) cannot mutate its
     /// sibling bar inline.
     #[allow(clippy::too_many_arguments)]
     pub fn request_scroll_bar_params(
@@ -1212,13 +1205,13 @@ impl<'a> Context<'a> {
     }
 
     /// Request the view `id` be shown/hidden — **deferred**
-    /// ([`Deferred::SetVisible`]). `TScroller::showSBar` → `TView::show`/`hide` on a
-    /// sibling scrollbar (which the scroller, a leaf, cannot reach inline).
+    /// ([`Deferred::SetVisible`]). A scroller showing/hiding a sibling scrollbar
+    /// (which the scroller, a leaf, cannot reach inline).
     pub fn request_set_visible(&mut self, id: ViewId, visible: bool) {
         self.deferred.push(Deferred::SetVisible(id, visible));
     }
 
-    /// Request the `TListViewer` `list` re-read its scrollbars' values and update
+    /// Request the list viewer `list` re-read its scrollbars' values and update
     /// its `focused`/`top_item`/`indent` — **deferred**
     /// ([`Deferred::SyncListViewer`]). The list (a leaf) cannot read its
     /// window-frame sibling bars itself; the pump brokers the read and calls back
@@ -1228,7 +1221,7 @@ impl<'a> Context<'a> {
         self.deferred.push(Deferred::SyncListViewer { list, h, v });
     }
 
-    /// Request a `TOutlineViewer`'s `delta` be refreshed from its sibling
+    /// Request an outline viewer's `delta` be refreshed from its sibling
     /// scrollbars' live `value`s — **deferred**
     /// ([`Deferred::SyncOutlineViewerDelta`]). The viewer (a leaf) cannot read
     /// its window-frame sibling bars itself; the pump brokers the read and writes
@@ -1247,10 +1240,10 @@ impl<'a> Context<'a> {
             .push(Deferred::SyncOutlineViewerDelta { viewer, h, v });
     }
 
-    /// Request the focused `SearchRec` of the `TFileList` `source` be resolved and
-    /// written into `subscriber` (`TFileInputLine`) — **deferred**
+    /// Request the focused directory entry of the file list `source` be resolved
+    /// and written into `subscriber` (the file input line) — **deferred**
     /// ([`Deferred::ResolveFocusedFile`]). The resolve-by-source broker for the
-    /// payload-carrying `cmFileFocused` broadcast: the consumer (a leaf) holds
+    /// payload-carrying file-focused broadcast: the consumer (a leaf) holds
     /// only `&mut Context` and cannot read its `FileList` sibling, so the pump
     /// brokers the read + write.
     pub fn request_resolve_focused_file(&mut self, subscriber: ViewId, source: ViewId) {
@@ -1263,7 +1256,7 @@ impl<'a> Context<'a> {
     /// child) cannot read the command set itself; the pump brokers it and
     /// calls back through
     /// [`View::update_menu_commands`](crate::view::View::update_menu_commands).
-    /// `TMenuView`'s `cmCommandSetChanged` handler requests this by its own id.
+    /// A menu view requests this by its own id when the command set changes.
     pub fn request_update_menu(&mut self, id: ViewId) {
         self.deferred.push(Deferred::UpdateMenu(id));
     }
@@ -1281,28 +1274,28 @@ impl<'a> Context<'a> {
     /// ([`Deferred::OpenMenuBox`]). The [`MenuSession`](crate::menu::MenuSession)
     /// mints `id` itself (so it knows the box id with no callback) and the pump
     /// builds + inserts the box (no focus move). The submenu-open arm of the
-    /// flattened `execute()`.
+    /// flattened menu interaction.
     pub fn request_open_menu_box(&mut self, id: ViewId, menu: crate::menu::Menu, bounds: Rect) {
         self.deferred
             .push(Deferred::OpenMenuBox { id, menu, bounds });
     }
 
-    /// Request the menu view `id` set its highlight cache (`current`) to `current`
+    /// Request the menu view `id` set its highlight cache to `current`
     /// — **deferred** ([`Deferred::SetMenuCurrent`]). The pump calls back through
     /// [`View::set_menu_current`](crate::view::View::set_menu_current). The
-    /// session owns the authoritative `current` and pushes it to the view for
+    /// session owns the authoritative highlight and pushes it to the view for
     /// `draw`.
     pub fn request_set_menu_current(&mut self, id: ViewId, current: Option<usize>) {
         self.deferred.push(Deferred::SetMenuCurrent(id, current));
     }
 
     /// Request a view-triggered history modal be opened over the link `link` —
-    /// **deferred** ([`Deferred::OpenHistory`]). The `THistory` icon (a leaf)
+    /// **deferred** ([`Deferred::OpenHistory`]). The history drop-down icon (a leaf)
     /// holds only the link's id and cannot call `exec_view` (top-level only), so it
     /// requests the open; the pump reads the link, records history, builds the
-    /// `THistoryWindow`, and stashes it into `Program::pending_modal` for the outer
+    /// history window, and stashes it into `Program::pending_modal` for the outer
     /// driver to `exec_view` at top level. `require_focus` gates the keyboard
-    /// trigger on the link being focused (faithful to `(link->state & sfFocused)`).
+    /// trigger on the link being focused.
     pub fn request_open_history(&mut self, link: ViewId, history_id: u8, require_focus: bool) {
         self.deferred.push(Deferred::OpenHistory {
             link,
@@ -1311,7 +1304,7 @@ impl<'a> Context<'a> {
         });
     }
 
-    /// Request `recordHistory(link->data)` for the `THistory` broadcast arm —
+    /// Request the link's current text be recorded into history —
     /// **deferred** ([`Deferred::RecordHistory`]). The pump resolves the link, reads
     /// its current text, and `history_add`s it to the channel.
     pub fn request_record_history(&mut self, link: ViewId, history_id: u8) {
@@ -1319,17 +1312,18 @@ impl<'a> Context<'a> {
             .push(Deferred::RecordHistory { link, history_id });
     }
 
-    /// Request a modal `messageBox` be opened from inside a downward-borrowed
+    /// Request a modal message box be opened from inside a downward-borrowed
     /// `&mut View` — **deferred** ([`Deferred::OpenMessageBox`]; the
-    /// async-modal-from-a-view seam, `docs/design/async-modal-from-view.md`). A
-    /// `valid()` (a validator `error`, the `FileEditor` modified-save prompt) holds
-    /// only `&mut Context` and cannot run a nested modal inline, so it requests one;
-    /// the pump builds + drives it.
+    /// async-modal-from-a-view seam, `docs/design/async-modal-from-view.md`).
+    /// Validation (a validator error, the
+    /// [`FileEditor`](crate::widgets::FileEditor) modified-save prompt) holds only
+    /// `&mut Context` and cannot run a nested modal inline, so it requests one; the
+    /// pump builds + drives it.
     ///
     /// `answer_to = Some(id)` routes the chosen button [`Command`] back to that view
     /// via [`View::set_modal_answer`](crate::view::View::set_modal_answer), and
     /// `then_command = Some(cmd)` re-posts a focused command afterwards so the
-    /// original action re-runs `valid()` with the cached answer. Both `None` for an
+    /// original action re-validates with the cached answer. Both `None` for an
     /// informational (OK-only) box.
     pub fn request_message_box(
         &mut self,
@@ -1348,18 +1342,16 @@ impl<'a> Context<'a> {
         });
     }
 
-    /// Start mouse hold-tracking for `view` — the widget-facing successor of
-    /// entering the C++ `do { … } while (mouseEvent(event, mask))` blocking
-    /// hold-loop (`tview.cpp:636-643`). Wraps [`push_capture`](Self::push_capture)
-    /// with a [`MouseTrackCapture`](crate::capture::MouseTrackCapture): from the
-    /// *next* pump on (the deferred-push latency — matching the C++ `do{}while`
-    /// running the body once before the first wait), every masked
-    /// `MouseMove`/`MouseAuto`/`evMouseWheel` event — and
-    /// the terminating `MouseUp` — is localized against `origin` and delivered
-    /// straight back to `view`'s `handle_event` via [`Deferred::MouseTrack`];
-    /// everything else is swallowed (the hold is modal). The widget's own
-    /// `MouseMove`/`MouseAuto` arms are the loop body; its `MouseUp` arm is the
-    /// post-loop code.
+    /// Start mouse hold-tracking for `view` — the widget-facing entry into a
+    /// modal mouse hold. Wraps [`push_capture`](Self::push_capture) with a
+    /// [`MouseTrackCapture`](crate::capture::MouseTrackCapture): from the *next*
+    /// pump on (the deferred-push latency — so the widget runs its press handling
+    /// once before the first forwarded event), every masked
+    /// `MouseMove`/`MouseAuto`/`MouseWheel` event — and the terminating `MouseUp`
+    /// — is localized against `origin` and delivered straight back to `view`'s
+    /// `handle_event` via [`Deferred::MouseTrack`]; everything else is swallowed
+    /// (the hold is modal). The widget's own `MouseMove`/`MouseAuto` arms run
+    /// while held; its `MouseUp` arm runs once at release.
     ///
     /// `origin` is the absolute screen position of `view`-local `(0, 0)`, cached
     /// by the widget's last `draw` (the `Button::abs_origin` /
@@ -1368,7 +1360,12 @@ impl<'a> Context<'a> {
     /// The widget's `MouseUp` arm **must** be guarded by a `tracking` flag set
     /// at `MouseDown` time: `MouseUp` is not gated by `Group::wants`, so a
     /// stray, untracked up delivered via normal routing would otherwise reach
-    /// the post-loop arm. See step 5 of `docs/design/mouse-track.md`.
+    /// the release arm. See step 5 of `docs/design/mouse-track.md`.
+    ///
+    /// # Turbo Vision heritage
+    /// Replaces entering the blocking hold loop `do { … } while (mouseEvent(event,
+    /// mask))` (`tview.cpp:636-643`) — whose body-once-before-the-first-wait shape
+    /// is why the capture is pushed deferred.
     pub fn start_mouse_track(
         &mut self,
         view: ViewId,
@@ -1384,21 +1381,19 @@ impl<'a> Context<'a> {
     /// ([`Deferred::MouseTrack`]). `pub(crate)`: two posters only —
     /// [`MouseTrackCapture`](crate::capture::MouseTrackCapture) (the router), and
     /// `Editor::handle_event`'s wheel-in-hold arm, which uses the same direct
-    /// find_mut+handle_event delivery to forward an `evMouseWheel` event to its
-    /// sibling scrollbars (the C++ `vScrollBar->handleEvent(event)` /
-    /// `hScrollBar->handleEvent(event)`, teditor1.cpp:574-579). Widgets enter
-    /// tracking via [`start_mouse_track`](Self::start_mouse_track).
+    /// find-then-deliver path to forward a mouse-wheel event to its sibling
+    /// scrollbars. Widgets enter tracking via
+    /// [`start_mouse_track`](Self::start_mouse_track).
     pub(crate) fn request_mouse_track(&mut self, view: ViewId, event: Event) {
         self.deferred.push(Deferred::MouseTrack { view, event });
     }
 
     /// Request the pump to open a [`FileDialog`](crate::dialog::FileDialog) for
     /// `editor_id` to pick a save-as filename — **deferred**
-    /// ([`Deferred::OpenSaveAsDialog`]). Called from
-    /// `FileEditor::handle_event(cmSaveAs)` and `FileEditor::save()` when the buffer
-    /// is untitled (`*fileName == EOS`). The pump builds + stashes the dialog; the
-    /// `SaveAsPick` completion sets the picked name on the editor and re-injects
-    /// `cmSave`.
+    /// ([`Deferred::OpenSaveAsDialog`]). Called from the file editor's save / save-as
+    /// path when the buffer is untitled. The pump builds + stashes the dialog; the
+    /// `SaveAsPick` completion sets the picked name on the editor and re-injects the
+    /// save command.
     pub fn request_save_as_dialog(&mut self, editor_id: ViewId) {
         self.deferred.push(Deferred::OpenSaveAsDialog { editor_id });
     }
@@ -1437,10 +1432,10 @@ impl<'a> Context<'a> {
             .push(Deferred::OpenReplaceDialog { editor_id });
     }
 
-    /// Request the `TEditor` `editor` re-read its scrollbars' values and update its
+    /// Request the editor `editor` re-read its scrollbars' values and update its
     /// `delta` — **deferred** ([`Deferred::SyncEditorDelta`]). The editor (a leaf
     /// view) cannot read its window-frame sibling bars itself; the pump brokers the
-    /// read (`checkScrollBar`). `h`/`v` are the bar [`ViewId`]s (`None` = no bar).
+    /// read. `h`/`v` are the bar [`ViewId`]s (`None` = no bar).
     pub fn request_sync_editor_delta(
         &mut self,
         editor: ViewId,
@@ -1452,9 +1447,8 @@ impl<'a> Context<'a> {
     }
 
     /// Request the editor's `indicator` display `location`/`modified` —
-    /// **deferred** ([`Deferred::IndicatorSetValue`]). `TEditor::doUpdate` →
-    /// `indicator->setValue`; the editor (a leaf) cannot mutate its sibling
-    /// indicator inline.
+    /// **deferred** ([`Deferred::IndicatorSetValue`]). The editor (a leaf) cannot
+    /// mutate its sibling indicator inline.
     pub fn set_indicator_value(&mut self, indicator: ViewId, location: Point, modified: bool) {
         self.deferred.push(Deferred::IndicatorSetValue {
             indicator,
@@ -1464,21 +1458,19 @@ impl<'a> Context<'a> {
     }
 
     /// Request `text` be copied to the system clipboard — **deferred**
-    /// ([`Deferred::SetClipboard`]). `TEditor::clipCopy` → `TClipboard::setText`.
+    /// ([`Deferred::SetClipboard`]). The pump writes it to the backend clipboard.
     pub fn set_clipboard(&mut self, text: String) {
         self.deferred.push(Deferred::SetClipboard(text));
     }
 
     /// Request the editor `id` paste the system-clipboard text — **deferred**
-    /// ([`Deferred::EditorPaste`]). `TEditor::clipPaste` →
-    /// `TClipboard::requestText`; the pump reads the clipboard and inserts.
+    /// ([`Deferred::EditorPaste`]). The pump reads the clipboard and inserts.
     pub fn editor_paste(&mut self, id: ViewId) {
         self.deferred.push(Deferred::EditorPaste(id));
     }
 
-    /// Request the `InputLine` `id` paste the system-clipboard text — **deferred**
-    /// ([`Deferred::InputLinePaste`]). `TInputLine::handleEvent cmPaste` →
-    /// `TClipboard::requestText`; the pump reads the clipboard and calls
+    /// Request the input line `id` paste the system-clipboard text — **deferred**
+    /// ([`Deferred::InputLinePaste`]). The pump reads the clipboard and calls
     /// [`InputLine::paste_text`](crate::widgets::InputLine::paste_text).
     pub fn request_input_line_paste(&mut self, id: ViewId) {
         self.deferred.push(Deferred::InputLinePaste(id));
@@ -1486,11 +1478,10 @@ impl<'a> Context<'a> {
 
     /// Re-queue a **raw event** into the loop's event queue — the raw-event
     /// sibling of [`post`](Self::post) (which only ever queues an
-    /// `Event::Command`). Ports `execute()`'s `putEvent(e)`
-    /// (`tmnuview.cpp:375/405`): the menu session re-posts the triggering event so
+    /// `Event::Command`). The menu session re-posts the triggering event so
     /// the next pump re-delivers it (e.g. an outside click that should reach the
-    /// view recovering focus, or — stage 2 — a mouse event on submenu-open). Lands
-    /// in `out_events`, drained before the backend is polled.
+    /// view recovering focus, or a mouse event on submenu-open). Lands in
+    /// `out_events`, drained before the backend is polled.
     pub fn put_event(&mut self, ev: Event) {
         self.out_events.push_back(ev);
     }
@@ -1501,7 +1492,7 @@ impl<'a> Context<'a> {
     }
 
     /// The owner's size for the view currently being routed to — the downward
-    /// realization of `owner->size` / `owner->getExtent()`. See the
+    /// realization of reading the owner's size/extent. See the
     /// [`owner_size`](Self::owner_size) field docs: it is **transient routing
     /// state** set/restored by each [`Group::handle_event`](crate::view::Group)
     /// around delivery, valid only during group-routed dispatch. Defaults to
@@ -1518,18 +1509,19 @@ impl<'a> Context<'a> {
     }
 
     /// The focused-dispatch phase for the view currently being routed to —
-    /// the C++ `owner->phase` read (no up-pointer, so the phase rides the
-    /// `Context`; see the [`phase`](Self::phase) field docs). Defaults to
-    /// [`Phase::Focused`] outside a focused-events walk.
+    /// the downward realization of reading the owner's dispatch phase (no
+    /// up-pointer, so the phase rides the `Context`; see the
+    /// [`phase`](Self::phase) field docs). Defaults to [`Phase::Focused`] outside a
+    /// focused-events walk.
     pub fn phase(&self) -> Phase {
         self.phase
     }
 
     /// Set the dispatch phase for the routed view — called by
     /// `Group::route_event` before each leg of the focused-events walk
-    /// (pre-process / focused / post-process, `tgroup.cpp:362-371`) and to
-    /// restore the saved value on exit. Leaf views never call this — routing
-    /// infrastructure only, hence `pub(crate)`.
+    /// (pre-process / focused / post-process) and to restore the saved value on
+    /// exit. Leaf views never call this — routing infrastructure only, hence
+    /// `pub(crate)`.
     pub(crate) fn set_phase(&mut self, phase: Phase) {
         self.phase = phase;
     }
@@ -2052,7 +2044,7 @@ mod tests {
         let mut timers = TimerQueue::new();
         let mut deferred: Vec<Deferred> = Vec::new();
         let mut ctx = Context::new(&mut out, &mut timers, 0, &mut deferred);
-        // Context::new defaults phase to Focused (TGroup ctor, tgroup.cpp:28).
+        // Context::new defaults the dispatch phase to Focused.
         assert_eq!(ctx.phase(), Phase::Focused);
         // The setter round-trips.
         ctx.set_phase(Phase::PostProcess);

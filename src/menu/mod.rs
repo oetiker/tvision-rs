@@ -7,31 +7,29 @@
 //!
 //! ## The item model
 //!
-//! In the C++, `TMenuItem` is a singly linked-list node carrying a C `union {
-//! const char *param; TMenu *subMenu; }` discriminated *implicitly* by its
-//! `name`/`command` fields. Consumers test, in order:
+//! A [`MenuItem`] is one of three things, made explicit and type-safe by the
+//! enum's three variants:
 //!
-//! - `name == 0` ⇒ a **separator** (`newLine()`: name=0, command=0, subMenu=0);
-//! - else `command == 0` ⇒ a **submenu** (the union holds `subMenu`);
-//! - else ⇒ a **command item** (the union holds `param`, the shortcut display
-//!   text such as `"Alt-X"`).
+//! - a **separator** — a horizontal divider with no label or behaviour;
+//! - a **submenu** — a label that opens a nested [`Menu`];
+//! - a **command item** — a label that emits a [`Command`] when chosen, with an
+//!   optional accelerator key and optional shortcut display text such as
+//!   `"Alt-X"`.
 //!
-//! rstv makes that discrimination *explicit and type-safe* with a 3-variant
-//! [`MenuItem`] enum: the `param`-xor-`subMenu` union becomes the
-//! `Command`-vs-`SubMenu` choice, so an item can never hold both. Shared fields
+//! A command and a submenu are mutually exclusive: an item can never hold both a
+//! command and a nested menu. The fields common to commands and submenus
 //! (`name`, `key_code`, `help_ctx`, `disabled`) are read uniformly via
 //! or-patterns, e.g. `Command { disabled, .. } | SubMenu { disabled, .. } => …`.
 //!
-//! The C++ linked list (`next`) becomes a [`Vec`]; the `deflt` pointer becomes
-//! [`Menu::default`], an *index* into that `Vec` (any valid index — the C++
-//! `TMenu(itemList, TheDefault)` two-arg ctor allows a non-head default). The
-//! [`MenuBuilder`] mirrors the common `TMenu(itemList)` case: it sets `default`
-//! to `Some(0)` (the head) for a non-empty menu and `None` for an empty one.
+//! A [`Menu`] is a [`Vec`] of items plus a `default` selection given as an
+//! *index* into that vector (any valid index, or `None`). The [`MenuBuilder`]
+//! produces the usual convention: `default` is `Some(0)` (the first item) for a
+//! non-empty menu and `None` for an empty one.
 //!
 //! # Turbo Vision heritage
-//! Ports `TMenuItem`, `TSubMenu`, and `TMenu` (`menus.h`/`menu.cpp`). The implicit
-//! tagged `union` becomes a 3-variant enum and the linked list becomes a `Vec`
-//! with an index default (deviation D1).
+//! Ports `TMenuItem`, `TSubMenu`, and `TMenu` (`menus.h`/`menu.cpp`). The
+//! implicit `name`/`command`-tagged union becomes a 3-variant enum and the
+//! linked list becomes a `Vec` with an index default (deviation D1).
 
 use crate::command::Command;
 use crate::event::{Key, KeyEvent, KeyModifiers};
@@ -46,55 +44,58 @@ pub use menu_box::MenuBox;
 pub use menu_session::{MenuSession, popup_menu};
 pub use menu_view::{MenuColors, MenuView, MenuViewState};
 
-/// A single menu entry. Ports `TMenuItem` (`menus.h`) — including the
-/// `TSubMenu` subclass and `newLine()` separator — collapsed into one
-/// type-safe enum.
+/// A single menu entry: a [`Separator`], a [`Command`] item, or a [`SubMenu`].
 ///
-/// The C++ `union { const char *param; TMenu *subMenu; }`, discriminated by the
-/// `name`/`command` fields, becomes the three variants below: a [`Separator`]
-/// (C++ `name == 0`), a [`Command`] item (C++ `command != 0`, union holds
-/// `param`), and a [`SubMenu`] (C++ `command == 0`, union holds `subMenu`).
+/// A command item carries the label, the [`Command`] it emits, and its optional
+/// accelerator key and shortcut display text. A submenu carries a label and an
+/// owned nested [`Menu`]. A separator is a divider with no other data. The
+/// command-vs-submenu split is exclusive: an entry holds either a command or a
+/// nested menu, never both.
 ///
 /// [`Separator`]: MenuItem::Separator
 /// [`Command`]: MenuItem::Command
 /// [`SubMenu`]: MenuItem::SubMenu
+///
+/// # Turbo Vision heritage
+/// Ports `TMenuItem` (`menus.h`), folding in its `TSubMenu` subclass and the
+/// `newLine()` separator. The implicit `union { const char *param; TMenu
+/// *subMenu; }` (tagged by `name`/`command`) becomes the three explicit variants
+/// (deviation D1).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MenuItem {
-    /// A horizontal divider line. Ports C++ `newLine()` (`name == 0`).
+    /// A horizontal divider line with no label or behaviour.
     Separator,
 
-    /// A command item. Ports a `TMenuItem` with `command != 0`, whose union
-    /// holds `param` (the shortcut display text).
+    /// A command item: a label that emits a [`Command`] when chosen.
     Command {
-        /// The `~`-marked label (C++ `name`).
+        /// The label; a `~`-marked character is the highlighted hotkey.
         name: String,
-        /// The command emitted when chosen (C++ `command`).
+        /// The command emitted when this item is chosen.
         command: Command,
-        /// The accelerator key (C++ `keyCode`, a `TKey`). `None` is the C++
-        /// `kbNoKey` — in our key model the absence of a key event.
+        /// The accelerator key that activates this item from anywhere. `None`
+        /// means the item has no accelerator.
         key_code: Option<KeyEvent>,
-        /// Shortcut display text such as `"Alt-X"` (C++ `param`). `None` is the
-        /// C++ `param == 0`.
+        /// Shortcut display text such as `"Alt-X"`, shown right-aligned. `None`
+        /// means no shortcut text.
         param: Option<String>,
-        /// The help context (C++ `helpCtx`).
+        /// The help context active while this item is highlighted.
         help_ctx: HelpCtx,
-        /// Whether the item is greyed out (C++ `disabled`). Mutated at runtime by
-        /// command-graying, which keeps it in sync with the live command set.
+        /// Whether the item is greyed out. Mutated at runtime by command-graying,
+        /// which keeps it in sync with the live command set.
         disabled: bool,
     },
 
-    /// A submenu. Ports `TSubMenu` — a `TMenuItem` with `command == 0` whose
-    /// union holds a fresh `subMenu`.
+    /// A submenu: a label that opens a nested [`Menu`].
     SubMenu {
-        /// The `~`-marked label (C++ `name`).
+        /// The label; a `~`-marked character is the highlighted hotkey.
         name: String,
-        /// The accelerator key (C++ `keyCode`). See [`MenuItem::Command`].
+        /// The accelerator key that opens this submenu. See [`MenuItem::Command`].
         key_code: Option<KeyEvent>,
-        /// The help context (C++ `helpCtx`).
+        /// The help context active while this item is highlighted.
         help_ctx: HelpCtx,
-        /// Whether the item is greyed out (C++ `disabled`).
+        /// Whether the item is greyed out.
         disabled: bool,
-        /// The owned nested menu (C++ `subMenu`).
+        /// The owned nested menu opened by this item.
         menu: Menu,
     },
 }
@@ -103,8 +104,8 @@ impl MenuItem {
     /// A mutable handle to the `disabled` flag, or `None` for a
     /// [`Separator`](MenuItem::Separator) (which has no such field).
     ///
-    /// Mirrors the C++ runtime mutation of `TMenuItem::disabled`, which only
-    /// ever targets command/submenu items, never a `newLine()`.
+    /// Command-graying only ever toggles command and submenu items, never a
+    /// separator, so a separator yields `None`.
     pub fn disabled_mut(&mut self) -> Option<&mut bool> {
         match self {
             MenuItem::Separator => None,
@@ -115,45 +116,45 @@ impl MenuItem {
     }
 }
 
-/// A menu: an ordered list of [`MenuItem`]s plus the default selection. Ports
-/// `TMenu` (`menus.h`).
+/// A menu: an ordered list of [`MenuItem`]s plus the default selection.
 ///
-/// The C++ linked list (`items`) becomes a [`Vec`]; the C++ `deflt` pointer
-/// becomes [`default`](field@Menu::default), an *index* into that `Vec` — any
-/// valid index, since the C++ `TMenu(itemList, TheDefault)` two-arg ctor allows
-/// a non-head default. Both fields are public and not invariant-checked; the
-/// [`MenuBuilder`] is what produces the common `Some(0)`-head / `None`-empty
-/// convention (see its docs).
+/// The default is an *index* into [`items`](field@Menu::items) — any valid
+/// index, or `None` for no default. Both fields are public and not
+/// invariant-checked; the [`MenuBuilder`] is what produces the common
+/// `Some(0)`-first / `None`-empty convention (see its docs).
+///
+/// # Turbo Vision heritage
+/// Ports `TMenu` (`menus.h`): the linked list of items becomes a [`Vec`] and the
+/// `deflt` pointer becomes an index into it (deviation D1).
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct Menu {
-    /// The menu entries, in order (C++ linked list `items`).
+    /// The menu entries, in order.
     pub items: Vec<MenuItem>,
-    /// The index of the default item (C++ `deflt`); any valid index into
-    /// [`items`], or `None` for no default. The [`MenuBuilder`] sets this to
-    /// `Some(0)` (the head) for a non-empty menu and `None` for an empty one,
-    /// but the field is unconstrained — the C++ two-arg ctor likewise permits a
-    /// non-head default.
+    /// The index of the default item; any valid index into [`items`], or `None`
+    /// for no default. The [`MenuBuilder`] sets this to `Some(0)` (the first
+    /// item) for a non-empty menu and `None` for an empty one, but the field is
+    /// unconstrained.
     ///
     /// [`items`]: Menu::items
     pub default: Option<usize>,
 }
 
 impl Menu {
-    /// Start building a menu fluently. The successor of the C++ `operator+`
-    /// chains over `TSubMenu`/`TMenuItem` (`menu.cpp`).
+    /// Start building a menu fluently.
     pub fn builder() -> MenuBuilder {
         MenuBuilder::default()
     }
 }
 
-/// A fluent builder for a [`Menu`] — the idiomatic replacement for the C++
-/// `operator+` overloads (`menu.cpp`) that chained `TSubMenu` and `TMenuItem`
-/// nodes together.
+/// A fluent builder for a [`Menu`].
 ///
 /// Each method appends one [`MenuItem`] and returns `self` for chaining; nested
 /// submenus are built with a closure. The first appended item sets
-/// [`Menu::default`] to `Some(0)`, faithful to the C++ `TMenu(itemList)` /
-/// empty-submenu `deflt = &head` behaviour.
+/// [`Menu::default`] to `Some(0)`.
+///
+/// # Turbo Vision heritage
+/// Replaces the `operator+` overloads (`menu.cpp`) that chained `TSubMenu` and
+/// `TMenuItem` nodes together.
 #[derive(Default)]
 pub struct MenuBuilder {
     menu: Menu,
@@ -171,13 +172,12 @@ impl MenuBuilder {
         self
     }
 
-    /// Append a separator line (C++ `newLine()`).
+    /// Append a separator line.
     pub fn separator(self) -> Self {
         self.item(MenuItem::Separator)
     }
 
-    /// Append a command item with no accelerator and no shortcut text — the
-    /// minimal `TMenuItem(name, command, kbNoKey)` form.
+    /// Append a command item with no accelerator and no shortcut text.
     pub fn command(self, name: impl Into<String>, command: Command) -> Self {
         self.item(MenuItem::Command {
             name: name.into(),
@@ -189,11 +189,9 @@ impl MenuBuilder {
         })
     }
 
-    /// Append a command item with an accelerator and shortcut display text —
-    /// the `TMenuItem(name, command, key, hcNoContext, param)` form.
+    /// Append a command item with an accelerator and shortcut display text.
     ///
-    /// An empty `param` string is stored as `None`, faithful to C++ `param ==
-    /// 0`.
+    /// An empty `param` string is stored as `None` (no shortcut text).
     pub fn command_key(
         self,
         name: impl Into<String>,
@@ -212,8 +210,7 @@ impl MenuBuilder {
         })
     }
 
-    /// Append a submenu, built by the closure. Ports the `TSubMenu(name, key)`
-    /// node whose nested `TMenu` is filled by chained `operator+`.
+    /// Append a submenu whose contents are built by the closure.
     pub fn submenu(
         self,
         name: impl Into<String>,
@@ -237,8 +234,7 @@ impl MenuBuilder {
 }
 
 /// Build an `Alt`+`<char>` accelerator — a menu-definition convenience that
-/// mirrors the C++ `kbAltF`/`kbAltX`/… literals at the call site, keeping menu
-/// trees terse.
+/// keeps menu trees terse at the call site.
 pub fn alt(c: char) -> KeyEvent {
     KeyEvent::new(
         Key::Char(c),
@@ -253,10 +249,10 @@ pub fn alt(c: char) -> KeyEvent {
 mod tests {
     use super::*;
 
-    /// The builder must reproduce, node for node, the tree the C++ `operator+`
-    /// chain produces for the canonical File/Window menu. The expected tree is
-    /// hand-built with struct/enum literals (a *different* code path from the
-    /// builder) so a builder bug cannot pass silently.
+    /// The builder must reproduce, node for node, the canonical File/Window menu
+    /// tree. The expected tree is hand-built with struct/enum literals (a
+    /// *different* code path from the builder) so a builder bug cannot pass
+    /// silently.
     #[test]
     fn builder_reproduces_file_window_menu() {
         let built = Menu::builder()

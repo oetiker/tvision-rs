@@ -1,13 +1,13 @@
-//! Modal alert, confirmation, and input dialogs — `messageBox` and `inputBox`.
+//! Modal alert, confirmation, and input dialogs.
 //!
 //! Builders for the standard pop-up dialogs: a body of text with a title
 //! ([`build_message_box`]) and a single-field prompt ([`build_input_box`]). Each
 //! returns a ready-to-run [`Dialog`]; the program runs it modally and returns the
 //! command that closed it.
 //!
-//! The option types replace the C++ raw flag word: [`MessageBoxKind`] picks the
-//! title and [`MessageBoxButtons`] selects which of [Yes, No, OK, Cancel] to show,
-//! in that fixed order.
+//! The option types are typed instead of a packed flag word: [`MessageBoxKind`]
+//! picks the title and [`MessageBoxButtons`] selects which of [Yes, No, OK, Cancel]
+//! to show, in that fixed order.
 //!
 //! ## Initial focus
 //!
@@ -20,16 +20,17 @@
 //! ## Button behavior
 //!
 //! All message-box buttons are normal (not default). A button fires when focused
-//! (Space / Alt+hotkey) or on a direct mouse click — see `Button::handle_event`
+//! (Space / Alt+hotkey) or on a direct mouse click — see [`Button`]
 //! (focused-Space and Alt+hotkey arm the animation timer, which fires the command
 //! on expiry).
 //!
 //! # Turbo Vision heritage
-//! Ports `messageBox` / `messageBoxRect` / `inputBox` / `inputBoxRect`
-//! (`msgbox.cpp`, titles/labels from `tvtext2.cpp`). The C++ `ushort aOptions`
-//! flag word becomes the typed [`MessageBoxKind`] + [`MessageBoxButtons`]
-//! (deviation D5); `execView`/destroy live in [`Program`](crate::app::Program),
-//! so this module is a pure builder (deviation D9).
+//! Ports the `messageBox` / `inputBox` free functions and their `…Rect` variants
+//! (`msgbox.cpp`; titles and button labels from `tvtext2.cpp`). The original
+//! packed `aOptions` flag word becomes the typed [`MessageBoxKind`] +
+//! [`MessageBoxButtons`] (deviation D5); running the dialog modally and destroying
+//! it afterward live in [`Program`](crate::app::Program), so this module is a pure
+//! builder (deviation D9).
 
 use super::Dialog;
 use crate::command::Command;
@@ -42,24 +43,23 @@ use crate::widgets::{InputLine, Label, LimitMode};
 // Public option types (replacing the raw `ushort aOptions` flag word)
 // ---------------------------------------------------------------------------
 
-/// The dialog title — ports the `aOptions & 0x3` nibble from `msgbox.h`.
+/// The dialog title — which kind of alert this is.
 ///
-/// C++ constants: `mfWarning=0x0000`, `mfError=0x0001`,
-/// `mfInformation=0x0002`, `mfConfirmation=0x0003`.
+/// Each variant maps to a fixed title string shown in the dialog frame.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MessageBoxKind {
-    /// `mfWarning` — "Warning" title.
+    /// "Warning" title.
     Warning,
-    /// `mfError` — "Error" title.
+    /// "Error" title.
     Error,
-    /// `mfInformation` — "Information" title.
+    /// "Information" title.
     Information,
-    /// `mfConfirmation` — "Confirm" title.
+    /// "Confirm" title.
     Confirmation,
 }
 
 impl MessageBoxKind {
-    /// The dialog title string, faithful to `tvtext2.cpp` `Titles[]`.
+    /// The dialog title string for this kind.
     fn title(self) -> &'static str {
         match self {
             Self::Warning => "Warning",
@@ -70,22 +70,22 @@ impl MessageBoxKind {
     }
 }
 
-/// The set of buttons to show — ports the `0x0100 << i` button-mask nibble.
+/// The set of buttons to show.
 ///
-/// C++ constants: `mfYesButton=0x0100`, `mfNoButton=0x0200`,
-/// `mfOKButton=0x0400`, `mfCancelButton=0x0800`.
+/// Each field, when set, adds one button along the bottom of the dialog. They
+/// always appear in [Yes, No, OK, Cancel] order regardless of which are enabled.
 ///
 /// Build with one of the convenience constructors ([`MessageBoxButtons::ok`],
 /// [`MessageBoxButtons::ok_cancel`], etc.) or with struct-update syntax.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MessageBoxButtons {
-    /// `mfYesButton` — show a "~Y~es" button firing [`Command::YES`].
+    /// Show a "~Y~es" button firing [`Command::YES`].
     pub yes: bool,
-    /// `mfNoButton` — show a "~N~o" button firing [`Command::NO`].
+    /// Show a "~N~o" button firing [`Command::NO`].
     pub no: bool,
-    /// `mfOKButton` — show an "O~K~" button firing [`Command::OK`].
+    /// Show an "O~K~" button firing [`Command::OK`].
     pub ok: bool,
-    /// `mfCancelButton` — show a "~C~ancel" button firing [`Command::CANCEL`].
+    /// Show a "~C~ancel" button firing [`Command::CANCEL`].
     pub cancel: bool,
 }
 
@@ -128,36 +128,35 @@ impl MessageBoxButtons {
 }
 
 // ---------------------------------------------------------------------------
-// Button label / command tables (faithful to C++ `buttonName[]` / `commands[]`)
+// Button label / command tables
 // ---------------------------------------------------------------------------
 
-/// C++ `buttonName[]` in order [Yes, No, OK, Cancel] — `tvtext2.cpp`.
-/// The `~X~` markup is parsed by `Button::new` as the hotkey letter.
+/// Button labels in [Yes, No, OK, Cancel] order. The `~X~` markup is parsed by
+/// [`Button::new`] as the hotkey letter.
 const BUTTON_NAMES: [&str; 4] = ["~Y~es", "~N~o", "O~K~", "~C~ancel"];
 
-/// C++ `commands[]` in order [Yes, No, OK, Cancel].
+/// The command each button fires, in [Yes, No, OK, Cancel] order.
 const BUTTON_COMMANDS: [Command; 4] = [Command::YES, Command::NO, Command::OK, Command::CANCEL];
 
 // ---------------------------------------------------------------------------
 // Pure dialog builder
 // ---------------------------------------------------------------------------
 
-/// Build a [`Dialog`] for `messageBoxRect` without executing it.
+/// Build the message-box [`Dialog`] without running it.
 ///
-/// Faithful port of the construction half of `messageBoxRect` in
-/// `msgbox.cpp` — everything except the `execView`/`destroy` tail, which
-/// lives in [`Program::message_box_rect`](crate::app::Program::message_box_rect).
+/// Assembles the dialog and its children; running it modally and destroying it
+/// afterward live in
+/// [`Program::message_box_rect`](crate::app::Program::message_box_rect).
 ///
 /// `bounds` is the dialog's bounding rect (position + size). `msg` is the
 /// body text (rendered by [`StaticText`], word-wrapped). `kind` picks the
 /// title. `buttons` selects which of [Yes, No, OK, Cancel] to show, in that
-/// fixed C++ order.
+/// fixed order.
 ///
 /// Returns `(dialog, first_button_id)` where `first_button_id` is the
 /// [`ViewId`] of the FIRST inserted button (the first enabled in
 /// [Yes, No, OK, Cancel] order), or `None` if no buttons were requested.
-/// The caller passes it to `exec_view_with_completion` as `initial_focus`
-/// to replicate C++'s `selectNext(False)`.
+/// The caller passes it as the initial-focus target.
 pub(crate) fn build_message_box(
     bounds: Rect,
     msg: &str,
@@ -169,15 +168,13 @@ pub(crate) fn build_message_box(
 
     let mut dialog = Dialog::new(bounds, Some(kind.title().into()));
 
-    // TStaticText at (3, 2, w-2, h-3) — the text area inside the frame.
+    // Static text at (3, 2, w-2, h-3) — the text area inside the frame.
     dialog.insert_child(Box::new(StaticText::new(
         Rect::new(3, 2, w - 2, h - 3),
         msg,
     )));
 
-    // Build each selected button (in [Yes, No, OK, Cancel] order, skipping unset),
-    // faithfully porting the C++ loop:
-    //   for i=0..3: if (aOptions & (0x0100 << i)) buttonList[count++] = new TButton(…)
+    // Build each selected button (in [Yes, No, OK, Cancel] order, skipping unset).
     //
     // Buttons are 10 columns wide (the Rect::new(0,0,10,2) ctor). Centering:
     //   x starts at -2; for each button x += button_width + 2 = +12 each.
@@ -186,10 +183,9 @@ pub(crate) fn build_message_box(
     let button_flags = [buttons.yes, buttons.no, buttons.ok, buttons.cancel];
     let button_width = 10_i32;
 
-    // Compute centering offset.
+    // Compute centering offset. x starts at -2, then each button adds
+    // (width + 2) = 12, so total span = -2 + button_count * 12.
     let button_count = button_flags.iter().filter(|&&b| b).count() as i32;
-    // C++ x starts at -2, then each button adds (width + 2) = 12.
-    // So after the loop: x = -2 + button_count * 12.
     let total_x = -2 + button_count * (button_width + 2);
     let mut x = (w - total_x) / 2;
 
@@ -201,20 +197,19 @@ pub(crate) fn build_message_box(
                 Rect::new(0, 0, button_width, 2),
                 BUTTON_NAMES[i],
                 BUTTON_COMMANDS[i],
-                ButtonFlags::new(), // bfNormal — all false
+                ButtonFlags::new(), // normal button — all flags false
             );
             buttons_to_insert.push((b, x));
             x += button_width + 2;
         }
     }
 
-    // Insert each button at its computed position (moveTo = set origin keeping size).
-    // Track the ViewId of the FIRST button inserted — this is what C++'s
-    // selectNext(False) would focus (the first selectable child in insertion order).
+    // Insert each button at its computed position (move_to sets origin, keeps size).
+    // Track the ViewId of the FIRST button inserted — the first selectable child
+    // in insertion order, which becomes the initial focus.
     let mut first_button_id: Option<ViewId> = None;
     for (mut b, bx) in buttons_to_insert {
-        // C++ buttonList[i]->moveTo(x, dialog->size.y - 3):
-        // moveTo on the view state sets origin = (bx, h-3), size unchanged (10x2).
+        // Set origin = (bx, h-3); size unchanged (10x2).
         b.state.move_to(bx, h - 3);
         let vid = dialog.insert_child(Box::new(b));
         if first_button_id.is_none() {
@@ -229,28 +224,25 @@ pub(crate) fn build_message_box(
 // Pure input-box builder
 // ---------------------------------------------------------------------------
 
-/// Build a [`Dialog`] for `inputBoxRect` without executing it.
+/// Build the single-field input [`Dialog`] without running it.
 ///
-/// Faithful port of the construction half of `inputBoxRect` in `msgbox.cpp` —
-/// everything before `selectNext(False)`/`setData`/`execView`, which live in
+/// Assembles the dialog; running it modally, seeding the initial text, and
+/// reading the result live in
 /// [`Program::input_box_rect`](crate::app::Program::input_box_rect).
 ///
-/// Layout (faithful, `w = bounds.b.x - bounds.a.x`, `h = bounds.b.y - bounds.a.y`):
+/// Layout (`w = bounds.b.x - bounds.a.x`, `h = bounds.b.y - bounds.a.y`):
 /// * **InputLine** at `(4 + label_size, 2, w - 3, 3)` — inserted FIRST so it is
-///   the first selectable child (`selectNext(False)` initial focus target).
+///   the first selectable child and gets the initial focus.
 /// * **Label** at `(2, 2, 3 + label_size, 3)`, linked to the input line.
-/// * **OK** button (`bfDefault`) at `(w - 24, h - 4, w - 14, h - 2)` → [`Command::OK`].
-/// * **Cancel** button (`bfNormal`) at `(w - 12, h - 4, w - 2, h - 2)` →
-///   [`Command::CANCEL`]. (C++ `r.a.x += 12; r.b.x += 12` from the OK rect. The
-///   trailing dead `+= 12` after Cancel — which in C++ set up a never-used third
-///   button — is faithfully dropped.)
+/// * **OK** button (default) at `(w - 24, h - 4, w - 14, h - 2)` → [`Command::OK`].
+/// * **Cancel** button (normal) at `(w - 12, h - 4, w - 2, h - 2)` →
+///   [`Command::CANCEL`].
 ///
 /// Returns `(dialog, input_id)` where `input_id` is the [`ViewId`] of the lone
-/// [`InputLine`]. It doubles as the `selectNext(False)` initial-focus target AND
-/// the single-field gather/scatter target (C++ `setData`/`getData`): the caller
-/// scatters the initial string into it before exec and gathers the final string
-/// out of it on a non-cancel result (the typed value currency,
-/// [`FieldValue::Text`](crate::data::FieldValue::Text)).
+/// [`InputLine`]. It doubles as the initial-focus target AND the single-field
+/// value target: the caller seeds the initial string into it before running and
+/// reads the final string out of it on a non-cancel result (the typed value
+/// currency, [`FieldValue::Text`](crate::data::FieldValue::Text)).
 pub(crate) fn build_input_box(
     bounds: Rect,
     title: &str,
@@ -260,14 +252,13 @@ pub(crate) fn build_input_box(
     let w = bounds.b.x - bounds.a.x; // dialog width  (== size.x)
     let h = bounds.b.y - bounds.a.y; // dialog height (== size.y)
 
-    // C++ aLabel.size() = byte length of the TStringView; ASCII labels only in practice.
+    // Label width in columns (byte length; ASCII labels only in practice).
     let label_size = label.len() as i32;
 
     let mut dialog = Dialog::new(bounds, Some(title.into()));
 
-    // 1. TInputLine(r, limit) — `new TInputLine(r, limit)` uses ilMaxBytes (the
-    //    default), so maxLen = limit - 1. No validator. Inserted FIRST so it is the
-    //    first selectable child (selectNext(False) focuses it).
+    // 1. Input line with byte-limit `limit` and no validator. Inserted FIRST so it
+    //    is the first selectable child and gets the initial focus.
     let input_id = dialog.insert_child(Box::new(InputLine::new(
         Rect::new(4 + label_size, 2, w - 3, 3),
         limit,
@@ -275,14 +266,14 @@ pub(crate) fn build_input_box(
         LimitMode::MaxBytes,
     )));
 
-    // 2. TLabel(r, aLabel, control) — linked to the input line.
+    // 2. Label linked to the input line.
     dialog.insert_child(Box::new(Label::new(
         Rect::new(2, 2, 3 + label_size, 3),
         label,
         Some(input_id),
     )));
 
-    // 3. TButton(okText, cmOK, bfDefault).
+    // 3. OK button (default).
     dialog.insert_child(Box::new(Button::new(
         Rect::new(w - 24, h - 4, w - 14, h - 2),
         "O~K~",
@@ -293,8 +284,8 @@ pub(crate) fn build_input_box(
         },
     )));
 
-    // 4. TButton(cancelText, cmCancel, bfNormal). C++ `r.a.x += 12; r.b.x += 12`
-    //    from the OK rect → x range [w - 12, w - 2].
+    // 4. Cancel button (normal), offset 12 columns right of OK → x range
+    //    [w - 12, w - 2].
     dialog.insert_child(Box::new(Button::new(
         Rect::new(w - 12, h - 4, w - 2, h - 2),
         "~C~ancel",
@@ -388,8 +379,7 @@ mod tests {
         insta::assert_snapshot!(render_dialog(&mut d, 40, 9));
     }
 
-    /// Input box (`inputBoxRect`) at 60x8: a "Name" label, an input field, and
-    /// OK + Cancel buttons. Mirrors the C++ `inputBox` default geometry.
+    /// Input box at 60x8: a "Name" label, an input field, and OK + Cancel buttons.
     #[test]
     fn snapshot_input_box() {
         let (mut d, _input_id) = build_input_box(Rect::new(0, 0, 60, 8), "Title", "Name", 20);
@@ -397,8 +387,8 @@ mod tests {
     }
 
     /// Scatter unit test: after building + setting the input line's value, its
-    /// `value()` reads back as `FieldValue::Text(initial)` — the gather/scatter
-    /// round-trip used by `Program::input_box_rect` (C++ `setData`/`getData`).
+    /// `value()` reads back as `FieldValue::Text(initial)` — the seed/read-back
+    /// round-trip used by `Program::input_box_rect`.
     #[test]
     fn input_box_scatter_value_round_trip() {
         use crate::data::FieldValue;

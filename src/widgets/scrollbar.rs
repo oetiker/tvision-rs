@@ -33,11 +33,10 @@
 //!
 //! # Turbo Vision heritage
 //!
-//! Ports `TScrollBar` (`tscrlbar.cpp`/`scrlbar.h`). The hardcoded `vChars`/`hChars`
-//! tables become [`Glyphs`](crate::theme::Glyphs) fields (deviation D7); the owner
-//! up-pointer plus `infoPtr` payload becomes [`Context`] broadcasts carrying a
-//! resolvable [`ViewId`](crate::view::ViewId) `source` (deviations D3, D4); and
-//! `TStreamable` is dropped.
+//! Ports `TScrollBar` (`tscrlbar.cpp`/`scrlbar.h`). The hardcoded glyph tables
+//! become [`Glyphs`](crate::theme::Glyphs) fields (D7); the owner back-pointer
+//! plus its event payload become [`Context`] broadcasts that carry a resolvable
+//! [`ViewId`](crate::view::ViewId) `source` (D3, D4).
 
 use crate::capture::TrackMask;
 use crate::command::Command;
@@ -47,42 +46,39 @@ use crate::theme::Role;
 use crate::view::{Context, DrawCtx, GrowMode, Point, Rect, View, ViewState};
 
 // ---------------------------------------------------------------------------
-// Scrollbar part codes — ports the `sb*` enum in `views.h`
+// Scrollbar part codes
 // ---------------------------------------------------------------------------
 
-/// Which part of the scrollbar was hit. Faithful to the C++ `sb*` constants
-/// in `views.h`.
+/// Which part of the scrollbar a point hits.
 ///
-/// The vertical variants (`sbUpArrow`/`sbDownArrow`/`sbPageUp`/`sbPageDown`)
-/// are exactly `+4` from the horizontal ones (the C++ `if(size.x == 1) part += 4`
-/// pattern is therefore just a variant selection, not arithmetic, here).
+/// The vertical variants ([`UpArrow`](Part::UpArrow)/[`DownArrow`](Part::DownArrow)/
+/// [`PageUp`](Part::PageUp)/[`PageDown`](Part::PageDown)) mirror the four
+/// horizontal ones; orientation selects which set applies.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Part {
-    /// `sbLeftArrow` (0) — horizontal: left arrow / vertical unused.
+    /// Horizontal: left arrow.
     LeftArrow,
-    /// `sbRightArrow` (1) — horizontal: right arrow.
+    /// Horizontal: right arrow.
     RightArrow,
-    /// `sbPageLeft` (2) — horizontal: page left (trough left of thumb).
+    /// Horizontal: page left (trough left of thumb).
     PageLeft,
-    /// `sbPageRight` (3) — horizontal: page right (trough right of thumb).
+    /// Horizontal: page right (trough right of thumb).
     PageRight,
-    /// `sbUpArrow` (4) — vertical: up arrow.
+    /// Vertical: up arrow.
     UpArrow,
-    /// `sbDownArrow` (5) — vertical: down arrow.
+    /// Vertical: down arrow.
     DownArrow,
-    /// `sbPageUp` (6) — vertical: page up (trough above thumb).
+    /// Vertical: page up (trough above thumb).
     PageUp,
-    /// `sbPageDown` (7) — vertical: page down (trough below thumb).
+    /// Vertical: page down (trough below thumb).
     PageDown,
-    /// `sbIndicator` (8) — the thumb itself.
+    /// The thumb itself.
     Indicator,
 }
 
 impl Part {
-    /// The scroll step for this part, faithful to `TScrollBar::scrollStep`.
-    ///
-    /// `step = arStep` if `!(part & 2)` (arrows), else `step = pgStep`.
-    /// Negative if `!(part & 1)` (back direction).
+    /// The scroll step for this part: the arrow step for arrows, the page step
+    /// for troughs, negated for the back (left/up) direction.
     fn scroll_step(self, ar_step: i32, pg_step: i32) -> i32 {
         let is_page = matches!(
             self,
@@ -114,13 +110,13 @@ pub struct ScrollBar {
     pub state: ViewState,
     /// Current scroll position. `0` when constructed.
     pub value: i32,
-    /// Minimum value of the range (inclusive). Faithful to C++ `minVal`.
+    /// Minimum value of the range (inclusive).
     pub min_value: i32,
-    /// Maximum value of the range (inclusive). Faithful to C++ `maxVal`.
+    /// Maximum value of the range (inclusive).
     pub max_value: i32,
-    /// Page step size (how much `PageUp`/`PageDown` moves). `pgStep`.
+    /// Page step size (how much a trough page-up/page-down moves).
     pub page_step: i32,
-    /// Arrow step size (how much an arrow key / click moves). `arStep`.
+    /// Arrow step size (how much an arrow key / click moves).
     pub arrow_step: i32,
     /// Whether this is a vertical bar (`size.x == 1`). Derived at construction.
     vertical: bool,
@@ -132,27 +128,24 @@ pub struct ScrollBar {
     /// `MouseMove` / `MouseUp` tracking arms against stray (untracked) events.
     tracking: bool,
     /// The part that was clicked to start an arrow/page hold-track. `None` for
-    /// the thumb/default branch. The C++ captures `clickPart` before the loop
-    /// and checks `getPartCode() == clickPart` each auto tick.
+    /// the thumb/default branch. The part code under the cursor is re-derived on
+    /// each auto tick and compared against this to decide whether to keep stepping.
     tracked_part: Option<Part>,
 }
 
 impl ScrollBar {
     /// Construct a scrollbar from `bounds`.
     ///
-    /// Faithful to the C++ constructor: `value`/`minVal`/`maxVal` all zero,
-    /// `pgStep = 1`, `arStep = 1`, `growMode` set per orientation,
-    /// `eventMask |= evMouseWheel` (both orientations opt-in to wheel events
-    /// — the existing `EventMask` only carries `mouse_move`/`mouse_auto`, and
-    /// wheel is now an unconditional `MouseWheel` field on `MouseEvent`, so no
-    /// explicit mask bit is needed).
+    /// `value`/`min_value`/`max_value` start at zero, both step sizes at 1, and
+    /// the grow mode is set per orientation so the bar stays pinned to the
+    /// owner's edge as it resizes. Mouse-wheel events are an unconditional field
+    /// on the mouse event, so no explicit event-mask bit is needed.
     pub fn new(bounds: Rect) -> Self {
         let mut state = ViewState::new(bounds);
         let vertical = state.size.x == 1;
 
-        // growMode faithful to tscrlbar.cpp:
-        //   vertical:   gfGrowLoX | gfGrowHiX | gfGrowHiY
-        //   horizontal: gfGrowLoY | gfGrowHiX | gfGrowHiY
+        // Grow mode per orientation: a vertical bar tracks the right edge and
+        // full height; a horizontal bar tracks the bottom edge and full width.
         if vertical {
             state.grow_mode = GrowMode {
                 lo_x: true,
@@ -169,10 +162,9 @@ impl ScrollBar {
             };
         }
 
-        // Not selectable — faithful to C++ TScrollBar (options = 0). Mouse events
-        // are delivered directly; keyboard events reach it only via post_process
-        // (ofPostProcess / sbHandleKeyboard), set by standard_scroll_bar when
-        // ScrollBarOptions::handle_keyboard is true.
+        // Not selectable (no options set). Mouse events are delivered directly;
+        // keyboard events reach it only via post-processing, which
+        // standard_scroll_bar enables when ScrollBarOptions::handle_keyboard is true.
 
         ScrollBar {
             state,
@@ -188,11 +180,10 @@ impl ScrollBar {
         }
     }
 
-    /// Opt this bar into keyboard handling: set `ofPostProcess` so it receives
-    /// focused-chain arrow/page/home/end keys even when it is not the current
-    /// view (faithful to C++ `standardScrollBar(... | sbHandleKeyboard)`, which
-    /// sets `options |= ofPostProcess`). Builder form for the `ScrollBar::new`
-    /// path; `Window::standard_scroll_bar(handle_keyboard: true)` does the same.
+    /// Opt this bar into keyboard handling: set the post-process option so it
+    /// receives focused-chain arrow/page/home/end keys even when it is not the
+    /// current view. Builder form for the `ScrollBar::new` path;
+    /// `Window::standard_scroll_bar(handle_keyboard: true)` does the same.
     pub fn with_keyboard(mut self) -> Self {
         self.state.options.post_process = true;
         self
@@ -210,8 +201,8 @@ impl ScrollBar {
     /// Update all parameters atomically.
     ///
     /// `a_max` is floored to `a_min`; `a_value` is clamped to `[a_min, a_max]`.
-    /// If `value` changed, broadcasts `cmScrollBarChanged`. Steps are set
-    /// unconditionally at the end, regardless of whether the range changed.
+    /// If `value` changed, broadcasts [`Command::SCROLL_BAR_CHANGED`]. Steps are
+    /// set unconditionally at the end, regardless of whether the range changed.
     pub fn set_params(
         &mut self,
         a_value: i32,
@@ -237,7 +228,7 @@ impl ScrollBar {
         self.arrow_step = a_ar_step;
     }
 
-    /// `TScrollBar::setValue` — set the value, clamping to `[min, max]`.
+    /// Set the value, clamping to `[min, max]`.
     ///
     /// Forwards to [`set_params`](Self::set_params).
     pub fn set_value(&mut self, a_value: i32, ctx: &mut Context) {
@@ -251,7 +242,7 @@ impl ScrollBar {
         );
     }
 
-    /// `TScrollBar::setRange` — update `[min, max]`, keeping other params.
+    /// Update the `[min, max]` range, keeping other params.
     pub fn set_range(&mut self, a_min: i32, a_max: i32, ctx: &mut Context) {
         self.set_params(
             self.value,
@@ -263,7 +254,7 @@ impl ScrollBar {
         );
     }
 
-    /// `TScrollBar::setStep` — update the step sizes, keeping other params.
+    /// Update the page and arrow step sizes, keeping other params.
     pub fn set_step(&mut self, a_pg_step: i32, a_ar_step: i32, ctx: &mut Context) {
         self.set_params(
             self.value,
@@ -275,19 +266,17 @@ impl ScrollBar {
         );
     }
 
-    /// Broadcast `cmScrollBarChanged`, carrying this bar's id as the broadcast
-    /// `source` so a two-bar owner can tell which bar fired.
+    /// Broadcast [`Command::SCROLL_BAR_CHANGED`], carrying this bar's id as the
+    /// broadcast `source` so a two-bar owner can tell which bar fired.
     fn scroll_draw(&self, ctx: &mut Context) {
         ctx.broadcast(Command::SCROLL_BAR_CHANGED, self.state().id());
     }
 
     // -----------------------------------------------------------------------
-    // Position / size math (ports getPos / getSize)
+    // Position / size math
     // -----------------------------------------------------------------------
 
-    /// `TScrollBar::getSize` — the scrollbar's active length in cells.
-    ///
-    /// Faithful port: `max(3, size.y or size.x)`.
+    /// The scrollbar's active length in cells: the axis length, at least 3.
     pub fn get_size(&self) -> i32 {
         let s = if self.vertical {
             self.state.size.y
@@ -297,14 +286,11 @@ impl ScrollBar {
         s.max(3)
     }
 
-    /// `TScrollBar::getPos` — the thumb position (1-based cell index in the
-    /// scrollbar row/column, i.e. 1..=getSize()-2 inclusive).
+    /// The thumb position: a 1-based cell index along the bar's axis
+    /// (`1..=get_size()-2` inclusive).
     ///
-    /// Faithful port:
-    /// ```text
-    /// if r == 0: return 1
-    /// else: ((value - minVal) * (getSize() - 3) + r/2) / r + 1
-    /// ```
+    /// With an empty range the thumb sits at 1; otherwise the value is mapped
+    /// linearly across the inner cells (`get_size() - 3`), rounded to nearest.
     pub fn get_pos(&self) -> i32 {
         let r = self.max_value - self.min_value;
         if r == 0 {
@@ -318,14 +304,14 @@ impl ScrollBar {
     }
 
     // -----------------------------------------------------------------------
-    // Part classification (ports getPartCode)
+    // Part classification
     // -----------------------------------------------------------------------
 
-    /// `TScrollBar::getPartCode` — classify which part a point hits.
+    /// Classify which [`Part`] a point hits.
     ///
     /// `mark` is the position along the scrollbar axis (x for horizontal,
     /// y for vertical), in view-local coords.  `pos` is the current thumb
-    /// cell index. `s` is `getSize() - 1`.
+    /// cell index. `s` is [`get_size`](Self::get_size)` - 1`.
     ///
     /// Returns `None` if the point is outside the view extent.
     fn get_part_code(&self, mark: i32, pos: i32, s: i32) -> Option<Part> {
@@ -375,26 +361,24 @@ impl View for ScrollBar {
         Some(FieldValue::Int(self.value))
     }
 
-    /// Concrete-reach hatch (the sanctioned downcast, same as `TWindow::zoom`'s
-    /// frame push): the pump downcasts to `&mut ScrollBar` to call `set_params`
-    /// when applying a `Deferred::ScrollBarSetParams` from a scroller.
+    /// Concrete-reach hatch (the sanctioned downcast): the pump downcasts to
+    /// `&mut ScrollBar` to call `set_params` when applying a
+    /// `Deferred::ScrollBarSetParams` from a scroller.
     fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
         Some(self)
     }
 
-    /// `TScrollBar::draw` + `drawPos` — paint the scrollbar.
+    /// Paint the scrollbar.
     ///
     /// Layout (using vertical as example; horizontal mirrors on x-axis):
-    /// - Cell 0:         back-arrow (`sb_v_arrow_back` / `sb_h_arrow_back`), controls role.
-    /// - Cells 1..pos-1: trough/page (`sb_page` or `sb_page_no_range`), page role.
-    /// - Cell pos:       thumb (`sb_thumb`), controls role. (omitted if range==0)
+    /// - Cell 0:           back-arrow, controls role.
+    /// - Cells 1..pos-1:   trough/page, page role.
+    /// - Cell pos:         thumb, controls role (omitted when the range is empty).
     /// - Cells pos+1..s-1: trough/page, page role.
-    /// - Cell s:         fwd-arrow (`sb_v_arrow_fwd` / `sb_h_arrow_fwd`), controls role.
+    /// - Cell s:           fwd-arrow, controls role.
     ///
-    /// Palette mapping (cpScrollBar `"\x04\x05\x05"`, indices 1-based):
-    /// - Index 1 (trough/page):    `Role::ScrollBarPage`
-    /// - Index 2 (arrows):         `Role::ScrollBarControls`
-    /// - Index 3 (thumb):          `Role::ScrollBarControls`
+    /// Role mapping: troughs use [`Role::ScrollBarPage`]; arrows and thumb use
+    /// [`Role::ScrollBarControls`].
     ///
     fn draw(&mut self, ctx: &mut DrawCtx) {
         // Cache absolute origin for the mouse-tracking capture: the
@@ -444,23 +428,22 @@ impl View for ScrollBar {
         }
     }
 
-    /// `TScrollBar::handleEvent` — keyboard and mouse input.
+    /// Keyboard and mouse input.
     ///
     /// Handles:
-    /// - `evMouseWheel`: adjust by `3 * arStep`, broadcast `SCROLL_BAR_CLICKED`
-    ///   then `SCROLL_BAR_CHANGED` (via `set_value`).
-    /// - `evMouseDown`: classify the part hit. Arrow parts do a first step and
-    ///   arm an auto-repeat track (`TrackMask { mouse_auto: true }`). The
+    /// - Mouse wheel: adjust by `3 * arrow_step`, broadcasting clicked then
+    ///   changed (via `set_value`).
+    /// - Mouse down: classify the part hit. Arrow parts do a first step and arm
+    ///   an auto-repeat track (`TrackMask { mouse_auto: true }`). The
     ///   indicator/default branch does a first thumb-jump and arms a move track
-    ///   (`TrackMask { mouse_move: true }`). Broadcasts `SCROLL_BAR_CLICKED`.
-    /// - `evMouseAuto` (tracked): re-derive part; step iff it matches the
-    ///   originally-clicked part (arrow/page hold loop body,
-    ///   `tscrlbar.cpp:188-191`).
-    /// - `evMouseMove` (tracked): recompute thumb value from cursor position
-    ///   (drag loop body, `tscrlbar.cpp:195-205`).
-    /// - `evMouseUp` (tracked): clear tracking flag.
-    /// - `evKeyDown` (when visible + focused): arrow/page/home/end keys.
-    ///   Broadcasts `SCROLL_BAR_CLICKED` then adjusts value.
+    ///   (`TrackMask { mouse_move: true }`). Broadcasts clicked.
+    /// - Tracked auto tick: re-derive the part; step only if it still matches the
+    ///   originally-clicked part (the arrow/page hold loop body).
+    /// - Tracked move: recompute the thumb value from the cursor position (the
+    ///   drag loop body).
+    /// - Tracked mouse up: clear the tracking flag.
+    /// - Key down (when visible + focused): arrow/page/home/end keys; broadcasts
+    ///   clicked then adjusts the value.
     fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
         let visible = self.state.state.visible;
 
@@ -578,7 +561,7 @@ impl View for ScrollBar {
                     }
                 }
 
-                // C++:209: clearEvent(event) — always runs after mouse-down.
+                // Always consume the event after a mouse-down.
                 ev.clear();
             }
 
@@ -589,15 +572,13 @@ impl View for ScrollBar {
             // auto event during a thumb track must fall through, not hit this arm.
             // ------------------------------------------------------------------
             Event::MouseAuto(me) if self.tracking && self.tracked_part.is_some() => {
-                // C++:188: `mouse = makeLocal(event.mouse.where)` — position is
-                // already bar-local (the capture localized it via abs_origin).
+                // Position is already bar-local (the capture localized it via abs_origin).
                 let local = me.position;
                 let mark = if self.vertical { local.y } else { local.x };
-                let pos = self.get_pos(); // C++: re-derive `p = getPos()`
+                let pos = self.get_pos(); // re-derive the thumb position
                 let s = self.get_size() - 1;
-                // C++:189: `if getPartCode() == clickPart` — re-classify under
-                // the current cursor and step only if the mouse is still over the
-                // originally-clicked arrow part.
+                // Re-classify under the current cursor and step only if the mouse
+                // is still over the originally-clicked arrow part.
                 let cur_part = self.get_part_code(mark, pos, s);
                 if cur_part == self.tracked_part
                     && let Some(p) = self.tracked_part
@@ -974,8 +955,8 @@ mod tests {
     #[test]
     fn with_keyboard_sets_post_process() {
         let r = Rect::new(0, 0, 1, 10);
-        // A plain new() bar must NOT have post_process (the default is false,
-        // faithful to C++ TScrollBar: options == 0).
+        // A plain new() bar must NOT have post_process (the default is false;
+        // no options are set).
         let sb_plain = ScrollBar::new(r);
         assert!(
             !sb_plain.state.options.post_process,
@@ -1565,11 +1546,10 @@ mod tests {
         assert_eq!(sb.value, 86);
     }
 
-    /// The two track kinds are discriminated (the C++ has two SEPARATE masked
-    /// loops): a `MouseAuto` during a THUMB track and a `MouseMove` during an
-    /// ARROW track must both fall through unconsumed — they belong to the other
-    /// loop's mask, and only the capture's mask filtering makes them
-    /// unreachable in normal flow.
+    /// The two track kinds are discriminated (two SEPARATE masked tracks): a
+    /// `MouseAuto` during a THUMB track and a `MouseMove` during an ARROW track
+    /// must both fall through unconsumed — they belong to the other track's mask,
+    /// and only the capture's mask filtering makes them unreachable in normal flow.
     #[test]
     fn track_wrong_event_kind_falls_through() {
         let mut out = VecDeque::new();

@@ -15,10 +15,10 @@
 //! frame and the cell diff keeps the terminal I/O bounded.
 //!
 //! # Turbo Vision heritage
-//! Replaces Turbo Vision's incremental, per-view screen writes (`TView::writeBuf`
-//! through `TScreen`) with a double-buffered whole-tree repaint plus diff. The
-//! per-view damage tracking is dropped in favour of repaint-and-diff
-//! (deviation D8).
+//! Replaces Turbo Vision's incremental, per-view screen writes (each view wrote
+//! its buffer straight through the screen driver) with a double-buffered
+//! whole-tree repaint plus diff. The per-view damage tracking is dropped in favour
+//! of repaint-and-diff (deviation D8).
 
 use crate::backend::Backend;
 use crate::screen::Buffer;

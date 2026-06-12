@@ -8,24 +8,23 @@
 //!
 //! ## Window cycling and tiling
 //!
-//! `cmNext`/`cmPrev` cycle the focus through the open windows (see
-//! [`Desktop::handle_event`]), and Alt-N selects a window by number via
-//! [`Desktop::select_window_num`]. `tile`/`cascade` lay the windows out — the
-//! `mostEqualDivisors`/`calcTileRect`/`doCascade` geometry — driven by the
-//! program's `cmTile`/`cmCascade` handler. When a layout cannot fit (a cell
-//! would be zero-sized, or a window's minimum exceeds the cascade rect) the
-//! affected bounds are simply left unchanged. `tile_columns_first` (C++
-//! `tileColumnsFirst = False`) selects the orientation.
+//! The [`Command::NEXT`]/[`Command::PREV`] commands cycle focus through the open
+//! windows (see [`Desktop::handle_event`]), and Alt-N selects a window by number
+//! via [`Desktop::select_window_num`]. [`tile`](Desktop::tile) and
+//! [`cascade`](Desktop::cascade) lay the windows out — a most-equal grid or an
+//! offset stack — driven by the program's tile/cascade handler. When a layout
+//! cannot fit (a cell would be zero-sized, or a window's minimum exceeds the
+//! cascade rect) the affected bounds are simply left unchanged.
+//! `tile_columns_first` selects the grid orientation (default: rows first).
 //!
 //! # Turbo Vision heritage
 //!
-//! Ports `TDeskTop` (`tdesktop.cpp`), a `TGroup` subclass. Inheritance becomes
-//! an embedded [`Group`] the [`Desktop`] forwards every [`View`] method to
-//! (deviation D2); the background is recorded as a local [`ViewId`] rather than
-//! through an owner back-pointer (deviation D3); and the streaming machinery is
-//! dropped (deviation D12). The C++ `shutDown` (`background = 0;
-//! TGroup::shutDown()`) is not reproduced — rstv has no separate shutdown phase;
-//! the tree is simply dropped.
+//! Ports `TDeskTop` (`tdesktop.cpp`), which derived from the group class. That
+//! inheritance becomes an embedded [`Group`] the [`Desktop`] forwards every
+//! [`View`] method to (deviation D2); the background is recorded as a local
+//! [`ViewId`] rather than through an owner back-pointer (deviation D3); and the
+//! streaming machinery is dropped (deviation D12). There is no separate shutdown
+//! phase — the tree is simply dropped.
 
 use crate::command::Command;
 use crate::event::Event;
@@ -33,13 +32,11 @@ use crate::view::{Context, Group, Rect, View, ViewId, locate};
 
 use super::Background;
 
-// -- tiling geometry helpers (verbatim ports of the tdesktop.cpp file statics --
-// turned into pure functions; no globals — the C++ `numCols`/`numRows`/`leftOver`
-// statics are threaded as parameters).
+// -- tiling geometry helpers: pure functions, no globals; the grid dimensions
+// (column count, row count, left-over column count) are threaded as parameters.
 
-/// `iSqr(i)` (`tdesktop.cpp`) — integer square-root-ish helper used by
-/// `mostEqualDivisors`. Faithful `i32` port of the `abs((int)(res1-res2)) > 1`
-/// Newton-style loop.
+/// Integer square-root-ish helper used by [`most_equal_divisors`] — a Newton-style
+/// loop that converges on `floor(sqrt(i))`.
 fn i_sqr(i: i32) -> i32 {
     let mut res1 = 2;
     let mut res2 = i / res1;
@@ -50,9 +47,8 @@ fn i_sqr(i: i32) -> i32 {
     if res1 < res2 { res1 } else { res2 }
 }
 
-/// `mostEqualDivisors(n, x, y, favorY)` (`tdesktop.cpp`) — factor `n` into the
-/// most-equal pair. Returns `(x, y)`. `favor_y` puts the larger factor on `y`
-/// (C++ `favorY = !tileColumnsFirst`).
+/// Factor `n` into the most-equal pair of divisors. Returns `(x, y)` — the grid's
+/// column and row counts. `favor_y` puts the larger factor on `y`.
 fn most_equal_divisors(n: i32, favor_y: bool) -> (i32, i32) {
     let mut i = i_sqr(n);
     if n % i != 0 && n % (i + 1) == 0 {
@@ -68,17 +64,15 @@ fn most_equal_divisors(n: i32, favor_y: bool) -> (i32, i32) {
     }
 }
 
-/// `dividerLoc(lo, hi, num, pos)` (`tdesktop.cpp`) — the `pos`-th of `num` evenly
-/// spaced divider coordinates between `lo` and `hi`. C++ does the multiply in
-/// `long`; coords are `i32`, so the product is computed in `i64` to avoid
-/// overflow, faithful to `int(long(hi-lo)*pos/long(num)+lo)`.
+/// The `pos`-th of `num` evenly spaced divider coordinates between `lo` and `hi`.
+/// The product is computed in `i64` to avoid overflow, then truncated back to
+/// `i32`.
 fn divider_loc(lo: i32, hi: i32, num: i32, pos: i32) -> i32 {
     ((hi - lo) as i64 * pos as i64 / num as i64) as i32 + lo
 }
 
-/// `calcTileRect(pos, r)` (`tdesktop.cpp`) — the cell rect for tile slot `pos`
-/// in the `num_cols × num_rows` grid (with `left_over` columns carrying an extra
-/// row). The C++ file statics `numCols`/`numRows`/`leftOver` are passed in.
+/// The cell rect for tile slot `pos` in the `num_cols × num_rows` grid (with
+/// `left_over` columns carrying an extra row).
 fn calc_tile_rect(pos: i32, r: Rect, num_cols: i32, num_rows: i32, left_over: i32) -> Rect {
     let d = (num_cols - left_over) * num_rows;
     let (x, y) = if pos < d {
@@ -102,12 +96,9 @@ fn calc_tile_rect(pos: i32, r: Rect, num_cols: i32, num_rows: i32, left_over: i3
     n_rect
 }
 
-/// The default desktop background fill — `TDeskTop::defaultBkgrnd` (`tvtext2.cpp`).
-///
-/// C++ `'\xB0'` is CP437 `0xB0`, which is **U+2591 ░ LIGHT SHADE** (the project's
-/// CP437 convention, the same shade family as the scrollbar glyphs in
-/// `theme.rs`). This is the faithful glyph — not `'▒'` (U+2592), which appears
-/// only in arbitrary test scaffolding.
+/// The default desktop background fill: **U+2591 ░ LIGHT SHADE** (the same shade
+/// family as the scrollbar glyphs in [`theme`](crate::theme)). Not `'▒'`
+/// (U+2592), which appears only in arbitrary test scaffolding.
 const DEFAULT_BKGRND: char = '\u{2591}';
 
 /// The desktop group: an embedded [`Group`] that owns a [`Background`].
@@ -118,54 +109,51 @@ const DEFAULT_BKGRND: char = '\u{2591}';
 ///
 /// # Turbo Vision heritage
 ///
-/// Ports `TDeskTop` (`tdesktop.cpp`); inheritance from `TGroup` becomes an
+/// Ports `TDeskTop` (`tdesktop.cpp`); inheritance from the group class becomes an
 /// embedded [`Group`] (deviation D2).
 pub struct Desktop {
-    /// The embedded container. `Desktop` *is-a* `TGroup`: its state, draw, and
+    /// The embedded container. The desktop *is-a* group: its state, draw, and
     /// event routing are the group's.
     group: Group,
-    /// The inserted background child's id — `TDeskTop::background`.
+    /// The inserted background child's id.
     ///
-    /// Consumed by the `cmPrev` arm in [`handle_event`](Self::handle_event), which
-    /// reads `self.background` directly for `current->putInFrontOf(background)`
-    /// (send the current window to the back). Also exposed via
-    /// [`background`](Self::background).
+    /// Consumed by the [`Command::PREV`] arm in
+    /// [`handle_event`](Self::handle_event), which reads `self.background` directly
+    /// to send the current window behind the background (i.e. to the back). Also
+    /// exposed via [`background`](Self::background).
     background: Option<ViewId>,
-    /// `TDeskTop::tileColumnsFirst` — orientation flag read by [`tile`](Self::tile)
-    /// (`favorY = !tile_columns_first`). C++ ctor sets it `False`.
+    /// Grid orientation flag read by [`tile`](Self::tile); `favor_y =
+    /// !tile_columns_first`. Defaults to `false` (rows first).
     tile_columns_first: bool,
 }
 
 impl Desktop {
-    /// `TDeskTop::TDeskTop(bounds)` + `TDeskInit` — construct the desktop.
+    /// Construct the desktop.
     ///
-    /// Ports the C++ ctor faithfully:
-    /// 1. `TGroup(bounds)`.
-    /// 2. `growMode = gfGrowHiX | gfGrowHiY`.
-    /// 3. `tileColumnsFirst = False` (read by [`tile`](Self::tile)).
-    /// 4. `if( createBackground && (background = createBackground(getExtent())) )
-    ///    insert(background)`.
+    /// Steps:
+    /// 1. Create the embedded group over `bounds`.
+    /// 2. Set the grow mode to grow with both the right and bottom edges.
+    /// 3. Default `tile_columns_first` to `false` (read by [`tile`](Self::tile)).
+    /// 4. If `create_background` yields a view, insert it and record its id.
     ///
-    /// The background factory is injected (the `TDeskInit` factory-mixin, mirroring
+    /// The background factory is injected (mirroring
     /// [`Program::new`](crate::app::Program::new)); pass [`Desktop::init_background`]
-    /// for the faithful default. `get_extent()` is the local-origin extent.
+    /// for the default. The factory receives the desktop's local-origin extent.
     pub fn new(
         bounds: Rect,
         create_background: impl FnOnce(Rect) -> Option<Box<dyn View>>,
     ) -> Self {
         let mut group = Group::new(bounds);
-        // C++: growMode = gfGrowHiX | gfGrowHiY
+        // Grow with both the right and bottom edges of the owner.
         group.state_mut().grow_mode.hi_x = true;
         group.state_mut().grow_mode.hi_y = true;
 
         let mut desktop = Desktop {
             group,
             background: None,
-            // C++ ctor: tileColumnsFirst = False
             tile_columns_first: false,
         };
-        // C++: if( createBackground && (background = createBackground(getExtent())) )
-        //          insert(background)
+        // Build the background over the desktop extent and insert it.
         let extent = desktop.group.state().get_extent();
         if let Some(view) = create_background(extent) {
             desktop.background = Some(desktop.group.insert(view));
@@ -173,23 +161,23 @@ impl Desktop {
         desktop
     }
 
-    /// `TDeskTop::initBackground` — the default background factory:
-    /// `new TBackground(r, defaultBkgrnd)`.
+    /// The default background factory: a [`Background`] filled with the default
+    /// shade pattern.
     pub fn init_background(r: Rect) -> Box<dyn View> {
         Box::new(Background::new(r, DEFAULT_BKGRND))
     }
 
-    /// `TDeskTop::background` — the background child's id (the
-    /// `putInFrontOf(background)` target).
+    /// The background child's id (the target the current window is sent behind on
+    /// a previous-window cycle).
     pub fn background(&self) -> Option<ViewId> {
         self.background
     }
 
     /// Insert an arbitrary view (a window) directly into the embedded group,
-    /// returning its id — the production window-insert seam (faithful to the public
-    /// `TGroup::insert` that `TDeskTop` inherits). Windows must live *inside the
-    /// desktop* because the `cmNext`/`cmPrev`/Alt-N handlers live on it. Used by
-    /// app code that pre-populates the desktop (see `examples/hello.rs`).
+    /// returning its id — the production window-insert seam. Windows must live
+    /// *inside the desktop* because the next/previous-window and Alt-N handlers live
+    /// on it. Used by app code that pre-populates the desktop (see
+    /// `examples/hello.rs`).
     pub fn insert_view(&mut self, view: Box<dyn View>) -> ViewId {
         self.group.insert(view)
     }
@@ -210,15 +198,13 @@ impl Desktop {
         ctx: &mut crate::view::Context,
     ) -> ViewId {
         let id = self.group.insert(view);
-        // focus_child == the faithful C++ focus()/select() path; it gives the
-        // window same-instant focus (the focus_child self-heal re-asserts
+        // focus_child gives the window same-instant focus (its self-heal re-asserts
         // currency when the freshly-inserted window is already topmost). The
         // window's own INTERNAL currency (its first selectable child, e.g. an
         // EditWindow's FileEditor) comes from the insert-time `currency_dirty`
         // marker the `Group::insert` above set: the pump's settle_currency pass
-        // (A2) runs the pending reset_current BEFORE the next event pick, so
-        // typing routes into the new window's child exactly as after a C++
-        // insert-time show()->resetCurrent. (The explicit pre-focus
+        // (A2) runs the pending reset_current BEFORE the next event pick, so typing
+        // routes into the new window's child immediately. (The explicit pre-focus
         // reset_current that used to live here was that cascade's per-site
         // compensation; retired by A2.)
         self.group.focus_child(id, ctx);
@@ -228,101 +214,80 @@ impl Desktop {
 
 #[crate::delegate(to = group, skip(value, set_value, number, grabs_focus_on_click, apply_list_scroll))]
 impl View for Desktop {
-    /// `TDeskTop::handleEvent` — delegate to the embedded group's three-phase
-    /// router, then handle the desktop's own `cmNext`/`cmPrev` window cycling.
-    /// Faithful to `tdesktop.cpp`:
-    /// ```cpp
-    /// TGroup::handleEvent( event );
-    /// if( event.what == evCommand ) switch( event.message.command ) {
-    ///     case cmNext: if( valid(cmReleasedFocus) ) selectNext( False ); break;
-    ///     case cmPrev: if( valid(cmReleasedFocus) ) current->putInFrontOf( background ); break;
-    ///     default: return;          // NO clearEvent for other commands
-    /// }
-    /// clearEvent( event );          // reached ONLY for cmNext/cmPrev
-    /// ```
     /// Concrete-reach hatch used by `Program::desktop_insert` to downcast
     /// `&mut dyn View` → `&mut Desktop` and call `insert_and_focus`.
     fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
         Some(self)
     }
 
+    /// Lets the embedded group route the event, then handles the desktop's own
+    /// window cycling: [`Command::NEXT`] focuses the next window and
+    /// [`Command::PREV`] sends the current window to the back (exposing the one
+    /// behind it). Both first check that the focused window will release focus, and
+    /// both consume the command afterward; any other command is left untouched.
     fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
         self.group.handle_event(ev, ctx);
         if let Event::Command(cmd) = *ev {
             match cmd {
                 Command::NEXT => {
                     if self.group.valid(Command::RELEASED_FOCUS, ctx) {
-                        // selectNext(False): findNext + select. `focus_next` is that
-                        // (focus_child raises ofTopSelect windows == C++ select();
-                        // its outgoing validation is already gated by valid() above,
-                        // so it is redundant-but-always-passes). `false` == C++
-                        // `forwards == False`.
+                        // Focus the next window (raising any always-on-top window).
+                        // The outgoing validation is already gated by valid() above.
                         self.group.focus_next(false, ctx);
                     }
-                    // C++ `break` falls through to clearEvent: clear even when
-                    // !valid (the valid() guard wraps only the *action*).
+                    // Consume even when !valid: the guard wraps only the *action*.
                     ev.clear();
                 }
                 Command::PREV => {
                     if self.group.valid(Command::RELEASED_FOCUS, ctx)
                         && let Some(cur) = self.group.current()
                     {
-                        // current->putInFrontOf(background): send current to the
-                        // back, exposing the next window. NB: put_in_front_of's
-                        // `target: None` means TO-TOP (the inverse); pass the
-                        // resolved Some(background) so a future refactor cannot
-                        // silently flip cmPrev into a raise.
+                        // Send the current window behind the background, exposing
+                        // the next window. NB: put_in_front_of's `target: None`
+                        // means TO-TOP (the inverse); pass the resolved
+                        // Some(background) so a future refactor cannot silently flip
+                        // this into a raise.
                         self.group.put_in_front_of(cur, self.background, ctx);
                     }
                     ev.clear();
                 }
-                // C++ `default: return;` — no clearEvent for other commands.
+                // No consume for other commands.
                 _ => {}
             }
         }
     }
 
-    /// `cmSelectWindowNum` (Alt-N) — select the desktop window numbered `num`.
-    /// Realizes the C++ broadcast arm as a direct walk into the embedded
-    /// group (see [`Group::focus_by_number`]). The program reaches this through the
-    /// `select_window_num` trait method — **not** an `as_any_mut` downcast — so it
-    /// stays decoupled from the concrete `Desktop` type.
+    /// Select the desktop window numbered `num` (the Alt-N shortcut). Walks
+    /// directly into the embedded group (see [`Group::focus_by_number`]). The
+    /// program reaches this through the `select_window_num` trait method — **not**
+    /// an `as_any_mut` downcast — so it stays decoupled from the concrete `Desktop`
+    /// type.
     fn select_window_num(&mut self, num: i16, ctx: &mut Context) -> bool {
         self.group.focus_by_number(num, ctx)
     }
 
-    /// `TDeskTop::tile(r)` — lay the tileable windows into a most-equal grid of
-    /// cells over `r`. Faithful port of `tdesktop.cpp`:
-    /// ```cpp
-    /// numTileable = 0; forEach( doCountTileable, 0 );
-    /// if( numTileable > 0 ) {
-    ///     mostEqualDivisors( numTileable, numCols, numRows, !tileColumnsFirst );
-    ///     if( (r.b.x-r.a.x)/numCols == 0 || (r.b.y-r.a.y)/numRows == 0 ) tileError();
-    ///     else { leftOver = numTileable % numCols; tileNum = numTileable - 1;
-    ///            forEach( doTile, &r ); }
-    /// }
-    /// ```
-    /// `doTile` calls `p->locate(calcTileRect(tileNum--))` per tileable child in
-    /// `forEach` order, so the *first-visited* (topmost) child takes `tileNum =
-    /// numTileable - 1`. `tileError()` is an empty no-op → on the guard we leave
-    /// bounds unchanged. `lock()`/`unlock()` are dropped (the whole-tree redraw
-    /// makes them unnecessary). `owner_size` is the desktop size, fed to each
-    /// child's `size_limits` inside [`locate`].
+    /// Lay the tileable windows into a most-equal grid of cells over `r`.
+    ///
+    /// Factors the window count into the most-equal column/row grid, then assigns
+    /// each tileable window a cell. The first-visited (topmost) window takes the
+    /// highest-numbered slot. If a cell would be zero-width or zero-height the
+    /// layout is abandoned and bounds are left unchanged. `owner_size` is the
+    /// desktop size, fed to each child's size limits inside [`locate`].
     fn tile(&mut self, r: Rect) {
-        let ids = self.group.tileable_ids(); // forEach order
-        let n = ids.len() as i32; // numTileable
+        let ids = self.group.tileable_ids(); // visit order
+        let n = ids.len() as i32; // tileable window count
         if n == 0 {
             return;
         }
         let favor_y = !self.tile_columns_first;
         let (num_cols, num_rows) = most_equal_divisors(n, favor_y);
-        // tileError guard: a cell would be zero-width or zero-height.
+        // Fit guard: a cell would be zero-width or zero-height.
         if (r.b.x - r.a.x) / num_cols == 0 || (r.b.y - r.a.y) / num_rows == 0 {
             return;
         }
         let left_over = n % num_cols;
         let owner_size = self.group.state().size;
-        let mut tile_num = n - 1; // FIRST visited gets numTileable - 1
+        let mut tile_num = n - 1; // FIRST visited gets the highest slot
         for id in ids {
             let rect = calc_tile_rect(tile_num, r, num_cols, num_rows, left_over);
             if let Some(v) = self.group.child_mut(id) {
@@ -332,30 +297,22 @@ impl View for Desktop {
         }
     }
 
-    /// `TDeskTop::cascade(r)` — stack the tileable windows offset by one cell each.
-    /// Faithful port of `tdesktop.cpp`:
-    /// ```cpp
-    /// cascadeNum = 0; forEach( doCount, 0 );   // cascadeNum = count, lastView = last
-    /// if( cascadeNum > 0 ) {
-    ///     lastView->sizeLimits( min, max );
-    ///     if( min.x > r.b.x-r.a.x-cascadeNum || min.y > r.b.y-r.a.y-cascadeNum )
-    ///         tileError();
-    ///     else { cascadeNum--; forEach( doCascade, &r ); }
-    /// }
-    /// ```
-    /// `doCount` leaves `cascadeNum == n` and `lastView` = the *last*-visited
-    /// tileable child; the error check subtracts the **full** count `n`. Then
-    /// `cascadeNum--` (→ `n-1`) and `doCascade` offsets each child's `a` by the
-    /// running `cascadeNum`, so the first-visited (topmost) gets `+ (n-1)` and the
-    /// last gets `+ 0`. `tileError()` no-op → leave bounds unchanged on the guard.
+    /// Stack the tileable windows, each offset one cell down-and-right from the
+    /// previous.
+    ///
+    /// The fit check uses the *last*-visited tileable window's minimum size against
+    /// the full window count `n`; if even the deepest offset cannot fit, the layout
+    /// is abandoned and bounds are left unchanged. Otherwise each window's top-left
+    /// is offset by a running counter, so the first-visited (topmost) window gets
+    /// the largest offset `n-1` and the last gets `0`.
     fn cascade(&mut self, r: Rect) {
-        let ids = self.group.tileable_ids(); // forEach order
-        let n = ids.len() as i32; // doCount's cascadeNum
+        let ids = self.group.tileable_ids(); // visit order
+        let n = ids.len() as i32; // window count
         if n == 0 {
             return;
         }
         let owner_size = self.group.state().size;
-        // lastView = last tileable in forEach order; error check uses the full n.
+        // The last-visited tileable window; the fit check uses the full count n.
         if let Some(&last_id) = ids.last() {
             let (min, _max) = self
                 .group
@@ -363,10 +320,10 @@ impl View for Desktop {
                 .expect("tileable id resolves")
                 .size_limits(owner_size);
             if min.x > r.b.x - r.a.x - n || min.y > r.b.y - r.a.y - n {
-                return; // tileError
+                return; // does not fit; leave bounds unchanged
             }
         }
-        let mut cascade_num = n - 1; // C++ decrements once before doCascade
+        let mut cascade_num = n - 1; // start the offset at n-1 (topmost deepest)
         for id in ids {
             if cascade_num >= 0 {
                 let mut nr = r;
@@ -415,7 +372,7 @@ mod tests {
         assert_eq!(desktop.group.len(), 1, "exactly one child (the background)");
     }
 
-    // -- 2. growMode = gfGrowHiX | gfGrowHiY ---------------------------------
+    // -- 2. grow mode = grow with right + bottom edges -----------------------
 
     #[test]
     fn new_sets_grow_hi_x_and_hi_y() {
@@ -489,7 +446,7 @@ mod tests {
         insta::assert_snapshot!(screen.snapshot());
     }
 
-    /// Shadow pass: a `Window` (which sets `sfShadow`) inserted over the ░
+    /// Shadow pass: a `Window` (which casts a shadow) inserted over the ░
     /// desktop background casts the offset-L drop shadow — 2 columns right
     /// (screen rows 2..5: one below the top edge to one past the bottom) + 1 row below
     /// (columns 3..10: starting 2 right of the left edge). The shadow cells keep
@@ -523,8 +480,8 @@ mod tests {
         let mut desktop = Desktop::new(Rect::new(0, 0, 20, 10), |r| {
             Some(Desktop::init_background(r))
         });
-        // Background was inserted at the desktop's local extent (0,0,20,10) with
-        // gfGrowHiX|HiY, so its hi edges track the desktop.
+        // Background was inserted at the desktop's local extent (0,0,20,10) and
+        // grows with the right + bottom edges, so its far edges track the desktop.
         View::change_bounds(&mut desktop, Rect::new(0, 0, 25, 13)); // UFCS: disambiguate the trait method
         let child_bounds = desktop.group.child_state_mut(0).get_bounds();
         assert_eq!(
@@ -639,10 +596,9 @@ mod tests {
     /// non-square `n` the two orientations differ, so this pins the otherwise
     /// uncovered `favor_y == false` branch (the `tile_columns_first == true` path).
     ///
-    /// Hand-traced for `n = 6` (C++ `mostEqualDivisors`):
-    /// `iSqr(6)` → res1=2, res2=3, `|2-3| == 1` (loop skipped), returns 2 → `i = 2`;
-    /// `6 % 2 == 0` (no `+1`); `2 < 6/2 == 3` → `i = 3`. Then
-    /// `favorY` → `x = n/i = 2, y = i = 3`; `!favorY` → `x = i = 3, y = n/i = 2`.
+    /// Hand-traced for `n = 6`: `i_sqr(6)` → 2 → `i = 2`; `6 % 2 == 0` (no `+1`);
+    /// `2 < 6/2 == 3` → `i = 3`. Then `favor_y` → `(x, y) = (n/i, i) = (2, 3)`;
+    /// `!favor_y` → `(x, y) = (i, n/i) = (3, 2)`.
     #[test]
     fn most_equal_divisors_swaps_on_favor_y() {
         // favor_y == true (tile_columns_first == false): larger factor on y.
@@ -651,13 +607,13 @@ mod tests {
         assert_eq!(most_equal_divisors(6, false), (3, 2));
     }
 
-    /// Test 1 — tile lays N windows into `calc_tile_rect` cells, in forEach order.
+    /// Test 1 — tile lays N windows into `calc_tile_rect` cells, in visit order.
     /// Bite: the topmost (last-inserted) window must take `tile_num = n-1`; an
     /// off-by-one or reversed order lands a window in the wrong cell.
     #[test]
     fn tile_lays_windows_into_calc_tile_cells() {
         let mut desktop = Desktop::new(Rect::new(0, 0, 80, 24), |_| None);
-        // Insert first→last; ids[0] in forEach order == the LAST inserted (topmost).
+        // Insert first→last; ids[0] in visit order == the LAST inserted (topmost).
         let w0 = desktop.insert_view(tileable_window(Rect::new(1, 1, 20, 8), 1));
         let w1 = desktop.insert_view(tileable_window(Rect::new(2, 2, 21, 9), 2));
         let w2 = desktop.insert_view(tileable_window(Rect::new(3, 3, 22, 10), 3));
@@ -665,7 +621,7 @@ mod tests {
         desktop.tile(Rect::new(0, 0, 80, 24));
 
         // n=3, favor_y=true → num_cols=1, num_rows=3 → 3 stacked cells.
-        // forEach order = [w2, w1, w0]; tile_num = 2,1,0.
+        // visit order = [w2, w1, w0]; tile_num = 2,1,0.
         assert_eq!(
             child_bounds(&mut desktop, w2),
             Rect::new(0, 16, 80, 24),
@@ -715,7 +671,7 @@ mod tests {
             inv_bounds,
             "invisible window untouched"
         );
-        // n=2 → num_cols=1, num_rows=2 → 2 stacked cells. forEach [b, a]; tile_num 1,0.
+        // n=2 → num_cols=1, num_rows=2 → 2 stacked cells. visit [b, a]; tile_num 1,0.
         assert_eq!(
             child_bounds(&mut desktop, b),
             Rect::new(0, 12, 80, 24),
@@ -728,7 +684,7 @@ mod tests {
         );
     }
 
-    /// Test 3 — tileError guard (a cell would be zero-width/height) leaves bounds
+    /// Test 3 — the fit guard (a cell would be zero-width/height) leaves bounds
     /// unchanged. Bite: without the guard, `divider_loc`/`locate` would still run
     /// and (after the 16×6 clamp) move the windows.
     #[test]
@@ -742,7 +698,7 @@ mod tests {
         let a = desktop.insert_view(tileable_window(a_bounds, 1));
         let b = desktop.insert_view(tileable_window(b_bounds, 2));
 
-        // Zero-width layout rect → (r.b.x - r.a.x)/num_cols == 0 → tileError no-op.
+        // Zero-width layout rect → (r.b.x - r.a.x)/num_cols == 0 → guard trips, no-op.
         desktop.tile(Rect::new(5, 0, 5, 24));
 
         assert_eq!(child_bounds(&mut desktop, a), a_bounds, "a unchanged");
@@ -751,7 +707,7 @@ mod tests {
 
     /// Test 4 — cascade offsets run `n-1 … 0`: topmost (last-inserted, `ids[0]`)
     /// gets `a == r.a + (n-1)`; the bottom (first-inserted) gets `a == r.a + 0`.
-    /// Bite: this assertion flips if forEach order or the `n-1` start is wrong.
+    /// Bite: this assertion flips if visit order or the `n-1` start is wrong.
     #[test]
     fn cascade_offsets_run_n_minus_1_down_to_0() {
         let mut desktop = Desktop::new(Rect::new(0, 0, 80, 24), |_| None);
@@ -762,7 +718,7 @@ mod tests {
         let r = Rect::new(0, 0, 80, 24);
         desktop.cascade(r);
 
-        // n=3 → offsets 2,1,0 in forEach order [top, mid, bottom].
+        // n=3 → offsets 2,1,0 in visit order [top, mid, bottom].
         let top_b = child_bounds(&mut desktop, top);
         assert_eq!(top_b.a, Point::new(2, 2), "topmost gets r.a + (n-1) = +2");
         let bottom_b = child_bounds(&mut desktop, bottom);

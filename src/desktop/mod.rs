@@ -1,9 +1,9 @@
-//! Desktop-layer views — `TDeskTop` and `TBackground`.
+//! Desktop-layer views — the desktop surface and its backdrop.
 //!
-//! [`Background`] is the simplest concrete view: fills its owner's bounds
-//! with a repeated pattern character. [`Desktop`] is the `TGroup`-embedding
-//! desktop group that owns a [`Background`] and gives `Program` a named real
-//! desktop.
+//! [`Background`] is the simplest concrete view: it fills its owner's bounds
+//! with a repeated pattern character. [`Desktop`] is the group-embedding
+//! desktop that owns a [`Background`], hosts the application's windows, and gives
+//! `Program` a named real desktop.
 
 mod background;
 // The module file is named `desktop.rs` (matching the `Desktop` type) inside the

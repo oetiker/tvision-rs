@@ -34,24 +34,19 @@
 //! [`transfer_set`](Validator::transfer_set) hook before falling back to the
 //! text itself, so a range validator round-trips an integer rather than a string.
 //!
-//! Validation runs on focus loss and returns a plain boolean. The C++
-//! `valid()` additionally re-focused the offending field as a side effect; rstv
-//! does not, because deciding validity is a read-only query (`valid(&self)`)
-//! while moving focus would require mutable access to the event loop.
+//! Validation runs on focus loss and returns a plain boolean. Deciding validity
+//! is a read-only query (`valid(&self)`); a field that fails validation is *not*
+//! automatically re-focused, since moving focus would require mutable access to
+//! the event loop.
 //!
 //! # Turbo Vision heritage
 //!
-//! Ports `TInputLine` (`tinputli.cpp`/`dialogs.h`). C++ inheritance becomes the
-//! `View` trait plus `ViewState` composition (deviation D2); the
-//! `ilMaxBytes`/`ilMaxWidth`/`ilMaxChars` constants become the [`LimitMode`] enum
-//! (deviation D1); `getData`/`setData`/`dataSize` become the typed
-//! [`value`](View::value)/[`set_value`](View::set_value) protocol over
-//! [`FieldValue`] (deviation D10); and `byte offset vs. display column` is the
-//! explicit two-unit coordinate model (deviation D13). The cursor screen
-//! position is computed in `handle_event` and stored on [`ViewState::cursor`] for
-//! the loop's cursor reset to read, rather than set inside `draw`; the
-//! attr-only selection paint becomes a segmented redraw; and `TStreamable` is
-//! dropped.
+//! Ports `TInputLine` (`tinputli.cpp`/`dialogs.h`). Inheritance becomes the
+//! `View` trait plus `ViewState` composition (D2); the byte/width/char limit
+//! constants become the [`LimitMode`] enum (D1); the get/set/size data hooks
+//! become the typed [`value`](View::value)/[`set_value`](View::set_value)
+//! protocol over [`FieldValue`] (D10); and the explicit byte-offset vs.
+//! display-column split is the two-unit coordinate model (D13).
 
 use crate::capture::TrackMask;
 use crate::command::Command;
@@ -64,22 +59,20 @@ use crate::validate::Validator;
 use crate::view::{Context, DrawCtx, Options, Point, Rect, StateFlag, View, ViewState};
 
 // ---------------------------------------------------------------------------
-// LimitMode — enum for ilMaxBytes / ilMaxWidth / ilMaxChars
+// LimitMode — what the `limit` constructor argument counts
 // ---------------------------------------------------------------------------
 
-/// How the `limit` constructor argument is interpreted — replaces the
-/// `ilMaxBytes`/`ilMaxWidth`/`ilMaxChars` constants (`dialogs.h`).
+/// How the `limit` constructor argument is interpreted — which of the three
+/// internal caps it sets.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum LimitMode {
-    /// `ilMaxBytes` (0, the C++ default) — `limit` caps the byte length
-    /// (`maxLen = limit - 1`); width/char count are unbounded.
+    /// The default: `limit` caps the byte length (`max_len = limit - 1`); the
+    /// display width and grapheme count are unbounded.
     #[default]
     MaxBytes,
-    /// `ilMaxWidth` (1) — `limit` caps the display width (`maxWidth = limit`);
-    /// `maxLen = 255`.
+    /// `limit` caps the display width (`max_width = limit`); `max_len` is 255.
     MaxWidth,
-    /// `ilMaxChars` (2) — `limit` caps the grapheme count (`maxChars = limit`);
-    /// `maxLen = 255`.
+    /// `limit` caps the grapheme count (`max_chars = limit`); `max_len` is 255.
     MaxChars,
 }
 
@@ -91,27 +84,26 @@ pub enum LimitMode {
 pub struct InputLine {
     /// View state (geometry, flags, cursor) — the composition target.
     pub state: ViewState,
-    /// `data` — the field contents.
+    /// The field contents.
     pub data: String,
-    /// `maxLen` — the maximum byte length of `data`.
+    /// The maximum byte length of `data`.
     pub max_len: i32,
-    /// `maxWidth` — the maximum display width (`INT_MAX` ≈ unbounded otherwise).
+    /// The maximum display width (`i32::MAX` ≈ unbounded otherwise).
     pub max_width: i32,
-    /// `maxChars` — the maximum grapheme count (`INT_MAX` ≈ unbounded otherwise).
+    /// The maximum grapheme count (`i32::MAX` ≈ unbounded otherwise).
     pub max_chars: i32,
-    /// `curPos` — cursor position, a **byte** offset into `data`.
+    /// Cursor position, a **byte** offset into `data`.
     pub cur_pos: i32,
-    /// `firstPos` — horizontal scroll offset, a **display column** (see module
-    /// docs: NOT a byte offset).
+    /// Horizontal scroll offset, a **display column** (see module docs: NOT a
+    /// byte offset).
     pub first_pos: i32,
-    /// `selStart` — selection start, a **byte** offset into `data`.
+    /// Selection start, a **byte** offset into `data`.
     pub sel_start: i32,
-    /// `selEnd` — selection end, a **byte** offset into `data`.
+    /// Selection end, a **byte** offset into `data`.
     pub sel_end: i32,
-    /// `anchor` — the fixed end of a keyboard/mouse block extension, a **byte**
-    /// offset.
+    /// The fixed end of a keyboard/mouse block extension, a **byte** offset.
     pub anchor: i32,
-    /// `validator` — the optional input validator (a trait object).
+    /// The optional input validator (a trait object).
     pub validator: Option<Box<dyn Validator>>,
     // -- validator save-state (oldData/oldCurPos/…) ------------------------
     old_data: String,
@@ -134,13 +126,14 @@ pub struct InputLine {
 }
 
 impl InputLine {
-    /// `TInputLine::TInputLine` — build a field from `bounds`, `limit`, an
-    /// optional `validator`, and a [`LimitMode`].
+    /// Build a field from `bounds`, a `limit`, an optional `validator`, and a
+    /// [`LimitMode`] that decides what `limit` counts.
     ///
-    /// Faithful to the C++ ctor: `maxLen = (mode==MaxBytes) ?
-    /// min(max(limit-1,0), INT_MAX-1) : 255`; `maxWidth = (mode==MaxWidth) ?
-    /// limit : INT_MAX`; `maxChars = (mode==MaxChars) ? limit : INT_MAX`. Sets
-    /// `sfCursorVis` and `ofSelectable | ofFirstClick`; `data` starts empty.
+    /// The three internal caps are derived from the mode: `max_len` (byte cap)
+    /// is `limit - 1` clamped to a non-negative range when the mode is byte-based,
+    /// else 255; `max_width` is `limit` only in width mode, else unbounded;
+    /// `max_chars` is `limit` only in char mode, else unbounded. The field is
+    /// selectable, takes focus on first click, shows a cursor, and starts empty.
     pub fn new(
         bounds: Rect,
         limit: i32,
@@ -198,21 +191,21 @@ impl InputLine {
         il
     }
 
-    /// Convenience ctor with no validator and the default `ilMaxBytes` mode.
+    /// Convenience constructor with no validator and the default byte-limit mode.
     pub fn with_limit(bounds: Rect, limit: i32) -> Self {
         Self::new(bounds, limit, None, LimitMode::MaxBytes)
     }
 
     // -- geometry helpers (byte ↔ column) ----------------------------------
 
-    /// `TInputLine::displayedPos` — the display column of the prefix
-    /// `data[..pos]` (`pos` is a byte offset). The screen-column ↔ byte bridge.
+    /// The display column of the prefix `data[..pos]` (`pos` is a byte offset).
+    /// The screen-column ↔ byte bridge.
     fn displayed_pos(&self, pos: i32) -> i32 {
         text::width(&self.data[..pos as usize]) as i32
     }
 
-    /// `TInputLine::canScroll` — whether the field can scroll by `delta`
-    /// (`delta < 0` left, `> 0` right). Right uses display-width arithmetic.
+    /// Whether the field can scroll by `delta` (`delta < 0` left, `> 0` right).
+    /// Right uses display-width arithmetic.
     fn can_scroll(&self, delta: i32) -> bool {
         if delta < 0 {
             self.first_pos > 0
@@ -233,8 +226,8 @@ impl InputLine {
 
     // -- selection / deletion (byte offsets) -------------------------------
 
-    /// `TInputLine::deleteSelect` — remove `data[selStart..selEnd]`, leaving the
-    /// cursor at `selStart`.
+    /// Remove the selected range `data[sel_start..sel_end]`, leaving the cursor
+    /// at `sel_start`.
     fn delete_select(&mut self) {
         if self.sel_start < self.sel_end {
             self.data
@@ -243,8 +236,7 @@ impl InputLine {
         }
     }
 
-    /// `TInputLine::deleteCurrent` — select the grapheme under the cursor (one
-    /// `TText::next` step) and delete it.
+    /// Select the grapheme under the cursor (one [`text::next`] step) and delete it.
     fn delete_current(&mut self) {
         let cp = self.cur_pos as usize;
         if cp < self.data.len() {
@@ -257,8 +249,7 @@ impl InputLine {
         }
     }
 
-    /// `TInputLine::adjustSelectBlock` — order `selStart`/`selEnd` around the
-    /// `anchor` after a block extension.
+    /// Order `sel_start`/`sel_end` around the `anchor` after a block extension.
     fn adjust_select_block(&mut self) {
         if self.cur_pos < self.anchor {
             self.sel_start = self.cur_pos;
@@ -271,9 +262,8 @@ impl InputLine {
 
     /// Select all (or none) and optionally scroll the end into view. **Does
     /// not** draw (the whole tree is redrawn) but does sync the cursor. Callers
-    /// that have `ctx` and where
-    /// `canUpdateCommands()` may be true (set_state, handle_event) call
-    /// `update_commands` themselves after `select_all`.
+    /// that hold a `ctx` and where command state may need refreshing
+    /// (`set_state`, `handle_event`) call `update_commands` themselves afterward.
     pub fn select_all(&mut self, enable: bool, scroll: bool) {
         self.sel_start = 0;
         if enable {
@@ -289,17 +279,15 @@ impl InputLine {
         self.sync_cursor();
     }
 
-    /// `TInputLine::canUpdateCommands` — true when both `sfActive` and `sfSelected`
-    /// are set (C++: `(~state & (sfActive | sfSelected)) == 0`). Only when both
-    /// flags are set should `update_commands` push the enable/disable deferred ops.
+    /// True only when this field is both active and selected. Command
+    /// enable/disable updates are pushed only while both hold.
     fn can_update_commands(&self) -> bool {
         self.state.state.active && self.state.state.selected
     }
 
-    /// `TInputLine::updateCommands` — push enable/disable deferred ops for
-    /// cmCut/cmCopy (enabled when a selection exists) and cmPaste (always enabled
-    /// while this field is active+selected, faithful to `setCmdState(cmPaste, True)`).
-    /// Only called when `can_update_commands()`. Faithful to tinputli.cpp.
+    /// Push enable/disable updates for cut/copy (enabled only while a selection
+    /// exists) and paste (always enabled while this field is active+selected).
+    /// Only called when [`can_update_commands`](Self::can_update_commands) holds.
     fn update_commands(&self, ctx: &mut Context) {
         let has_selection = self.sel_start < self.sel_end;
         if has_selection {
@@ -315,7 +303,7 @@ impl InputLine {
 
     // -- validator save/restore/check --------------------------------------
 
-    /// `TInputLine::saveState` — snapshot for the validator's restore-on-reject.
+    /// Snapshot the field for the validator's restore-on-reject.
     fn save_state(&mut self) {
         if self.validator.is_some() {
             self.old_data.clear();
@@ -327,7 +315,7 @@ impl InputLine {
         }
     }
 
-    /// `TInputLine::restoreState` — undo to the last [`save_state`](Self::save_state).
+    /// Undo to the last [`save_state`](Self::save_state).
     fn restore_state(&mut self) {
         if self.validator.is_some() {
             self.data.clear();
@@ -339,9 +327,9 @@ impl InputLine {
         }
     }
 
-    /// `TInputLine::checkValid` — run the validator's `isValidInput` over the
-    /// current `data`; on reject, restore and report `false`; on accept, clamp to
-    /// `maxLen` and pull `curPos` to the new end if it sat past the old one.
+    /// Run the validator's input check over the current `data`; on reject,
+    /// restore the snapshot and report `false`; on accept, clamp to the byte cap
+    /// and pull the cursor back to the new end if it sat past the old one.
     /// Returns whether the input is (still) valid.
     fn check_valid(&mut self, no_auto_fill: bool) -> bool {
         if self.validator.is_none() {
@@ -381,17 +369,14 @@ impl InputLine {
 
     /// Insert `text` from the clipboard at the current cursor position,
     /// replacing any active selection and clamping the result to `max_len`.
-    /// Called by the pump's `Deferred::InputLinePaste` apply arm. Mirrors the
-    /// C++ `TClipboard::requestText()` completion path: insert the pasted bytes
-    /// at `curPos`, replacing the selection, clamped so the total byte length
-    /// does not exceed `maxLen`. Tabs/newlines are replaced with spaces
-    /// (faithful to the per-character insertion in the C++ keyboard path).
-    /// After insertion the cursor sits at the end of the pasted text and the
-    /// selection is cleared.
+    /// Called by the pump's `Deferred::InputLinePaste` apply arm once the backend
+    /// has supplied the clipboard text: insert the pasted bytes at the cursor,
+    /// replacing the selection, clamped so the total byte length does not exceed
+    /// the byte cap. Tabs/newlines are replaced with spaces. After insertion the
+    /// cursor sits at the end of the pasted text and the selection is cleared.
     pub fn paste_text(&mut self, text: &str) {
         self.save_state();
-        // Replace the selection (C++ tinputli.cpp paste lands after the cut/copy
-        // block; in the original C++ cmPaste → requestText → callback inserts).
+        // Replace the current selection before inserting.
         self.delete_select();
         // Replace tabs/newlines with spaces, insert character by character,
         // stopping when max_len would be exceeded. For simplicity we insert the
@@ -439,8 +424,8 @@ impl InputLine {
 
     // -- mouse helpers (used by the press-and-hold track arms) -------------
 
-    /// `TInputLine::mousePos` — the byte offset under the mouse (view-local
-    /// position already applied by the group).
+    /// The byte offset under the mouse (view-local position already applied by
+    /// the group).
     fn mouse_pos(&self, m: &MouseEvent) -> i32 {
         let mx = m.position.x.max(1);
         let pos = (mx + self.first_pos - 1).max(0);
@@ -448,9 +433,9 @@ impl InputLine {
         text::scroll(&self.data, pos, false).0 as i32
     }
 
-    /// `TInputLine::mouseDelta` — the auto-scroll direction for a mouse at the
-    /// edge. Used by `MouseDown` (the first loop iteration) and the `MouseAuto`
-    /// arm (hold-repeat ticks) in both the edge-scroll and drag-select branches.
+    /// The auto-scroll direction for a mouse at the edge. Used by the mouse-down
+    /// arm and the hold-repeat (`MouseAuto`) arm in both the edge-scroll and
+    /// drag-select branches.
     fn mouse_delta(&self, m: &MouseEvent) -> i32 {
         if m.position.x <= 0 {
             -1
@@ -461,12 +446,12 @@ impl InputLine {
         }
     }
 
-    // -- clipboard helpers (extracted from the evCommand arm) --------------
+    // -- clipboard helpers (extracted from the command arm) --------------
 
-    /// cmCut — copy the current selection to the clipboard, then delete it.
-    /// Verbatim move of the `Event::Command(Command::CUT)` body; the clipboard
-    /// operation is guarded by the selection test (C++ always clears the event
-    /// regardless, which the callers handle).
+    /// Cut: copy the current selection to the clipboard, then delete it. The
+    /// clipboard operation is guarded by the selection test; the cut command is
+    /// always consumed regardless of whether a selection existed, which the
+    /// callers handle.
     fn do_cut(&mut self, ctx: &mut Context) {
         if self.sel_start < self.sel_end {
             let sel = self.data[self.sel_start as usize..self.sel_end as usize].to_string();
@@ -480,8 +465,8 @@ impl InputLine {
         }
     }
 
-    /// cmCopy — copy the current selection to the clipboard, keep it. Verbatim
-    /// move of the `Event::Command(Command::COPY)` body.
+    /// Copy the current selection to the clipboard, keeping it (the
+    /// `Command::COPY` body).
     fn do_copy(&mut self, ctx: &mut Context) {
         if self.sel_start < self.sel_end {
             let sel = self.data[self.sel_start as usize..self.sel_end as usize].to_string();
@@ -489,8 +474,7 @@ impl InputLine {
         }
     }
 
-    /// cmPaste — request an async paste via the broker. Verbatim move of the
-    /// `Event::Command(Command::PASTE)` body.
+    /// Request an async paste via the broker (the `Command::PASTE` body).
     fn do_paste(&mut self, ctx: &mut Context) {
         if let Some(id) = self.state.id() {
             ctx.request_input_line_paste(id);
@@ -638,16 +622,16 @@ impl View for InputLine {
         // this value, mirroring the Button `abs_origin` pattern.
         self.abs_origin = ctx.origin();
         let size = self.state.size;
-        // getColor((sfFocused)?2:1) — both palette indices map to InputNormal.
+        // Focused and unfocused both use the normal input role.
         let color = ctx.style(Role::InputNormal);
         let arrow = ctx.style(Role::InputArrow);
         let selected = ctx.style(Role::InputSelected);
         let left_arrow = ctx.glyphs().input_left_arrow;
         let right_arrow = ctx.glyphs().input_right_arrow;
 
-        // moveChar(0, ' ', color, size.x) — fill the whole row.
+        // Fill the whole row with the background color.
         ctx.fill(Rect::new(0, 0, size.x, 1), ' ', color);
-        // moveStr(1, data, color, size.x-1, firstPos) — scrolled text from col 1.
+        // Scrolled text from column 1, offset by first_pos.
         if size.x > 1 {
             // The text window is columns 1..size.x; clip there via a sub-ctx so a
             // glyph cannot spill into col 0 or past the right edge.
@@ -663,14 +647,12 @@ impl View for InputLine {
             ctx.put_char(0, 0, left_arrow, arrow);
         }
 
-        // Selection highlight. C++ recolors columns [l+1 .. l+1+(r-l)) with
-        // getColor(3); rstv has no attr-only paint (the `0 = retain` sentinel was
-        // dropped), so we REDRAW the selected substring in the selected style at
-        // its screen column — byte-identical output.
+        // Selection highlight. There is no attr-only paint, so we REDRAW the
+        // selected substring in the selected style at its screen column —
+        // byte-identical output.
         if self.state.state.selected && self.sel_start < self.sel_end {
-            // C++ l/r are display columns of the selection ends, relative to the
-            // scroll window; the recolor covers view columns [l+1 .. r+1) (width
-            // r-l) at `moveChar(l+1, 0, getColor(3), r-l)`.
+            // `l`/`r` are the display columns of the selection ends relative to
+            // the scroll window; the highlight covers view columns [l+1 .. r+1).
             let l = (self.displayed_pos(self.sel_start) - self.first_pos).max(0);
             let r = (self.displayed_pos(self.sel_end) - self.first_pos).min(size.x - 2);
             if l < r {
@@ -694,8 +676,7 @@ impl View for InputLine {
     /// [`do_copy`](Self::do_copy) / [`do_paste`](Self::do_paste)) and command
     /// graying ([`update_commands`](Self::update_commands)) are handled here.
     fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
-        // Base TView::handleEvent (mouse-down auto-select is the group's job now;
-        // base is a no-op).
+        // Mouse-down auto-select is the group's job; nothing to do while unselected.
         if !self.state.state.selected {
             return;
         }
@@ -703,15 +684,14 @@ impl View for InputLine {
         match ev {
             // -- Mouse positioning + hold-tracking ------------------------------
             //
-            // The C++ `handleEvent` has two `do{}while` loops starting from the
-            // same mouse-down — they become the first iteration in `MouseDown`,
-            // then arm the capture for subsequent ticks.
+            // The two hold loops (edge auto-scroll, drag-select) both start from
+            // the same mouse-down — they become the first iteration here, then
+            // arm the capture for subsequent ticks.
             Event::MouseDown(m) => {
                 let m = *m;
                 let delta = self.mouse_delta(&m);
                 if self.can_scroll(delta) {
-                    // C++ tinputli.cpp:313-320 — edge auto-scroll loop.
-                    // First iteration: `if canScroll(delta) firstPos += delta`.
+                    // Edge auto-scroll: first iteration steps first_pos by delta.
                     self.first_pos += delta;
                     // Arm auto-only repeat.
                     if let Some(id) = self.state.id() {
@@ -788,12 +768,12 @@ impl View for InputLine {
             //
             // C++ tinputli.cpp:332-334 (inside the move|auto loop, for non-auto
             // events): `curPos=mousePos(event); adjustSelectBlock()`.
-            // The edge-scroll branch's C++ loop is auto-only-masked, so a move
-            // during an edge track must FALL THROUGH unconsumed (the two-
-            // separate-masked-loops structure, same as the scrollbar arms).
+            // The edge-scroll track is auto-only, so a move during an edge track
+            // must FALL THROUGH unconsumed (same split-loop structure as the
+            // scrollbar arms).
             Event::MouseMove(m) if self.tracking && self.tracking_drag => {
                 let m = *m;
-                // C++ tinputli.cpp:333-334: `curPos = mousePos; adjustSelectBlock`
+                // Drag-select: move the cursor to the mouse and re-order the block.
                 self.cur_pos = self.mouse_pos(&m);
                 self.adjust_select_block();
                 self.sync_cursor();
@@ -928,15 +908,12 @@ impl View for InputLine {
             }
 
             // -- evCommand clipboard block --------------------------------------
-            // C++: `if ((state & sfSelected) != 0) … case evCommand: …`
-            // Faithful: only when selected (the outer guard at the top of
-            // handleEvent already returns if !selected, so this arm is always
-            // inside the selected block).
+            // Only reached when selected (the outer guard returns otherwise).
             Event::Command(cmd) => {
                 // Only CUT/COPY/PASTE are handled via the command channel — the
                 // input line must NOT newly react to movement/select commands that
                 // arrive here (the keymap-driven repertoire applies to KeyDown).
-                // C++ always calls clearEvent for these regardless of whether a
+                // The command is always consumed regardless of whether a
                 // selection exists; the clipboard operation is guarded inside each.
                 match *cmd {
                     Command::CUT => {
@@ -966,9 +943,10 @@ impl View for InputLine {
         }
     }
 
-    /// Base flag flip then, on `sfSelected` (or `sfActive` while selected),
-    /// `select_all(enable, false)`. Also refreshes the cut/copy/paste command
-    /// enable state when the active+selected condition changes.
+    /// Base flag flip then, on [`Selected`](StateFlag::Selected) (or
+    /// [`Active`](StateFlag::Active) while selected), `select_all(enable,
+    /// false)`. Also refreshes the cut/copy/paste command enable state when the
+    /// active+selected condition changes.
     fn set_state(&mut self, flag: StateFlag, enable: bool, ctx: &mut Context) {
         // Command graying: sample the enable condition BEFORE the flag flip so
         // we can detect the transition.
@@ -998,18 +976,17 @@ impl View for InputLine {
         }
     }
 
-    /// `TInputLine::valid` — with a validator: `cmValid` → status OK; any other
-    /// non-`cmCancel` command runs the validator and fails if invalid. Without a
-    /// validator: always valid.
+    /// With a validator: the validate command reports the validator's status;
+    /// any other non-cancel command runs the validator and fails if invalid.
+    /// Without a validator: always valid.
     fn valid(&mut self, cmd: Command, ctx: &mut Context) -> bool {
         if let Some(validator) = &self.validator {
             if cmd == Command::VALID {
                 return validator.is_status_ok();
             } else if cmd != Command::CANCEL && !validator.validate(&self.data, ctx) {
-                // validator.validate pops the validator's `error()` box (via
-                // ctx.request_message_box) on the way to returning false — faithful
-                // to TInputLine::valid calling validator->valid() which pops error().
-                // C++ `valid()`: `select(); return False` — focus the bad field.
+                // validator.validate pops the validator's error box (via
+                // ctx.request_message_box) on the way to returning false, then we
+                // refocus the offending field.
                 if let Some(id) = self.state.id() {
                     ctx.request_focus(id);
                 }
@@ -2170,9 +2147,9 @@ mod tests {
         assert_eq!(il.cur_pos, 4);
     }
 
-    /// cmCut without a selection is a no-op data-wise but the event IS consumed.
-    /// C++ always calls clearEvent for cmCut/cmCopy regardless of selection;
-    /// the clipboard operation is only performed when a selection exists.
+    /// Cut without a selection is a no-op data-wise but the event IS consumed.
+    /// Cut/copy always consume the event regardless of selection; the clipboard
+    /// operation is only performed when a selection exists.
     #[test]
     fn b3_cut_without_selection_consumes_event() {
         let mut il = field(12, "hello");
@@ -2184,10 +2161,7 @@ mod tests {
         let mut ev = Event::Command(Command::CUT);
         let (_, deferred, ()) = with_ctx_d(|ctx| il.handle_event(&mut ev, ctx));
         // C++ always clears the event for cmCut/cmCopy, even without a selection.
-        assert!(
-            ev.is_nothing(),
-            "cmCut always consumes the event (C++ clearEvent)"
-        );
+        assert!(ev.is_nothing(), "cut always consumes the event");
         assert_eq!(il.data, data_before, "no data change without selection");
         assert!(
             !deferred

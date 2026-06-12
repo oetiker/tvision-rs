@@ -8,33 +8,30 @@
 //! [`Color`]: crate::color::Color
 //!
 //! # Turbo Vision heritage
-//! Ports `RGBtoXTerm16`, `RGBtoXTerm256`, `BIOStoXTerm16` and the related
-//! helpers from `colors.cpp` / `colors.h`. The individual functions name their
-//! C++ originals; the math is reproduced verbatim, only the storage is typed
-//! (`u8` channels rather than packed bytes).
+//! Ports `RGBtoXTerm16`, `RGBtoXTerm256`, `BIOStoXTerm16` and the related helpers
+//! from `colors.cpp` / `colors.h`. The math is reproduced verbatim; only the
+//! storage is typed (`u8` channels rather than packed bytes).
 
 // ---------------------------------------------------------------------------
-// HCL helper (RGBtoHCL, colors.cpp)
+// Hue-Chroma-Lightness helper
 // ---------------------------------------------------------------------------
 
 /// Hue-Chroma-Lightness record used internally by [`rgb_to_xterm16`].
-/// Faithful to `struct HCL` in `colors.cpp` (`h`, `c`, `l` fields).
 struct Hcl {
     h: u8,
     c: u8,
     l: u8,
 }
 
-/// HUE_PRECISION = 32 (colors.cpp)
+/// Hue units per sector.
 const HUE_PRECISION: u8 = 32;
-/// HUE_MAX = 6 * HUE_PRECISION = 192 (colors.cpp)
+/// Full hue circle = 6 sectors.
 const HUE_MAX: u8 = 6 * HUE_PRECISION; // 192
 
-/// Port of `RGBtoHCL` (`colors.cpp`).
+/// Convert an RGB triplet to Hue-Chroma-Lightness.
 ///
-/// The hue-angle arithmetic uses `i16` to match the C++ `int16_t(HUE_PRECISION*(G-B))/C`
-/// semantics. `HUE_PRECISION * 255 = 8160` fits in `i16`, so no truncation occurs
-/// for valid inputs, but we mirror the type exactly.
+/// The hue-angle arithmetic uses `i16` to keep the intermediate products exact
+/// (`HUE_PRECISION * 255 = 8160` fits in `i16`).
 const fn rgb_to_hcl(r: u8, g: u8, b: u8) -> Hcl {
     // min/max are not available as const fn in std; inline with if/else.
     let xmin = if r < g {
@@ -49,13 +46,12 @@ const fn rgb_to_hcl(r: u8, g: u8, b: u8) -> Hcl {
     };
 
     let v = xmax;
-    // C++: uint8_t L = uint16_t(Xmax + Xmin) / 2
-    // Use u16 intermediate to avoid overflow before the divide.
+    // Lightness = (max + min) / 2; u16 intermediate avoids overflow.
     let l = ((xmax as u16 + xmin as u16) / 2) as u8;
     let c = xmax - xmin; // safe: xmax >= xmin
 
     let h: i16 = if c != 0 {
-        // C++ selects the first matching arm (when R==G, V==R wins)
+        // Select the first matching arm (when R==G, V==R wins).
         let raw: i16 = if v == r {
             // int16_t(HUE_PRECISION * (G - B)) / C
             (HUE_PRECISION as i16 * (g as i16 - b as i16)) / c as i16
@@ -82,14 +78,10 @@ const fn rgb_to_hcl(r: u8, g: u8, b: u8) -> Hcl {
 }
 
 // ---------------------------------------------------------------------------
-// Threshold constants derived from `constexpr uint8_t u8(double d)` (colors.cpp)
-// The C++ helper casts d*255 to uint8_t (truncates toward zero):
-//   u8(0.25)  = 63
-//   u8(0.5)   = 127
-//   u8(0.625) = 159
-//   u8(0.875) = 223
-//   u8(0.925) = 235
-// We bake these as integer literals to avoid floating-point in const fn.
+// Lightness thresholds: fractions of 255, truncated toward zero.
+//   0.25  → 63    0.5   → 127   0.625 → 159
+//   0.875 → 223   0.925 → 235
+// Baked as integer literals to avoid floating-point in a const fn.
 // ---------------------------------------------------------------------------
 const THRESH_025: u8 = 63;
 const THRESH_050: u8 = 127;
@@ -101,21 +93,20 @@ const THRESH_0925: u8 = 235;
 // Public API
 // ---------------------------------------------------------------------------
 
-/// Port of `RGBtoXTerm16` (`source/platform/colors.cpp`).
+/// Convert an RGB triplet to the nearest xterm-16 / BIOS-style index (0..=15).
 ///
-/// Converts an RGB triplet to the nearest xterm-16 / BIOS-style index (0..=15).
-/// Uses the HCL colour model for perceptually plausible quantization.
+/// Uses the Hue-Chroma-Lightness colour model for perceptually plausible
+/// quantization.
 pub const fn rgb_to_xterm16(r: u8, g: u8, b: u8) -> u8 {
     let c = rgb_to_hcl(r, g, b);
     if c.c >= 12 {
-        // Chromatic: pick the hue sector.
-        // C++: index = (h + HUE_PRECISION/2, wrapping to [0,HUE_MAX)) / HUE_PRECISION
+        // Chromatic: pick the hue sector by rounding the hue to the nearest
+        // sector boundary (add half a sector, wrapping to [0, HUE_MAX)).
         let adjusted_h = if (c.h as u16) < (HUE_MAX as u16 - HUE_PRECISION as u16 / 2) {
             c.h + HUE_PRECISION / 2
         } else {
-            // wraps: c.h - (HUE_MAX - HUE_PRECISION/2)
-            // C++ subtracts so it stays in 0..HUE_MAX; use wrapping sub on u8 —
-            // the value is always < HUE_MAX, so no actual wrap occurs for valid inputs.
+            // Wraps: subtract so it stays in 0..HUE_MAX. The value is always
+            // < HUE_MAX, so no actual wrap occurs for valid inputs.
             c.h - (HUE_MAX - HUE_PRECISION / 2)
         };
         let index = (adjusted_h / HUE_PRECISION) as usize;
@@ -146,38 +137,30 @@ pub const fn rgb_to_xterm16(r: u8, g: u8, b: u8) -> u8 {
     }
 }
 
-/// Port of `RGBtoXTerm256` (`include/tvision/colors.h`).
+/// Map an RGB triplet to the nearest xterm-256 index **in the range 16..=255**.
 ///
-/// Maps an RGB triplet to the nearest xterm-256 index **in the range 16..=255**.
-/// The result is never in 0..=15 (the xterm-16 palette), which matches the C++
-/// guarantee.
-///
-/// The inner `cnvColor` quantizes to the 6×6×6 cube; if the round-trip
-/// `XTerm256toRGB(idx)` doesn't match the input, the colour is too achromatic
-/// and `cnvGray` falls back to the 24-step grayscale ramp.
-///
-/// **Branchless dark-compensation** in `scale`: `c += 20 & -(c < 75)` in C++ is
-/// equivalent to `if c < 75 { c + 20 } else { c }` (c+20 < 95 ≤ 127, no u8
-/// overflow).
+/// The result is never in 0..=15 (the xterm-16 palette). The colour is first
+/// quantized to the 6×6×6 colour cube; if that index does not round-trip back to
+/// the input, the colour is too achromatic and falls back to the 24-step
+/// grayscale ramp.
 pub fn rgb_to_xterm256(r: u8, g: u8, b: u8) -> u8 {
-    // scale: map a single channel to a cube index 0..=5.
+    // Map a single channel to a cube index 0..=5.
     let scale = |c: u8| -> u8 {
-        // Dark-compensation: add 20 iff c < 75 (branchless in C++; same semantics).
+        // Dark-compensation: add 20 iff c < 75 (c+20 < 95, no u8 overflow).
         let c = if c < 75 { c.wrapping_add(20) } else { c };
-        // max(c, 35) - 35 then divide by 40, truncating (matches C++ uchar arithmetic).
-        // saturating_sub is exactly max(c,35)-35 for u8.
+        // max(c, 35) - 35, then divide by 40 (truncating).
         let c = c.saturating_sub(35);
         c / 40
     };
 
-    // cnvColor: pack to cube index
+    // Pack the three channel indices into a cube index.
     let ri = scale(r);
     let gi = scale(g);
     let bi = scale(b);
-    // 16 + r*36 + g*6 + b, rewritten as (r*6 + g)*6 + b to match C++
+    // 16 + r*36 + g*6 + b, rewritten as (r*6 + g)*6 + b.
     let idx = 16u8 + (ri * 6 + gi) * 6 + bi;
 
-    // cnvGray: map a lightness value to the 24-step grayscale ramp.
+    // Map a lightness value to the 24-step grayscale ramp.
     let cnv_gray = |l: u8| -> u8 {
         if l < 3 {
             // l < 8-5 → totally black → cube index 16 (= black in the 6x6x6 cube)
@@ -214,52 +197,44 @@ pub fn rgb_to_xterm256(r: u8, g: u8, b: u8) -> u8 {
     }
 }
 
-/// Port of `BIOStoXTerm16` / `XTerm16toBIOS` (`include/tvision/colors.h`).
+/// Swap the red and blue bits of a 4-bit BIOS colour index.
 ///
-/// Swaps the red and blue bits of a 4-bit BIOS colour index.
 /// BIOS bit layout: bit0=blue, bit1=green, bit2=red, bit3=bright.
 /// xterm-16 layout: bit0=red,  bit1=green, bit2=blue, bit3=bright.
 ///
-/// The swap is `(x & 0b1010) | ((x & 1) << 2) | ((x >> 2) & 1)`.
-///
-/// C++ note: `BIOStoXTerm16` and `XTerm16toBIOS` both do this identical swap —
-/// it is its own inverse.
+/// The swap is `(x & 0b1010) | ((x & 1) << 2) | ((x >> 2) & 1)`. It is its own
+/// inverse, so the same operation converts in both directions.
 pub const fn bios_to_xterm16(bios: u8) -> u8 {
     (bios & 0b1010) | ((bios & 1) << 2) | ((bios >> 2) & 1)
 }
 
-/// Port of `XTerm16toBIOS` (`include/tvision/colors.h`).
+/// Convert an xterm-16 index to a BIOS colour index.
 ///
 /// Identical bit-swap as [`bios_to_xterm16`] — the function is its own inverse.
-/// C++ literally implements it as `BIOStoXTerm16(idx)`.
 pub const fn xterm16_to_bios(idx: u8) -> u8 {
     bios_to_xterm16(idx)
 }
 
-/// Port of `RGBtoBIOS` (`include/tvision/colors.h`).
+/// Convert an RGB triplet directly to a BIOS colour index (0..=15).
 ///
-/// Converts an RGB triplet directly to a BIOS colour index (0..=15).
 /// Equivalent to `xterm16_to_bios(rgb_to_xterm16(r, g, b))`.
 pub const fn rgb_to_bios(r: u8, g: u8, b: u8) -> u8 {
     xterm16_to_bios(rgb_to_xterm16(r, g, b))
 }
 
-/// Port of `XTerm256toXTerm16` (`include/tvision/colors.h`).
+/// Look up the nearest xterm-16 index for an xterm-256 index.
 ///
-/// LUT lookup into [`XTERM256_TO_XTERM16`]. For indices 0..=15 the LUT contains
-/// the identity (the first 16 xterm-256 entries *are* the xterm-16 palette).
+/// For indices 0..=15 the result is the identity (the first 16 xterm-256 entries
+/// *are* the xterm-16 palette).
 pub const fn xterm256_to_xterm16(idx: u8) -> u8 {
     XTERM256_TO_XTERM16[idx as usize]
 }
 
-/// Port of `XTerm256toRGB` (`include/tvision/colors.h`).
+/// Look up the RGB value for an xterm-256 index, as `(red, green, blue)`.
 ///
-/// LUT lookup into [`XTERM256_TO_RGB`]. Valid for indices 16..=255 (the
-/// 6×6×6 cube and 24-step grayscale ramp). Indices 0..=15 return `(0,0,0)` —
-/// they are never looked up via this path in the C++ (the caller already has
-/// the exact RGB from the palette).
-///
-/// Returns `(red, green, blue)`.
+/// Valid for indices 16..=255 (the 6×6×6 cube and 24-step grayscale ramp).
+/// Indices 0..=15 return `(0, 0, 0)` — they are never looked up via this path
+/// (the caller already has the exact RGB from the palette).
 pub const fn xterm256_to_rgb(idx: u8) -> (u8, u8, u8) {
     let packed = XTERM256_TO_RGB[idx as usize];
     let r = ((packed >> 16) & 0xFF) as u8;
@@ -274,7 +249,6 @@ pub const fn xterm256_to_rgb(idx: u8) -> (u8, u8, u8) {
 
 /// xterm-256 cube channel values for indices 0..=5.
 /// `i=0 → 0`, `i=1..5 → 55 + i*40` (i.e. 0, 95, 135, 175, 215, 255).
-/// Faithful to the C++ comment in `colors.cpp`.
 const fn cube_channel(i: u8) -> u8 {
     if i == 0 { 0 } else { 55 + i * 40 }
 }
@@ -328,7 +302,7 @@ const fn build_xterm256_to_xterm16() -> [u8; 256] {
 /// Build `XTERM256_TO_RGB`: for each xterm-256 index, the packed `0xRRGGBB`
 /// value.
 ///
-/// - Indices 0..=15: left as 0 (never looked up via `xterm256_to_rgb` in C++).
+/// - Indices 0..=15: left as 0 (never looked up via [`xterm256_to_rgb`]).
 /// - Indices 16..=231: 6×6×6 cube.
 /// - Indices 232..=255: 24-step grayscale ramp.
 const fn build_xterm256_to_rgb() -> [u32; 256] {
@@ -368,15 +342,13 @@ const fn build_xterm256_to_rgb() -> [u32; 256] {
 ///
 /// Built at compile time from [`rgb_to_xterm16`]. Indices 0..=15 map to
 /// themselves; 16..=231 are the 6×6×6 cube; 232..=255 are the grayscale ramp.
-/// (Faithful to `XTERM256_TO_XTERM16` in `colors.cpp`.)
 pub const XTERM256_TO_XTERM16: [u8; 256] = build_xterm256_to_xterm16();
 
 /// LUT: xterm-256 index → packed `0xRRGGBB`.
 ///
 /// Built at compile time. Indices 0..=15 are 0 (never looked up via
-/// [`xterm256_to_rgb`] in C++). 16..=231 are the 6×6×6 cube;
-/// 232..=255 are the 24-step grayscale ramp.
-/// (Faithful to `XTERM256_TO_RGB` in `colors.cpp`.)
+/// [`xterm256_to_rgb`]). 16..=231 are the 6×6×6 cube; 232..=255 are the 24-step
+/// grayscale ramp.
 pub const XTERM256_TO_RGB: [u32; 256] = build_xterm256_to_rgb();
 
 // ---------------------------------------------------------------------------

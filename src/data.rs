@@ -14,32 +14,29 @@
 //! [`FieldValue`] carries one variant per kind of value a control can hold.
 //! Only the kinds an actual control transfers are present:
 //! [`Text`](FieldValue::Text) for input lines and
-//! [`Int`](FieldValue::Int) for scrollbars. The C++ cluster controls
-//! (check boxes, radio buttons) interpret their packed bit value internally and
-//! do not participate in dialog data transfer, so there is no `Bits` variant;
-//! the color picker likewise reports its color through a dedicated accessor
-//! rather than a `FieldValue`.
+//! [`Int`](FieldValue::Int) for scrollbars. Cluster controls (check boxes, radio
+//! buttons) interpret their packed bit value internally and do not participate in
+//! dialog data transfer, so there is no `Bits` variant; the color picker likewise
+//! reports its color through a dedicated accessor rather than a `FieldValue`.
 //!
 //! # Turbo Vision heritage
 //!
-//! C++ moves dialog data through `TView::getData`/`setData`/`dataSize`: each
-//! control `memcpy`s its raw value into/out of an untyped `void*` record at a
-//! hand-tracked offset, and a dialog gathers the record by walking its children
-//! (`TGroup::getData`/`setData`). rstv replaces that untyped `memcpy` protocol
-//! with this typed value currency (deviation D10).
+//! The original moved dialog data through an untyped getter/setter protocol: each
+//! control copied its raw value into/out of an untyped record at a hand-tracked
+//! offset, and a dialog gathered the record by walking its children. rstv replaces
+//! that protocol with this typed value currency (deviation D10).
 
-/// The typed unit of dialog data transfer — the successor to the untyped
-/// `getData`/`setData` `void*` record.
+/// The typed unit of dialog data transfer.
 ///
 /// Carries one variant per kind of value a control transfers. Cluster controls
 /// (check boxes, radio buttons) keep their bit value internal and the color
 /// picker uses a dedicated accessor, so neither has a variant here.
 #[derive(Clone, Debug, PartialEq)]
 pub enum FieldValue {
-    /// A text field's contents (`TInputLine`).
+    /// A text field's contents (an input line).
     Text(String),
-    /// An integer value (`TScrollBar::value`; read by the `TScroller`
-    /// read-broker via [`View::value`](crate::view::View::value)).
+    /// An integer value (a scroll bar's position; read by the scroller via
+    /// [`View::value`](crate::view::View::value)).
     Int(i32),
 }
 

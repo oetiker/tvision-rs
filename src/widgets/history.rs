@@ -2,37 +2,30 @@
 //! [`HistoryViewer`] widget that shows the store in a modal recall list.
 //!
 //! Each "channel" is a small `u8` id that groups one input field's recall
-//! list.  Entries are stored oldest-first globally; `history_str(id, 0)`
+//! list.  Entries are stored oldest-first globally; [`history_str(id, 0)`](history_str)
 //! returns the oldest surviving entry for that id.
 //!
-//! # Deviation from C++ (`histlist.cpp`)
+//! # The clean read contract — every non-evicted entry is readable
 //!
-//! The C++ implementation keeps a hidden **front sentinel** record (written by
-//! `clearHistory` / `initHistory`) and `advanceStringPointer` always skips it
-//! before matching.  A side-effect: once the budget is first exceeded and the
-//! sentinel is evicted, the *actual* globally-oldest entry becomes the new
-//! front and `advanceStringPointer` skips it — hiding it from
-//! `historyCount`/`historyStr`.  This is a byte-block bookkeeping artifact,
-//! not intentional designed behavior.
+//! The store keeps a flat list of entries and a byte budget; once adding an
+//! entry would exceed the budget, the globally-oldest entries are evicted until
+//! it fits. **Every entry that has not been evicted is readable** — there is no
+//! hidden front record and no skipped-oldest entry.
 //!
-//! **We model the clean contract: no sentinel, no front-skip — every
-//! non-evicted entry is readable.**  Pre-overflow behavior is identical to
-//! C++; the only divergence is a single hidden globally-oldest entry that the
-//! C++ implementation would lose after the budget is first exceeded.  This
-//! deviation is intentional and documented here so it is not mistaken for a
-//! missing behavior.
-//!
-//! One precision note: because C++ carries its 3-byte front sentinel inside
-//! its `used` accounting, C++'s real-entry budget is 3 bytes tighter, so its
-//! first-eviction byte boundary differs from ours by 3 bytes.  This is a
-//! direct consequence of the no-sentinel model above, not a separate
-//! divergence.
+//! This is a deliberate simplification of the original store, which carried a
+//! hidden front sentinel record and skipped it (and, after the first eviction,
+//! the real oldest entry) when reading. Pre-overflow behavior is identical; the
+//! only difference is that we keep that one globally-oldest entry visible, and
+//! our first-eviction byte boundary is 3 bytes looser because we do not spend
+//! budget on a sentinel. The deviation is intentional and noted here so it is
+//! not mistaken for a missing behavior.
 //!
 //! # Turbo Vision heritage
 //!
 //! Ports the history store (`histlist.cpp`) plus `THistoryViewer`
-//! (`thstview.cpp`), `THistoryWindow` (`thistwin.cpp`), and `THistory`
-//! (`thistory.cpp`).
+//! (`thstview.cpp`), `THistoryWindow` (`thistwin.cpp`), and the `THistory`
+//! dropdown icon (`thistory.cpp`). The store drops the original front-sentinel
+//! byte-block bookkeeping in favor of the clean read contract above.
 
 use crate::command::Command;
 use crate::event::{Event, Key};
@@ -51,14 +44,14 @@ struct HistRec {
 }
 
 impl HistRec {
-    /// Byte cost of one entry, matching the C++ `len = str.size() + 3` formula.
+    /// Byte cost of one entry: its byte length plus a 3-byte per-record overhead.
     fn cost(&self) -> usize {
         cost_of(&self.str)
     }
 }
 
-/// Byte cost of a candidate string — the single source of truth for the C++
-/// `len = str.size() + 3` formula.
+/// Byte cost of a candidate string — the single source of truth for the
+/// per-entry budget accounting (string bytes plus a 3-byte per-record overhead).
 fn cost_of(s: &str) -> usize {
     s.len() + 3
 }
@@ -75,7 +68,7 @@ thread_local! {
     static HISTORY: RefCell<Vec<HistRec>> = const { RefCell::new(Vec::new()) };
 }
 
-/// Maximum byte budget shared across **all** ids (faithful to C++ `historySize`).
+/// Maximum byte budget shared across **all** ids.
 const HISTORY_SIZE: usize = 1024;
 
 // ---------------------------------------------------------------------------
@@ -93,7 +86,7 @@ fn used_bytes(history: &[HistRec]) -> usize {
 
 /// Add `str` to the history channel identified by `id`.
 ///
-/// Operation order (faithful to C++):
+/// Operation order:
 /// 1. Ignore empty strings.
 /// 2. Remove any existing duplicate for this `(id, str)` pair.
 /// 3. Evict globally-oldest entries until the new entry fits within the budget.
@@ -161,34 +154,34 @@ pub fn clear_history() {
 /// A read-only single-column list over the global history store, shown in a
 /// modal recall popup when a user drops down an input field.
 ///
-/// Enter / double-click confirms (`endModal(cmOK)`); Esc / `cmCancel` dismisses
-/// (`endModal(cmCancel)`). All other events fall through to the base
-/// `TListViewer` nav.
+/// Enter / double-click confirms; Esc or a cancel command dismisses. All other
+/// events fall through to the base [`ListViewer`] navigation.
 ///
 /// # history_id type
 ///
-/// C++ held `ushort historyId` but the store uses `uchar` (i.e. truncates at
-/// the call boundary). Using `u8` throughout makes that truncation explicit and
-/// avoids a silent aliasing bug.
+/// The channel id is a `u8`. The store keys on a single byte, so using `u8`
+/// throughout makes the width explicit and avoids a silent truncation bug at the
+/// call boundary.
 ///
 /// # Setup after insertion
 ///
-/// Call [`setup`](HistoryViewer::setup) after inserting the viewer into a group
-/// (it needs a `Context` to publish the range and focus). This parallels how
-/// `THistoryViewer::THistoryViewer` runs `setRange`/`focusItem`/hbar-range
-/// inline in the C++ ctor where `Context` is always available.
+/// Call [`setup`](HistoryViewer::setup) after inserting the viewer into a group:
+/// it needs a `Context` to publish the list range, default focus, and horizontal
+/// scrollbar range, none of which are available before insertion.
 ///
 /// # Palette / theme
 ///
 /// The history list recolors the gray-dialog list matrix into the blue
 /// input-field look, surfaced through the [`ListViewer::list_roles`] override:
-/// `Role::HistoryViewerNormal` (white on blue) and `Role::HistoryViewerFocused`
+/// [`Role::HistoryViewerNormal`](crate::theme::Role::HistoryViewerNormal)
+/// (white on blue) and
+/// [`Role::HistoryViewerFocused`](crate::theme::Role::HistoryViewerFocused)
 /// (white on green).
 ///
 /// # Turbo Vision heritage
 ///
-/// Ports `THistoryViewer` (`thstview.cpp`); its `getPalette` recolor surfaces as
-/// a [`ListRoles`](crate::widgets::ListRoles) override.
+/// Ports `THistoryViewer` (`thstview.cpp`); its palette recolor surfaces as a
+/// [`ListRoles`](crate::widgets::ListRoles) override.
 pub struct HistoryViewer {
     lv: ListViewerState,
     history_id: u8,
@@ -212,28 +205,26 @@ impl HistoryViewer {
         divider: crate::theme::Role::HistoryViewerNormal,
     };
 
-    /// Construct a `HistoryViewer` — ports the data-init portion of
-    /// `THistoryViewer::THistoryViewer`.
+    /// Construct a `HistoryViewer` (the data-init portion of the widget).
     ///
     /// `bounds`: the view rectangle; `h`/`v`: optional scrollbar ids;
     /// `history_id`: the store channel this viewer presents.  No `Context` is
     /// needed here (see [`setup`](Self::setup)).
     pub fn new(bounds: Rect, h: Option<ViewId>, v: Option<ViewId>, history_id: u8) -> Self {
         HistoryViewer {
-            // 1 column: THistoryViewer always passes numCols=1.
+            // Always a single column.
             lv: ListViewerState::new(bounds, 1, h, v),
             history_id,
         }
     }
 
-    /// Context-needing tail of the ctor — call once after insertion.
+    /// Context-needing tail of construction — call once after insertion.
     ///
-    /// Faithful to the C++ ctor body:
-    /// 1. `setRange(historyCount(historyId))`
-    /// 2. `if (range > 1) focusItem(1)` — the recall list shows the *most
-    ///    recent* entry at item `count-1`, so item 1 (second-oldest) is the
-    ///    default selection when more than one entry exists.
-    /// 3. If an h-bar is wired, publish `setRange(0, historyWidth()-size.x+3)`.
+    /// 1. Set the list length to the channel's entry count.
+    /// 2. If more than one entry exists, focus item 1 (the second-oldest) as the
+    ///    default selection.
+    /// 3. If a horizontal bar is wired, publish its range as
+    ///    `0 ..= history_width() - size.x + 3`.
     pub fn setup(&mut self, ctx: &mut Context) {
         let count = history_count(self.history_id) as i32;
         list_viewer::set_range(self, count, ctx);
@@ -249,14 +240,13 @@ impl HistoryViewer {
 
     /// Maximum display width over all entries for this channel.
     ///
-    /// Faithful to `THistoryViewer::historyWidth()`: iterates the full channel
-    /// and takes the max. Returns 0 for an empty channel.
+    /// Iterates the full channel and takes the max; returns 0 for an empty channel.
     ///
-    /// Note: this is O(n²)-ish — each `history_str(id, i)` re-filters the store
-    /// from the front and clones a `String` just to measure it. That is fine
-    /// for a recall list's tiny `n` (and matches the C++ `historyWidth` loop).
-    /// The `.unwrap_or_default()` is defensive: `i` is always in `0..count`, so
-    /// the `None` arm is effectively unreachable.
+    /// Note: this is O(n²)-ish — each [`history_str(id, i)`](history_str)
+    /// re-filters the store from the front and clones a `String` just to measure
+    /// it. That is fine for a recall list's tiny `n`. The `.unwrap_or_default()`
+    /// is defensive: `i` is always in `0..count`, so the `None` arm is
+    /// effectively unreachable.
     fn history_width(&self) -> i32 {
         let id = self.history_id;
         (0..history_count(id))
@@ -275,10 +265,9 @@ impl ListViewer for HistoryViewer {
         &mut self.lv
     }
 
-    /// `THistoryViewer::getText` — return the store entry for `item`.
+    /// Return the store entry for `item`.
     ///
-    /// Faithful: `historyStr(historyId, item)`. Negative items and out-of-range
-    /// items return an empty string (C++ `*dest = EOS`).
+    /// Negative or out-of-range items return an empty string.
     fn get_text(&self, item: i32) -> String {
         if item < 0 {
             return String::new();
@@ -286,13 +275,12 @@ impl ListViewer for HistoryViewer {
         history_str(self.history_id, item as usize).unwrap_or_default()
     }
 
-    /// `THistoryViewer::getPalette` → the `cpHistoryViewer` quintet
-    /// ([`HistoryViewer::LIST_ROLES`]); chains documented on the constant.
+    /// The history viewer's recolored quintet ([`HistoryViewer::LIST_ROLES`]).
     fn list_roles(&self) -> crate::widgets::ListRoles {
         Self::LIST_ROLES
     }
-    // is_selected / select_item: inherit the base (item == focused /
-    // broadcast cmListItemSelected). THistoryViewer does NOT override these.
+    // is_selected / select_item: inherit the base (item == focused, and the
+    // base broadcasts list-item-selected). Not overridden here.
 }
 
 impl View for HistoryViewer {
@@ -308,15 +296,15 @@ impl View for HistoryViewer {
         list_viewer::draw(self, ctx);
     }
 
-    /// `THistoryViewer::handleEvent` — confirm or dismiss the modal recall list.
+    /// Confirm or dismiss the modal recall list.
     ///
-    /// Enter / double-click → `endModal(cmOK)`.
-    /// Esc / `cmCancel`     → `endModal(cmCancel)`.
-    /// Everything else      → `TListViewer::handleEvent` (nav, scrollbar sync…).
+    /// Enter / double-click → end the modal with [`Command::OK`].
+    /// Esc / cancel command → end the modal with [`Command::CANCEL`].
+    /// Everything else      → the base list-viewer handler (nav, scrollbar sync…).
     ///
-    /// **No `sfModal` gate**: the viewer only lives inside a `THistoryWindow`
-    /// (always `execView`'d), so the endModal is unconditional. Faithful to the
-    /// C++ `THistoryViewer::handleEvent` body.
+    /// There is no modal-state gate: the viewer only ever lives inside a
+    /// [`HistoryWindow`] that is always run modally, so ending the modal is
+    /// unconditional.
     fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
         match *ev {
             Event::MouseDown(me) if me.flags.double_click => {
@@ -365,7 +353,7 @@ impl View for HistoryViewer {
 }
 
 impl HistoryViewer {
-    /// `THistoryWindow::getSelection` reads `viewer->getText(viewer->focused)`.
+    /// The text of the currently focused entry (the window's selection).
     ///
     /// This accessor is on `HistoryViewer` (not exposed to the crate root) so
     /// `HistoryWindow::get_selection` can reach `lv.focused` without making the
@@ -392,20 +380,18 @@ impl HistoryViewer {
 ///
 /// # Color
 ///
-/// The window keeps the default blue `Window`/`Frame` role family, which matches
-/// the C++ history-window palette chain on every cell the popup actually shows
-/// (active frame, icon, scroll-bar page). Two cells differ in theory but not in
-/// practice: the passive frame is never seen (the popup is the modal top and is
-/// always active), and the scroll-bar controls render a different byte from the
-/// C++ chain's quirk of pointing that slot at the dialog's history-sides entry.
-/// The viewer's item colors do remap — see [`HistoryViewer`]'s `list_roles`.
+/// The window keeps the default blue [`Window`]/[`Frame`](crate::frame::Frame)
+/// role family. Because the popup is always the modal top, the passive-frame
+/// color is never seen; every cell the popup actually shows (active frame, icon,
+/// scroll-bar page) renders as expected. The viewer's item colors do remap —
+/// see [`HistoryViewer`]'s `list_roles`.
 ///
-/// An outside-bounds click cancels the modal (`end_modal(CANCEL)`).
+/// An outside-bounds click cancels the modal ([`Command::CANCEL`]).
 ///
 /// # Turbo Vision heritage
 ///
-/// Ports `THistoryWindow` (`thistwin.cpp`); the `initViewer`/`createListViewer`
-/// constructor indirection is inlined and `TStreamable` is dropped.
+/// Ports `THistoryWindow` (`thistwin.cpp`); the viewer-construction indirection
+/// is inlined into the constructor.
 pub struct HistoryWindow {
     /// The embedded window. `HistoryWindow` *is-a* window.
     window: Window,
@@ -419,29 +405,27 @@ pub struct HistoryWindow {
 }
 
 impl HistoryWindow {
-    /// `THistoryWindow::THistoryWindow(bounds, historyId)` + inlined
-    /// `initViewer`.
+    /// Build a `HistoryWindow` over `bounds` for the given channel.
     ///
-    /// Faithful to the C++:
-    /// 1. `TWindow(bounds, 0 /*title*/, wnNoNumber)`.
-    /// 2. `flags = wfClose` — close box only; NOT move/grow/zoom.
-    /// 3. `initViewer`: `r.grow(-1,-1)`, build h-bar and v-bar (in that order,
-    ///    matching C++ evaluation order), build `HistoryViewer(r, hbar, vbar)`,
-    ///    insert into the group.
+    /// 1. A numberless, titleless window.
+    /// 2. Close box only — not movable, growable, or zoomable.
+    /// 3. Shrink the extent by one cell on each side, build a horizontal then a
+    ///    vertical scroll bar, build a [`HistoryViewer`] over that inner rect, and
+    ///    insert it into the window group.
     pub fn new(bounds: Rect, history_id: u8) -> Self {
-        // (1) Window(bounds, NULL title, wnNoNumber).
+        // (1) Numberless, titleless window.
         let mut window = Window::new(bounds, None, 0);
-        // (2) flags = wfClose.
+        // (2) Close box only.
         window.set_flags(WindowFlags {
             close: true,
             ..WindowFlags::default()
         });
-        // (3) initViewer inlined: r = getExtent(); r.grow(-1, -1).
+        // (3) Inner rect: the extent shrunk by one cell on every side.
         let mut r = View::state(&window).get_extent();
         r.grow(-1, -1);
 
-        // Build the two bars (ORDER MATTERS — C++ evaluates h-bar arg first,
-        // then v-bar; both are inserted into the window group).
+        // Build the two bars (order matters: horizontal then vertical; both are
+        // inserted into the window group).
         let h = window.standard_scroll_bar(ScrollBarOptions {
             vertical: false,
             handle_keyboard: true,
@@ -534,13 +518,11 @@ impl View for HistoryWindow {
             // current (proven by the no_nav_first_event bite test).
             self.setup_done = true;
         }
-        // (B) TWindow::handleEvent (faithful order: base first).
+        // (B) The window's base handler runs first.
         self.window.handle_event(ev, ctx);
-        // (C) Outside-click cancel — C++ THistoryWindow::handleEvent:
-        //   if (event.what == evMouseDown && !mouseInView(event.mouse.where))
-        //       endModal(cmCancel);
-        // The pump delivers outside clicks to us with the position already localized
-        // (subtracted modal_bounds.a), so !mouseInView == !extent.contains(position).
+        // (C) Outside-click cancel: a mouse-down outside the window's extent ends
+        // the modal. The pump delivers outside clicks with the position already
+        // localized, so the test is just !extent.contains(position).
         if let Event::MouseDown(m) = ev
             && !View::state(self).get_extent().contains(m.position)
         {
@@ -571,35 +553,35 @@ impl View for HistoryWindow {
 ///
 /// # Focus on open
 ///
-/// The C++ aborted the open if focusing the linked input failed. Focusing here is
-/// requested through [`focus_descendant`](crate::view::View::focus_descendant) and
-/// applied by the loop, with no inline success flag to test, so the open proceeds
-/// regardless — focusing the link and opening the popup are independent requests.
+/// Focusing the linked input is a separate request
+/// ([`focus_descendant`](crate::view::View::focus_descendant)) applied by the
+/// loop; there is no inline success flag to test, so the open always proceeds —
+/// focusing the link and opening the popup are independent requests.
 ///
 /// # Turbo Vision heritage
 ///
-/// Ports `THistory` (`thistory.cpp`). The owning `link` pointer becomes a
-/// [`ViewId`] (deviation D3), so there is nothing to null out on shutdown;
-/// `getPalette` becomes [`Role`](crate::theme::Role)s.
+/// Ports `THistory` (`thistory.cpp`). The owning back-pointer to the linked
+/// input becomes a [`ViewId`] (D3), so there is nothing to null out on teardown,
+/// and the palette becomes [`Role`](crate::theme::Role)s.
 pub struct THistory {
     state: ViewState,
-    /// The linked input line's id (`link`).
+    /// The linked input line's id.
     link: ViewId,
-    /// The history channel id (`historyId`).
+    /// The history channel id.
     history_id: u8,
 }
 
 impl THistory {
-    /// `THistory(bounds, aLink, aHistoryId)` — `options |= ofPostProcess`.
+    /// Build the icon over `bounds`, linked to input `link`, for channel
+    /// `history_id`.
     ///
-    /// `selectable` stays `false` (the [`ViewState`] default), so a click delivers
-    /// to the icon without grabbing focus — the icon is never `current`. Opting
-    /// into the broadcast class is moot ([`Group`](crate::view::Group) fans
-    /// broadcasts to all children regardless).
+    /// The icon is *not* selectable, so a click delivers to it without grabbing
+    /// focus — it is never the current view. It opts into post-processing so it
+    /// sees key events only after the focused input line has had its turn.
     pub fn new(bounds: Rect, link: ViewId, history_id: u8) -> Self {
         let mut state = ViewState::new(bounds);
-        // ofPostProcess — the icon gets keyDowns via the postProcess phase, AFTER
-        // the focused input line (which leaves the ↓ arrow live + uncleared).
+        // Post-process: the icon gets key-downs after the focused input line,
+        // which leaves the ↓ arrow live and uncleared.
         state.options.post_process = true;
         THistory {
             state,
@@ -618,13 +600,11 @@ impl View for THistory {
         &mut self.state
     }
 
-    /// `THistory::draw` — `b.moveCStr(0, icon, getColor(0x0102))`.
-    ///
-    /// The C++ icon is `"\xDE~\x19~\xDD"`: `▐` (U+2590) + a highlighted `↓`
-    /// (U+2193, `\x19`) + `▌` (U+258C), where the `~…~` marks the hi region (the
-    /// arrow). `getColor(0x0102)` → lo = palette[2] (the sides), hi = palette[1]
-    /// (the arrow). We render the cstr `"▐~↓~▌"` with lo = `Role::HistorySides`,
-    /// hi = `Role::HistoryArrow` (the `cpHistory` chain — see the type docs).
+    /// Draw the dropdown icon `"▐~↓~▌"`: a left half-block `▐` (U+2590), a
+    /// highlighted down-arrow `↓` (U+2193), and a right half-block `▌` (U+258C),
+    /// where the `~…~` marks the highlighted region (the arrow). The sides render
+    /// in [`Role::HistorySides`](crate::theme::Role::HistorySides) and the arrow
+    /// in [`Role::HistoryArrow`](crate::theme::Role::HistoryArrow).
     fn draw(&mut self, ctx: &mut DrawCtx) {
         let lo = ctx.style(crate::theme::Role::HistorySides);
         let hi = ctx.style(crate::theme::Role::HistoryArrow);
@@ -633,14 +613,16 @@ impl View for THistory {
 
     /// Open the modal on a trigger, or record history on the broadcast arm:
     ///
-    /// * **mouse-down**: open (mouse trigger never gates on focus).
-    /// * **keyDown where `ctrlToArrow(keyCode) == kbDown`**: open, gated on the link
-    ///   being focused (`(link->state & sfFocused)`). `ctrl_to_arrow` returns the
-    ///   event UNCHANGED when not Ctrl, so `.key == Key::Down` matches BOTH the
-    ///   literal ↓ AND Ctrl+X; modifiers are cleared on a mapped result, so we
-    ///   compare `.key` only.
-    /// * **broadcast `cmReleasedFocus`(source == link) / `cmRecordHistory`**:
-    ///   `recordHistory(link->data)`; C++ does NOT clearEvent here — left live.
+    /// * **mouse-down**: open (a mouse trigger never gates on focus).
+    /// * **key-down mapping to the down-arrow**: open, gated (downstream, in the
+    ///   loop) on the linked input being focused.
+    ///   [`ctrl_to_arrow`](crate::event::ctrl_to_arrow) returns the
+    ///   event UNCHANGED when it is not a Ctrl combo, so matching on `.key ==
+    ///   Key::Down` covers both the literal ↓ and the Ctrl mapping; modifiers are
+    ///   cleared on a mapped result, so we compare `.key` only.
+    /// * **a released-focus broadcast from the link, or a record-history
+    ///   broadcast**: record the linked input's current text. The event is left
+    ///   live (not consumed) here.
     fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
         match ev {
             Event::MouseDown(_) => {
@@ -649,12 +631,11 @@ impl View for THistory {
             }
             Event::KeyDown(k) if crate::event::ctrl_to_arrow(*k).key == crate::event::Key::Down => {
                 ctx.request_open_history(self.link, self.history_id, true);
-                // C++ keeps the ↓ live when the link is NOT focused — its
-                // `clearEvent` sits inside the focus guard. Here we clear
-                // unconditionally: the leaf cannot read the link's focus inline
-                // (it only holds the link's id), so the focus gate is applied
-                // later in the loop's `OpenHistory` arm. Clear-always is correct
-                // (clear-never would let a focused-link ↓ be double-handled).
+                // We consume the ↓ unconditionally: the leaf cannot read the
+                // link's focus inline (it only holds the link's id), so the focus
+                // gate is applied later in the loop's `OpenHistory` arm.
+                // Clear-always is correct — leaving it live would let a
+                // focused-link ↓ be double-handled.
                 ev.clear();
             }
             Event::Broadcast { command, source }
@@ -662,12 +643,12 @@ impl View for THistory {
                     || *command == Command::RECORD_HISTORY =>
             {
                 ctx.request_record_history(self.link, self.history_id);
-                // C++ does not clearEvent in the broadcast arm — leave it live.
+                // Leave the broadcast live (not consumed).
             }
             _ => {}
         }
     }
-    // value/set_value: trait default (THistory has no transferable value).
+    // value/set_value: trait default (the icon has no transferable value).
 }
 
 // ---------------------------------------------------------------------------
@@ -846,7 +827,7 @@ mod thistory_tests {
             )),
             "cmReleasedFocus(source==link) queues RecordHistory"
         );
-        // C++ does not clearEvent in the broadcast arm — left live.
+        // The broadcast arm does not consume the event.
         assert!(!ev.is_nothing(), "broadcast arm does not clear the event");
 
         // cmReleasedFocus on ANOTHER view → no record (source filter).

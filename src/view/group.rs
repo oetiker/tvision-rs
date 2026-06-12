@@ -10,34 +10,33 @@
 //!   child's own `ViewState.id`. Cross-links (`current`) are a [`ViewId`],
 //!   resolved by an internal index lookup ([`Group::index_of`]).
 //!
-//!   The C++ sibling ring maps to the `Vec` in **back-to-front paint order**:
-//!   `children[0]` == C++ `last` == bottom (drawn first); `children.last()` ==
-//!   C++ `first()` == top/frontmost (drawn last). `insert` pushes (new child on
-//!   top). `forEach`/`firstThat` (C++ visits `first()`→`last`) is therefore
-//!   `children.iter().rev()`; tab order `next` walks decreasing index with wrap.
+//!   The `children` `Vec` is ordered **back-to-front for painting**:
+//!   `children[0]` is the bottom (drawn first); `children.last()` is the
+//!   top/frontmost (drawn last). [`Group::insert`] pushes, so a new child lands
+//!   on top. Visits that go top-to-bottom (paint occlusion, hit-testing,
+//!   broadcast delivery) iterate `children.iter().rev()`; tab order steps to the
+//!   next-frontmost child by walking decreasing index with wrap.
 //!
-//! * **Mouse position is view-local at each level.** C++ keeps the mouse in
-//!   absolute screen coordinates and each view calls `makeLocal`. Under the
-//!   downward model there is no owner to walk up to, so on each positional
-//!   delivery the group subtracts the child's `origin`, handing the child a
-//!   child-local position — the downward realization of `makeLocal`/
-//!   `mouseInView`/`containsMouse`.
+//! * **Mouse position is view-local at each level.** Because a child holds no
+//!   pointer back to its owner, the group itself does the coordinate translation:
+//!   on each positional delivery it subtracts the child's `origin`, handing the
+//!   child a position already in the child's own coordinate frame.
 //!
-//! * **No explicit `eventError`/bubble.** "Consumed" is the event being set to
+//! * **No event bubbling.** "Consumed" means the event was set to
 //!   [`Event::Nothing`]; an unhandled event is simply left **not cleared**, and
-//!   as the recursive `handle_event` stack unwinds the parent/loop sees it still
-//!   live. There is no owner pointer to bubble to.
+//!   as the recursive [`handle_event`](View::handle_event) stack unwinds the
+//!   parent/loop sees it still live. There is no owner pointer to bubble back to.
 //!
-//! * **Painter's-algorithm draw.** `draw` paints back-to-front (so higher
-//!   siblings overpaint lower ones), the reverse of C++ `drawSubViews`, which
-//!   paints top-first and relies on occlusion tracking; the buffering/occlusion
-//!   machinery (`ofBuffered`/`sfExposed`/`lock`/`unlock`) is replaced by
-//!   whole-tree redraw + diff.
+//! * **Painter's-algorithm draw.** [`draw`](View::draw) paints back-to-front, so
+//!   higher siblings overpaint lower ones. There is no per-cell occlusion
+//!   bookkeeping: the whole tree is redrawn each frame and a diff sends only the
+//!   changed cells to the terminal.
 //!
-//! * **Z-reorder:** `ofTopSelect`/`makeFirst`/`putInFrontOf` are realized in the
-//!   owner ([`Group::put_in_front_of`]/[`Group::make_first`]); the select path
-//!   ([`Group::focus_child`]) raises an `ofTopSelect` child to the top instead of
-//!   just making it current, faithful to `TView::select`.
+//! * **Z-reorder lives in the owner.** A child cannot move itself in the
+//!   Z-order; the group does it ([`Group::put_in_front_of`]/[`Group::make_first`]).
+//!   Selecting a child that opts into raise-on-select
+//!   ([`top_select`](crate::view::Options::top_select)) raises it to the top via
+//!   [`Group::focus_child`] rather than merely making it current.
 //!
 //! Running a modal loop is not a group operation: the event loop owns the capture
 //! stack, so modality runs through [`Program::exec_view`](crate::app::Program::exec_view)
@@ -46,9 +45,10 @@
 //! placed by the event loop.
 //!
 //! # Turbo Vision heritage
-//! Ports `TGroup` (`tgroup.cpp`). The circular `next`/`prev` sibling ring plus
-//! `owner` back-pointers become an owned `Vec` of children addressed by `ViewId`
-//! (deviation D3); the occlusion/buffering draw machinery is dropped in favor of
+//! Ports `TGroup` (`tgroup.cpp`). The circular sibling ring plus owner
+//! back-pointers become an owned `Vec` of children addressed by [`ViewId`]
+//! (deviation D3); broadcasts carry a [`ViewId`] subject rather than a pointer
+//! (deviation D4); the occlusion/buffering draw machinery is replaced by
 //! whole-tree redraw + diff.
 
 use crate::command::Command;
@@ -59,23 +59,27 @@ use crate::view::geometry::{Point, Rect};
 use crate::view::id::ViewId;
 use crate::view::view::{Phase, StateFlag, View, ViewState};
 
-/// Which side effects `set_current` applies when changing the current view —
-/// ports the `selectMode` enum (`views.h`: `normalSelect`/`enterSelect`/
-/// `leaveSelect`). `Enter`/`Leave` are used by the modal
+/// Which select/deselect side effects [`Group::set_current`] applies when
+/// changing the current view. `Enter`/`Leave` are used by the modal
 /// [`exec_view`](crate::app::Program::exec_view) path when entering and leaving a
-/// modal dialog.
+/// modal dialog, so the underlying current view keeps its selected state across
+/// the modal session.
+///
+/// # Turbo Vision heritage
+/// Ports the `selectMode` enum (`views.h`):
+/// `normalSelect`/`enterSelect`/`leaveSelect`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SelectMode {
-    /// `normalSelect` — deselect the old current, select the new one.
+    /// Deselect the old current, select the new one.
     Normal,
-    /// `enterSelect` — entering a modal: do **not** deselect the old current.
+    /// Entering a modal: do **not** deselect the old current.
     Enter,
-    /// `leaveSelect` — leaving a modal: do **not** select the new current.
+    /// Leaving a modal: do **not** select the new current.
     Leave,
 }
 
-/// One owned child view plus its global identity (mirrors the child's own
-/// `ViewState.id`).
+/// One owned child view plus its global identity (the same value stored in the
+/// child's own `ViewState.id`).
 struct Child {
     id: ViewId,
     view: Box<dyn View>,
@@ -89,30 +93,32 @@ struct Child {
 ///
 /// # Turbo Vision heritage
 /// Ports `TGroup` (`tgroup.cpp`). Owns its children in a `Vec` addressed by
-/// `ViewId` rather than the C++ `next`/`prev`/`owner` pointer ring (deviation
-/// D3); broadcasts carry a `ViewId` subject instead of `infoPtr` (deviation D4).
+/// [`ViewId`] rather than a `next`/`prev`/`owner` pointer ring (deviation D3);
+/// broadcasts carry a [`ViewId`] subject rather than a pointer (deviation D4).
 pub struct Group {
     st: ViewState,
-    /// Children in back-to-front paint order (`children[0]` == C++ `last`/bottom,
-    /// `children.last()` == C++ `first()`/top).
+    /// Children in back-to-front paint order (`children[0]` is the bottom,
+    /// `children.last()` is the top).
     children: Vec<Child>,
-    /// The current (selected) child — C++ `current`, as a [`ViewId`].
+    /// The current (selected) child, as a [`ViewId`].
     current: Option<ViewId>,
-    /// A visible+selectable child was inserted since the last `set_current` —
-    /// the pending C++ insert-time `show()`→`resetCurrent` cascade.
-    /// Settled by [`View::settle_currency`]; cleared by any explicit
+    /// A visible+selectable child was inserted since the last
+    /// [`set_current`](Group::set_current) — a pending request to re-establish
+    /// currency. Settled by [`View::settle_currency`]; cleared by any explicit
     /// [`set_current`](Group::set_current).
     currency_dirty: bool,
 }
 
 impl Group {
-    /// Construct a group covering `bounds`. Ports `TGroup::TGroup`:
-    /// `options |= ofSelectable` and `eventMask = 0xFFFF`.
+    /// Construct a group covering `bounds`. The group is itself selectable and
+    /// opts into the two tracking event classes ([`crate::event::EventMask`]'s
+    /// mouse-move and mouse-auto), since it must *receive* those in order to
+    /// route them to its children.
     ///
-    /// Our [`crate::event::EventMask`] only has the two opt-ins (mouse-move /
-    /// mouse-auto); a group must *receive* those to be able to route them to
-    /// children, so it opts into both — the surviving slice of `0xFFFF`. The
-    /// dropped ctor bits are `ofBuffered`/`clip`.
+    /// # Turbo Vision heritage
+    /// Ports `TGroup::TGroup` (`options |= ofSelectable`, `eventMask = 0xFFFF`).
+    /// rstv's event mask exposes only those two opt-in tracking classes; the
+    /// dropped constructor bits were buffering/clipping.
     pub fn new(bounds: Rect) -> Self {
         let mut st = ViewState::new(bounds);
         st.options.selectable = true;
@@ -142,8 +148,8 @@ impl Group {
         self.children.is_empty()
     }
 
-    /// Resolve a [`ViewId`] to its index in `children` — the internal lookup that
-    /// replaces the C++ pointer cross-links. `None` for a stale/foreign id.
+    /// Resolve a [`ViewId`] to its index in `children` — the internal lookup
+    /// that resolves an id handle to a child slot. `None` for a stale/foreign id.
     fn index_of(&self, id: ViewId) -> Option<usize> {
         self.children.iter().position(|c| c.id == id)
     }
@@ -161,13 +167,11 @@ impl Group {
         self.children[idx].view.state_mut()
     }
 
-    /// `firstThat(viewHasMouse)` over the group's direct children — the id of the
-    /// topmost visible child whose bounds contain `pos` (ports the program's
-    /// status-line mouse-route guard in `TProgram::getEvent`,
-    /// `firstThat(viewHasMouse, &event) == statusLine`). **Not recursive** — it
-    /// scans only the direct children, mirroring the positional router in
-    /// [`route_event`](Self::route_event) (same `visible && get_bounds().contains`
-    /// predicate, same `(0..n).rev()` top-to-bottom scan).
+    /// The id of the topmost **visible** direct child whose bounds contain `pos`,
+    /// or `None`. **Not recursive** — it scans only the direct children, mirroring
+    /// the positional router in [`route_event`](Self::route_event) (same
+    /// `visible && get_bounds().contains` predicate, same top-to-bottom scan).
+    /// Used by the event loop to decide whether a click lands on the status line.
     pub(crate) fn topmost_child_at(&self, pos: Point) -> Option<ViewId> {
         // children are stored back-to-front; topmost is last → iterate rev.
         let n = self.children.len();
@@ -177,11 +181,11 @@ impl Group {
         })
     }
 
-    /// Ids of tileable + visible direct children in C++ `forEach` order
-    /// (`first()`→`last` == `children` reversed; see the module doc). Backs
-    /// [`Desktop::tile`/`cascade`](crate::desktop::Desktop): `tileNum`/`cascadeNum`
-    /// decrement across this visit, so the *first-visited* (topmost) child gets
-    /// the highest position/offset (ports `Tileable(p)` filtered `forEach`).
+    /// Ids of tileable + visible direct children in **top-to-bottom** order
+    /// (`children` reversed; see the module doc). Backs
+    /// [`Desktop::tile`/`cascade`](crate::desktop::Desktop): the tile/cascade
+    /// counter decrements across this visit, so the *first-visited* (topmost)
+    /// child gets the highest position/offset.
     pub(crate) fn tileable_ids(&self) -> Vec<ViewId> {
         self.children
             .iter()
@@ -194,9 +198,9 @@ impl Group {
             .collect()
     }
 
-    /// Mutably borrow child `id`'s view (for an owner→child push that needs the
-    /// concrete type via [`View::as_any_mut`], e.g. `TWindow::zoom` reaching its
-    /// `TFrame`). `None` for a stale/foreign id.
+    /// Mutably borrow child `id`'s view — for an owner reaching into one of its
+    /// own children by concrete type (downcast via [`View::as_any_mut`], e.g. a
+    /// window reaching its frame). `None` for a stale/foreign id.
     pub fn child_mut(&mut self, id: ViewId) -> Option<&mut dyn View> {
         let i = self.index_of(id)?;
         Some(self.children[i].view.as_mut())
@@ -204,26 +208,30 @@ impl Group {
 
     // -- gather / scatter ---------------------------------------------
 
-    /// `TGroup::getData` (gather) — collect each child's typed value in C++
-    /// data-walk order (`last → prev → ...` = `children` forward). Returns one
-    /// `Option<FieldValue>` per child; `None` means that child carries no
-    /// transferable value.
+    /// Gather: collect each child's typed value, in bottom-to-top order
+    /// (`children` forward — the opposite of the top-to-bottom order used in
+    /// event delivery). Returns one `Option<FieldValue>` per child; `None` means
+    /// that child carries no transferable value.
     ///
-    /// C++ walk: starts at `last` (`children[0]`) and walks `prev()` to
-    /// `children[n-1]`, which maps to `children.iter()` in rstv (opposite of the
-    /// `forEach` top→bottom `children.iter().rev()` used in event delivery).
+    /// # Turbo Vision heritage
+    /// Ports `TGroup::getData` (the data-walk that collects each control's value
+    /// into a record).
     pub fn gather_data(&self) -> Vec<Option<FieldValue>> {
         self.children.iter().map(|c| c.view.value()).collect()
     }
 
-    /// `TGroup::setData` (scatter) — distribute typed values back to children
-    /// in the same C++ data-walk order as [`gather_data`](Self::gather_data).
-    /// Calls [`set_value_ctx`](View::set_value_ctx) so views that need deferred
-    /// bar updates (e.g. `ListBox`) receive the `Context`.
+    /// Scatter: distribute typed values back to children, in the same
+    /// bottom-to-top order as [`gather_data`](Self::gather_data). Calls
+    /// [`set_value_ctx`](View::set_value_ctx) so views that need deferred bar
+    /// updates (e.g. [`ListBox`](crate::widgets::ListBox)) receive the `Context`.
     ///
     /// `values` shorter than the children list: remaining children are left
     /// untouched. Extra values beyond the children count are silently ignored.
     /// `None` entries skip the corresponding child.
+    ///
+    /// # Turbo Vision heritage
+    /// Ports `TGroup::setData` (the data-walk that writes each control's value
+    /// back from a record).
     pub fn scatter_data(&mut self, values: &[Option<FieldValue>], ctx: &mut Context) {
         for (child, val) in self.children.iter_mut().zip(values.iter()) {
             if let Some(v) = val.clone() {
@@ -234,25 +242,25 @@ impl Group {
 
     // -- insert / remove ----------------------------------------------------
 
-    /// Insert `view` on **top** of the group (becomes the frontmost child),
+    /// Insert `view` on **top** of the group (it becomes the frontmost child),
     /// mint a process-global [`ViewId`], stamp it into the view's own
-    /// `ViewState.id` (self-id), and return it. Ports `TGroup::insert` →
-    /// `insertBefore(p, first())`.
+    /// `ViewState.id`, and return it.
     ///
-    /// Applies `ofCenterX`/`ofCenterY` centering. The C++ `insertBefore`
-    /// hide/show dance and the `sfActive`-restore are a **no-op** (no occlusion
-    /// tracking, so show/hide is absent; the child's own saved state is preserved
-    /// as-is). Centering is therefore the only observable effect here. It does
-    /// **not** auto-set `current` — `insert` alone never focuses; callers use
-    /// [`set_current`](Self::set_current)/[`reset_current`](Self::reset_current).
+    /// Applies `center_x`/`center_y` centering (the only observable effect at
+    /// insert time). `insert` alone never focuses — to make the new child current,
+    /// callers use [`set_current`](Self::set_current)/[`reset_current`](Self::reset_current).
     ///
-    /// **Insert-time currency:** inserting a visible+selectable child marks
-    /// `currency_dirty` — the deferred stand-in for the C++ `insertBefore` tail
-    /// `if (saveState & sfVisible) p->show()` → `TView::setState(sfVisible)` →
-    /// `if (options & ofSelectable) owner->resetCurrent()` (tgroup.cpp:391 /
-    /// tview.cpp). The flag is settled by [`View::settle_currency`] (the pump /
-    /// `Program::new`), which runs the inherent `reset_current`; any explicit
-    /// `set_current` in between supersedes it (clears the flag).
+    /// **Insert-time currency:** inserting a visible+selectable child sets
+    /// `currency_dirty`, a deferred request to re-establish the group's current
+    /// view. It is settled by [`View::settle_currency`] (run by the event loop /
+    /// at program start), which runs [`reset_current`](Self::reset_current); any
+    /// explicit [`set_current`](Self::set_current) in between supersedes it and
+    /// clears the flag.
+    ///
+    /// # Turbo Vision heritage
+    /// Ports `TGroup::insert` (insert-on-top). The hide/show/active-restore dance
+    /// around the original insert is a no-op here (no occlusion tracking); only
+    /// the centering and the deferred currency cascade survive.
     pub fn insert(&mut self, mut view: Box<dyn View>) -> ViewId {
         // ofCenterX/ofCenterY centering (insertBefore).
         let opts = view.state().options;
@@ -289,11 +297,11 @@ impl Group {
     /// The menu modal layer pre-mints each open box's [`ViewId`] from
     /// the global counter ([`ViewId::next`]) *before* requesting the box be opened,
     /// so the [`MenuSession`](crate::menu::MenuSession) capture handler already
-    /// knows every box id with no insert-time callback/downcast. The pump then
-    /// builds the [`MenuBox`](crate::menu::MenuBox) and inserts it here, stamping
-    /// the id the session already holds. Otherwise identical to `insert`
-    /// (centering applies; `current` is **not** touched — a menu box is never
-    /// focused, the session owns every event, Clean Architecture A).
+    /// knows every box id with no insert-time callback or downcast. The event loop
+    /// then builds the [`MenuBox`](crate::menu::MenuBox) and inserts it here,
+    /// stamping the id the session already holds. Otherwise identical to
+    /// [`insert`](Self::insert): centering applies; `current` is **not** touched —
+    /// a menu box is never focused, the session owns every event.
     ///
     /// The caller is responsible for the id being globally unique (a `ViewId::next`
     /// value is, by construction); reusing a live id would make `find_mut` resolve
@@ -325,13 +333,18 @@ impl Group {
         self.children.push(Child { id, view });
     }
 
-    /// Remove the child named by `id` (no-op if it is not a child). Ports
-    /// `TGroup::remove` (tgroup.cpp:112): `p->hide()` → `removeView`. The
-    /// `hide()` runs `TView::setState(sfVisible, false)`, whose tail
-    /// `if (options & ofSelectable) owner->resetCurrent()` fires for ANY
-    /// visible+selectable child — so C++ resets currency on removal of a
-    /// visible+selectable child whether or not it was `current`.
-    /// A removed `current` additionally vacates the slot first.
+    /// Remove the child named by `id` (no-op if it is not a child).
+    ///
+    /// Removing a visible+selectable child re-establishes currency
+    /// ([`reset_current`](Self::reset_current)) whether or not that child was the
+    /// current one. A removed current additionally vacates the `current` slot
+    /// first.
+    ///
+    /// # Turbo Vision heritage
+    /// Ports `TGroup::remove` (`tgroup.cpp`): hiding the view before unlinking it
+    /// runs the visibility-change currency tail, which is why any
+    /// visible+selectable removal resets currency, not just removal of the current
+    /// view.
     pub fn remove(&mut self, id: ViewId, ctx: &mut Context) {
         let Some(i) = self.index_of(id) else {
             return;
@@ -352,9 +365,13 @@ impl Group {
     // -- focus machinery (faithful ports of setCurrent / focus / findNext) ---
 
     /// Change the current view to `p` (or `None`), applying the focus/select
-    /// side effects per `mode`. Faithful port of `TGroup::setCurrent` +
-    /// `focusView`/`selectView` (`tgroup.cpp`), with the `lock`/`unlock`
-    /// redraw bracket dropped.
+    /// side effects chosen by `mode` ([`SelectMode`]): deselect the outgoing
+    /// current, select the incoming one, and (when the group itself is focused)
+    /// move the focused flag between them.
+    ///
+    /// # Turbo Vision heritage
+    /// Ports `TGroup::setCurrent` plus its focus/select helpers (`tgroup.cpp`),
+    /// with the redraw-locking bracket dropped (whole-tree redraw + diff).
     pub fn set_current(&mut self, p: Option<ViewId>, mode: SelectMode, ctx: &mut Context) {
         // CURRENCY KEYSTONE — DO NOT MOVE BELOW THE EARLY RETURN. Any explicit currency
         // op supersedes the pending insert-time reset: clearing `currency_dirty`
@@ -403,45 +420,37 @@ impl Group {
         self.current = p;
     }
 
-    /// Make the child `id` the current/focused one. The downward realization of
-    /// `TView::focus()` → `TView::select()` for a child in this (assumed-focused)
-    /// group.
+    /// Make the child `id` the current/focused one (the group is assumed focused).
     ///
-    /// Faithful to the C++ ordering: `focus()` validates the **outgoing** current
-    /// (the `ofValidate` / `cmReleasedFocus` gate) and, if that passes, calls
-    /// `select()`. `select()` is:
-    /// ```cpp
-    /// if( options & ofTopSelect ) makeFirst();
-    /// else owner->setCurrent( this, normalSelect );
-    /// ```
-    /// so a **selectable + `ofTopSelect`** child is **raised to the top**
-    /// ([`make_first`](Self::make_first), which reorders + `resetCurrent`s); any
-    /// other selectable child is just made current via
-    /// [`set_current`](Self::set_current). Returns `false` if the validate gate
-    /// refused the switch.
+    /// First the **outgoing** current is validated: if it opts into validation
+    /// ([`validate`](crate::view::Options::validate)) and reports it is not yet
+    /// ready to release focus, the switch is refused and this returns `false`.
+    /// Otherwise the child is selected: a child that opts into raise-on-select
+    /// ([`top_select`](crate::view::Options::top_select)) is **raised to the top**
+    /// ([`make_first`](Self::make_first)); any other selectable child is just made
+    /// current via [`set_current`](Self::set_current). Returns `true` on success.
     ///
-    /// **Self-heal (deviation from the pure C++ mapping):** after `make_first`,
-    /// if the child is still not current we re-assert currency with an explicit
-    /// `set_current`. C++ `select()` does only `makeFirst()` because
-    /// `putInFrontOf`'s trailing `resetCurrent` establishes currency — but that
-    /// tail is skipped by the already-in-place no-op, which is safe in C++ only
-    /// because insert-time `show()`→`resetCurrent()` keeps the topmost
-    /// `ofTopSelect` window current (an already-top window is already current).
-    /// rstv's ctx-less `Group::insert` defers that cascade to the pump's
-    /// `settle_currency` pass, so the invariant now self-restores between
-    /// events — but the self-heal **remains load-bearing for same-instant focus
-    /// within one call sequence** (the e8d82f2 bite): `Desktop::insert_and_focus`
-    /// calls `focus_child` on a just-inserted, not-yet-settled topmost window,
-    /// where `current` is still `None`/stale. When the invariant holds, the
-    /// self-heal is itself a no-op (`set_current` early-returns on
-    /// `current == p`).
+    /// **Self-heal:** after raising a `top_select` child, if it is somehow still
+    /// not current we re-assert currency with an explicit
+    /// [`set_current`](Self::set_current). Normally raising a child also
+    /// re-establishes currency, but that step no-ops when the child is already on
+    /// top — and a *just-inserted* topmost child has not yet had its deferred
+    /// insert-time currency settled, so without this its `current` slot could
+    /// still be empty. When currency is already correct this re-assert is itself a
+    /// no-op ([`set_current`](Self::set_current) early-returns when nothing
+    /// changes).
     ///
-    /// **`ofSelectable` gate:** the real C++ `TView::select()` has an outer guard
-    /// `if( (options & ofSelectable) != 0 && owner != 0 )`. That gate is enforced
-    /// at the **call sites** — the mouse-down auto-select path checks
-    /// `selectable && !selected && !disabled` before calling, and `focus_next`
-    /// only iterates `eligible = visible && !disabled && selectable` children —
-    /// so `focus_child` itself does not re-check `ofSelectable`.
+    /// **Selectability** is checked by the callers, not here: the mouse-down
+    /// auto-select path checks `selectable && !selected && !disabled` first, and
+    /// [`focus_next`](Self::focus_next) only iterates visible, enabled, selectable
+    /// children — so `focus_child` itself does not re-check it.
+    ///
+    /// # Turbo Vision heritage
+    /// Realizes `TView::focus()` → `TView::select()` (`tview.cpp`) in the owner:
+    /// the validate-then-select sequence, where `ofTopSelect` views call
+    /// `makeFirst` and others call `setCurrent`. The self-heal covers a case the
+    /// C++ leaves to its synchronous insert-time `resetCurrent`, which rstv defers
+    /// (deviation D3).
     pub fn focus_child(&mut self, id: ViewId, ctx: &mut Context) -> bool {
         // focus(): validate the outgoing current before letting it lose focus.
         if let Some(ci) = self.current.and_then(|c| self.index_of(c)) {
@@ -478,17 +487,18 @@ impl Group {
         true
     }
 
-    /// Reset `current` to the first visible+selectable child. Ports
-    /// `TGroup::resetCurrent` → `setCurrent(firstMatch(sfVisible, ofSelectable),
-    /// normalSelect)`.
+    /// Re-establish `current` as the first visible+selectable child.
+    ///
+    /// # Turbo Vision heritage
+    /// Ports `TGroup::resetCurrent` (re-select the first matching child).
     pub fn reset_current(&mut self, ctx: &mut Context) {
         let p = self.first_match_visible_selectable();
         self.set_current(p, SelectMode::Normal, ctx);
     }
 
-    /// `TGroup::firstMatch(sfVisible, ofSelectable)`. C++ checks `last` (bottom,
-    /// `children[0]`) **first**, then walks
-    /// `first()`→down, i.e. `children[0]`, then `children[len-1], len-2, …, 1`.
+    /// The first visible+selectable child, in the search order used to establish
+    /// currency: the **bottom** child (`children[0]`) is checked first, then the
+    /// rest top-to-bottom (`children[len-1], len-2, …, 1`).
     fn first_match_visible_selectable(&self) -> Option<ViewId> {
         let n = self.children.len();
         if n == 0 {
@@ -512,12 +522,14 @@ impl Group {
     }
 
     /// The next selectable child in tab order from `current`, or `None` if there
-    /// is no other eligible child (wrapping back to `current`). Ports
-    /// `TGroup::findNext`.
+    /// is no other eligible child (the search wraps back to `current`).
     ///
-    /// `forwards` steps C++ `p = p->next`, which (Vec mapping) walks **decreasing
-    /// index with wrap** (top→…→bottom→top); `backwards` walks increasing index.
-    /// Eligible = `visible && !disabled && selectable`.
+    /// `forwards` walks toward the next-frontmost child (decreasing index, with
+    /// wrap); the reverse direction walks increasing index. Eligible means
+    /// visible, enabled, and selectable.
+    ///
+    /// # Turbo Vision heritage
+    /// Ports `TGroup::findNext` (tab-order search over the sibling ring).
     pub fn find_next(&self, forwards: bool) -> Option<ViewId> {
         let cur = self.current?;
         let n = self.children.len();
@@ -544,10 +556,13 @@ impl Group {
         }
     }
 
-    /// Move focus to the next selectable child in tab order. Ports
-    /// `TGroup::focusNext`: focuses the [`find_next`](Self::find_next) result, or
-    /// returns `true` when there is no other eligible child (faithful to C++,
-    /// where `focusNext` returns `True` if `findNext` yields nothing).
+    /// Move focus to the next selectable child in tab order: focuses the
+    /// [`find_next`](Self::find_next) result, or returns `true` when there is no
+    /// other eligible child (so a no-other-child group reports success rather than
+    /// blocking the keystroke).
+    ///
+    /// # Turbo Vision heritage
+    /// Ports `TGroup::focusNext`.
     pub fn focus_next(&mut self, forwards: bool, ctx: &mut Context) -> bool {
         match self.find_next(forwards) {
             Some(id) => self.focus_child(id, ctx),
@@ -556,22 +571,19 @@ impl Group {
     }
 
     /// Select (raise + focus) the selectable child whose [`number`](View::number)
-    /// matches `num`. Returns whether a match was found. Realizes the C++
-    /// `cmSelectWindowNum` broadcast arm as a **direct walk** (`TWindow::handleEvent`:
-    /// `infoInt == number && (options & ofSelectable)` → `select()`).
+    /// matches `num`. Returns whether a match was found. This backs the
+    /// "select window N" shortcut (Alt-1 … Alt-9): it walks the children directly
+    /// and uses [`focus_child`](Self::focus_child), so a matching window that opts
+    /// into raise-on-select is raised to the top as well as focused.
     ///
-    /// **`focus_child` is the faithful realization of C++ `select()` here** (not a
-    /// raw `set_current`): `focus_child` is C++ `select()` *plus* an outgoing
-    /// `valid(cmReleasedFocus)` re-check. The Alt-N call site is already gated on
-    /// `canMoveFocus()` (== `deskTop->valid(cmReleasedFocus)`) upstream, so that
-    /// re-check is **redundant and always passes** — it cannot refuse focus the
-    /// upstream gate permitted. Windows carry `ofTopSelect`, so `focus_child` →
-    /// `make_first` **raises** the window, exactly matching C++ `select()` →
-    /// `makeFirst`.
+    /// Unlike the tab-order path, selectability is filtered **here** (the match
+    /// requires a selectable child); the validation re-check inside
+    /// [`focus_child`](Self::focus_child) is harmless because the caller has
+    /// already confirmed focus may move.
     ///
-    /// **The `ofSelectable` filter is explicit here** — unlike `cmNext` (whose
-    /// `find_next` already filters selectable), the by-number path must check it
-    /// itself (faithful to the C++ arm's `(options & ofSelectable) != 0`).
+    /// # Turbo Vision heritage
+    /// Realizes the "select window by number" broadcast arm of
+    /// `TWindow::handleEvent` as a direct child walk (deviations D3/D4).
     pub fn focus_by_number(&mut self, num: i16, ctx: &mut Context) -> bool {
         let target = self.children.iter().find_map(|c| {
             let s = c.view.state();
@@ -592,33 +604,27 @@ impl Group {
 
     // -- Z-reorder (putInFrontOf / makeFirst, realized in the owner) ------
 
-    /// `TView::putInFrontOf(target)` realized in the owner (a child cannot
-    /// reorder itself; the group does it). Move child `id` so it sits immediately
-    /// **in front of** `target` in Z-order. `target == None` moves `id` to the
-    /// very front (top). Unknown ids are ignored.
+    /// Move child `id` so it sits immediately **in front of** `target` in
+    /// Z-order. `target == None` moves `id` to the very front (top). Unknown ids
+    /// are ignored. A child cannot reorder itself; the owning group does it.
     ///
-    /// **NOTE:** `target == None` is a **to-top** sentinel used exclusively by
-    /// [`make_first`](Self::make_first). Do NOT equate it with C++
-    /// `Target == 0` — C++ `putInFrontOf(0)` / `insertView(p, 0)` sets
-    /// `last = p`, sending the view to the **BOTTOM**, which is the opposite of
-    /// this API's `None`-to-top behavior. The C++ send-to-bottom path has no
-    /// consumer here and is intentionally unimplemented.
+    /// Concretely, "in front of `target`" means `id` lands at index
+    /// `index_of(target) + 1` in the back-to-front `children` `Vec` (one slot above
+    /// `target`); `target == None` lands it at `children.last()` (the top).
     ///
-    /// **Ring → Vec mapping.** C++ `putInFrontOf(Target)` re-splices `this` so that
-    /// `this->next == Target`; in next-walk order (`first()`→`last`) that places
-    /// `this` immediately *ahead of* `Target` (one step closer to the top). Our Vec
-    /// is back-to-front (`children[0]` == `last`/bottom, `children.last()` ==
-    /// `first()`/top) and next-walk == **decreasing** index, so "`this->next ==
-    /// Target`" means `id` lands at index `index_of(target) + 1` (one slot above
-    /// `target`). `makeFirst` (`Target == first()`) therefore lands `id` at
-    /// `children.last()` (the top).
+    /// **`target == None` is a to-top sentinel** used exclusively by
+    /// [`make_first`](Self::make_first). There is intentionally no send-to-bottom
+    /// path — no caller needs one.
     ///
-    /// **C++ guards (faithful):** no-op if `id == target`, or if `id` is already
-    /// immediately in front of `target` (C++ `Target == nextView()`), or — for
-    /// `target == None` — if `id` is already the top. The `sfVisible` hide/show +
-    /// `drawHide`/`drawShow` dance is **dropped**: whole-tree redraw makes it
-    /// unnecessary. The trailing `if (options & ofSelectable) owner->resetCurrent()`
-    /// is kept.
+    /// **Guards:** no-op if `id == target`, if `id` is already immediately in front
+    /// of `target`, or (for `target == None`) if `id` is already the top. If the
+    /// moved view is selectable, currency is re-established
+    /// ([`reset_current`](Self::reset_current)) afterwards.
+    ///
+    /// # Turbo Vision heritage
+    /// Realizes `TView::putInFrontOf` in the owner. The original send-to-bottom
+    /// overload (`putInFrontOf(0)`) is unimplemented; the visibility hide/show
+    /// redraw dance is dropped (whole-tree redraw + diff).
     pub fn put_in_front_of(&mut self, id: ViewId, target: Option<ViewId>, ctx: &mut Context) {
         let Some(from) = self.index_of(id) else {
             return;
@@ -673,16 +679,21 @@ impl Group {
         }
     }
 
-    /// `TView::makeFirst` == `putInFrontOf(first())` — move child `id` to the top
-    /// (frontmost) of the Z-order. Realized in the owner.
+    /// Move child `id` to the top (frontmost) of the Z-order. Equivalent to
+    /// [`put_in_front_of`](Self::put_in_front_of) with `target == None`. Realized
+    /// in the owner.
+    ///
+    /// # Turbo Vision heritage
+    /// Ports `TView::makeFirst` (`putInFrontOf(first())`).
     pub fn make_first(&mut self, id: ViewId, ctx: &mut Context) {
         self.put_in_front_of(id, None, ctx);
     }
 
     // -- event routing helpers ----------------------------------------------
 
-    /// Per-child eventMask gate (our mask has only the two opt-ins). Ports the
-    /// `event.what & p->eventMask` test in `doHandleEvent`.
+    /// Per-child event-mask gate: does this child accept events of `ev`'s class?
+    /// Only the two opt-in tracking classes (mouse-move / mouse-auto) are gated;
+    /// every other class falls through to `true`.
     fn wants(s: &ViewState, ev: &Event) -> bool {
         match ev {
             Event::MouseMove(_) => s.event_mask.mouse_move,
@@ -694,10 +705,8 @@ impl Group {
         }
     }
 
-    /// `sfDisabled` gate — a disabled view ignores positional + focused events
-    /// (`positionalEvents | focusedEvents`) but still receives broadcasts. Ports
-    /// the `(p->state & sfDisabled) && (event.what & (positionalEvents |
-    /// focusedEvents))` test in `doHandleEvent`.
+    /// Disabled gate — a disabled view ignores positional (mouse) and focused
+    /// (key/command) events but still receives broadcasts.
     fn blocked(s: &ViewState, ev: &Event) -> bool {
         s.state.disabled
             && matches!(
@@ -711,9 +720,9 @@ impl Group {
             )
     }
 
-    /// Deliver `ev` to child `idx` — the `doHandleEvent` core (the phase gating
-    /// is applied by the caller). No-op if the event is already consumed, the
-    /// child is disabled for this class, or the child has not opted into it.
+    /// Deliver `ev` to child `idx` (the phase gating is applied by the caller).
+    /// No-op if the event is already consumed, the child is disabled for this
+    /// class, or the child has not opted into it.
     ///
     /// For positional (mouse) events the position is translated into the child's
     /// local coordinate frame first (subtract the child's `origin`); if the child
@@ -740,9 +749,9 @@ impl Group {
     }
 }
 
-/// `Some(&mut Point)` for the four mouse variants, `None` otherwise — the
-/// downward realization of `makeLocal` (the group rewrites the position into the
-/// child's frame before delivery).
+/// A mutable handle on the position of a mouse event (`None` for non-mouse
+/// events), so the group can rewrite the position into the child's coordinate
+/// frame before delivery.
 fn mouse_pos_mut(ev: &mut Event) -> Option<&mut Point> {
     match ev {
         Event::MouseDown(m)
@@ -774,14 +783,18 @@ impl View for Group {
         &mut self.st
     }
 
-    /// `TGroup::draw` → `drawSubViews`: paint visible children **back-to-front**
-    /// (`children[0]`→`children.last()`), each through a sub-context clipped to
-    /// its bounds. Painter's algorithm — deliberately reversed from C++ (which
-    /// paints top-first and relies on occlusion tracking, which rstv drops). No own-area
-    /// fill: children cover it. After each `sfShadow` child the group casts its
-    /// drop shadow ([`DrawCtx::cast_shadow`]): back-to-front order means later
-    /// (higher) siblings overwrite the shadow cells they occlude — the
-    /// painter's-algorithm equivalent of the C++ TVWrite occlusion walk.
+    /// Paint visible children **back-to-front** (`children[0]` →
+    /// `children.last()`), each through a sub-context clipped to its bounds —
+    /// painter's algorithm, so higher siblings overpaint lower ones. The group
+    /// does not fill its own area; the children cover it. After each child that
+    /// casts a drop shadow the group draws the shadow ([`DrawCtx::cast_shadow`]):
+    /// back-to-front order means later (higher) siblings overwrite the shadow
+    /// cells they occlude.
+    ///
+    /// # Turbo Vision heritage
+    /// Ports `TGroup::draw`/`drawSubViews`, with the paint order reversed: the
+    /// original paints top-first and tracks occlusion, which rstv drops in favor
+    /// of whole-tree redraw + diff.
     fn draw(&mut self, ctx: &mut DrawCtx) {
         for child in self.children.iter_mut() {
             if child.view.state().state.visible {
@@ -795,10 +808,13 @@ impl View for Group {
         }
     }
 
-    /// `TGroup::setState` — flip the group's own flag (+ focus broadcast via the
-    /// base behaviour) then propagate: `sfActive`/`sfDragging` to **all**
-    /// children; `sfFocused` to the **current** child only. Faithful port; the
-    /// dropped C++ cases (`sfVisible`/`sfExposed`) are the occlusion side effects.
+    /// Flip the group's own state flag (emitting the focus-gained/lost broadcast
+    /// for the focused flag) then propagate: `Active`/`Dragging` to **all**
+    /// children; `Focused` to the **current** child only.
+    ///
+    /// # Turbo Vision heritage
+    /// Ports `TGroup::setState`. The dropped flag cases (visible/exposed) were
+    /// occlusion side effects, unneeded under whole-tree redraw + diff.
     fn set_state(&mut self, flag: StateFlag, enable: bool, ctx: &mut Context) {
         // Base behaviour: flip the group's own flag + (for Focused) broadcast.
         self.st.set_flag(flag, enable);
@@ -830,9 +846,13 @@ impl View for Group {
         }
     }
 
-    /// `TGroup::changeBounds` — apply `bounds`; if the size changed, propagate the
-    /// delta to every child via `calc_bounds`/`change_bounds` (the resize grow
-    /// math). The `getBuffer`/`lock`/`unlock` redraw bracket is dropped.
+    /// Apply `bounds`; if the size changed, propagate the size delta to every
+    /// child via [`calc_bounds`](View::calc_bounds)/[`change_bounds`](View::change_bounds)
+    /// (the grow-mode resize math), so children grow/move with their owner.
+    ///
+    /// # Turbo Vision heritage
+    /// Ports `TGroup::changeBounds`, with the buffer-reallocation/redraw-locking
+    /// bracket dropped (whole-tree redraw + diff).
     fn change_bounds(&mut self, bounds: Rect) {
         let delta = (bounds.b - bounds.a) - self.st.size;
         self.st.set_bounds(bounds);
@@ -845,10 +865,13 @@ impl View for Group {
         }
     }
 
-    /// `TView::resetCursor` (group case) — descend into the `current` child for
-    /// the absolute cursor position, accumulating the child's `origin` at this
-    /// level. `None` if there is no current child or it wants no cursor shown.
-    /// The top-down realization of the C++ focused-chain cursor walk.
+    /// Descend into the `current` child to find where the hardware cursor should
+    /// sit, accumulating the child's `origin` so the result is in this group's
+    /// coordinate frame. `None` if there is no current child or it wants no cursor
+    /// shown. The event loop walks this chain from the root to place the cursor.
+    ///
+    /// # Turbo Vision heritage
+    /// The group case of the focused-chain cursor walk (`TView::resetCursor`).
     fn cursor_request(&self) -> Option<Point> {
         let i = self.current.and_then(|id| self.index_of(id))?;
         let child = &self.children[i];
@@ -858,7 +881,7 @@ impl View for Group {
             .map(|p| p + child.view.state().origin)
     }
 
-    /// `Group`'s [`View::find_mut`] override — the recursive tree-walk.
+    /// The group's [`View::find_mut`] override — the recursive tree-walk.
     /// One pass per child: match the child's own id, else recurse into it. A
     /// two-pass split (all direct children, then all recursions) fails the borrow
     /// checker (E0499) — the early `return` of `&mut` in the first loop escapes to
@@ -877,7 +900,7 @@ impl View for Group {
         None
     }
 
-    /// `Group`'s [`View::descendant_global_bounds`] override — resolve `id` to its
+    /// The group's [`View::descendant_global_bounds`] override — resolve `id` to its
     /// absolute bounds. `acc` is THIS group's absolute origin; a child's
     /// owner-local bounds come from `child.view.state().get_bounds()` (the `Child`
     /// struct carries no bounds field). Mirrors [`find_mut`](Self::find_mut)'s
@@ -906,13 +929,13 @@ impl View for Group {
         None
     }
 
-    /// `Group`'s [`View::remove_descendant`] override — route to the owning
-    /// group's [`remove`](Self::remove) (faithful removal + `reset_current`). If
+    /// The group's [`View::remove_descendant`] override — route to the owning
+    /// group's [`remove`](Self::remove) (which also re-establishes currency). If
     /// `id` is a direct child, remove it here; otherwise recurse so the group that
     /// actually owns it does the removal.
     fn remove_descendant(&mut self, id: ViewId, ctx: &mut Context) -> bool {
         if self.index_of(id).is_some() {
-            self.remove(id, ctx); // direct child: faithful removal + reset_current
+            self.remove(id, ctx); // direct child: removal + reset_current
             return true;
         }
         for child in self.children.iter_mut() {
@@ -923,16 +946,15 @@ impl View for Group {
         false
     }
 
-    /// `Group`'s [`View::focus_descendant`] override — route to the owning group's
-    /// [`focus_child`](Self::focus_child) (the faithful `link->focus()`). If `id`
-    /// is a **direct child**, apply the `ofSelectable` gate here (C++ `focusLink`'s
-    /// `link->options & ofSelectable`) and select it; either way `id` was found, so
-    /// **return `true` to stop the walk** (a non-selectable match is still a match —
-    /// it just doesn't get focused, exactly as C++ skips the `focus()` call).
-    /// Otherwise recurse so the group that actually owns `id` does the selection.
+    /// The group's [`View::focus_descendant`] override — route to the owning
+    /// group's [`focus_child`](Self::focus_child). If `id` is a **direct child**,
+    /// gate on selectability and select it; either way `id` was found, so **return
+    /// `true` to stop the walk** (a non-selectable match is still a match — it just
+    /// doesn't get focused). Otherwise recurse so the group that actually owns `id`
+    /// does the selection.
     fn focus_descendant(&mut self, id: ViewId, ctx: &mut Context) -> bool {
         if let Some(i) = self.index_of(id) {
-            // Direct child: gate on ofSelectable, then select (C++ focusLink).
+            // Direct child: gate on selectability, then select.
             if self.children[i].view.state().options.selectable {
                 self.focus_child(id, ctx);
             }
@@ -946,12 +968,11 @@ impl View for Group {
         false
     }
 
-    /// `Group`'s [`View::set_visible_descendant`] — write the flag in the OWNING
-    /// group and run the C++ `setState(sfVisible)` currency tail: if the flag
-    /// actually changed and the child is selectable, `resetCurrent()` — in BOTH
-    /// directions (show and hide), faithful to `tview.cpp`. A no-change write
-    /// runs no tail (C++ `setState` flips the bit unconditionally but show/hide
-    /// guard on the current state, so an idempotent call has no cascade).
+    /// The group's [`View::set_visible_descendant`] — write the visible flag in
+    /// the OWNING group and run the visibility-change currency tail: if the flag
+    /// actually changed and the child is selectable, re-establish currency
+    /// ([`reset_current`](Self::reset_current)) — in **both** directions (show and
+    /// hide). A no-change write runs no tail (an idempotent toggle has no cascade).
     /// Recurses like [`find_mut`](Self::find_mut) when `id` is not a direct child.
     fn set_visible_descendant(&mut self, id: ViewId, visible: bool, ctx: &mut Context) -> bool {
         if let Some(i) = self.index_of(id) {
@@ -959,8 +980,8 @@ impl View for Group {
             if st.state.visible != visible {
                 st.state.visible = visible;
                 if st.options.selectable {
-                    // The setState(sfVisible) tail: owner->resetCurrent()
-                    // (inherent — the owning group's own currency).
+                    // The visibility-change tail: re-establish the owning
+                    // group's own currency.
                     Group::reset_current(self, ctx);
                 }
             }
@@ -974,22 +995,22 @@ impl View for Group {
         false
     }
 
-    /// `TGroup::resetCurrent` via the `View` trait — establishes the group's
-    /// internal currency (first visible+selectable child). Delegates to the
-    /// inherent [`Group::reset_current`](Group::reset_current) (the
-    /// `firstMatch`/`setCurrent` body at the top of `impl Group`). Inherent methods
-    /// take resolution priority over same-named trait methods, so the UFCS call
-    /// below is NOT recursion — it dispatches to the inherent fn, not back here.
+    /// The [`View::reset_current`] override — re-establish the group's internal
+    /// currency (first visible+selectable child). Delegates to the inherent
+    /// [`Group::reset_current`](Group::reset_current). Inherent methods take
+    /// resolution priority over same-named trait methods, so the fully-qualified
+    /// call below is NOT recursion — it dispatches to the inherent fn, not back
+    /// here.
     fn reset_current(&mut self, ctx: &mut Context) {
         Group::reset_current(self, ctx)
     }
 
-    /// `Group`'s [`View::settle_currency`] — run pending insert-time
-    /// `resetCurrent` cascades, POST-ORDER (children first, so a child group's
-    /// currency exists before this group's focus cascade descends into it).
-    /// Runs the INHERENT [`Group::reset_current`] (not the virtual trait one) —
-    /// see the trait doc for why (FileDialog's one-time init must stay on the
-    /// `exec_view` virtual-call path).
+    /// The group's [`View::settle_currency`] — run pending insert-time currency
+    /// cascades, POST-ORDER (children first, so a child group's currency exists
+    /// before this group's focus cascade descends into it). Runs the INHERENT
+    /// [`Group::reset_current`] (not the trait override) — see the trait method's
+    /// doc for why (a file dialog's one-time init must stay on the
+    /// [`exec_view`](crate::app::Program::exec_view) path).
     fn settle_currency(&mut self, ctx: &mut Context) {
         for i in 0..self.children.len() {
             self.children[i].view.settle_currency(ctx);
@@ -1000,15 +1021,18 @@ impl View for Group {
         }
     }
 
-    /// `TGroup::valid` — for `cmReleasedFocus`, defer to the current child iff it
-    /// has `ofValidate` (else `true`); otherwise every child must be `valid`.
+    /// Validity check. For the "may I release focus?" command
+    /// ([`Command::RELEASED_FOCUS`]) it defers to the current child only when that
+    /// child opts into validation (else `true`); for any other command **every**
+    /// child must be valid.
     ///
-    /// Threads `&mut Context` (the async-modal-from-a-view seam): a child's
-    /// `valid` may request a modal `messageBox`. The `else` branch is a manual
-    /// `iter_mut` loop that keeps the **first-invalid short-circuit** (C++
-    /// `firstThat` stops at the first invalid child) — which also ensures only the
-    /// first invalid child enqueues an error box, matching C++'s single-box
-    /// behavior.
+    /// Threads `&mut Context` because a child's validity check may itself want to
+    /// pop up a modal message box. The all-children branch stops at the **first**
+    /// invalid child, which also ensures only that child enqueues an error box (a
+    /// single box, not one per invalid field).
+    ///
+    /// # Turbo Vision heritage
+    /// Ports `TGroup::valid`.
     fn valid(&mut self, cmd: Command, ctx: &mut Context) -> bool {
         if cmd == Command::RELEASED_FOCUS {
             match self.current.and_then(|id| self.index_of(id)) {
@@ -1027,35 +1051,42 @@ impl View for Group {
         }
     }
 
-    /// `TGroup::awaken` — `forEach(doAwaken)`: awaken every child (order
-    /// irrelevant).
+    /// Awaken every child (order irrelevant) — the post-construction hook a view
+    /// uses to finish initialization once it is wired into the tree.
+    ///
+    /// # Turbo Vision heritage
+    /// Ports `TGroup::awaken`.
     fn awaken(&mut self) {
         for child in self.children.iter_mut() {
             child.view.awaken();
         }
     }
 
-    /// `TGroup::handleEvent` — the three-phase router.
+    /// The three-phase event router.
     ///
-    /// * **focused events** (`KeyDown`/`Command`): `phPreProcess` (top→bottom,
-    ///   `ofPreProcess` children) → `phFocused` (the current child) →
-    ///   `phPostProcess` (top→bottom, `ofPostProcess` children).
-    /// * **broadcast**: `phFocused`, delivered to every child (top→bottom).
+    /// * **focused events** ([`KeyDown`](Event::KeyDown)/[`Command`](Event::Command)):
+    ///   a pre-process pass (top→bottom, only children that opt into pre-processing)
+    ///   → the focused pass (the current child) → a post-process pass (top→bottom,
+    ///   only children that opt into post-processing).
+    /// * **broadcasts**: delivered to every child (top→bottom).
     /// * **positional** (mouse): the topmost **visible** child whose bounds
-    ///   contain the (group-local) position — with the relocated mouse-down
-    ///   auto-select (carryover #1) applied before delivery.
+    ///   contain the (group-local) position — with mouse-down auto-select applied
+    ///   before delivery, so clicking a selectable child focuses it.
     ///
-    /// The C++ leading `TView::handleEvent(event)` (its own mouse-down→focus
-    /// body) is **not** restored here: a view does not select *itself within
-    /// itself* — that selection is the parent's job (the base `handle_event` is a
-    /// no-op).
+    /// A group does not run a self-focus step on itself here: selecting a child is
+    /// the *parent's* job, and the base view's event handler is a no-op.
     ///
-    /// **owner-extent-down:** the routing body is bracketed by a
+    /// **Owner size:** the routing body is bracketed by a
     /// `ctx.set_owner_size(self.size)` / restore so a child can read its owner's
-    /// size (`TWindow::zoom`). The restore is **unconditional**: the actual
-    /// routing lives in [`route_event`](Self::route_event), which may `return`
-    /// early (the positional `mouse_pos` guard), so the bracket here guarantees a
-    /// parent group's later sibling deliveries never see this group's size.
+    /// size (e.g. a window computing its zoomed bounds). The restore is
+    /// **unconditional** because the actual routing lives in
+    /// [`route_event`](Self::route_event), which may `return` early — the bracket
+    /// here guarantees a parent group's later sibling deliveries never see this
+    /// group's size.
+    ///
+    /// # Turbo Vision heritage
+    /// Ports `TGroup::handleEvent` (the pre/focused/post phase router and
+    /// positional hit-test).
     fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
         let saved_owner_size = ctx.owner_size();
         ctx.set_owner_size(self.st.size); // children's owner is THIS group (Copy read first)
@@ -1216,12 +1247,10 @@ mod tests {
         })
     }
 
-    /// Regression: the mouse wheel is `evMouseWheel`, a non-positional event
-    /// class that a group broadcasts to every child until consumed — NOT a
-    /// positional `evMouseDown` hit-tested under the cursor (`views.h:199`,
-    /// `positionalEvents = evMouse & ~evMouseWheel`; `TGroup::handleEvent`'s
-    /// `forEach` else-branch). A wheel over empty content must still reach the
-    /// active window's scrollbar, while a real click there must not.
+    /// Regression: the mouse wheel is a non-positional event class that a group
+    /// broadcasts to every child until consumed — NOT a positional click
+    /// hit-tested under the cursor. A wheel over empty content must still reach
+    /// the active window's scrollbar, while a real click there must not.
     #[test]
     fn wheel_broadcasts_to_scrollbar_off_the_bar() {
         use crate::event::MouseWheel;
@@ -1292,8 +1321,9 @@ mod tests {
         st: ViewState,
         ch: char,
         log: Rc<RefCell<Vec<Event>>>,
-        /// Mirrors `View::grabs_focus_on_click` (default true). Set false to
-        /// model a TButton-without-`bfGrabFocus` (the carryover-#1 opt-out).
+        /// Mirrors [`View::grabs_focus_on_click`] (default true). Set false to
+        /// model a control that takes a click without grabbing focus (e.g. a
+        /// button that fires but does not become current).
         grabs: bool,
     }
 
@@ -1644,8 +1674,8 @@ mod tests {
     // -- 5. three-phase focused dispatch -------------------------------------
 
     /// Order/phase probe for the three-phase dispatch tests: records its tag +
-    /// the [`Phase`] the routing group set for the delivery (`ctx.phase()`,
-    /// the `owner->phase` successor). Does NOT consume, so all legs run.
+    /// the [`Phase`] the routing group set for the delivery (read via
+    /// `ctx.phase()`). Does NOT consume, so all legs run.
     struct Tagged {
         st: ViewState,
         tag: char,
@@ -2706,11 +2736,10 @@ mod tests {
         );
     }
 
-    /// Remove parity with C++ `TGroup::remove` (tgroup.cpp:112):
-    /// `p->hide()` → `removeView`, where `hide()`'s `setState(sfVisible, false)`
-    /// tail runs `owner->resetCurrent()` for ANY visible+selectable child. So
-    /// removing a NON-current visible+selectable child must still snap `current`
-    /// to firstMatch — not leave it where it was.
+    /// Removing a view runs the visibility-change currency tail for ANY
+    /// visible+selectable child. So removing a NON-current visible+selectable
+    /// child must still snap `current` to the first matching child — not leave it
+    /// where it was.
     #[test]
     fn remove_of_noncurrent_visible_selectable_child_resets_current() {
         let mut out = VecDeque::new();

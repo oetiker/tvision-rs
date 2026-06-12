@@ -13,7 +13,7 @@
 //! # Turbo Vision heritage
 //! Replaces Turbo Vision's per-view incremental screen writes with a
 //! double-buffered whole-tree repaint plus cell diff (deviation D8). The grid
-//! and diff are adapted from ratatui rather than ported from the C++.
+//! and diff are adapted from ratatui rather than ported from the original.
 //
 // Portions adapted from ratatui (https://github.com/ratatui-org/ratatui),
 // licensed under the MIT License. Copyright (c) 2023-2024 The Ratatui Developers.

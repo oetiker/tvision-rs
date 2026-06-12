@@ -5,40 +5,40 @@
 //! [`menu_box_rect`] sizing helper, [`frame_line`](MenuBox::frame_line),
 //! [`draw`](MenuBox::draw), and [`get_item_rect`](MenuView::get_item_rect). Its
 //! [`handle_event`](MenuBox::handle_event) delegates to the shared passive
-//! [`menu_view::handle_event`] (`TMenuBox` inherits `TMenuView::handleEvent`); the
-//! interactive navigation runs in the menu session that owns the open box.
+//! [`menu_view::handle_event`]; the interactive navigation runs in the menu
+//! session that owns the open box.
 //!
-//! ## The inset frame (faithful TV, **not** a bug)
+//! ## The inset frame (intentional, **not** a bug)
 //!
-//! `frameLine` writes the corner/edge glyph at columns 1 and `size.x-2`, leaving
-//! **column 0 and column `size.x-1` blank**. The TV menu-box frame is inset one
-//! column on each side; this is byte-faithful to the C++ `frameChars` table
-//! (`frameChars[n]` and `frameChars[n+4]` are both `' '`), and the snapshot
-//! captures it. Do not "correct" it.
+//! [`frame_line`](MenuBox::frame_line) writes the corner/edge glyph at columns 1
+//! and `size.x-2`, leaving **column 0 and column `size.x-1` blank**. The menu-box
+//! frame is deliberately inset one column on each side (those outer columns are
+//! spaces in the frame-glyph table), and the snapshot captures it. Do not
+//! "correct" it.
 //!
-//! ## The per-line `color` fill
+//! ## The per-line colour fill
 //!
-//! `frameLine(b, n)` fills the **interior** columns `[2, size.x-2)` with the
-//! per-line `color` (its lo style), while the border cells stay `cNormal`. So a
-//! selected/disabled item row gets its interior highlighted by setting `color`
-//! *before* `frameLine(10)`, then the name is drawn over it in the same `color`.
+//! Each frame row fills the **interior** columns `[2, size.x-2)` with a per-line
+//! colour (its lo style), while the border cells keep the normal box style. A
+//! selected or disabled item row highlights its interior by passing that colour
+//! into the middle frame row, then the name is drawn over it in the same colour.
 //!
 //! As with [`MenuBar`](crate::menu::MenuBar), [`MenuViewState`] embeds a
-//! [`ViewState`] (not a `View`), so the differing `View` methods are hand-written
-//! rather than generated.
+//! [`ViewState`] (not a `View`), so the differing [`View`] methods are
+//! hand-written rather than generated.
 //!
 //! # Turbo Vision heritage
-//! Ports `TMenuBox` (`tmenubox.cpp`/`menus.h`). C++ inheritance from `TMenuView`
-//! becomes the [`MenuView`] trait (deviation D2); `TStreamable` persistence is
-//! dropped (deviation D12).
+//! Ports `TMenuBox` (`tmenubox.cpp`/`menus.h`). The `TMenuView` base becomes the
+//! [`MenuView`] trait (deviation D2); `TStreamable` persistence is dropped
+//! (deviation D12).
 
 use crate::event::Event;
 use crate::menu::menu_view::{self, MenuColors, MenuView, MenuViewState};
 use crate::menu::{Menu, MenuItem};
 use crate::view::{Context, DrawCtx, Rect, View, ViewState};
 
-/// `cstrlen` — display width of a `~`-marked control string, ignoring the `~`
-/// markers. Per-module copy mirroring `button.rs` (see [`MenuBar`]).
+/// Display width of a `~`-marked label, ignoring the `~` markers. Per-module copy
+/// mirroring `button.rs` (see [`MenuBar`]).
 ///
 /// [`MenuBar`]: crate::menu::MenuBar
 fn cstrlen(s: &str) -> i32 {
@@ -48,30 +48,32 @@ fn cstrlen(s: &str) -> i32 {
         .sum()
 }
 
-/// `getRect` (`tmenubox.cpp:25`, the static sizing helper) — compute the box
-/// bounds that fit `menu` inside `bounds`.
+/// Compute the box bounds that fit `menu` inside `bounds`.
 ///
-/// Faithful: start `w = 10`, `h = 2`; for each **named** item
-/// `l = cstrlen(name) + 6`, `+ 3` if it is a submenu (C++ `command == 0`), else
-/// `+ cstrlen(param) + 2` if it has a `param`; `w = max(l, w)`. `h++` for **every**
-/// item (named or not — separators still take a row). Then clamp the box into
-/// `bounds`: if `a.x + w < b.x` set `b.x = a.x + w`, else `a.x = b.x - w` (and the
-/// same for y/h).
+/// Width starts at a floor of 10 and grows to the widest item: each item is its
+/// label width plus 6 padding columns, plus 3 more for a submenu's `►` marker
+/// column, or plus the shortcut-text width plus 2 for a command with shortcut
+/// text. Height is 2 (the top and bottom borders) plus one row per item —
+/// separators included. The result is then clamped into `bounds`: the box keeps
+/// its preferred size where it fits, otherwise it is pushed against the far edge.
+///
+/// # Turbo Vision heritage
+/// Ports the static `getRect` sizing helper (`tmenubox.cpp`).
 pub fn menu_box_rect(bounds: Rect, menu: &Menu) -> Rect {
     let mut w = 10;
     let mut h = 2;
     for item in &menu.items {
         match item {
-            MenuItem::Separator => {} // C++ p->name == 0: no width, but h++ below.
+            MenuItem::Separator => {} // no width, but still takes a row (h++ below).
             MenuItem::SubMenu { name, .. } => {
-                // command == 0 (a submenu): + 3 for the "►" marker column.
+                // a submenu: + 3 for the "►" marker column.
                 let l = cstrlen(name) + 6 + 3;
                 w = l.max(w);
             }
             MenuItem::Command { name, param, .. } => {
                 let mut l = cstrlen(name) + 6;
                 if let Some(p) = param {
-                    // param != 0: + cstrlen(param) + 2 for the right-aligned shortcut.
+                    // shortcut text: + its width + 2 for the right-aligned shortcut.
                     l += cstrlen(p) + 2;
                 }
                 w = l.max(w);
@@ -94,35 +96,34 @@ pub fn menu_box_rect(bounds: Rect, menu: &Menu) -> Rect {
     r
 }
 
-/// `TMenuBox` — the framed, shadowed vertical menu box. Holds the shared
-/// [`MenuViewState`]; the box-specific layout lives in the methods below.
+/// The framed, shadowed vertical menu box. Holds the shared [`MenuViewState`];
+/// the box-specific layout lives in the methods below.
+///
+/// # Turbo Vision heritage
+/// Ports `TMenuBox` (`tmenubox.cpp`/`menus.h`).
 pub struct MenuBox {
     mv: MenuViewState,
 }
 
 impl MenuBox {
-    /// Construct a menu box presenting `menu`, sized to fit inside `bounds` —
-    /// ports `TMenuBox::TMenuBox` (`tmenubox.cpp:62`), whose `TMenuView` base is
-    /// built over `getRect(bounds, aMenu)`.
+    /// Construct a menu box presenting `menu`, sized by [`menu_box_rect`] to fit
+    /// inside `bounds`.
     ///
-    /// Faithful: bounds = [`menu_box_rect`]`(bounds, &menu)`; `state |= sfShadow`
-    /// (the box casts a drop shadow) and `options |= ofPreProcess`.
+    /// The box casts a drop shadow and pre-processes events in the focused chain.
     pub fn new(bounds: Rect, menu: Menu) -> Self {
         let rect = menu_box_rect(bounds, &menu);
         let mut state = ViewState::new(rect);
-        state.state.shadow = true; // sfShadow
-        state.options.pre_process = true; // ofPreProcess
+        state.state.shadow = true; // drop shadow
+        state.options.pre_process = true; // see accelerators before focused view
         MenuBox {
             mv: MenuViewState::new(state, menu),
         }
     }
 
-    /// `TMenuBox::frameLine` (`tmenubox.cpp:73`) — draw one box-frame row of style
-    /// `kind`, with the interior columns in `color` and the border cells in
-    /// `c_normal`.
+    /// Draw one box-frame row of style `kind`, with the interior columns in
+    /// `color` and the border cells in `c_normal`.
     ///
-    /// Decoded `frameChars` table (single-line box glyphs, all from
-    /// [`Glyphs`](crate::theme::Glyphs)):
+    /// The single-line box glyphs (all from [`Glyphs`](crate::theme::Glyphs)):
     /// ```text
     /// kind  cols 0,1        cols [2, size.x-2)   cols size.x-2, size.x-1
     /// Top   ' '  ┌          ─                    ┐  ' '
@@ -130,7 +131,7 @@ impl MenuBox {
     /// Mid   ' '  │          ' '                  │  ' '
     /// Sep   ' '  ├          ─                    ┤  ' '
     /// ```
-    /// Columns 0 and `size.x-1` are blank — the faithful inset (see the module
+    /// Columns 0 and `size.x-1` are blank — the intentional inset (see the module
     /// doc).
     fn frame_line(
         ctx: &mut DrawCtx,
@@ -162,16 +163,16 @@ impl MenuBox {
     }
 }
 
-/// Which `frameChars` row to draw (the C++ index `n` ∈ {0, 5, 10, 15}).
+/// Which frame row to draw.
 #[derive(Clone, Copy)]
 enum FrameKind {
-    /// `n = 0` — the top border.
+    /// The top border.
     Top,
-    /// `n = 5` — the bottom border.
+    /// The bottom border.
     Bottom,
-    /// `n = 10` — an item row (vertical edges, blank interior).
+    /// An item row (vertical edges, blank interior).
     Middle,
-    /// `n = 15` — a separator row (a `├──┤` divider).
+    /// A separator row (a `├──┤` divider).
     Separator,
 }
 
@@ -184,17 +185,13 @@ impl MenuView for MenuBox {
         &mut self.mv
     }
 
-    /// `TMenuBox::getItemRect` (`tmenubox.cpp:125`) — the rect of item `index`,
-    /// counting rows from `y = 1` (just below the top border).
+    /// The rect of item `index`, counting rows from `y = 1` (just below the top
+    /// border).
     ///
-    /// Faithful: `y` starts at 1 and increments for **every** item (named or
-    /// separator — the draw emits a row for each), returning
-    /// `Rect::new(2, y, size.x - 2, y + 1)` for the matched index.
-    ///
-    /// The C++ walks the linked list to `index`; since every row advances `y` by
-    /// exactly 1 (separators included), that is the closed form `y = 1 + index`.
-    /// (Unlike `TMenuBar::getItemRect`, where separators consume no `x` and the
-    /// walk is genuinely load-bearing.)
+    /// Every item — separators included — occupies exactly one row, so the row is
+    /// the closed form `y = 1 + index`, and the rect spans the interior columns
+    /// `[2, size.x - 2)`. (Unlike the bar's layout, where separators consume no
+    /// horizontal space and a running walk is genuinely needed.)
     fn get_item_rect(&self, index: usize) -> Rect {
         let y = 1 + index as i32;
         let size_x = self.mv.state.size.x;
@@ -211,16 +208,14 @@ impl View for MenuBox {
         &mut self.mv.state
     }
 
-    /// `TMenuBox::draw` (`tmenubox.cpp:80`) — top border, one row per item, bottom
-    /// border.
+    /// Draw the top border, one row per item, then the bottom border.
     ///
-    /// Colour matrix (`getColor`, same as [`MenuBar`](crate::menu::MenuBar)):
-    /// `cNormal = 0x0301`, `cSelect = 0x0604`, `cNormDisabled = 0x0202`,
-    /// `cSelDisabled = 0x0505`. For each named item the per-line `color` is set to
-    /// the selected/disabled lo style (or stays `cNormal`), the frame row is drawn
-    /// (its interior filled in `color`), then the name is drawn over it. A submenu
-    /// gets the `►` marker at `size.x - 4`; a command with a `param` gets the param
-    /// right-aligned at `size.x - 3 - cstrlen(param)`.
+    /// The colours come from [`MenuColors`] (the same matrix as
+    /// [`MenuBar`](crate::menu::MenuBar)). For each named item the per-line colour
+    /// is set to the selected/disabled lo style (or stays the normal box style),
+    /// the frame row is drawn with its interior filled in that colour, then the
+    /// label is drawn over it. A submenu gets the `►` marker near the right edge; a
+    /// command with shortcut text gets that text right-aligned.
     fn draw(&mut self, ctx: &mut DrawCtx) {
         let colors = MenuColors::resolve(ctx);
         let c_normal = colors.normal.0; // cNormal lo — the border style.
@@ -272,15 +267,15 @@ impl View for MenuBox {
         MenuBox::frame_line(ctx, size.x, y, FrameKind::Bottom, c_normal, c_normal);
     }
 
-    /// `TMenuBox::handleEvent` — `TMenuBox` inherits `TMenuView::handleEvent`, so
-    /// this delegates to the passive [`menu_view::handle_event`].
+    /// Delegates to the passive [`menu_view::handle_event`]; the box adds no event
+    /// logic of its own (interactive navigation lives in the menu session).
     fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
         menu_view::handle_event(&self.mv, ev, ctx);
     }
 
-    /// Write the session-owned highlight cache (`TMenuView::current`) — the
-    /// pump's [`Deferred::SetMenuCurrent`](crate::view::Deferred::SetMenuCurrent)
-    /// broker target. A box is never focused (Clean Architecture A); the
+    /// Write the session-owned highlight index — the pump's
+    /// [`Deferred::SetMenuCurrent`](crate::view::Deferred::SetMenuCurrent) broker
+    /// target. A box is never focused; the
     /// [`MenuSession`](crate::menu::MenuSession) drives its highlight through here.
     fn set_menu_current(&mut self, current: Option<usize>) {
         self.mv.current = current;

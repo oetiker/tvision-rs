@@ -13,13 +13,12 @@
 //!
 //! # Turbo Vision heritage
 //!
-//! Ports `TWindow`. C++ `TWindow : TGroup` inheritance becomes embed-and-
-//! delegate composition (deviation D2): [`Window`] embeds a [`Group`] and
-//! forwards the [`View`](crate::view::View) trait to it, overriding only the
-//! methods `TWindow` does. A window never reaches up to an owner — the frame's
-//! title/flags/number are pushed down (deviation D3); the `wf*` flag word
-//! becomes [`WindowFlags`] (deviation D5); and `getPalette` becomes a
-//! [`WindowPalette`] → [`Role`](crate::theme::Role) mapping (deviation D7).
+//! Ports `TWindow` (`twindow.cpp`). The base-class container becomes an embedded
+//! [`Group`] that the [`View`](crate::view::View) trait forwards to (deviation
+//! D2); frame title/flags/number are pushed down to the child instead of reached
+//! up for (deviation D3); the decoration flag word becomes [`WindowFlags`]
+//! (deviation D5); and the palette indirection becomes a [`WindowPalette`] →
+//! [`Role`](crate::theme::Role) mapping (deviation D7).
 
 #[allow(clippy::module_inception)]
 mod window;

@@ -2,9 +2,9 @@
 //! showing the items of the help-context-selected [`StatusDef`].
 //!
 //! It draws the items, hit-tests mouse clicks, runs the mouse press-and-hold
-//! drag-highlight, handles the `cmCommandSetChanged` broadcast (regraying its
-//! disabled items), and matches keyboard accelerators against **all** items
-//! (including the hidden, text-less ones).
+//! drag-highlight, handles the [`Command::COMMAND_SET_CHANGED`](crate::command::Command::COMMAND_SET_CHANGED)
+//! broadcast (regraying its disabled items), and matches keyboard accelerators
+//! against **all** items (including the hidden, text-less ones).
 //!
 //! ## Mouse press-and-hold drag-highlight
 //!
@@ -39,11 +39,11 @@
 //!
 //! # Turbo Vision heritage
 //!
-//! Ports `TStatusLine` (`tstatusl.cpp`). The `cpStatusLine` palette /
-//! `getColor` / `getPalette` indirection becomes direct theme-role lookups
-//! (deviation D7), and the streaming machinery is dropped (deviation D12).
-//! Structurally it embeds a [`ViewState`] with hand-written `View` methods
-//! rather than delegating, like [`MenuBar`](crate::menu::MenuBar).
+//! Ports `TStatusLine` (`tstatusl.cpp`). The palette-index color indirection
+//! becomes direct theme-role lookups (deviation D7), and the streaming machinery
+//! is dropped (deviation D12). Structurally it embeds a [`ViewState`] with
+//! hand-written `View` methods rather than delegating, like
+//! [`MenuBar`](crate::menu::MenuBar).
 
 use crate::capture::TrackMask;
 use crate::color::Style;
@@ -54,8 +54,8 @@ use crate::status::StatusDef;
 use crate::theme::Role;
 use crate::view::{Context, DrawCtx, Point, Rect, View, ViewState};
 
-/// `cstrlen` — display width of a `~`-marked control string, **ignoring** the `~`
-/// markers (not printed columns). A per-module copy mirroring
+/// Display width of a `~`-marked control string, **ignoring** the `~` markers
+/// (they are hotkey delimiters, not printed columns). A per-module copy mirroring
 /// [`menu_bar`](crate::menu::menu_bar)'s, using the same `UnicodeWidthChar`
 /// primitive so widths match the rest of the renderer.
 fn cstrlen(s: &str) -> i32 {
@@ -65,33 +65,29 @@ fn cstrlen(s: &str) -> i32 {
         .sum()
 }
 
-/// The hint separator drawn before the hint text — C++
-/// `TStatusLine::hintSeparator = "\xB3 "` (`tvtext1.cpp:109`): a CP437 `\xB3`
-/// vertical bar `│` (U+2502) followed by a space. Drawn plain (`moveStr`), not a
-/// `~`-cstr.
+/// The hint separator drawn before the hint text: a vertical bar `│` (U+2502)
+/// followed by a space. Drawn as plain text, not a `~`-marked control string.
 const HINT_SEPARATOR: &str = "\u{2502} ";
 
-/// The four `(lo, hi)` style pairs a status item is drawn in — the C++
-/// `drawSelect` color matrix (`cNormal`/`cSelect`/`cNormDisabled`/`cSelDisabled`,
-/// `tstatusl.cpp:72-75`), resolved once per `draw` from the
-/// [`Theme`](crate::theme::Theme) via the `Status*` [`Role`]s.
+/// The four `(lo, hi)` style pairs a status item is drawn in — normal, selected,
+/// normal-disabled, and selected-disabled — resolved once per draw from the
+/// [`Theme`](crate::theme::Theme) via the `Status*` [`Role`]s. Each pair is
+/// `(label style, shortcut-highlight style)`.
 ///
 /// Analogous to [`MenuColors`](crate::menu::MenuColors) but reads the distinct
 /// `Status*` roles — deliberately a separate type (different roles), not a reuse.
 ///
-/// All four pairs are resolved as a unit, matching C++ `drawSelect` (which
-/// resolves all four `TAttrPair`s together at the function top). The
-/// `select` / `sel_disabled` pairs are used by the hover/press highlight, which
-/// picks `cSelect`/`cSelDisabled` for the item under the cursor.
+/// All four pairs are resolved as a unit. The `select` / `sel_disabled` pairs are
+/// used by the hover/press highlight for the item under the cursor.
 #[derive(Clone, Copy)]
 pub struct StatusColors {
-    /// `cNormal` → `(StatusNormal, StatusShortcut)`.
+    /// Normal: `(StatusNormal, StatusShortcut)`.
     pub normal: (Style, Style),
-    /// `cSelect` → `(StatusSelect, StatusShortcutSelect)`.
+    /// Selected/highlighted: `(StatusSelect, StatusShortcutSelect)`.
     pub select: (Style, Style),
-    /// `cNormDisabled` → `StatusDisabled` for both lo and hi.
+    /// Normal but disabled: `StatusDisabled` for both lo and hi.
     pub norm_disabled: (Style, Style),
-    /// `cSelDisabled` → `StatusSelDisabled` for both lo and hi.
+    /// Selected but disabled: `StatusSelDisabled` for both lo and hi.
     pub sel_disabled: (Style, Style),
 }
 
@@ -110,15 +106,14 @@ impl StatusColors {
                 ctx.style(Role::StatusShortcutSelect),
             ),
             // Disabled rows: a single style for both lo and hi (no shortcut
-            // highlight when greyed) — C++ `cNormDisabled`/`cSelDisabled` lo==hi.
+            // highlight when greyed).
             norm_disabled: (d, d),
             sel_disabled: (sd, sd),
         }
     }
 
-    /// The `(lo, hi)` pair for an item given its `enabled`/`selected` state — the
-    /// C++ `drawSelect` matrix (`commandEnabled ? (sel?cSelect:cNormal) :
-    /// (sel?cSelDisabled:cNormDisabled)`).
+    /// The `(lo, hi)` pair for an item given its `enabled`/`selected` state: a
+    /// 2×2 matrix picking between the normal/select/disabled pairs.
     fn item(&self, enabled: bool, selected: bool) -> (Style, Style) {
         match (enabled, selected) {
             (true, true) => self.select,
@@ -136,31 +131,29 @@ impl StatusColors {
 ///
 /// Ports `TStatusLine` (`tstatusl.cpp`).
 pub struct StatusLine {
-    /// The embedded [`ViewState`] (`TView` data members).
+    /// The embedded view state (geometry, flags, state bits).
     state: ViewState,
-    /// The status-line definitions (C++ `TStatusDef* defs`, owned).
+    /// The status-line definitions, owned.
     defs: Vec<StatusDef>,
-    /// Index into [`defs`](Self::defs) of the currently-selected def (C++ `items`
-    /// = `defs[items_def].items`), or `None` if none match the current help
-    /// context (C++ `items == 0`). Resolved by [`find_items`](Self::find_items).
+    /// Index into [`defs`](Self::defs) of the currently-selected def, or `None` if
+    /// none match the current help context. Resolved by
+    /// [`find_items`](Self::find_items).
     items_def: Option<usize>,
-    /// The view's current help context (C++ `helpCtx`).
+    /// The view's current help context.
     help_ctx: HelpCtx,
-    /// The hint provider (C++ virtual `hint()`); default returns `None` (C++
-    /// `hint()` returns `""`). Overridable via [`set_hint`](Self::set_hint).
+    /// The hint provider; the default returns `None` (no hint). Overridable via
+    /// [`set_hint`](Self::set_hint).
     hint: Box<dyn Fn(HelpCtx) -> Option<String>>,
     /// Cached **disabled**-command snapshot for graying (a denylist; refreshed
     /// by the [`update_menu_commands`](View::update_menu_commands) broker hook,
     /// whose contract passes the program's disabled set). `None` before the
     /// first refresh means **treat all as enabled** (the same startup gap menus
     /// have — and consistent with the denylist default, where an empty set also
-    /// means all-enabled). **Not** a per-item `disabled` field — `TStatusItem`
-    /// has none; C++ `drawSelect` calls `commandEnabled` live, which we snapshot
-    /// here.
+    /// means all-enabled). A status item carries no per-item disabled flag, so
+    /// enablement is resolved against this snapshot at draw time.
     disabled_cmds: Option<CommandSet>,
-    /// The item index currently being highlighted during a press-and-hold drag
-    /// (the C++ `drawSelect(T)` selected pointer). `None` when the cursor is
-    /// over no item (C++ `T = 0`). Reset to `None` on `MouseUp`.
+    /// The item index currently being highlighted during a press-and-hold drag.
+    /// `None` when the cursor is over no item. Reset to `None` on `MouseUp`.
     pressed_item: Option<usize>,
     /// Whether a mouse hold-track is in flight (between the arming `MouseDown`
     /// and the terminating `MouseUp`). Guards the `MouseMove`/`MouseUp` tracking
@@ -173,27 +166,26 @@ pub struct StatusLine {
 }
 
 impl StatusLine {
-    /// Construct a status line over `bounds` presenting `defs` — ports
-    /// `TStatusLine::TStatusLine` (`tstatusl.cpp:31`).
+    /// Construct a status line over `bounds` presenting `defs`.
     ///
-    /// Faithful: `growMode = gfGrowLoY | gfGrowHiX | gfGrowHiY` (the line sticks
-    /// to the bottom and stretches with the screen) and `options |= ofPreProcess`
-    /// (it pre-processes accelerators before the focused view). `eventMask |=
-    /// evBroadcast` is **moot** — our `Group::handle_event` fans broadcasts to
-    /// every child unconditionally (see the identical note in
-    /// [`menu_view::handle_event`](crate::menu::menu_view)); no mask is ported.
+    /// The grow mode sticks the line to the bottom and stretches it with the
+    /// screen, and the view pre-processes accelerators before the focused view
+    /// sees the event. Broadcasts reach it because the group fans them to every
+    /// child unconditionally (see the identical note in
+    /// [`menu_view::handle_event`](crate::menu::menu_view)); no event-mask opt-in
+    /// is needed.
     pub fn new(bounds: Rect, defs: Vec<StatusDef>) -> Self {
         let mut state = ViewState::new(bounds);
-        state.grow_mode.lo_y = true; // gfGrowLoY
-        state.grow_mode.hi_x = true; // gfGrowHiX
-        state.grow_mode.hi_y = true; // gfGrowHiY
-        state.options.pre_process = true; // ofPreProcess
+        state.grow_mode.lo_y = true; // stick to the bottom edge
+        state.grow_mode.hi_x = true; // stretch with screen width
+        state.grow_mode.hi_y = true; // stretch with screen height
+        state.options.pre_process = true; // see events before the focused view
         let mut sl = StatusLine {
             state,
             defs,
             items_def: None,
-            help_ctx: HelpCtx::NO_CONTEXT, // C++ helpCtx default
-            hint: Box::new(|_| None),      // C++ default hint() -> ""
+            help_ctx: HelpCtx::NO_CONTEXT, // no context by default
+            hint: Box::new(|_| None),      // no hint by default
             disabled_cmds: None,
             pressed_item: None,
             tracking: false,
@@ -203,9 +195,8 @@ impl StatusLine {
         sl
     }
 
-    /// Override the hint provider (the idiomatic port of the C++ `virtual
-    /// hint()`). The closure maps the current help context to an optional hint
-    /// string.
+    /// Override the hint provider. The closure maps the current help context to an
+    /// optional hint string.
     pub fn set_hint(&mut self, hint: impl Fn(HelpCtx) -> Option<String> + 'static) {
         self.hint = Box::new(hint);
     }
@@ -216,9 +207,8 @@ impl StatusLine {
         self
     }
 
-    /// `TStatusLine::findItems` (`tstatusl.cpp:119`) — select the first def whose
-    /// `range` matches the current help context; if none match, leave
-    /// [`items_def`](Self::items_def) `None` (C++ `items = 0`).
+    /// Select the first def whose `range` matches the current help context; if
+    /// none match, leave [`items_def`](Self::items_def) `None`.
     pub fn find_items(&mut self) {
         self.items_def = self
             .defs
@@ -230,9 +220,8 @@ impl StatusLine {
     /// [`Program`](crate::app::Program) calls this on idle with the topmost
     /// view's help context (see the module docs).
     ///
-    /// Idempotent guard: mirrors the C++ `TStatusLine::update()` check
-    /// `if (helpCtx != h)` (`tstatusl.cpp:209`) — if the context hasn't changed
-    /// we skip the `find_items` rescan entirely.
+    /// Idempotent guard: if the context hasn't changed we skip the
+    /// [`find_items`](Self::find_items) rescan entirely.
     pub fn set_help_ctx(&mut self, ctx: HelpCtx) {
         if self.help_ctx == ctx {
             return;
@@ -241,8 +230,8 @@ impl StatusLine {
         self.find_items();
     }
 
-    /// The items of the currently-selected def (C++ `items`), or an empty slice if
-    /// none is selected (C++ `items == 0`).
+    /// The items of the currently-selected def, or an empty slice if none is
+    /// selected.
     fn items(&self) -> &[crate::status::StatusItem] {
         match self.items_def {
             Some(i) => &self.defs[i].items,
@@ -252,8 +241,7 @@ impl StatusLine {
 
     /// Whether `command` is enabled, per the cached disabled-set snapshot
     /// (denylist: enabled iff NOT in the set). `None` (before the first broker
-    /// refresh) means **treat all as enabled** (the startup gap). Ports the C++
-    /// `commandEnabled(T->command)` call, snapshotted.
+    /// refresh) means **treat all as enabled** (the startup gap).
     fn command_enabled(&self, command: crate::command::Command) -> bool {
         !self
             .disabled_cmds
@@ -261,12 +249,12 @@ impl StatusLine {
             .is_some_and(|cs| cs.has(command))
     }
 
-    /// `TStatusLine::itemMouseIsIn` (`tstatusl.cpp:133`) — the index of the item
-    /// whose drawn span `[i, k)` contains the **view-local** `mouse`, or `None`.
+    /// The index of the item whose drawn span `[i, k)` contains the
+    /// **view-local** `mouse`, or `None`.
     ///
-    /// Faithful: `mouse.y != 0 → None`; else walk the selected def's items
-    /// accumulating `i` / `k = i + cstrlen + 2` over `text != None` items (a
-    /// `text == None` item is **skipped** in the accumulator — it consumes no
+    /// A `mouse.y != 0` returns `None`; otherwise walk the selected def's items
+    /// accumulating the start `i` and end `k = i + width + 2` over the visible
+    /// items (a text-less item is **skipped** in the accumulator — it consumes no
     /// width), and return the item whose `[i, k)` contains `mouse.x`.
     fn item_mouse_is_in(&self, mouse: Point) -> Option<usize> {
         if mouse.y != 0 {
@@ -295,19 +283,17 @@ impl View for StatusLine {
         &mut self.state
     }
 
-    /// `TStatusLine::draw` → `drawSelect(T)` (`tstatusl.cpp:62-117`). Fill the row,
-    /// then lay the selected def's visible items out left-to-right, each with a
-    /// leading + trailing space in the per-item colour, then the hint tail.
+    /// Fill the row, then lay the selected def's visible items out left-to-right,
+    /// each with a leading + trailing space in the per-item style, then the hint
+    /// tail.
     ///
-    /// `selected` is [`pressed_item`](StatusLine::pressed_item) — `None` when no
-    /// press-and-hold is in flight (`drawSelect(0)` in C++), or `Some(idx)` when
-    /// the item at `idx` is the one currently under the held button
-    /// (`drawSelect(T)` in C++). The `(enabled, selected)` pair feeds
-    /// [`StatusColors::item`], which selects `cSelect`/`cSelDisabled` for the
-    /// highlighted item and `cNormal`/`cNormDisabled` for all others.
+    /// The highlighted item is [`pressed_item`](StatusLine::pressed_item) — `None`
+    /// when no press-and-hold is in flight, or `Some(idx)` when the item at `idx`
+    /// is currently under the held button. The `(enabled, selected)` pair feeds
+    /// [`StatusColors::item`], which selects the highlight styles for that item and
+    /// the normal styles for all others.
     ///
-    /// The C++ `TDrawBuffer` + `writeLine` becomes direct view-local [`DrawCtx`]
-    /// writes. `abs_origin` is cached here for the mouse-tracking capture.
+    /// `abs_origin` is cached here for the mouse-tracking capture.
     fn draw(&mut self, ctx: &mut DrawCtx) {
         // Cache the absolute origin for the mouse-tracking capture: the
         // MouseTrackCapture converts abs mouse coords to view-local via this
@@ -317,19 +303,18 @@ impl View for StatusLine {
         let colors = StatusColors::resolve(ctx);
         let size = self.state.size;
 
-        // b.moveChar(0, ' ', cNormal, size.x) — fill the whole row with cNormal.lo.
+        // Fill the whole row with the normal label style.
         ctx.fill(Rect::new(0, 0, size.x, 1), ' ', colors.normal.0);
 
         let mut i = 0i32;
         for (idx, item) in self.items().iter().enumerate() {
-            // C++: the `i += l + 2` advance is INSIDE `if (text != 0)`, so a
-            // text==None item draws nothing AND consumes no width.
+            // The `i += l + 2` advance is INSIDE the `Some(text)` arm, so a
+            // text-less item draws nothing AND consumes no width.
             if let Some(text) = &item.text {
                 let l = cstrlen(text);
                 if i + l < size.x {
                     let enabled = self.command_enabled(item.command);
-                    // selected = true iff this item is the one being held (C++
-                    // `T == selected` in drawSelect; None -> no item selected).
+                    // selected = true iff this item is the one being held.
                     let selected = self.pressed_item == Some(idx);
                     let (lo, hi) = colors.item(enabled, selected);
                     ctx.put_char(i, 0, ' ', lo);
@@ -340,60 +325,51 @@ impl View for StatusLine {
             }
         }
 
-        // Hint tail: if there is room (C++ `i < size.x - 2`) and the hint provider
-        // returns a non-empty string, draw the separator then the clipped hint.
+        // Hint tail: if there is room (at least 2 columns left) and the hint
+        // provider returns a non-empty string, draw the separator then the
+        // clipped hint.
         if i < size.x - 2
             && let Some(text) = (self.hint)(self.help_ctx)
             && !text.is_empty()
         {
-            // moveStr(i, hintSeparator, cNormal) — plain, in cNormal.lo.
+            // Plain separator, in the normal label style.
             ctx.put_str(i, 0, HINT_SEPARATOR, colors.normal.0);
             i += 2;
-            // moveStr(i, hintText, cNormal, size.x - i) — clipped to the row.
-            // put_str already truncates at the clip right edge (the row), so no
-            // explicit width arg is needed.
+            // The hint text, clipped to the row: put_str already truncates at the
+            // clip right edge, so no explicit width arg is needed.
             ctx.put_str(i, 0, &text, colors.normal.0);
         }
     }
 
-    /// `TStatusLine::handleEvent` (`tstatusl.cpp:154`).
+    /// Handle the status line's events.
     ///
-    /// Ported branches:
+    /// Branches:
     ///
-    /// - **`evBroadcast cmCommandSetChanged`** → request the regray broker by
-    ///   the view's own id ([`Context::request_update_menu`] — the same menu
-    ///   pattern; reuses
-    ///   [`Deferred::UpdateMenu`](crate::view::Deferred::UpdateMenu) + the
-    ///   [`update_menu_commands`](View::update_menu_commands) hook). C++ does
-    ///   `drawView()` here; the whole-tree redraw makes it redundant.
-    /// - **`evMouseDown`** — the first iteration of the C++
-    ///   `do { drawSelect(T = itemMouseIsIn) } while (mouseEvent(evMouseMove))`
-    ///   loop (`tstatusl.cpp:162-178`): hit-test the item, store as
-    ///   [`pressed_item`](StatusLine::pressed_item), set `tracking = true`, arm
-    ///   [`TrackMask`]`{ mouse_move: true }`. Do NOT post yet.
-    /// - **`evMouseMove`** (guarded by `tracking`) — the loop body: re-derive the
-    ///   item; update `pressed_item`. The next whole-tree redraw renders the
-    ///   new highlight.
-    /// - **`evMouseUp`** (guarded by `tracking`) — the post-loop code
-    ///   (`tstatusl.cpp:170-175`): if `pressed_item` is Some and the command is
-    ///   enabled, post it. Clear `pressed_item` / `tracking`.
-    ///
-    /// - **`evKeyDown`** — match the key against every item's accelerator (incl.
-    ///   the hidden text-less ones) and, if its command is enabled, transform the
-    ///   event into a command event in place so it propagates (see the module
-    ///   docs). The C++ leading `TView::handleEvent(event)` call is a no-op here,
-    ///   like [`MenuBar`](crate::menu::MenuBar).
+    /// - **command-set-changed broadcast** → request the regray broker by the
+    ///   view's own id ([`Context::request_update_menu`] — the same menu pattern;
+    ///   reuses [`Deferred::UpdateMenu`](crate::view::Deferred::UpdateMenu) + the
+    ///   [`update_menu_commands`](View::update_menu_commands) hook). The whole-tree
+    ///   redraw makes any explicit repaint redundant.
+    /// - **mouse down** — the first step of the press-and-hold drag: hit-test the
+    ///   item, store as [`pressed_item`](StatusLine::pressed_item), set
+    ///   `tracking = true`, arm [`TrackMask`]`{ mouse_move: true }`. Do NOT post
+    ///   yet.
+    /// - **mouse move** (guarded by `tracking`) — re-derive the item; update
+    ///   `pressed_item`. The next whole-tree redraw renders the new highlight.
+    /// - **mouse up** (guarded by `tracking`) — if `pressed_item` is Some and the
+    ///   command is enabled, post it. Clear `pressed_item` / `tracking`.
+    /// - **key down** — match the key against every item's accelerator (incl. the
+    ///   hidden text-less ones) and, if its command is enabled, transform the event
+    ///   into a command event in place so it propagates (see the module docs).
     fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
         match ev {
-            // C++ evBroadcast / cmCommandSetChanged: drawView() (the whole-tree
-            // redraw makes it redundant). The regray runs through the broker — a
+            // Command-set-changed broadcast: the regray runs through the broker — a
             // child cannot read the command set inline, so request UpdateMenu by
             // our own id; the pump calls back through View::update_menu_commands
-            // at apply time.
+            // at apply time. No explicit repaint is needed (whole-tree redraw).
             //
-            // NOTE (deviation): C++ sets `eventMask |= evBroadcast` to opt in.
-            // Our Group::handle_event fans broadcasts to EVERY child
-            // unconditionally, so no mask/gate is ported (same as menu_view).
+            // The group fans broadcasts to EVERY child unconditionally, so no
+            // event-mask opt-in is needed (same as menu_view).
             Event::Broadcast {
                 command: crate::command::Command::COMMAND_SET_CHANGED,
                 ..
@@ -403,12 +379,10 @@ impl View for StatusLine {
                 }
             }
 
-            // C++ evMouseDown (tstatusl.cpp:160-179). This is the FIRST ITERATION
-            // of the C++ hold loop (tstatusl.cpp:164-168): hit-test the item under
-            // the view-local mouse position, record it as `pressed_item` (the C++
-            // `T` pointer), and arm mouse-move tracking via the A3 seam.
-            // The command is NOT posted here — post waits until MouseUp (faithful
-            // to the loop structure: C++ fires after the loop exits on evMouseUp).
+            // Mouse down: the first step of the press-and-hold drag. Hit-test the
+            // item under the view-local mouse position, record it as
+            // `pressed_item`, and arm mouse-move tracking via the A3 seam. The
+            // command is NOT posted here — post waits until MouseUp.
             Event::MouseDown(m) => {
                 self.pressed_item = self.item_mouse_is_in(m.position);
                 if let Some(id) = self.state.id() {
@@ -438,24 +412,22 @@ impl View for StatusLine {
                 // The clear is load-bearing in BOTH branches: an uncleared
                 // MouseDown would fall through to normal positional routing and
                 // reach the status line a SECOND time via the root group,
-                // double-arming the capture. Also faithful: the C++ line consumes
-                // the down by entering its modal loop (clearEvent after it).
+                // double-arming the capture.
                 ev.clear();
             }
 
-            // C++ loop body (tstatusl.cpp:165-167): re-derive the item under the
-            // view-local mouse (already localized by the capture) and update
-            // `pressed_item`. The next whole-tree redraw renders the highlight.
-            // Guarded by `tracking` — MouseMove is not mask-gated in Group::wants
-            // for untracked events.
+            // Mouse move: re-derive the item under the view-local mouse (already
+            // localized by the capture) and update `pressed_item`. The next
+            // whole-tree redraw renders the highlight. Guarded by `tracking` —
+            // MouseMove is not mask-gated in Group::wants for untracked events.
             Event::MouseMove(m) if self.tracking => {
                 self.pressed_item = self.item_mouse_is_in(m.position);
                 ev.clear();
             }
 
-            // C++ post-loop code (tstatusl.cpp:170-175): if the final item is
-            // non-None and commandEnabled, post its command; then clear.
-            // Guarded by `tracking` — MouseUp is not mask-gated in Group::wants.
+            // Mouse up: if the final item is present and its command is enabled,
+            // post the command; then clear. Guarded by `tracking` — MouseUp is not
+            // mask-gated in Group::wants.
             Event::MouseUp(_) if self.tracking => {
                 self.tracking = false;
                 if let Some(idx) = self.pressed_item.take() {
@@ -467,14 +439,14 @@ impl View for StatusLine {
                 ev.clear();
             }
 
-            // tstatusl.cpp keyDown arm: match the keyCode against EVERY item (incl.
-            // text == None hidden global hotkeys) and, if enabled, TRANSFORM the
-            // event into evCommand IN PLACE — no clear, no post. The pre-routing in
-            // TProgram::getEvent then lets the transformed command propagate to
-            // normal dispatch (porting it as ctx.post + clear would double-handle).
-            // These transform-in-place-and-propagate semantics only make sense
-            // inside getEvent's pre-routing, which is why this arm landed with the
-            // TProgram wiring step.
+            // Key down: match the key against EVERY item (incl. text-less hidden
+            // global hotkeys) and, if its command is enabled, TRANSFORM the event
+            // into a command event IN PLACE — no clear, no post. The program's
+            // pre-routing then lets the transformed command propagate to normal
+            // dispatch (posting + clearing here would double-handle). These
+            // transform-in-place-and-propagate semantics only make sense inside the
+            // pre-routing stage, which is why this arm landed with the program
+            // wiring step.
             Event::KeyDown(k) => {
                 // Copy the key out so the `&mut ev` write below does not alias the
                 // `k: &mut KeyEvent` borrow.
@@ -494,8 +466,8 @@ impl View for StatusLine {
     /// pump calls this at apply time with the live **disabled-command set** (a
     /// denylist) in hand; we snapshot it into
     /// [`disabled_cmds`](StatusLine::disabled_cmds) so `draw` can gray disabled
-    /// items (C++ `drawSelect` calls `commandEnabled` live; we cache it because
-    /// `TStatusItem` has no `disabled` field to mutate).
+    /// items. (A status item has no per-item disabled flag, so enablement is
+    /// resolved against this cached snapshot rather than stored on the item.)
     fn update_menu_commands(&mut self, disabled_cmds: &CommandSet) {
         self.disabled_cmds = Some(disabled_cmds.clone());
     }
@@ -642,7 +614,7 @@ mod tests {
     #[test]
     fn item_mouse_is_in_off_row_is_none() {
         let line = StatusLine::new(Rect::new(0, 0, 40, 1), sample_defs());
-        // mouse.y != 0 -> None (C++ guard).
+        // mouse.y != 0 -> None (off-row guard).
         assert_eq!(line.item_mouse_is_in(Point::new(2, 1)), None);
     }
 
@@ -1078,7 +1050,7 @@ mod tests {
     }
 
     /// MouseUp while tracking with a DISABLED pressed_item does NOT fire the
-    /// command (C++ `commandEnabled(T->command)` guard, tstatusl.cpp:170).
+    /// command (the release path checks command enablement first).
     #[test]
     fn track_release_on_disabled_item_fires_nothing() {
         let (mut line, _id) = tracked_status_line();
@@ -1144,8 +1116,8 @@ mod tests {
 
     #[test]
     fn empty_hint_string_draws_no_separator() {
-        // A hint closure returning Some("") must render NOTHING extra — C++
-        // `if (hintText.size())` skips an empty hint, so no separator is drawn.
+        // A hint closure returning Some("") must render NOTHING extra — an empty
+        // hint is skipped, so no separator is drawn.
         // BITE: deleting the `!text.is_empty()` guard in `draw` would draw the
         // `│ ` separator for the empty hint, making this render differ from the
         // None-hint render. We assert they are byte-identical.
@@ -1187,12 +1159,11 @@ mod tests {
     }
 
     /// Drag-highlight snapshot: with `pressed_item = Some(1)` (the "Alt-X Exit"
-    /// item held), `draw` renders that item with the `cSelect`/`cSelDisabled`
-    /// pair and all others in `cNormal`/`cNormDisabled`.
+    /// item held), `draw` renders that item with the select/sel-disabled pair and
+    /// all others with the normal/norm-disabled pair.
     ///
-    /// This is the `drawSelect(T)` path (C++ `tstatusl.cpp:67-117`) with a non-null
-    /// `selected`: item 1 is drawn with `colors.select` (the "held" look), item 0
-    /// with `colors.normal`. The snapshot freezes the selected style for regression
+    /// Item 1 is drawn with `colors.select` (the "held" look), item 0 with
+    /// `colors.normal`. The snapshot freezes the selected style for regression
     /// protection; hand-verify that item 1 appears visually distinct from item 0.
     #[test]
     fn snapshot_drag_highlight_held_item() {
@@ -1205,8 +1176,8 @@ mod tests {
     }
 
     /// Drag-highlight with a DISABLED held item: when the pressed item's command
-    /// is disabled, `draw` uses `cSelDisabled` (the disabled-selected pair) for
-    /// that item, not `cSelect`.
+    /// is disabled, `draw` uses the selected-disabled pair for that item, not the
+    /// plain select pair.
     #[test]
     fn snapshot_drag_highlight_held_disabled_item() {
         let mut line = StatusLine::new(Rect::new(0, 0, 40, 1), sample_defs());

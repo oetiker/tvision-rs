@@ -28,8 +28,8 @@
 //! # Turbo Vision heritage
 //!
 //! Ports `TIndicator` (`tindictr.cpp`). The hardcoded frame characters become
-//! [`Glyphs`](crate::theme::Glyphs) fields (deviation D7); `getPalette` becomes
-//! [`Role`]s; and `TStreamable` is dropped.
+//! [`Glyphs`](crate::theme::Glyphs) fields and the palette becomes [`Role`]s
+//! (deviation D7).
 
 use crate::theme::Role;
 use crate::view::{DrawCtx, GrowMode, Point, Rect, View, ViewState};
@@ -60,11 +60,9 @@ pub struct Indicator {
 impl Indicator {
     /// Construct an indicator from `bounds`.
     ///
-    /// Faithful to `TIndicator::TIndicator(bounds)`:
-    /// - `location = TPoint()` → `Point::new(0, 0)`
-    /// - `modified = False`
-    /// - `growMode = gfGrowLoY | gfGrowHiY`
-    /// - no `ofSelectable` (indicators are not interactive)
+    /// Starts at position `(0, 0)`, unmodified, and grows with the bottom edge
+    /// of its owner (`grow_mode.lo_y`/`hi_y`). It is not selectable — indicators
+    /// are display-only and never take focus.
     pub fn new(bounds: Rect) -> Self {
         let mut state = ViewState::new(bounds);
         state.grow_mode = GrowMode {
@@ -83,7 +81,7 @@ impl Indicator {
     ///
     /// Only updates fields (no broadcast). The whole-tree redraw reads the new
     /// values automatically on the next render pass, so there is no immediate
-    /// draw and no need for the C++ change-guard.
+    /// draw.
     pub fn set_value(&mut self, location: Point, modified: bool) {
         self.location = location;
         self.modified = modified;
@@ -108,9 +106,9 @@ impl View for Indicator {
         Some(self)
     }
 
-    /// `TIndicator::draw` — paint the one-row position display.
+    /// Paint the one-row position display.
     ///
-    /// Draw order (faithful to C++):
+    /// Draw order:
     /// 1. Fill row 0 with the frame char (`═` or `─`) in the current role.
     /// 2. If `modified`, overwrite column 0 with `☼` in the same role.
     /// 3. Draw the position string so that the `:` lands at column 8.

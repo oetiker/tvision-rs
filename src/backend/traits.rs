@@ -19,10 +19,10 @@ use crate::screen::Cell;
 ///
 /// # Turbo Vision heritage
 /// Stands in for the platform layer of `TScreen` / `THardwareInfo`
-/// (`hardware.cpp`, `tscreen.cpp`) plus the `TEvent` source pump. C++ selects a
-/// platform driver at link time; here the seam is a runtime trait object so the
-/// view tree carries no backend type parameter, and tests can swap in an
-/// in-memory fake (deviation D11).
+/// (`hardware.cpp`, `tscreen.cpp`) plus the event source pump. The original
+/// selected a platform driver at link time; here the seam is a runtime trait
+/// object so the view tree carries no backend type parameter, and tests can swap
+/// in an in-memory fake (deviation D11).
 pub trait Backend {
     /// Terminal size in cells `(cols, rows)`.
     fn size(&self) -> (u16, u16);

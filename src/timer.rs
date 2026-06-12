@@ -26,10 +26,11 @@
 //! # Turbo Vision heritage
 //!
 //! Ports `TTimerQueue` (`ttimerqu.cpp`, `system.h`) and its time source
-//! `THardwareInfo::getTickCountMs`. C++ marks each timer with a per-invocation
-//! `collectId` so a callback may mutate the list mid-iteration, and stores the
-//! clock inside the queue; rstv replaces the callback with a returned id list
-//! and injects the clock from the event loop (deviations D9 and D11).
+//! `THardwareInfo::getTickCountMs`. The original marked each timer with a
+//! per-invocation collect-id so a callback could mutate the list mid-iteration,
+//! and stored the clock inside the queue; rstv replaces the callback with a
+//! returned id list and injects the clock from the event loop (deviations D9 and
+//! D11).
 
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -161,20 +162,18 @@ pub struct TimerId(u64);
 
 #[derive(Debug)]
 struct TimerEntry {
-    /// Absolute ms when this timer next fires.  Faithful to `TTimer::expiresAt`.
+    /// Absolute ms when this timer next fires.
     expires_at: u64,
-    /// `None` = one-shot; `Some(ms)` = periodic with this period.
-    /// Faithful to `TTimer::period` (C++: `< 0` = one-shot, `> 0` = periodic);
-    /// rstv uses `Option` instead of the signed sentinel.
+    /// `None` = one-shot; `Some(ms)` = periodic with this period. (The original
+    /// used a signed sentinel — negative for one-shot — where rstv uses `Option`.)
     period_ms: Option<u64>,
 }
 
 // ---------------------------------------------------------------------------
-// calc_next_expires_at — verbatim port of C++ static function
+// calc_next_expires_at
 // ---------------------------------------------------------------------------
 
-/// Catch-up-aware reschedule for periodic timers.  **Verbatim port** of the
-/// C++ `static calcNextExpiresAt` in `ttimerqu.cpp`.
+/// Catch-up-aware reschedule for periodic timers.
 ///
 /// ```text
 /// // Pre: expires_at <= now && period > 0
@@ -197,15 +196,13 @@ struct TimerEntry {
 ///
 /// # Panics
 /// Panics in debug mode (and is undefined in release) if `period == 0`.
-/// The pre-condition mirrors C++: callers guarantee `period > 0` and
-/// `expires_at <= now`.
+/// Callers must guarantee `period > 0` and `expires_at <= now`.
 pub fn calc_next_expires_at(expires_at: u64, now: u64, period: u64) -> u64 {
-    // Verbatim arithmetic from C++ ttimerqu.cpp calcNextExpiresAt.
     (1 + (now - expires_at + period) / period) * period + expires_at - period
 }
 
 // ---------------------------------------------------------------------------
-// TimerQueue — port of TTimerQueue
+// TimerQueue
 // ---------------------------------------------------------------------------
 
 /// A queue of pending one-shot and periodic timers.
@@ -227,14 +224,12 @@ pub struct TimerQueue {
 }
 
 impl TimerQueue {
-    /// Create an empty timer queue. Ports `TTimerQueue::TTimerQueue()`.
+    /// Create an empty timer queue.
     pub fn new() -> Self {
         TimerQueue::default()
     }
 
     /// Arm a new timer.
-    ///
-    /// Ports `TTimerQueue::setTimer(uint32_t timeoutMs, int32_t periodMs)`.
     ///
     /// - `now_ms` — the current clock value at the moment of arming.  Must be
     ///   supplied by the caller (the clock lives in the event loop, not here).
@@ -275,7 +270,7 @@ impl TimerQueue {
         id
     }
 
-    /// Cancel a pending timer. Ports `TTimerQueue::killTimer(TTimerId)`.
+    /// Cancel a pending timer.
     ///
     /// No-op if `id` is unknown or has already fired (one-shot).
     pub fn kill_timer(&mut self, id: TimerId) {
@@ -284,12 +279,11 @@ impl TimerQueue {
 
     /// Fire all timers due at `now_ms` and return their ids (in unspecified order).
     ///
-    /// Ports `TTimerQueue::collectExpiredTimers`, but instead of calling a
-    /// user-supplied callback mid-iteration, it collects due ids into a [`Vec`]
-    /// and returns them.  The caller then dispatches each id (posts a command,
-    /// calls a callback, etc.).
+    /// Instead of calling a user-supplied callback mid-iteration, it collects due
+    /// ids into a [`Vec`] and returns them.  The caller then dispatches each id
+    /// (posts a command, calls a callback, etc.).
     ///
-    /// **Invariants preserved from C++:**
+    /// **Invariants:**
     /// - A single `now_ms` snapshot is used for the whole pass.
     /// - A periodic timer fires **at most once** per call, even if overdue by
     ///   several periods — it is rescheduled forward past `now_ms` via
@@ -299,7 +293,7 @@ impl TimerQueue {
         let mut due = Vec::new();
 
         // Collect due ids with their period first, then mutate — avoids
-        // borrow-checker issues and mirrors the C++ single-pass intent.
+        // borrow-checker issues in a single pass.
         let mut to_reschedule: Vec<(TimerId, u64, u64)> = Vec::new(); // (id, expires_at, period_ms)
         let mut to_remove: Vec<TimerId> = Vec::new();
 
@@ -334,14 +328,11 @@ impl TimerQueue {
 
     /// Milliseconds until the next timer expires.
     ///
-    /// Ports `TTimerQueue::timeUntilNextTimeout()`:
     /// - `None` if the queue is empty.
     /// - `Some(Duration::ZERO)` if any timer is already due.
     /// - `Some(remaining)` otherwise (the minimum over all timers).
     ///
-    /// Note: the C++ return type was `int32_t` with a `uint32_t(-1)>>1` clamp
-    /// to fit the signed range.  We return `Option<Duration>`, so no artificial
-    /// cap is needed.
+    /// Returning `Option<Duration>` avoids any artificial cap on the wait time.
     pub fn time_until_next(&self, now_ms: u64) -> Option<Duration> {
         if self.timers.is_empty() {
             return None;

@@ -34,8 +34,9 @@
 //! Mouse-down begins a modal hold:
 //! * **MouseDown:** select the item under the cursor (if enabled), set
 //!   `tracking = true`, and call [`Context::start_mouse_track`]. Do NOT press yet.
-//! * **MouseMove arm** (loop body): a no-op — the C++ cue only toggled cursor
-//!   visibility, which has no TUI equivalent. Guarded by `tracking`.
+//! * **MouseMove arm** (loop body): a no-op — the original only toggled cursor
+//!   visibility while dragging, which has no TUI equivalent. Guarded by
+//!   `tracking`.
 //! * **MouseUp arm** (post-loop): press only if the item under the release
 //!   position is still the selected one — the same-item release-confirm. Clear
 //!   `tracking`. Guarded by `tracking`.
@@ -47,20 +48,19 @@
 //!
 //! The typed value protocol (`value`/`set_value`) is not implemented for clusters:
 //! their `value`/`sel` fields are read and written directly by their owning dialog
-//! rather than through the gather/scatter protocol. The C++ `getHelpCtx` offset
-//! (`helpCtx + sel`) does not map onto rstv's string-identity
-//! [`HelpCtx`](crate::help::HelpCtx) and is not modeled.
+//! rather than through the gather/scatter protocol. The original per-item
+//! help-context offset (help id plus selected index) does not map onto rstv's
+//! string-identity [`HelpCtx`](crate::help::HelpCtx) and is not modeled.
 //!
 //! # Turbo Vision heritage
 //!
 //! Ports `TCluster` and its subclasses `TCheckBoxes` / `TRadioButtons` /
 //! `TMultiCheckBoxes` (`tcluster.cpp`, `tcheckbo.cpp`, `tradiobu.cpp`,
-//! `tmulchkb.cpp`). The abstract base with virtual `mark`/`multiMark`/`press`/
-//! `movedTo`/`draw` overrides becomes one engine branching on a closed
-//! [`ClusterKind`] enum, with the named subclasses as embed-and-delegate wrappers
-//! (deviations D1, D2). `getColor` AttrPairs become `(lo, hi)` [`Role`] pairs;
-//! `makeLocal` is gone because the group delivers view-local coords; and
-//! `TStreamable` is dropped.
+//! `tmulchkb.cpp`). The abstract base with its per-kind virtual overrides becomes
+//! one engine branching on a closed [`ClusterKind`] enum, with the named
+//! subclasses as embed-and-delegate wrappers (deviations D1, D2). The palette
+//! AttrPairs become `(lo, hi)` [`Role`] pairs, and coordinates arrive view-local
+//! from the group so no manual localization is needed.
 
 use crate::capture::TrackMask;
 use crate::event::{Event, Key, ctrl_to_arrow, hot_key, is_alt_hotkey, is_plain_hotkey};
@@ -71,34 +71,32 @@ use crate::view::{Context, DrawCtx, Options, Phase, Point, Rect, View, ViewState
 // ClusterKind — the data-driven polymorphism
 // ---------------------------------------------------------------------------
 
-/// Which concrete cluster behavior the engine runs. Models what C++ achieved
-/// with virtual `mark`/`multiMark`/`press`/`movedTo`/`draw` overrides as a
-/// closed set of data variants instead.
+/// Which concrete cluster behavior the engine runs. Replaces per-subclass virtual
+/// dispatch with a closed set of data variants the engine branches on.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ClusterKind {
-    /// `TCheckBoxes` — `value` is a bitmask (bit `item` set ⇔ item checked).
+    /// Check boxes — `value` is a bitmask (bit `item` set ⇔ item checked).
     /// Box ` [ ] `, markers `" X"` (idx 0 / 1).
     CheckBoxes,
-    /// `TRadioButtons` — `value` is the selected item index. Box ` ( ) `,
-    /// markers `" •"` (idx 0 / 1; CP437 0x07 bullet → U+2022). `movedTo` sets
+    /// Radio buttons — `value` is the selected item index. Box ` ( ) `, markers
+    /// `" •"` (idx 0 / 1; CP437 0x07 bullet → U+2022). Moving the selection sets
     /// `value = item`.
     RadioButtons,
-    /// `TMultiCheckBoxes` — `value` packs an n-bit state per item. Box ` [ ] `,
-    /// markers from `states` (idx = `multi_mark`).
+    /// Multi-state check boxes — `value` packs an n-bit state per item. Box
+    /// ` [ ] `, markers from `states` (idx = the item's current state).
     MultiCheckBoxes {
-        /// `selRange` — number of distinct states an item cycles through.
+        /// Number of distinct states an item cycles through.
         sel_range: u8,
-        /// `flags` — `lo = flags & 0xff` is the per-item mask; `hi = flags >> 8`
-        /// is the per-item bit-shift multiplier.
+        /// Packed item layout: `lo = flags & 0xff` is the per-item mask; `hi =
+        /// flags >> 8` is the per-item bit-shift multiplier.
         flags: u16,
-        /// `states` — the marker glyph for each state value (idx = state).
+        /// The marker glyph for each state value (idx = state).
         states: String,
     },
 }
 
 impl ClusterKind {
-    /// The box icon string (with the embedded marker slot at col+2). Faithful to
-    /// each subclass's `drawMultiBox` first arg / `button` member.
+    /// The box icon string (with the embedded marker slot at col+2).
     fn icon(&self) -> &'static str {
         match self {
             ClusterKind::CheckBoxes => " [ ] ",
@@ -125,21 +123,20 @@ impl ClusterKind {
 pub struct Cluster {
     /// View state (geometry, flags, cursor) — the composition target.
     pub state: ViewState,
-    /// `value` — interpreted per [`kind`](Cluster::kind) (bitmask / index /
-    /// packed states). Widened to `u32` (C++ `value` is a `long`/`int32_t`;
-    /// `TMultiCheckBoxes` uses the full 32 bits).
+    /// The cluster value, interpreted per [`kind`](Cluster::kind) (bitmask /
+    /// index / packed states). A `u32`; the multi-state kind uses all 32 bits.
     pub value: u32,
-    /// `sel` — the currently-highlighted item index.
+    /// The currently-highlighted item index.
     pub sel: i32,
-    /// `enableMask` — bit `item` set ⇔ item is enabled (`buttonState`). Ctor
-    /// default `0xFFFF_FFFF` (all enabled).
+    /// Enable mask: bit `item` set ⇔ item is enabled. Constructor default
+    /// `0xFFFF_FFFF` (all enabled).
     pub enable_mask: u32,
-    /// `strings` — the item labels, in `cur = j*size.y + i` fill order.
+    /// The item labels, in `cur = j*size.y + i` (column-major) fill order.
     pub strings: Vec<String>,
     /// The per-kind behavior selector.
     pub kind: ClusterKind,
     /// Absolute screen position of view-local `(0, 0)`, cached each `draw` for
-    /// the mouse-tracking capture (the same pattern as `Button::abs_origin`).
+    /// the mouse-tracking capture (the same pattern as [`Button`](crate::widgets::Button)).
     abs_origin: Point,
     /// Whether a mouse hold-track is in flight (between the arming `MouseDown`
     /// and the terminating `MouseUp`). Guards the `MouseMove`/`MouseUp` tracking
@@ -148,11 +145,11 @@ pub struct Cluster {
 }
 
 impl Cluster {
-    /// `TCluster::TCluster` — build a cluster from `bounds`, `strings`, `kind`.
+    /// Build a cluster from `bounds`, `strings`, `kind`.
     ///
-    /// Faithful to the C++ ctor: `value = 0`, `sel = 0`,
-    /// `options |= ofSelectable | ofFirstClick | ofPreProcess | ofPostProcess`,
-    /// `setCursor(2, 0)`, `showCursor()`, `enableMask = 0xFFFFFFFF`.
+    /// Starts with `value = 0`, `sel = 0`, all items enabled, and the cursor at
+    /// `(2, 0)` (inside the first box) and shown. The view is selectable,
+    /// first-click-aware, and takes part in pre- and post-processing.
     pub fn new(bounds: Rect, strings: Vec<String>, kind: ClusterKind) -> Self {
         let mut state = ViewState::new(bounds);
         state.options = Options {
@@ -177,7 +174,7 @@ impl Cluster {
         }
     }
 
-    /// Number of items (`strings->getCount()`).
+    /// Number of items.
     fn count(&self) -> i32 {
         self.strings.len() as i32
     }
@@ -193,15 +190,14 @@ impl Cluster {
     }
 
     // -----------------------------------------------------------------------
-    // Per-kind behavior (mark / multiMark / press / movedTo) — branches on kind
+    // Per-kind behavior (mark / multi_mark / press / moved_to) — branches on kind
     // -----------------------------------------------------------------------
 
-    /// `TCluster::mark` — whether item is "on" (boolean view of the state).
-    /// CheckBoxes: bit set; RadioButtons: `item == value`. The MultiCheckBoxes
-    /// arm returns `false` to match the C++ base `TCluster::mark` (it is never
-    /// overridden by `TMultiCheckBoxes`, which computes its marker through
-    /// `multiMark` directly) — this arm is in practice unreachable for multi
-    /// (`multi_mark` short-circuits it; only the check/radio arms have callers).
+    /// Whether `item` is "on" (a boolean view of the state). CheckBoxes: bit set;
+    /// RadioButtons: `item == value`. The MultiCheckBoxes arm returns `false`
+    /// because multi-state markers are computed through
+    /// [`multi_mark`](Self::multi_mark) directly — this arm is in practice
+    /// unreachable for the multi kind (only the check/radio arms have callers).
     fn mark(&self, item: i32) -> bool {
         match self.kind {
             // `item >= 32` → false (mirrors `button_state`'s 32-bit cap; the
@@ -213,14 +209,13 @@ impl Cluster {
         }
     }
 
-    /// `TCluster::multiMark` / `TMultiCheckBoxes::multiMark` — the marker index
-    /// for `item` (indexes the 2-char marker for check/radio, the `states`
-    /// string for multi).
+    /// The marker index for `item` (indexes the 2-char marker for check/radio, the
+    /// `states` string for multi).
     ///
     /// For CheckBoxes/RadioButtons this is `mark(item) as usize` (0 or 1). For
     /// MultiCheckBoxes it is the packed-state read:
-    /// `(value & (flo << fhi)) >> fhi`, `flo = flags & 0xff`,
-    /// `fhi = (flags >> 8) * item` (verbatim `tmulchkb.cpp`).
+    /// `(value & (flo << fhi)) >> fhi`, where `flo = flags & 0xff` and
+    /// `fhi = (flags >> 8) * item`.
     fn multi_mark(&self, item: i32) -> usize {
         match &self.kind {
             ClusterKind::CheckBoxes | ClusterKind::RadioButtons => self.mark(item) as usize,
@@ -237,11 +232,10 @@ impl Cluster {
         }
     }
 
-    /// `TCluster::press` — act on `item` (the subclass override).
+    /// Act on `item` (the per-kind toggle).
     ///
     /// CheckBoxes: `value ^= 1 << item`. RadioButtons: `value = item`.
-    /// MultiCheckBoxes: cycle the packed state `0 → 1 → … → selRange-1 → 0`
-    /// (verbatim `tmulchkb.cpp::press`).
+    /// MultiCheckBoxes: cycle the packed state `0 → 1 → … → sel_range-1 → 0`.
     fn press(&mut self, item: i32) {
         match &self.kind {
             ClusterKind::CheckBoxes => {
@@ -273,25 +267,25 @@ impl Cluster {
         }
     }
 
-    /// `TCluster::movedTo` — the subclass hook fired when `sel` moves.
-    /// RadioButtons set `value = item`; the others do nothing.
+    /// The hook fired when `sel` moves. RadioButtons set `value = item`; the
+    /// others do nothing.
     fn moved_to(&mut self, item: i32) {
         if let ClusterKind::RadioButtons = self.kind {
             self.value = item as u32;
         }
     }
 
-    /// `TCluster::buttonState` — whether `item` is enabled. `item >= 32 → false`
-    /// (faithful to the C++ 32-bit mask cap).
+    /// Whether `item` is enabled. `item >= 32 → false` (the enable mask is
+    /// 32 bits wide).
     fn button_state(&self, item: i32) -> bool {
         item < 32 && (self.enable_mask & (1u32 << item)) != 0
     }
 
-    /// `TCluster::setButtonState` — enable/disable the items in `a_mask` and
-    /// recompute `ofSelectable` (clear it iff *all* items are disabled).
+    /// Enable/disable the items in `a_mask` and recompute selectability (the
+    /// cluster is selectable iff at least one item is enabled).
     ///
-    /// Faithful port: with `n = count < 32`, `testMask = (1 << n) - 1`;
-    /// `ofSelectable` is set iff any enabled bit lies in `testMask`.
+    /// With `n = count < 32`, `test_mask = (1 << n) - 1`; the cluster's
+    /// `selectable` option is set iff any enabled bit lies in `test_mask`.
     pub fn set_button_state(&mut self, a_mask: u32, enable: bool) {
         if !enable {
             self.enable_mask &= !a_mask;
@@ -305,12 +299,12 @@ impl Cluster {
         }
     }
 
-    /// `TCluster::moveSel(i, s)` — move the selection to item `s`, where `i` is
-    /// the **loop step-counter** (number of items scanned), not an item index.
+    /// Move the selection to item `s`, where `i` is the **loop step-counter**
+    /// (number of items scanned), not an item index.
     ///
-    /// Guard: `if (i <= count)` aborts the move when the nav loop scanned
-    /// `count` items without finding an enabled one (the all-disabled case). On
-    /// success: `sel = s; movedTo(sel)`.
+    /// Guard: `i <= count` aborts the move when the nav loop scanned `count` items
+    /// without finding an enabled one (the all-disabled case). On success, sets
+    /// `sel = s` and runs the [`moved_to`](Self::moved_to) hook.
     fn move_sel(&mut self, i: i32, s: i32) {
         if i <= self.count() {
             self.sel = s;
@@ -319,20 +313,20 @@ impl Cluster {
     }
 
     // -----------------------------------------------------------------------
-    // Layout math (column / row / findSel) — verbatim ports
+    // Layout math (column / row / find_sel)
     // -----------------------------------------------------------------------
 
-    /// `TCluster::column` — the left column (cell x) at which `item`'s box is
-    /// drawn. Verbatim port of the `-6`/`+6` width-walk: each column is
-    /// `6 + max-label-width` cells wide, `width` reset at each column break
-    /// (`i % size.y == 0`). Label widths use [`cstrlen`] (strips `~`).
+    /// The left column (cell x) at which `item`'s box is drawn. The `-6`/`+6`
+    /// width-walk: each column is `6 + max-label-width` cells wide, with `width`
+    /// reset at each column break (`i % size.y == 0`). Label widths use
+    /// [`cstrlen`] (which strips the `~` hotkey marker).
     ///
-    /// `l` deliberately persists across iterations (matches the C++ `int l = 0;`
-    /// declared outside the loop — defensive when `i >= count`).
+    /// `l` deliberately persists across iterations (declared outside the loop —
+    /// defensive when `i >= count`).
     fn column(&self, item: i32) -> i32 {
         let size_y = self.size_y();
         // `size_y <= 0` guards the `% size_y` below (a zero-height cluster has a
-        // single column at 0); `item < size_y` is the C++ early-out.
+        // single column at 0); `item < size_y` is the early-out.
         if size_y <= 0 || item < size_y {
             0
         } else {
@@ -356,17 +350,16 @@ impl Cluster {
         }
     }
 
-    /// `TCluster::row` — the row (cell y) at which `item` is drawn:
-    /// `item % size.y`.
+    /// The row (cell y) at which `item` is drawn: `item % size.y`.
     fn row(&self, item: i32) -> i32 {
         let size_y = self.size_y();
         // Guard `% 0`: a zero-height cluster has no rows.
         if size_y <= 0 { -1 } else { item % size_y }
     }
 
-    /// `TCluster::findSel` — the item index at view-local point `p`, or `-1` if
-    /// none. Walks columns (`while p.x >= column(i + size.y)`), then adds `p.y`;
-    /// returns `-1` if the result is out of range. Verbatim port.
+    /// The item index at view-local point `p`, or `-1` if none. Walks columns
+    /// (`while p.x >= column(i + size.y)`), then adds `p.y`; returns `-1` if the
+    /// result is out of range.
     fn find_sel(&self, p: Point) -> i32 {
         let size_y = self.size_y();
         // Guard the `i += size_y` walk + the `column` calls below against a
@@ -397,20 +390,20 @@ impl View for Cluster {
         &mut self.state
     }
 
-    /// `TCluster::drawMultiBox` — paint the cluster.
+    /// Paint the cluster.
     ///
-    /// Per row `i` (the outer loop runs `0..=size.y`; the extra `i == size.y`
-    /// row writes at `y == size.y`, which `DrawCtx::put_char` clips away — a
-    /// no-op, kept faithful to the C++ `<= size.y` bound): blank the full width
-    /// in `cNorm.lo`, then for each item in the row (`cur = j*size.y + i`,
-    /// `j` over the columns) whose `column(cur) < size.x`:
-    /// pick the item color (`cDis` if disabled, `cSel` if selected+`sfSelected`,
-    /// else `cNorm`), re-fill `col..size.x` in that color, draw the icon via
-    /// `put_cstr`, the marker glyph via `put_char` at `col+2` in the row's `lo`,
-    /// and the label via `put_cstr` at `col+5`.
+    /// Per row `i` (the outer loop runs `0..=size.y`; the extra `i == size.y` row
+    /// writes at `y == size.y`, which [`put_char`](DrawCtx::put_char) clips away —
+    /// a harmless no-op kept for layout symmetry): blank the full width in the
+    /// normal `lo` color, then for each item in the row (`cur = j*size.y + i`,
+    /// `j` over the columns) whose `column(cur) < size.x`: pick the item color
+    /// (disabled if disabled, selected if it is the selected item in a focused
+    /// cluster, else normal), re-fill `col..size.x` in that color, draw the icon,
+    /// the marker glyph at `col+2` in the row's `lo` color, and the label at
+    /// `col+5`.
     ///
-    /// Ends with `setCursor(column(sel)+2, row(sel))` so the hardware cursor
-    /// tracks the selection (surfaced via the base `cursor_request`).
+    /// Ends by parking the cursor at `(column(sel)+2, row(sel))` so the hardware
+    /// cursor tracks the selection (surfaced via the base cursor request).
     fn draw(&mut self, ctx: &mut DrawCtx) {
         // Cache the absolute origin for the mouse-tracking capture: the
         // MouseTrackCapture converts absolute mouse coords to view-local via
@@ -708,8 +701,8 @@ impl Cluster {
     ///
     /// CheckBoxes: `" X"`. RadioButtons: `" •"` (CP437 0x07 bullet → U+2022).
     /// MultiCheckBoxes: the `states` string (idx = state). An out-of-range index
-    /// degrades to a space (defensive; matches the C++ relying on the marker
-    /// string being long enough).
+    /// degrades to a space (defensive — the marker table is expected to be long
+    /// enough to cover every reachable index).
     fn marker_char(&self, item: i32) -> char {
         let idx = self.multi_mark(item);
         match &self.kind {
@@ -720,9 +713,9 @@ impl Cluster {
     }
 }
 
-/// C++ `cstrlen` — display width of a `~`-marked control string, **ignoring**
-/// the `~` toggle characters (they are not printed columns). Used by
-/// [`Cluster::column`] for the column-width walk.
+/// Display width of a `~`-marked control string, **ignoring** the `~` toggle
+/// characters (they are not printed columns). Used by [`Cluster::column`] for the
+/// column-width walk.
 fn cstrlen(s: &str) -> i32 {
     crate::text::width(&s.replace('~', "")) as i32
 }
@@ -782,7 +775,7 @@ pub struct MultiCheckBoxes {
 impl View for MultiCheckBoxes {}
 
 impl CheckBoxes {
-    /// `TCheckBoxes::TCheckBoxes` — build from `bounds` + `strings`.
+    /// Build from `bounds` + `strings`.
     pub fn new(bounds: Rect, strings: Vec<String>) -> Self {
         CheckBoxes {
             cluster: Cluster::new(bounds, strings, ClusterKind::CheckBoxes),
@@ -791,7 +784,7 @@ impl CheckBoxes {
 }
 
 impl RadioButtons {
-    /// `TRadioButtons::TRadioButtons` — build from `bounds` + `strings`.
+    /// Build from `bounds` + `strings`.
     pub fn new(bounds: Rect, strings: Vec<String>) -> Self {
         RadioButtons {
             cluster: Cluster::new(bounds, strings, ClusterKind::RadioButtons),
@@ -800,8 +793,8 @@ impl RadioButtons {
 }
 
 impl MultiCheckBoxes {
-    /// `TMultiCheckBoxes::TMultiCheckBoxes` — build from `bounds` + `strings`
-    /// plus `sel_range` (`selRange`), `flags`, and `states` (the marker string).
+    /// Build from `bounds` + `strings` plus `sel_range`, `flags`, and `states`
+    /// (the marker string).
     pub fn new(
         bounds: Rect,
         strings: Vec<String>,
@@ -1169,8 +1162,8 @@ mod tests {
     }
 
     /// The plain hotkey letter presses UNFOCUSED on the post-process walk (the
-    /// `owner->phase == phPostProcess` leg), and is ignored unfocused at the
-    /// default (Focused) phase.
+    /// post-process phase leg), and is ignored unfocused at the default (focused)
+    /// phase.
     #[test]
     fn plain_hotkey_unfocused_post_process_only() {
         let mut c = CheckBoxes::new(

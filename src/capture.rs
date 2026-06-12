@@ -11,12 +11,12 @@
 //! prove the protocol composes.
 //!
 //! # Turbo Vision heritage
-//! C++ Turbo Vision implements modality by spinning a *nested* blocking
-//! `getEvent` loop inside `execView` (`tgroup.cpp`); `dragView` and a pressed
-//! button's mouse-tracking do the same. Rust cannot nest a blocking loop that
-//! re-borrows the view tree, so rstv collapses all of them into one non-recursive
-//! event loop plus this LIFO capture stack (deviation D9). Handlers hold a
-//! [`ViewId`] rather than a view pointer (deviation D3).
+//! Turbo Vision implements modality, view dragging, and a pressed button's
+//! mouse-tracking by spinning *nested* blocking event loops (`tgroup.cpp`,
+//! `tview.cpp`). Rust cannot nest a blocking loop that re-borrows the view tree,
+//! so rstv collapses all of them into one non-recursive event loop plus this LIFO
+//! capture stack (deviation D9). Handlers hold a [`ViewId`] rather than a view
+//! pointer (deviation D3).
 
 use crate::event::Event;
 use crate::view::{Context, Point, Rect, ViewId};
@@ -28,10 +28,10 @@ use crate::view::{Context, Point, Rect, ViewId};
 /// separate downstream concern handled by normal view routing).
 ///
 /// # Turbo Vision heritage
-/// Makes explicit the consumed-vs-passed convention that C++ Turbo Vision encodes
-/// implicitly through `clearEvent` (`tview.cpp`); the self-removing
+/// Makes explicit the consumed-vs-passed convention that Turbo Vision encodes
+/// implicitly by clearing the event in place (`tview.cpp`); the self-removing
 /// [`ConsumedPop`](CaptureFlow::ConsumedPop) variant replaces a nested modal
-/// loop returning from `execute` (deviation D9).
+/// loop returning from its `execute` (deviation D9).
 #[derive(Debug)]
 pub enum CaptureFlow {
     /// Did not handle the event — offer it to the next (lower) handler, and
@@ -52,10 +52,10 @@ pub enum CaptureFlow {
 /// a [`ViewId`]: a handler never holds a view reference.
 ///
 /// # Turbo Vision heritage
-/// Replaces the nested blocking loops C++ spins for modality (`TGroup::execute`),
-/// `dragView`, and a held button's `mouseEvent` tracking (`tview.cpp`), folding
-/// them into one event loop plus stacked handlers (deviation D9). Each handler
-/// holds a [`ViewId`] instead of a view pointer (deviation D3).
+/// Replaces the nested blocking loops Turbo Vision spins for modality, view
+/// dragging, and a held button's mouse-tracking (`tgroup.cpp`, `tview.cpp`),
+/// folding them into one event loop plus stacked handlers (deviation D9). Each
+/// handler holds a [`ViewId`] instead of a view pointer (deviation D3).
 pub trait CaptureHandler {
     /// Offered an event before normal routing. May read/mutate `ctx` (post
     /// commands, schedule timers, push a *nested* capture via
@@ -95,59 +95,67 @@ pub trait CaptureHandler {
 // MouseTrackCapture — the mouse hold-tracking seam
 // ---------------------------------------------------------------------------
 
-/// Which event classes the C++ hold-loop's `mouseEvent` mask included
-/// (everything else is discarded until `evMouseUp` — `tview.cpp:636`).
+/// Which mouse event classes the hold-tracker forwards to its view while a
+/// button is held (everything else is discarded until the terminating
+/// [`MouseUp`](crate::event::Event::MouseUp)).
 ///
-/// The C++ callers pass `evMouseMove` (button, cluster, list viewer, …),
-/// `evMouseMove | evMouseAuto` (scrollbar, editor, menu), or `evMouse` (frame —
-/// every mouse class including evMouseWheel). This struct-of-bools is the
-/// idiomatic form of that bit-mask slice.
+/// Different widgets opt into different subsets: a button or list viewer wants
+/// only moves; a scrollbar, editor, or menu wants moves plus auto-repeat; a
+/// frame wants every mouse class including the wheel. This struct-of-bools
+/// names each forwarded class.
+///
+/// # Turbo Vision heritage
+/// The idiomatic form of the `evMouse*` bit-mask `mouseEvent` accepted in
+/// `tview.cpp`: `mouse_move` ↔ `evMouseMove`, `mouse_auto` ↔ `evMouseAuto`,
+/// `wheel` ↔ the `evMouseWheel` slice of `evMouse`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TrackMask {
-    /// Forward `evMouseMove` to the tracked view (`mask & evMouseMove`).
+    /// Forward [`MouseMove`](crate::event::Event::MouseMove) to the tracked view.
     pub mouse_move: bool,
-    /// Forward `evMouseAuto` (auto-repeat while held; `mask & evMouseAuto`).
+    /// Forward [`MouseAuto`](crate::event::Event::MouseAuto) (auto-repeat while held).
     pub mouse_auto: bool,
-    /// Forward `evMouseWheel` events (`Event::MouseWheel`; the
-    /// `evMouseWheel` slice of an `evMouse` mask).
+    /// Forward [`MouseWheel`](crate::event::Event::MouseWheel) events.
     pub wheel: bool,
 }
 
 /// The hold-tracking router: while a mouse button is held, it localizes and
 /// forwards masked mouse events to the tracked view, swallows everything else,
-/// and pops on `MouseUp` (forwarding the localized up — cluster/frame read the up
-/// position post-loop, `tcluster.cpp:181-184` / `tframe.cpp:159-160`).
+/// and pops on [`MouseUp`](crate::event::Event::MouseUp) (forwarding the
+/// localized up too — a button/frame reads the up position after the hold ends).
 ///
-/// **A pure router, not a strategy.** The C++ loop *bodies* stay in the widgets
-/// (their `MouseMove`/`MouseAuto` arms are the body, the `MouseUp` arm the
-/// post-loop code): captures are `'static` and hold no view borrow, and several
-/// tracked views (`ListViewer`, `Outline`) are trait objects the pump could not
+/// **A pure router, not a strategy.** The per-event handling logic stays in the
+/// widgets (their `MouseMove`/`MouseAuto` arms run while held, their `MouseUp`
+/// arm runs once at release): captures are `'static` and hold no view borrow,
+/// and several tracked views ([`ListViewer`](crate::widgets::ListViewer),
+/// [`Outline`](crate::widgets::Outline)) are trait objects the pump could not
 /// downcast — so the capture only routes, via
 /// [`Deferred::MouseTrack`](crate::view::Deferred), which the pump applies by
 /// calling the view's `handle_event` directly. Pushed via
 /// [`Context::start_mouse_track`]; because a capture push is itself applied
-/// through the deferred channel, the capture sees the **next** event — matching
-/// the C++ `do{}while` running the body once before the first wait.
+/// through the deferred channel, the capture sees the **next** event — so the
+/// widget runs its handling once on the press before the first forwarded event.
 ///
 /// `origin` is the absolute screen position of view-local `(0, 0)`, cached by
 /// the widget's last `draw` at push time (the `Button::abs_origin` /
-/// `ColorPicker::body_origin` pattern). Like `DragCapture` (window.rs), the
+/// `ColorPicker::body_origin` pattern). Like the window drag capture, the
 /// origin is fixed for the duration of the hold: if the tracked view is moved /
 /// resized mid-hold the localization goes stale — acceptable, since a hold is
 /// short-lived and nothing moves the view while the (modal) hold swallows all
 /// other input.
 ///
 /// # Turbo Vision heritage
-/// Replaces the C++ `do { … } while (mouseEvent(event, mask))` blocking
-/// hold-loop (`TView::mouseEvent`, `tview.cpp:636-643`) with a capture handler
+/// Replaces the blocking mouse-hold loop `do { … } while (mouseEvent(event,
+/// mask))` (`tview.cpp:636-643`; the cluster/frame post-loop reads at
+/// `tcluster.cpp:181-184` / `tframe.cpp:159-160`) with a capture handler
 /// (deviation D9) that routes via the deferred channel instead of holding a view
-/// borrow (deviation D3).
+/// borrow (deviation D3). The `do{}while` running its body once before the first
+/// wait is why the capture is applied deferred (sees the next event).
 pub struct MouseTrackCapture {
     /// The view being tracked (identity only, per the capture contract).
     view: ViewId,
     /// Absolute screen position of view-local `(0, 0)` at push time.
     origin: Point,
-    /// Which event classes to forward (the C++ `mouseEvent` mask).
+    /// Which event classes to forward (the tracked-event mask).
     mask: TrackMask,
 }
 
@@ -176,34 +184,32 @@ impl CaptureHandler for MouseTrackCapture {
                 ctx.request_mouse_track(self.view, Event::MouseAuto(localize(m, self.origin)));
                 CaptureFlow::Consumed
             }
-            // Mouse-wheel events (`evMouseWheel`, see `crossterm_backend`) — the
-            // `evMouseWheel` slice of an `evMouse` mask (the frame's hold loop).
+            // Mouse-wheel events (see `crossterm_backend`) — the wheel slice of
+            // the tracked-event mask (the frame's hold loop).
             Event::MouseWheel(m) if self.mask.wheel => {
                 ctx.request_mouse_track(self.view, Event::MouseWheel(localize(m, self.origin)));
                 CaptureFlow::Consumed
             }
-            // `mouseEvent` always returns on `evMouseUp` (the `mask | evMouseUp`
-            // test): forward the localized up — cluster/frame read its position
+            // A mouse-up always ends the hold (it is implicitly always tracked):
+            // forward the localized up — cluster/frame read its position
             // post-loop — and pop this handler.
             Event::MouseUp(m) => {
                 ctx.request_mouse_track(self.view, Event::MouseUp(localize(m, self.origin)));
                 CaptureFlow::ConsumedPop
             }
-            // Broadcasts pass THROUGH to normal routing (like `ModalFrame`). In
-            // C++ a hold loop's `mouseEvent`/`getEvent` only ever pulls *queued
-            // input* events; a `message(owner, evBroadcast, …)` notification is a
-            // SYNCHRONOUS side-channel that bypasses the queue entirely, so the
-            // hold loop never sees one to discard. rstv realizes that side-channel
+            // Broadcasts pass THROUGH to normal routing (like `ModalFrame`).
+            // A broadcast is a synchronous notification, not a queued input
+            // event — the original hold loop only ever consumed queued input, so
+            // it never saw a broadcast to discard. rstv delivers that notification
             // as a queued `Event::Broadcast`, so to stay faithful the hold must let
-            // it pass — otherwise a `cmScrollBarChanged` emitted by the very bar
-            // being dragged (its own `setValue` → `scrollDraw`) is swallowed and
+            // it pass — otherwise a scrollbar-changed broadcast emitted by the very
+            // bar being dragged (its own value update → redraw) is swallowed and
             // the editor/scroller never scrolls. (The bug this fixes: dragging a
             // scrollbar did not move the associated text.)
             Event::Broadcast { .. } => CaptureFlow::Pass,
             // Everything else (unmasked mouse classes, keys, commands, timers) is
-            // discarded until `evMouseUp` — the hold is modal (the C++ loop spins
-            // past events outside `mask | evMouseUp`; idle/timer work does not run
-            // inside a hold loop).
+            // discarded until the mouse-up — the hold is modal, and idle/timer
+            // work does not run inside it.
             _ => CaptureFlow::Consumed,
         }
     }
@@ -222,9 +228,9 @@ impl CaptureHandler for MouseTrackCapture {
 /// applies *after* dispatch — so the stack is never aliased while a handler runs.
 ///
 /// # Turbo Vision heritage
-/// Has no C++ analogue as a data structure: it replaces the nesting of blocking
-/// `getEvent` loops C++ uses for modality, drag, and press-tracking with one
-/// non-recursive loop plus this stack (deviation D9).
+/// Has no direct analogue as a data structure: it replaces the nesting of
+/// blocking event loops Turbo Vision uses for modality, drag, and press-tracking
+/// with one non-recursive loop plus this stack (deviation D9).
 #[derive(Default)]
 pub struct CaptureStack {
     handlers: Vec<Box<dyn CaptureHandler>>,
@@ -675,8 +681,8 @@ mod tests {
         }
     }
 
-    /// An UNmasked mouse class is swallowed without forwarding (the C++
-    /// `mouseEvent` discard — the hold is modal).
+    /// An UNmasked mouse class is swallowed without forwarding (the hold is
+    /// modal — only masked classes and the terminating up reach the view).
     #[test]
     fn track_unmasked_classes_are_swallowed() {
         let (mut stack, _id) = track_stack(TrackMask {
@@ -736,10 +742,10 @@ mod tests {
     }
 
     /// A `Broadcast` during the hold PASSES THROUGH (not consumed) so normal
-    /// routing delivers it to the tree — faithful to C++, where a `message()`
-    /// broadcast is a synchronous side-channel the hold loop's `getEvent` never
-    /// sees. This is what lets a scrollbar being dragged notify the editor/scroller
-    /// (its `setValue` → `scrollDraw` `cmScrollBarChanged`) so the text scrolls.
+    /// routing delivers it to the tree. A broadcast is a synchronous notification,
+    /// not queued input, so the hold must not swallow it. This is what lets a
+    /// scrollbar being dragged notify the editor/scroller (its value-changed
+    /// broadcast) so the text scrolls.
     #[test]
     fn track_broadcast_passes_through() {
         let (mut stack, _id) = track_stack(TrackMask {

@@ -15,10 +15,11 @@
 //! **The event loop is the broker, in both directions.** The scroller stores its
 //! bars as [`Option<ViewId>`](crate::view::ViewId) handles and issues
 //! [`Deferred`](crate::view::Deferred) ops naming them; the loop performs every
-//! cross-view read/write at apply time. The `cmScrollBarChanged` broadcast's
-//! `source` is the **filter** only (the scroller reacts iff `source ∈ {h, v}`);
-//! the value is not stuffed into the message — the loop resolves the subject bar
-//! and reads its `value`.
+//! cross-view read/write at apply time. A
+//! [`SCROLL_BAR_CHANGED`](crate::command::Command::SCROLL_BAR_CHANGED)
+//! broadcast's `source` is the **filter** only (the scroller reacts iff
+//! `source ∈ {h, v}`); the value is not stuffed into the message — the loop
+//! resolves the subject bar and reads its `value`.
 //!
 //! # Selected color
 //!
@@ -39,11 +40,10 @@
 //!
 //! # Turbo Vision heritage
 //!
-//! Ports `TScroller` (`tscrolle.cpp`). Owner up-pointers to the sibling scroll
-//! bars become [`ViewId`] handles brokered by the event loop (deviation D3);
-//! `getPalette` becomes [`Role`]s; the `drawLock`/`drawFlag`/`checkDraw`
-//! re-entrancy guard around the immediate `drawView()` is unneeded under
-//! whole-tree redraw and is dropped; and `TStreamable` is dropped.
+//! Ports `TScroller` (`tscrolle.cpp`). Owner back-pointers to the sibling scroll
+//! bars become [`ViewId`] handles brokered by the event loop (D3), and the
+//! palette becomes [`Role`]s. The original draw-re-entrancy guard is unneeded
+//! under whole-tree redraw and is dropped.
 
 use crate::theme::Role;
 use crate::view::{Context, DrawCtx, Options, Point, Rect, StateFlag, View, ViewId, ViewState};
@@ -64,11 +64,11 @@ pub struct Scroller {
     /// Scroll offset — the value mirrored from the scrollbars. Subclasses (the
     /// editor) draw their content shifted by this. Public so subclasses read it.
     pub delta: Point,
-    /// Content extent `(x, y)` — TV's `limit`. Set via [`set_limit`](Self::set_limit).
+    /// Content extent `(x, y)`. Set via [`set_limit`](Self::set_limit).
     limit: Point,
-    /// The horizontal scrollbar, by id (`None` if absent). TV's `hScrollBar`.
+    /// The horizontal scrollbar, by id (`None` if absent).
     h_scroll_bar: Option<ViewId>,
-    /// The vertical scrollbar, by id (`None` if absent). TV's `vScrollBar`.
+    /// The vertical scrollbar, by id (`None` if absent).
     v_scroll_bar: Option<ViewId>,
 }
 
@@ -110,7 +110,7 @@ impl Scroller {
         self.v_scroll_bar
     }
 
-    /// Apply a freshly-read scrollbar delta — the body of `TScroller::scrollDraw`.
+    /// Apply a freshly-read scrollbar delta.
     ///
     /// Called by the event loop (the read broker) after it resolves the bars and
     /// reads their `value`s. If `d != delta`, shift the cursor by the **old**
@@ -118,7 +118,7 @@ impl Scroller {
     /// adjust must use the old `delta`.
     pub fn apply_delta(&mut self, d: Point) {
         if d != self.delta {
-            // setCursor( cursor + delta - d ) — uses the OLD delta, before overwrite.
+            // Shift the cursor using the OLD delta, before overwriting.
             let new_cursor = self.state.cursor + (self.delta - d);
             self.state.cursor = new_cursor;
             self.delta = d;
@@ -171,9 +171,8 @@ impl Scroller {
         }
     }
 
-    /// `TScroller::showSBar` — show or hide one scrollbar based on this scroller's
-    /// active/selected state. Faithful: `getState(sfActive | sfSelected) != 0`
-    /// (either bit) → show, else hide. Realized as a deferred
+    /// Show or hide one scrollbar based on this scroller's active/selected state:
+    /// shown when either is set, hidden otherwise. Realized as a deferred
     /// [`SetVisible`](crate::view::Deferred::SetVisible).
     fn show_sbar(&self, sbar: Option<ViewId>, ctx: &mut Context) {
         if let Some(id) = sbar {
@@ -203,13 +202,12 @@ impl View for Scroller {
         ctx.fill(extent, ' ', style);
     }
 
-    /// `TScroller::handleEvent` — react to a `cmScrollBarChanged` broadcast whose
-    /// `source` is one of this scroller's two bars by requesting a deferred
-    /// delta-sync (the read broker; see the module docs).
+    /// React to a [`SCROLL_BAR_CHANGED`](crate::command::Command::SCROLL_BAR_CHANGED)
+    /// broadcast whose `source` is one of this scroller's two bars by requesting a
+    /// deferred delta-sync (the read broker; see the module docs).
     ///
-    /// The C++ `TView::handleEvent(event)` super-call is a no-op in our trait, so it
-    /// is omitted (matches every other widget). The `infoPtr == hScrollBar || ==
-    /// vScrollBar` guard becomes the `source ∈ {h_id, v_id}` filter.
+    /// The `source ∈ {h_id, v_id}` test is the filter that decides whether this
+    /// scroller owns the firing bar.
     fn handle_event(&mut self, ev: &mut crate::event::Event, ctx: &mut Context) {
         if let crate::event::Event::Broadcast { command, source } = *ev
             && command == crate::command::Command::SCROLL_BAR_CHANGED
@@ -223,10 +221,9 @@ impl View for Scroller {
         }
     }
 
-    /// `TScroller::setState` — after the base flips the flag, when `flag` is
-    /// `Active` or `Selected`, show/hide both bars per the new active/selected
-    /// state. Reads the **post-update** bits from `self` (the base already flipped
-    /// them).
+    /// After flipping the flag, when `flag` is `Active` or `Selected`, show/hide
+    /// both bars per the new active/selected state. Reads the **post-update** bits
+    /// from `self`.
     fn set_state(&mut self, flag: StateFlag, enable: bool, ctx: &mut Context) {
         // Base: flip the flag (+ the Focused broadcast).
         self.state_mut().set_flag(flag, enable);
@@ -247,18 +244,17 @@ impl View for Scroller {
         }
     }
 
-    /// `TScroller::changeBounds` — after the pump applies new bounds via
-    /// `Deferred::ChangeBounds`, re-publish scrollbar range/page params with the
-    /// stored `limit` and the **new** `size` (faithful: `setLimit(limit.x, limit.y)`
-    /// after `setBounds`, tscrolle.cpp changeBounds).
+    /// After the pump applies new bounds via `Deferred::ChangeBounds`, re-publish
+    /// the scrollbar range/page params with the stored `limit` and the **new**
+    /// `size` by calling [`set_limit`](Self::set_limit).
     fn on_bounds_changed(&mut self, ctx: &mut Context) {
         let (x, y) = (self.limit.x, self.limit.y);
         self.set_limit(x, y, ctx);
     }
 
-    /// Concrete-reach hatch (the sanctioned downcast, same as `TWindow::zoom`): the
-    /// pump downcasts to `&mut Scroller` to call [`apply_delta`](Self::apply_delta)
-    /// when applying a `Deferred::SyncScrollerDelta`.
+    /// Concrete-reach hatch (the sanctioned downcast): the pump downcasts to
+    /// `&mut Scroller` to call [`apply_delta`](Self::apply_delta) when applying a
+    /// `Deferred::SyncScrollerDelta`.
     fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
         Some(self)
     }

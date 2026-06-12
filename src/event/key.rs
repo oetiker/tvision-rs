@@ -13,79 +13,78 @@
 //! # Turbo Vision heritage
 //!
 //! Ports the `kb*` key-code family, the `TKey` class (`tkeys.h` / `tkey.cpp`),
-//! and `KeyDownEvent` (`system.h`). `TKey`'s canonical form is already
-//! decomposed into a base code plus a modifier mask (`kbCtrlA == TKey('A',
-//! kbCtrlShift)`, `kbShiftTab == TKey(kbTab, kbShift)`); rstv keeps that
-//! decomposition with the [`Key`] enum and a separate [`KeyModifiers`]
+//! and `KeyDownEvent` (`system.h`). `TKey`'s canonical form already decomposes
+//! each keystroke into a base code plus a modifier mask (Ctrl+A is `'A'` with the
+//! ctrl-shift mask; Shift+Tab is the Tab code with the shift mask); rstv keeps
+//! that decomposition as the [`Key`] enum and a separate [`KeyModifiers`]
 //! (deviations D4 and D5).
 
 /// A physical key.
 ///
-/// Only the base, modifier-free keys appear here. Combined `kb*` codes such as
-/// `kbCtrlA`, `kbShiftTab`, `kbAltF3` or `kbCtrlEnter` are *not* variants; they
-/// decompose into one of these plus the matching [`KeyModifiers`] flags, exactly
-/// as `TKey` normalizes them.
+/// Only the base, modifier-free keys appear here. Modifier combinations such as
+/// Ctrl+A, Shift+Tab, Alt+F3 or Ctrl+Enter are *not* variants; they decompose
+/// into one of these plus the matching [`KeyModifiers`] flags.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Key {
-    /// A printable character: letters, digits, symbols, and space
-    /// (`kbSpace` is `Char(' ')`). Holds the base character; case and the
-    /// Ctrl/Alt modifiers live in [`KeyModifiers`].
+    /// A printable character: letters, digits, symbols, and space (`Char(' ')`).
+    /// Holds the base character; case and the Ctrl/Alt modifiers live in
+    /// [`KeyModifiers`].
     Char(char),
-    /// A function key, `F(1)`..=`F(12)` (`kbF1`..`kbF12`).
+    /// A function key, `F(1)`..=`F(12)`.
     F(u8),
-    /// `kbEnter` / `kbCtrlEnter` (base key).
+    /// The Enter/Return key.
     Enter,
-    /// `kbEsc` / `kbAltEsc` (base key).
+    /// The Escape key.
     Esc,
-    /// `kbBack` (Backspace) / `kbCtrlBack` / `kbAltBack` (base key).
+    /// The Backspace key.
     Backspace,
-    /// `kbTab` / `kbShiftTab` / `kbCtrlTab` / `kbAltTab` (base key). Note there
-    /// is no `BackTab` variant: Shift+Tab is `Tab` + the `shift` modifier.
+    /// The Tab key. Note there is no `BackTab` variant: Shift+Tab is `Tab` + the
+    /// `shift` modifier.
     Tab,
-    /// `kbUp` / `kbCtrlUp` / `kbAltUp` (base key).
+    /// The Up arrow.
     Up,
-    /// `kbDown` / `kbCtrlDown` / `kbAltDown` (base key).
+    /// The Down arrow.
     Down,
-    /// `kbLeft` / `kbCtrlLeft` / `kbAltLeft` (base key).
+    /// The Left arrow.
     Left,
-    /// `kbRight` / `kbCtrlRight` / `kbAltRight` (base key).
+    /// The Right arrow.
     Right,
-    /// `kbHome` / `kbCtrlHome` / `kbAltHome` (base key).
+    /// The Home key.
     Home,
-    /// `kbEnd` / `kbCtrlEnd` / `kbAltEnd` (base key).
+    /// The End key.
     End,
-    /// `kbPgUp` / `kbCtrlPgUp` / `kbAltPgUp` (base key).
+    /// The Page Up key.
     PageUp,
-    /// `kbPgDn` / `kbCtrlPgDn` / `kbAltPgDn` (base key).
+    /// The Page Down key.
     PageDown,
-    /// `kbIns` / `kbCtrlIns` / `kbShiftIns` / `kbAltIns` (base key).
+    /// The Insert key.
     Insert,
-    /// `kbDel` / `kbCtrlDel` / `kbShiftDel` / `kbAltDel` (base key).
+    /// The Delete key.
     Delete,
 }
 
-/// The active keyboard modifiers. Replaces the `controlKeyState` bit-word
-/// (`tkeys.h` `kb*Shift` masks, `system.h`) with a struct-of-bools (deviation
-/// D5).
+/// The active keyboard modifiers — a struct of three named `bool` flags.
 ///
-/// Only the three logical modifiers `TKey` itself tracks are modeled; the
-/// platform left/right-Ctrl, left/right-Alt and left/right-Shift distinctions
-/// (`kbLeftCtrl` vs `kbRightCtrl`, etc.) collapse into a single flag each, just
-/// as `kbCtrlShift`/`kbAltShift`/`kbShift` do in the C++.
+/// Only the three logical modifiers are modeled; the platform left/right-Ctrl,
+/// left/right-Alt and left/right-Shift distinctions collapse into a single flag
+/// each.
+///
+/// # Turbo Vision heritage
+/// The packed `controlKeyState` bit-word becomes a struct-of-bools (deviation
+/// D5); the left/right modifier-side bits are folded into one flag each.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct KeyModifiers {
-    /// Shift is held (`kbShift`).
+    /// Shift is held.
     pub shift: bool,
-    /// Ctrl is held (`kbCtrlShift`).
+    /// Ctrl is held.
     pub ctrl: bool,
-    /// Alt is held (`kbAltShift`).
+    /// Alt is held.
     pub alt: bool,
 }
 
 /// A key-down event: a physical [`Key`] together with the [`KeyModifiers`]
-/// active when it was pressed. Faithful to `KeyDownEvent` (`system.h`) and to
-/// `TKey`'s `{code, mods}` pair, in the decomposed form (see the [module
-/// docs](self)).
+/// active when it was pressed (see the [module docs](self) for the decomposed
+/// form).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct KeyEvent {
     /// The physical key pressed.
@@ -112,23 +111,17 @@ impl From<Key> for KeyEvent {
     }
 }
 
-/// Extract the hotkey character from a label string — faithful port of
-/// `hotKey`/`hotKeyStr` (`tinputli.cpp`).
+/// Extract the hotkey character from a label string.
 ///
 /// The convention: the first `~`-delimited run in `s` marks the hotkey. The
 /// char immediately following the first `~` is the hotkey, **uppercased**.
 /// Returns `None` if there is no `~`, if the `~` is at the end of the string
-/// (nothing after it), or if the char after `~` is itself `~` (a
-/// tilde-escape). The C++ `hotKeyStr` returns the substring after `~` up to
-/// the next `~` (or end), and `hotKey` takes the first char of that substring;
-/// both return a null/empty result for the no-`~` case.
+/// (nothing after it), or if the char after `~` is itself `~` (a tilde-escape,
+/// i.e. a literal `~` in the label).
 ///
-/// Deviation: the C++ returns `'\0'` rather than a sentinel; we return
-/// `Option<char>` idiomatically. The `"~~x"` guard (char after `~` is `~`) is
-/// **faithful**, not an addition: C++ `hotKeyStr` calls `memchr` for the *next*
-/// `~` starting at `begin` (the char right after the first `~`); for `"~~x"`
-/// that finds the second `~` immediately, so the returned substring is empty
-/// and `hotKey` returns `'\0'`. Our `None` matches that exactly.
+/// # Turbo Vision heritage
+/// Ports `hotKey`/`hotKeyStr` (`tinputli.cpp`); they returned a null char for the
+/// no-hotkey case, where rstv returns `Option<char>`.
 ///
 /// # Examples
 ///
@@ -152,12 +145,10 @@ pub fn hot_key(s: &str) -> Option<char> {
     Some(ch.to_ascii_uppercase())
 }
 
-/// Map WordStar Ctrl-letter navigation keys to their arrow/nav equivalents —
-/// faithful port of `ctrlToArrow` (`drivers2.cpp`).
+/// Map WordStar Ctrl-letter navigation keys to their arrow/nav equivalents.
 ///
 /// In the decomposed key model, a Ctrl-letter is `Key::Char(letter)` with
-/// `modifiers.ctrl` set. The 11-entry table from the C++
-/// (`ctrlCodes[]`→`arrowCodes[]`) maps:
+/// `modifiers.ctrl` set. The 11-entry table maps:
 ///
 /// | Ctrl+ | → Key |
 /// |-------|-------|
@@ -178,9 +169,8 @@ pub fn hot_key(s: &str) -> Option<char> {
 /// returned). Any key that does not match — including literal arrow keys,
 /// non-Char keys, or Char keys without `ctrl` — is returned unchanged.
 ///
-/// The C++ `keyCode != 0` guard is auto-satisfied in our model (`kbNoKey` has
-/// no `Key` variant — there is never a null `KeyDown`), so no equivalent guard
-/// is needed here.
+/// # Turbo Vision heritage
+/// Ports `ctrlToArrow` (`drivers2.cpp`).
 pub fn ctrl_to_arrow(ke: KeyEvent) -> KeyEvent {
     if !ke.modifiers.ctrl {
         return ke;
@@ -211,36 +201,25 @@ pub fn ctrl_to_arrow(ke: KeyEvent) -> KeyEvent {
     }
 }
 
-/// Test whether a key event is the Alt-accelerator for a given hotkey char —
-/// the decomposed successor of the C++ idiom
-/// `event.keyDown.keyCode == getAltCode(c)` (`tbutton.cpp:218`,
-/// `tcluster.cpp:262`, `tlabel.cpp:93`).
+/// Test whether a key event is the Alt-accelerator for a given hotkey char.
 ///
 /// Together with [`is_plain_hotkey`] (and optionally [`ctrl_to_arrow`] for
-/// WordStar nav pre-processing), these predicates replace the C++ accelerator
-/// idiom seen in `tbutton.cpp:191`, `tcluster.cpp:256`, and `tlabel.cpp`.
-/// Callers compose them with the phase/focus gate.
+/// WordStar nav pre-processing), these predicates implement hotkey-accelerator
+/// matching for buttons, clusters, and labels. Callers compose them with the
+/// phase/focus gate.
 ///
 /// Returns `true` iff:
 /// - `ke.modifiers.alt` is set, **and**
 /// - `ke.key` is `Key::Char(c)` where `c` matches `hot` case-insensitively.
 ///
-/// **Deviation — broader than `getAltCode`:** C++ `getAltCode` is a whitelist
-/// (`altCodes1`/`altCodes2` in `tvtext2.cpp`) that only maps `A–Z` and
-/// `0–9`, `-`, `=`, returning 0 (never matches) for any other char. We instead
-/// accept any `Alt+Char` case-insensitively; the difference is unobservable in
-/// practice because hotkeys are always letters or digits. The C++ Alt-Space
-/// special case (`altSpaceChar = '\xF0'` → `kbAltSpace`) is dropped.
+/// Any `Alt+Char` is accepted case-insensitively; in practice hotkeys are always
+/// letters or digits. Only `alt` is required; `shift` and `ctrl` are not checked.
 ///
-/// Only `alt` is required; `shift` and `ctrl` are not checked. In the C++,
-/// Alt keys produce a scan-code with `charScan.charCode == 0`, so only the
-/// alt-scan-code path matches — the behavior is the same.
-///
-/// **Predicate, not the keycode:** every C++ consumer of `getAltCode` uses it
-/// only as `keyCode == getAltCode(c)` (verified at all three sites above), so a
-/// predicate is the faithful shape. The one caller that needs the *value*,
-/// `getCtrlCode` (`tvtext2.cpp:136`), has no port yet; add a value-returning
-/// `alt_code(c) -> Key` if/when a consumer needs it.
+/// # Turbo Vision heritage
+/// Replaces the `event.keyDown.keyCode == getAltCode(c)` accelerator idiom
+/// (`tbutton.cpp`, `tcluster.cpp`, `tlabel.cpp`). The original `getAltCode` was a
+/// whitelist of `A–Z`, `0–9`, `-`, `=`; this predicate is deliberately broader.
+/// The Alt-Space special case is dropped.
 pub fn is_alt_hotkey(ke: &KeyEvent, hot: char) -> bool {
     if !ke.modifiers.alt {
         return false;
@@ -248,27 +227,18 @@ pub fn is_alt_hotkey(ke: &KeyEvent, hot: char) -> bool {
     matches!(ke.key, Key::Char(c) if c.eq_ignore_ascii_case(&hot))
 }
 
-/// Test whether a key event is a plain (non-modified) hotkey press — the
-/// decomposed successor of the C++ plain-letter branch
-/// `c == (char) toupper(event.keyDown.charScan.charCode)` (`tbutton.cpp`,
-/// `tcluster.cpp`).
+/// Test whether a key event is a plain (non-modified) hotkey press.
 ///
 /// Returns `true` iff:
 /// - neither `alt` nor `ctrl` is held, **and**
 /// - `ke.key` is `Key::Char(c)` where `c` matches `hot` case-insensitively.
 ///
-/// **Why `!alt && !ctrl` is required (faithful, not cosmetic):** the C++ branch
-/// compares against `charScan.charCode`, which is the *plain ASCII* code of the
-/// keystroke. When Alt is held that field is `0`; when Ctrl is held it is the
-/// control code (e.g. Ctrl+S → `0x13`), never the letter. So the C++ plain
-/// branch can only fire for an unmodified letter. In our decomposed model
-/// (`CLAUDE.md`) Ctrl+S is `Key::Char('s')` + `ctrl`, so omitting the `ctrl`
-/// check would let `is_plain_hotkey(Ctrl+S, 'S')` false-match — a real
-/// divergence the `||` composition does **not** mask (Ctrl makes
-/// [`is_alt_hotkey`] false, so the call falls through to this predicate).
-/// Guarding both modifiers also makes the function match its name ("plain").
-/// **Callers still own the phase gate** (postProcess / focused), not this
-/// helper.
+/// **Why `!alt && !ctrl` is required:** in the decomposed key model Ctrl+S is
+/// `Key::Char('s')` + `ctrl`, so omitting the `ctrl` check would let
+/// `is_plain_hotkey(Ctrl+S, 'S')` false-match. Since Ctrl makes [`is_alt_hotkey`]
+/// false, the call falls through to this predicate, so guarding both modifiers is
+/// what keeps a plain-letter press distinct from a modified one. **Callers still
+/// own the phase gate** (post-process / focused), not this helper.
 pub fn is_plain_hotkey(ke: &KeyEvent, hot: char) -> bool {
     if ke.modifiers.alt || ke.modifiers.ctrl {
         return false;
@@ -284,7 +254,7 @@ mod tests {
     fn char_variant_holds_letters_digits_and_space() {
         assert_eq!(Key::Char('a'), Key::Char('a'));
         assert_ne!(Key::Char('a'), Key::Char('b'));
-        // kbSpace is just Char(' ').
+        // Space is just Char(' ').
         assert_eq!(Key::Char(' '), Key::Char(' '));
         // Digits and symbols are ordinary characters too.
         assert_ne!(Key::Char('1'), Key::Char('!'));
@@ -347,8 +317,8 @@ mod tests {
 
     #[test]
     fn shift_tab_is_tab_plus_shift_not_a_backtab_variant() {
-        // The decomposition contract: there is no BackTab variant. magiblot's
-        // kbShiftTab == TKey(kbTab, kbShift).
+        // The decomposition contract: there is no BackTab variant — Shift+Tab is
+        // the Tab key plus the shift modifier.
         let ev = KeyEvent::new(
             Key::Tab,
             KeyModifiers {
@@ -364,7 +334,7 @@ mod tests {
 
     #[test]
     fn ctrl_c_is_char_plus_ctrl() {
-        // kbCtrlC == TKey('C', kbCtrlShift); we model the base char + ctrl.
+        // Ctrl+C is modeled as the base char 'c' plus the ctrl modifier.
         let ev = KeyEvent::new(
             Key::Char('c'),
             KeyModifiers {
@@ -380,7 +350,7 @@ mod tests {
 
     #[test]
     fn alt_f3_is_function_key_plus_alt() {
-        // kbAltF3 decomposes into F(3) + alt.
+        // Alt+F3 decomposes into F(3) + alt.
         let ev = KeyEvent::new(
             Key::F(3),
             KeyModifiers {
@@ -599,8 +569,7 @@ mod tests {
 
     #[test]
     fn is_plain_hotkey_ctrl_held_returns_false() {
-        // Faithful: C++ compares against charScan.charCode, which under Ctrl is
-        // the control code (Ctrl+O != 'O'), so the plain branch never fires.
+        // A plain hotkey must be unmodified: Ctrl+O is not a plain 'O' press.
         let ke = KeyEvent::new(
             Key::Char('o'),
             KeyModifiers {
@@ -613,8 +582,7 @@ mod tests {
 
     #[test]
     fn is_plain_hotkey_alt_held_returns_false() {
-        // Under Alt, C++ charScan.charCode is 0, so the plain branch never
-        // fires; the Alt match is is_alt_hotkey's job.
+        // Under Alt this is not a plain press; the Alt match is is_alt_hotkey's job.
         let ke = KeyEvent::new(
             Key::Char('o'),
             KeyModifiers {

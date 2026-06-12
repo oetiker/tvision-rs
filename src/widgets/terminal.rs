@@ -15,11 +15,12 @@
 //!
 //! # Turbo Vision heritage
 //!
-//! Ports `TTextDevice` (`textview.cpp`) and `TTerminal` (`ttprvlns.cpp`). C++
-//! inheritance becomes a trait plus an embed-and-delegate wrapper over `Scroller`
-//! (deviation D2); the `streambuf`/`otstream` stream plumbing and `TStreamable`
-//! are dropped (deviations D11, D12); `mapColor` becomes a [`Role`]; and the byte
-//! buffer is decoded with UTF-8-aware width (deviation D13).
+//! Ports `TTextDevice` (`textview.cpp`) and `TTerminal` (`ttprvlns.cpp`).
+//! Inheritance becomes a trait plus an embed-and-delegate wrapper over `Scroller`
+//! (deviation D2); the C++ stream plumbing is replaced by the direct
+//! [`write_bytes`](TextDevice::write_bytes) call (deviations D11, D12); the color
+//! map becomes a [`Role`]; and the byte buffer is decoded with UTF-8-aware width
+//! (deviation D13).
 
 use crate::theme::Role;
 use crate::view::{Context, DrawCtx, GrowMode, Point, Rect, View, ViewId};
@@ -35,8 +36,8 @@ use tvision_macros::delegate;
 ///
 /// # Turbo Vision heritage
 ///
-/// Ports `TTextDevice` (`textview.cpp`); the `streambuf` base and `otstream`
-/// wrapper are dropped.
+/// Ports `TTextDevice` (`textview.cpp`); the C++ stream layer is replaced by
+/// this single write method.
 pub trait TextDevice {
     /// Write `data` bytes into the device and return the number of bytes accepted
     /// (always `data.len()` for `Terminal`).
@@ -60,25 +61,23 @@ pub struct Terminal {
     /// The ring buffer storage.
     buffer: Vec<u8>,
     /// Ring buffer capacity. Always `>= 1`; `buf_size - 1` is the max usable bytes
-    /// (one slot is the "empty sentinel" that distinguishes full from empty, faithful
-    /// to the C++ `bufSize - 1` guard in `canInsert`).
+    /// (one slot is the "empty sentinel" that distinguishes full from empty).
     buf_size: usize,
-    /// Write head — next byte goes here. `TTerminal::queFront`.
+    /// Write head — next byte goes here.
     que_front: usize,
-    /// Read tail — oldest data starts here. `TTerminal::queBack`.
+    /// Read tail — oldest data starts here.
     que_back: usize,
 }
 
 impl Terminal {
-    /// `TTerminal::TTerminal` — create the terminal with a ring buffer of
-    /// `a_buf_size` bytes (capped at 32000).
+    /// Create the terminal with a ring buffer of `a_buf_size` bytes (capped at
+    /// 32000). The view grows with the lower-right corner of its owner and the
+    /// ring buffer starts empty.
     ///
-    /// Faithful: `growMode = gfGrowHiX + gfGrowHiY`. `queFront = queBack = 0`.
-    ///
-    /// **NOTE:** the C++ ctor calls `setLimit(0, 1)`, `setCursor(0, 0)`, and
-    /// `showCursor()`, which all need a `Context` we do not have here. The consumer
-    /// must call [`Terminal::init`] once after inserting this view into a group (the
-    /// same pattern as `TOutline`).
+    /// **NOTE:** setting the scroll limit, cursor position, and cursor visibility
+    /// all need a [`Context`] not available here, so they are deferred. The
+    /// consumer must call [`Terminal::init`] once after inserting this view into a
+    /// group.
     pub fn new(
         bounds: Rect,
         h_scroll_bar: Option<ViewId>,
@@ -104,8 +103,8 @@ impl Terminal {
 
     /// Post-insert initializer — call once after inserting the terminal into a group.
     ///
-    /// Ports the context-requiring parts of the C++ ctor: `setLimit(0, 1)`,
-    /// `setCursor(0, 0)`, `showCursor()`. Faithful to the C++ initialization.
+    /// Performs the context-requiring setup that the constructor cannot: sets the
+    /// scroll limit to one line, parks the cursor at `(0, 0)`, and shows it.
     pub fn init(&mut self, ctx: &mut Context) {
         self.scroller.set_limit(0, 1, ctx);
         self.scroller.state_mut().cursor = Point::new(0, 0);
@@ -116,21 +115,21 @@ impl Terminal {
     // Ring-buffer helpers (private)
     // -----------------------------------------------------------------------
 
-    /// `TTerminal::bufDec` — decrement a ring-buffer index with wrap.
+    /// Decrement a ring-buffer index with wrap-around.
     fn buf_dec(&self, val: usize) -> usize {
         if val == 0 { self.buf_size - 1 } else { val - 1 }
     }
 
-    /// `TTerminal::bufInc` — increment a ring-buffer index with wrap.
+    /// Increment a ring-buffer index with wrap-around.
     fn buf_inc(&self, val: usize) -> usize {
         let next = val + 1;
         if next >= self.buf_size { 0 } else { next }
     }
 
-    /// `TTerminal::canInsert` — `true` if there is room for `amount` more bytes.
+    /// `true` if there is room for `amount` more bytes.
     ///
-    /// Faithful to the C++: keeps one slot empty as the full/empty sentinel
-    /// (`bufSize - 1` max usable bytes).
+    /// Keeps one slot empty as the full/empty sentinel (so `buf_size - 1` is the
+    /// max usable byte count).
     fn can_insert(&self, amount: usize) -> bool {
         if self.que_front < self.que_back {
             // Normal (no-wrap) case: free space = queBack - queFront - 1
@@ -151,22 +150,19 @@ impl Terminal {
         }
     }
 
-    /// `TTerminal::queEmpty` — `true` when the ring buffer is empty.
+    /// `true` when the ring buffer is empty.
     pub fn que_empty(&self) -> bool {
         self.que_back == self.que_front
     }
 
-    /// `TTerminal::prevLines` — scan backward from `pos`, counting `lines`
-    /// newline characters, and return the position of the first character on
-    /// the `lines`-th-previous logical line.
+    /// Scan backward from `pos`, counting `lines` newline characters, and return
+    /// the position of the first character on the `lines`-th-previous logical
+    /// line. Handles ring-buffer wrap.
     ///
-    /// Faithful port of `ttprvlns.cpp`. Handles ring-buffer wrap.
-    ///
-    /// Key difference from naive implementations: `find_lf_backwards` returns
-    /// `(found, last_pos)`. On `!found` the loop continues (just as the C++
-    /// do-while does) — there is **no early return**. This correctly handles
-    /// the ring-buffer wrap case where a newline is in the "other half" of the
-    /// buffer not covered by the current `count` window.
+    /// Key subtlety: [`find_lf_backwards`](Self::find_lf_backwards) returns
+    /// `(found, last_pos)`. On `!found` the loop continues — there is **no early
+    /// return**. This correctly handles the wrap case where a newline lies in the
+    /// "other half" of the buffer not covered by the current `count` window.
     fn prev_lines(&self, mut pos: usize, mut lines: usize) -> usize {
         if lines > 0 && pos != self.que_back {
             loop {
@@ -199,12 +195,12 @@ impl Terminal {
         pos
     }
 
-    /// Helper for `prev_lines` — port of `findLfBackwards`.
+    /// Helper for [`prev_lines`](Self::prev_lines).
     ///
     /// Scans backward from `pos` for up to `count` bytes.
     /// Returns `(true, pos_of_newline)` when found, or `(false, last_checked_pos)`
-    /// when not found. The last-checked position replicates the C++ behaviour of
-    /// mutating `pos` by reference so the caller can continue iterating.
+    /// when not found. Returning the last-checked position lets the caller
+    /// continue iterating from where this scan stopped.
     fn find_lf_backwards(&self, mut pos: usize, count: usize) -> (bool, usize) {
         // C++: ++pos; do { if (buffer[--pos] == '\n') return True; } while (--count > 0);
         // We start from `pos` (already at the character) and scan backward.
@@ -221,7 +217,7 @@ impl Terminal {
         }
     }
 
-    /// `TTerminal::nextLine` — advance `pos` past the next `\n` in the ring buffer.
+    /// Advance `pos` past the next `\n` in the ring buffer.
     fn next_line(&self, mut pos: usize) -> usize {
         while pos != self.que_front && self.buffer[pos] != b'\n' {
             pos = self.buf_inc(pos);
@@ -232,8 +228,8 @@ impl Terminal {
         pos
     }
 
-    /// `discardPossiblyTruncatedCharsAtEnd` — if the scratch buffer is full
-    /// (256 bytes), trim any trailing incomplete UTF-8 sequence.
+    /// If the scratch buffer is full (256 bytes), trim any trailing incomplete
+    /// UTF-8 sequence.
     ///
     /// Returns a `&str` slice of valid UTF-8 from the scratch buffer.
     fn valid_utf8(scratch: &[u8]) -> &str {

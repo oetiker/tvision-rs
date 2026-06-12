@@ -18,8 +18,7 @@
 //! # Turbo Vision heritage
 //!
 //! Ports `TStaticText` (`tstatict.cpp`), `TLabel` (`tlabel.cpp`), and
-//! `TParamText` (`tstatict.cpp`). `getColor` becomes [`Role`]s and `TStreamable`
-//! is dropped.
+//! `TParamText` (`tstatict.cpp`). The palette becomes [`Role`]s.
 
 use crate::command::Command;
 use crate::event::{Event, hot_key, is_alt_hotkey, is_plain_hotkey};
@@ -46,9 +45,9 @@ pub struct StaticText {
 impl StaticText {
     /// Construct a static text view from `bounds` and `text`.
     ///
-    /// Faithful to `TStaticText::TStaticText`:
-    /// - `growMode |= gfFixed` → `state.grow_mode.fixed = true`.
-    /// - Not selectable (static text ignores focus).
+    /// The view has a fixed grow mode (`state.grow_mode.fixed = true`), so it
+    /// keeps its size when its owner resizes, and is not selectable — static text
+    /// ignores focus.
     pub fn new(bounds: Rect, text: impl Into<String>) -> Self {
         let mut state = ViewState::new(bounds);
         // gfFixed: the view keeps its size regardless of the owner's resize.
@@ -56,7 +55,7 @@ impl StaticText {
             fixed: true,
             ..Default::default()
         };
-        // Not selectable — `TStaticText` has no `handleEvent` and is not
+        // Not selectable: static text has no event handling and is not
         // interactive (`options.selectable` is already false by default).
         StaticText {
             state,
@@ -84,35 +83,16 @@ impl View for StaticText {
         &mut self.state
     }
 
-    /// `TStaticText::draw` — word-wrap and paint.
+    /// Word-wrap and paint the text block.
     ///
-    /// Faithful port of `tstatict.cpp`:
-    ///
-    /// ```text
-    /// color = getColor(1);
-    /// getText(buf); s = buf;  // we hold the full String, no 255-byte truncation
-    /// l = s.size(); p = 0; y = 0; center = False;
-    /// while (y < size.y) {
-    ///     b.moveChar(0, ' ', color, size.x);
-    ///     if (p < l) {
-    ///         if (s[p] == 3) { center = True; ++p; }
-    ///         i = p;
-    ///         last = i + TText::scroll(s.substr(i), size.x, False).bytes;
-    ///         do {
-    ///             j = p;
-    ///             while (p<l && s[p]==' ') p++;
-    ///             while (p<l && s[p]!=' ' && s[p]!='\n') p += TText::next(…).bytes;
-    ///         } while (p<l && p<last && s[p]!='\n');
-    ///         if (p > last) { p = (j > i) ? j : last; }
-    ///         width = strwidth(s[i..p]);
-    ///         draw_col = center ? (size.x - width) / 2 : 0;
-    ///         b.moveStr(draw_col, s[i..p], color, width);
-    ///         while (p<l && s[p]==' ') p++;
-    ///         if (p<l && s[p]=='\n') { center = False; p++; }
-    ///     }
-    ///     writeLine(0, y++, size.x, 1, b);
-    /// }
-    /// ```
+    /// For each of the `size.y` output rows: fill the row with the static-text
+    /// color; if text remains, consume a leading `\x03` (ETX) byte as a
+    /// *center-this-line* flag; compute the byte offset reached by scrolling
+    /// `size.x` display columns; pack whole words up to that limit, backing off to
+    /// the last word boundary (or hard-breaking a single overflowing word); draw
+    /// the packed slice centered or left-aligned; consume trailing spaces; and on
+    /// `\n` clear centering and advance past the newline. The full `String` is
+    /// held with no length cap.
     ///
     /// ## Byte-offset discipline
     ///
@@ -227,23 +207,21 @@ impl View for StaticText {
 ///
 /// ## Formatting
 ///
-/// Where C++ used `setText(const char* fmt, ...)` with `vsnprintf`, formatting is
-/// the caller's responsibility via `format!(…)` and [`set_text`](Self::set_text)
-/// takes the already-formatted `String`. There is no length cap — the text is a
-/// `String`.
+/// Formatting is the caller's responsibility via `format!(…)`;
+/// [`set_text`](Self::set_text) takes the already-formatted `String`. There is no
+/// length cap — the text is a `String`.
 ///
 /// ## `text_len` byte semantics
 ///
-/// [`text_len`](Self::text_len) is a **byte count** (mirroring C++ `strlen`). For
-/// all-ASCII content (the common case in dialog labels) this equals the display
-/// width; for multi-byte UTF-8 it diverges, matching `strlen`.
+/// [`text_len`](Self::text_len) is a **byte count**. For all-ASCII content (the
+/// common case in dialog labels) this equals the display width; for multi-byte
+/// UTF-8 it diverges (bytes, not columns).
 ///
 /// # Turbo Vision heritage
 ///
 /// Ports `TParamText` (`tstatict.cpp`), which subclassed `TStaticText` overriding
 /// only the text accessors. Here it is an embed-and-delegate wrapper holding a
-/// single `ViewState` inside its inner `StaticText` (deviation D2); `TStreamable`
-/// is dropped.
+/// single `ViewState` inside its inner `StaticText` (deviation D2).
 pub struct ParamText {
     /// The delegated `StaticText` — its `state: ViewState` is the one true home
     /// for all view metadata. All `View` methods forward here.
@@ -251,18 +229,17 @@ pub struct ParamText {
 }
 
 impl ParamText {
-    /// `TParamText::TParamText(bounds)` — construct with empty text.
+    /// Construct with empty text.
     ///
-    /// Faithful to the C++ ctor: `TStaticText(bounds, 0)` with `str[0] = EOS`.
-    /// The fixed grow mode and non-selectable options come from `StaticText::new`.
+    /// The fixed grow mode and non-selectable options come from
+    /// [`StaticText::new`].
     pub fn new(bounds: Rect) -> Self {
         ParamText {
             inner: StaticText::new(bounds, ""),
         }
     }
 
-    /// Set (or replace) the displayed text — the Rust equivalent of C++
-    /// `setText(const char* fmt, ...)`.
+    /// Set (or replace) the displayed text.
     ///
     /// Formatting is the caller's responsibility via `format!(…)`; the view
     /// picks up the new text on the next render pass.
@@ -270,9 +247,8 @@ impl ParamText {
         self.inner.set_text(text);
     }
 
-    /// `TParamText::getTextLen` — byte length of the current text (`strlen`
-    /// equivalent). See the struct-level note on byte vs. display-column
-    /// semantics.
+    /// Byte length of the current text. See the struct-level note on byte vs.
+    /// display-column semantics.
     pub fn text_len(&self) -> usize {
         self.inner.text().len()
     }
@@ -313,58 +289,55 @@ impl View for ParamText {}
 ///
 /// # The highlight (`light`)
 ///
-/// On a `cmReceivedFocus`/`cmReleasedFocus` broadcast whose `source` is the link,
-/// the label sets `light = (command == cmReceivedFocus)`. Each focus transition
-/// of the link emits a `source == link` focus broadcast, so the label's highlight
+/// On a received/released-focus broadcast whose `source` is the link, the label
+/// sets `light` to true (received) or false (released). Each focus transition of
+/// the link emits a `source == link` focus broadcast, so the label's highlight
 /// follows the link's focus. A broadcast about any other view (or with no link
 /// set) leaves `light` unchanged.
 ///
-/// **Known limitation.** This tracks focus *changes*, not link *removal*. In C++,
-/// removing a focused selectable link emitted a release-focus broadcast and a lit
-/// label cleared; here, `Group::remove` removes the child and nulls `current`
-/// without first emitting a release-focus on the departing child, so a label
-/// whose **selectable link is removed at runtime** can keep a stale highlight. No
-/// current code removes a bare link, so this does not bite in practice.
+/// **Known limitation.** This tracks focus *changes*, not link *removal*. Removing
+/// a child from a group nulls the group's current selection without first emitting
+/// a release-focus on the departing child, so a label whose **selectable link is
+/// removed at runtime** can keep a stale highlight. No current code removes a bare
+/// link, so this does not bite in practice.
 ///
-/// Marker decoration (`showMarkers`/`specialChars`) is not modeled — the label
-/// always draws the no-markers form.
+/// Marker decoration (the optional `^…^` highlight brackets) is not modeled — the
+/// label always draws the plain form.
 ///
-/// Broadcasts reach every child regardless of its event mask, so opting into the
-/// broadcast class (as the C++ constructor did) is automatic.
+/// Broadcasts reach every child regardless of its event mask, so the label always
+/// sees focus broadcasts without any opt-in.
 ///
 /// # Turbo Vision heritage
 ///
-/// Ports `TLabel` (`tlabel.cpp`). C++ inheritance becomes an embed-and-delegate
+/// Ports `TLabel` (`tlabel.cpp`). Inheritance becomes an embed-and-delegate
 /// wrapper over `StaticText` (deviation D2); the owner/link pointers become
 /// [`Option<ViewId>`] with focusing routed through the event loop (deviations D3,
-/// D4); `getColor` AttrPairs become explicit (lo, hi) [`Role`] pairs
-/// (`(LabelNormal, LabelNormalShortcut)` / `(LabelLight, LabelLightShortcut)`);
-/// and `TStreamable` is dropped.
+/// D4); the palette AttrPairs become explicit (lo, hi) [`Role`] pairs
+/// (`(LabelNormal, LabelNormalShortcut)` / `(LabelLight, LabelLightShortcut)`).
 pub struct Label {
     /// The delegated [`StaticText`] — its `state: ViewState` is the one true home
     /// for all view metadata.
     inner: StaticText,
-    /// `link` — the control this label focuses on click/hotkey and tracks for
+    /// The control this label focuses on click/hotkey and tracks for
     /// highlighting. `None` if the label links nothing (a bare caption).
     link: Option<ViewId>,
-    /// `light` — whether the linked control currently holds focus (drives the
-    /// lit/normal color pair). Set from the link's focus broadcasts.
+    /// Whether the linked control currently holds focus (drives the lit/normal
+    /// color pair). Set from the link's focus broadcasts.
     light: bool,
 }
 
 impl Label {
-    /// `TLabel::TLabel(bounds, text, link)` — build a label over `bounds` with
-    /// `text` (a `~`-marked hotkey title) optionally linking `link`.
+    /// Build a label over `bounds` with `text` (a `~`-marked hotkey title)
+    /// optionally linking `link`.
     ///
-    /// Faithful to the C++ ctor: `light = False`, `options |= ofPreProcess |
-    /// ofPostProcess` (both load-bearing — a non-selectable label only ever sees
-    /// its hotkey via the pre/post sweeps), `eventMask |= evBroadcast` (a no-op
-    /// under our group, see the type docs). The inherited `gfFixed` + non-selectable
+    /// Starts unlit and opts into both the pre-process and post-process event
+    /// phases (both load-bearing — a non-selectable label only ever sees its
+    /// hotkey via those sweeps). The fixed grow mode and non-selectable default
     /// come from [`StaticText::new`].
     pub fn new(bounds: Rect, text: impl Into<String>, link: Option<ViewId>) -> Self {
         let mut inner = StaticText::new(bounds, text);
-        // ofPreProcess | ofPostProcess — keep StaticText's gfFixed (in grow_mode,
-        // untouched) and its non-selectable default; only add the two phase opt-ins.
+        // Keep StaticText's fixed grow_mode (untouched) and its non-selectable
+        // default; only add the pre/post-process phase opt-ins.
         inner.state.options = Options {
             pre_process: true,
             post_process: true,
@@ -429,40 +402,30 @@ impl Label {
     value
 ))]
 impl View for Label {
-    /// `TLabel::draw` — a single row: fill with the caption color, then draw the
-    /// `~`-marked text at column 1 through `put_cstr`'s lo/hi toggle.
-    ///
-    /// Faithful port of `tlabel.cpp` (markers branch dropped):
-    ///
-    /// ```text
-    /// color = light ? getColor(0x0402) : getColor(0x0301);
-    /// b.moveChar(0, ' ', color, size.x);
-    /// if (text != 0) b.moveCStr(1, text, color);
-    /// writeLine(0, 0, size.x, 1, b);
-    /// ```
+    /// Draw a single row: fill it with the caption color, then draw the
+    /// `~`-marked text at column 1 through [`put_cstr`](DrawCtx::put_cstr)'s lo/hi
+    /// toggle (the `~` switches the highlighted shortcut character to the `hi`
+    /// role).
     fn draw(&mut self, ctx: &mut DrawCtx) {
         let (lo_role, hi_role) = self.state_roles();
         let lo = ctx.style(lo_role);
         let hi = ctx.style(hi_role);
         let size_x = self.state().size.x;
-        // moveChar(0, ' ', color, size.x): fill row 0 in the caption color.
+        // Fill row 0 in the caption color.
         ctx.fill(Rect::new(0, 0, size_x, 1), ' ', lo);
-        // moveCStr(1, text, color): the ~-marked title at column 1, lo/hi toggle.
+        // The ~-marked title at column 1, lo/hi toggle.
         let text = self.inner.text();
         if !text.is_empty() {
             ctx.put_cstr(1, 0, text, lo, hi);
         }
     }
 
-    /// `TLabel::handleEvent` — see the per-branch mapping inline.
-    ///
-    /// The C++ leading `TStaticText::handleEvent(event)` is a no-op (static text
-    /// has no `handleEvent`), so it is omitted. Branches:
-    /// * **MouseDown** → `focusLink` (focus the link, consume).
-    /// * **KeyDown** → if it is the Alt+hotkey accelerator → `focusLink`. (The C++
-    ///   plain-letter branch fires only at `Phase::PostProcess`.)
-    /// * **Broadcast** `cmReceivedFocus`/`cmReleasedFocus` whose `source` is our
-    ///   link → update `light`; **not consumed** (other views may also react).
+    /// Handle the label's events. Branches:
+    /// * **MouseDown** → focus the link and consume.
+    /// * **KeyDown** → if it is the Alt+hotkey accelerator (or, on the
+    ///   post-process walk only, the plain hotkey letter) → focus the link.
+    /// * **Broadcast** received/released-focus whose `source` is our link → update
+    ///   `light`; **not consumed** (other views may also react).
     fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
         match ev {
             Event::MouseDown(_) => {
@@ -487,7 +450,7 @@ impl View for Label {
             // is removed at runtime can keep a stale highlight.) A broadcast about
             // any other view (or with no link) is ignored. The
             // `is_some()` guard rejects the `link == None && source == None`
-            // coincidence. Not consumed — faithful to C++ (no clearEvent here).
+            // coincidence. Not consumed — other views may react too.
             Event::Broadcast {
                 command: Command::RECEIVED_FOCUS,
                 source,

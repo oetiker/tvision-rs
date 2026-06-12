@@ -1,19 +1,21 @@
-//! Geometry primitives — faithful port of `TPoint` and `TRect` (`objects.h`).
+//! Geometry primitives: [`Point`] and [`Rect`].
 //!
-//! magiblot widened the historical `short` coordinates to `int`; we follow the
-//! source of truth and use `i32`. Signed is required regardless: view origins go
-//! negative when scrolled offscreen, and `move`/`grow` take negative deltas.
+//! Coordinates are `i32`. Signed is required: view origins go negative when
+//! scrolled offscreen, and the translate/inflate operations take negative deltas.
 //! Conversion to the unsigned buffer index space happens at the screen boundary.
 //!
 //! ### Keyword-collision renames
-//! `TRect::move` and `TRect::Union` collide with Rust keywords. We keep the
-//! faithful names via raw identifiers: [`Rect::r#move`] and [`Rect::r#union`]
-//! (call sites read `rect.r#move(1, 2)` / `rect.r#union(&other)`). C++ already
-//! capitalized `Union` for the very same reason.
+//! Two [`Rect`] methods would collide with Rust keywords, so they use raw
+//! identifiers: [`Rect::r#move`] (translate) and [`Rect::r#union`] (bounding box).
+//! Call sites read `rect.r#move(1, 2)` / `rect.r#union(&other)`.
+//!
+//! # Turbo Vision heritage
+//! Ports `TPoint`/`TRect` (`objects.h`). The mutating methods return `&mut Self`
+//! to mirror the original `TRect&` chaining idiom.
 
 use std::ops::{Add, AddAssign, Sub, SubAssign};
 
-/// A point on the screen. Faithful port of `TPoint` (`objects.h`).
+/// A point on the screen.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Point {
     pub x: i32,
@@ -21,7 +23,7 @@ pub struct Point {
 }
 
 impl Point {
-    /// Construct a point. (C++ used aggregate initialization `{x, y}`.)
+    /// Construct a point.
     pub const fn new(x: i32, y: i32) -> Self {
         Point { x, y }
     }
@@ -56,11 +58,10 @@ impl SubAssign for Point {
 }
 
 /// A rectangle defined by its top-left corner `a` (inclusive) and bottom-right
-/// corner `b` (exclusive). Faithful port of `TRect` (`objects.h`).
+/// corner `b` (exclusive).
 ///
-/// The mutating methods take `&mut self` and return `&mut Self`, mirroring C++'s
-/// `TRect&` return so the chaining/in-place idioms (`r.grow(-1, -1)`) port
-/// straight across.
+/// The mutating methods take `&mut self` and return `&mut Self`, so they chain
+/// and operate in place (`r.grow(-1, -1)`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Rect {
     pub a: Point,
@@ -68,7 +69,7 @@ pub struct Rect {
 }
 
 impl Rect {
-    /// `TRect(ax, ay, bx, by)`.
+    /// Construct from the corner coordinates `(ax, ay)`–`(bx, by)`.
     pub const fn new(ax: i32, ay: i32, bx: i32, by: i32) -> Self {
         Rect {
             a: Point::new(ax, ay),
@@ -76,12 +77,12 @@ impl Rect {
         }
     }
 
-    /// `TRect(TPoint p1, TPoint p2)`.
+    /// Construct from the two corner points.
     pub const fn from_points(p1: Point, p2: Point) -> Self {
         Rect { a: p1, b: p2 }
     }
 
-    /// `TRect::move` — translate both corners by `(dx, dy)`.
+    /// Translate both corners by `(dx, dy)`.
     pub fn r#move(&mut self, dx: i32, dy: i32) -> &mut Self {
         self.a.x += dx;
         self.a.y += dy;
@@ -90,7 +91,7 @@ impl Rect {
         self
     }
 
-    /// `TRect::grow` — inflate (or deflate, for negative args) about the centre:
+    /// Inflate (or deflate, for negative args) about the centre:
     /// pull `a` out by `(dx, dy)` and push `b` out by `(dx, dy)`.
     pub fn grow(&mut self, dx: i32, dy: i32) -> &mut Self {
         self.a.x -= dx;
@@ -100,7 +101,7 @@ impl Rect {
         self
     }
 
-    /// `TRect::intersect` — clip to the overlap with `r`.
+    /// Clip to the overlap with `r`.
     pub fn intersect(&mut self, r: &Rect) -> &mut Self {
         self.a.x = self.a.x.max(r.a.x);
         self.a.y = self.a.y.max(r.a.y);
@@ -109,7 +110,7 @@ impl Rect {
         self
     }
 
-    /// `TRect::Union` — expand to the bounding box of `self` and `r`.
+    /// Expand to the bounding box of `self` and `r`.
     pub fn r#union(&mut self, r: &Rect) -> &mut Self {
         self.a.x = self.a.x.min(r.a.x);
         self.a.y = self.a.y.min(r.a.y);
@@ -118,13 +119,13 @@ impl Rect {
         self
     }
 
-    /// `TRect::contains` — half-open test: the right/bottom edges are *excluded*
+    /// Half-open containment test: the right/bottom edges are *excluded*
     /// (`p.x < b.x`, `p.y < b.y`).
     pub fn contains(&self, p: Point) -> bool {
         p.x >= self.a.x && p.x < self.b.x && p.y >= self.a.y && p.y < self.b.y
     }
 
-    /// `TRect::isEmpty` — true when the rect has no area.
+    /// True when the rect has no area.
     pub fn is_empty(&self) -> bool {
         self.a.x >= self.b.x || self.a.y >= self.b.y
     }

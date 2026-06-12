@@ -16,13 +16,13 @@
 //!
 //! # Turbo Vision heritage
 //!
-//! Faithful port of the `TText` primitives (`ttext.h`, `ttext.cpp`). magiblot's
-//! `TText` hand-decodes UTF-8 with a DFA and iterates per codepoint, appending
-//! combining marks onto the previous cell at draw time. Because Rust strings
-//! are already valid UTF-8 and `unicode-segmentation` yields grapheme clusters
-//! directly, rstv drops the DFA and the append-combining-mark machinery and
-//! works one grapheme at a time (deviation D13) — which also clusters ZWJ emoji
-//! into one cell, where the per-codepoint model split them.
+//! Faithful port of the `TText` primitives (`ttext.h`, `ttext.cpp`). The original
+//! hand-decoded UTF-8 with a DFA and iterated per codepoint, appending combining
+//! marks onto the previous cell at draw time. Because Rust strings are already
+//! valid UTF-8 and `unicode-segmentation` yields grapheme clusters directly, rstv
+//! drops the DFA and the append-combining-mark machinery and works one grapheme at
+//! a time (deviation D13) — which also clusters ZWJ emoji into one cell, where the
+//! per-codepoint model split them.
 
 use crate::color::Style;
 use crate::screen::Cell;
@@ -30,8 +30,7 @@ use std::collections::BTreeMap;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthChar;
 
-/// The replacement glyph drawn for an unprintable (control) character — matches
-/// magiblot's `�` substitution in `drawOneImpl`.
+/// The replacement glyph drawn for an unprintable (control) character.
 const REPLACEMENT: &str = "\u{FFFD}";
 
 /// Width, in display columns, the first grapheme of `g` occupies. `g` must be a
@@ -39,14 +38,13 @@ const REPLACEMENT: &str = "\u{FFFD}";
 fn grapheme_columns(g: &str) -> usize {
     match g.chars().next() {
         None => 0,
-        // C0/C1 control chars have no width; magiblot draws `�` (1 column).
+        // C0/C1 control chars have no width; drawn as `�` (1 column).
         Some(c) => UnicodeWidthChar::width(c).unwrap_or(1),
     }
 }
 
 /// Byte length and column width of the first grapheme in `text`, or `None` when
-/// `text` is empty. Port of `TText::next` / `nextImpl`, collapsed to the grapheme
-/// model.
+/// `text` is empty.
 pub fn next(text: &str) -> Option<(usize, usize)> {
     let g = text.graphemes(true).next()?;
     Some((g.len(), grapheme_columns(g)))
@@ -54,14 +52,10 @@ pub fn next(text: &str) -> Option<(usize, usize)> {
 
 /// Byte length of the grapheme cluster *ending* at byte offset `index` in
 /// `text` (the cluster you would step back over from `index`). Returns 0 when
-/// `index == 0`. Port of `TText::prev` (`ttext.cpp`).
+/// `index == 0`.
 ///
-/// magiblot's `TText::prev` reads backwards codepoint-by-codepoint until it
-/// finds a valid UTF-8 lead, returning how many bytes the previous *character*
-/// occupies (clamped to 1 for an invalid lead). rstv steps back over a whole
-/// **grapheme cluster** instead — `cur_pos -= prev(data, cur_pos)` lands
-/// the cursor on the previous cluster boundary, never inside a multi-byte
-/// codepoint or a combining sequence.
+/// Stepping `cur_pos -= prev(text, cur_pos)` lands the cursor on the previous
+/// cluster boundary, never inside a multi-byte codepoint or a combining sequence.
 ///
 /// `index` must be a `char` boundary into `text` (it always is: every call site
 /// maintains `cur_pos` on grapheme boundaries). Returns 0 for `index == 0`.
@@ -79,24 +73,23 @@ pub fn prev(text: &str, index: usize) -> usize {
 }
 
 /// Width, the character (grapheme) count, and the number of non-zero-width
-/// graphemes of `text`. Port of `TTextMetrics`.
+/// graphemes of `text`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TextMetrics {
     pub width: usize,
-    /// Total grapheme clusters. NB: `TTextMetrics::characterCount` counts
-    /// *codepoints*; rstv counts *clusters* (they differ across combining
-    /// sequences).
+    /// Total grapheme clusters (counts *clusters*, not codepoints — the two differ
+    /// across combining sequences).
     pub character_count: usize,
-    /// Graphemes that occupy at least one column (`graphemeCount`).
+    /// Graphemes that occupy at least one column.
     pub grapheme_count: usize,
 }
 
-/// Display width of `text` in columns. Port of `TText::width`.
+/// Display width of `text` in columns.
 pub fn width(text: &str) -> usize {
     text.graphemes(true).map(grapheme_columns).sum()
 }
 
-/// Width + grapheme metrics of `text`. Port of `TText::measure`.
+/// Width + grapheme metrics of `text`.
 pub fn measure(text: &str) -> TextMetrics {
     let mut m = TextMetrics::default();
     for g in text.graphemes(true) {
@@ -109,12 +102,12 @@ pub fn measure(text: &str) -> TextMetrics {
 }
 
 /// Byte length of a leading substring of `text` that is `count` columns wide,
-/// together with that substring's actual width. Port of `TText::scroll`.
+/// together with that substring's actual width.
 ///
 /// If `text` is narrower than `count`, the whole string is returned. Negative
-/// `count` is treated as 0 (faithful to the C++ `int` parameter). When column
-/// `count` falls in the middle of a double-width grapheme, `include_incomplete`
-/// decides whether that grapheme is included.
+/// `count` is treated as 0. When column `count` falls in the middle of a
+/// double-width grapheme, `include_incomplete` decides whether that grapheme is
+/// included.
 pub fn scroll(text: &str, count: i32, include_incomplete: bool) -> (usize, usize) {
     if count <= 0 {
         return (0, 0);
@@ -146,7 +139,7 @@ pub fn scroll(text: &str, count: i32, include_incomplete: bool) -> (usize, usize
 }
 
 /// Write a single grapheme from `text` (at byte offset `j`) into `cells` at index
-/// `i`. Returns `(bytes_consumed, cells_advanced)`. Port of `TText::drawOneImpl`.
+/// `i`. Returns `(bytes_consumed, cells_advanced)`.
 ///
 /// `cells_advanced` is 0 when there is no room (the caller stops), 0 for a
 /// zero-width grapheme (consumed but draws nothing), 1 for a normal glyph, and 2
@@ -162,7 +155,7 @@ fn draw_one_impl(cells: &mut [Cell], i: usize, text: &str, j: usize) -> (usize, 
         return (len, 0);
     }
     if i >= cells.len() {
-        // No room — signal the caller to stop (mirrors C++ fall-through to {0,0}).
+        // No room — signal the caller to stop.
         return (0, 0);
     }
     let is_control = g
@@ -195,7 +188,7 @@ fn apply(cell: &mut Cell, transform: &mut impl FnMut(&mut Style)) {
 
 /// Write a single grapheme from `text` (at byte offset `j`) into `cells` at index
 /// `i`, applying `transform` to the [`Style`] of each cell written. Returns
-/// `(bytes_consumed, cells_advanced)`. Port of `TText::drawOne` / `drawOneT`.
+/// `(bytes_consumed, cells_advanced)`.
 ///
 /// A wide glyph applies `transform` to both its lead and trailing cell.
 /// `cells_advanced == 0` with `bytes_consumed == 0` means there was no room — the
@@ -219,10 +212,10 @@ pub fn draw_one(
 
 /// Copy `text` into `cells` starting at cell index `indent`, beginning from
 /// column `text_indent` of `text`, applying `transform` to the [`Style`] of each
-/// cell written. Returns the number of cells filled. Port of `TText::drawStrEx`.
+/// cell written. Returns the number of cells filled.
 ///
 /// When `text_indent` lands in the middle of a double-width grapheme, a single
-/// space is emitted in its place (faithful to `drawStrExT`).
+/// space is emitted in its place.
 pub fn draw_str_ex(
     cells: &mut [Cell],
     indent: usize,
@@ -256,7 +249,6 @@ pub fn draw_str_ex(
 }
 
 /// Copy `text` into `cells` at `indent`/`text_indent` with a fixed `style`.
-/// Port of the fixed-attribute `TText::drawStr` overload.
 pub fn draw_str(
     cells: &mut [Cell],
     indent: usize,
@@ -271,11 +263,11 @@ pub fn draw_str(
 // StringList
 // ---------------------------------------------------------------------------
 
-/// A keyed lookup of strings (`u16 key → String`).
+/// A keyed lookup of strings (`u16` key → `String`).
 ///
 /// Backed by a `BTreeMap<u16, String>`, so iteration is in ascending key order.
-/// A missing key returns `None` (callers that want the old empty-string
-/// behavior can use `.unwrap_or("")`).
+/// A missing key returns `None` (callers that want an empty-string fallback can
+/// use `.unwrap_or("")`).
 ///
 /// # Turbo Vision heritage
 ///
@@ -299,17 +291,11 @@ impl StringList {
     }
 
     /// Insert or replace the string for `key`.
-    ///
-    /// Successor to `TStrListMaker::put`.
     pub fn insert(&mut self, key: u16, value: impl Into<String>) {
         self.map.insert(key, value.into());
     }
 
     /// Return the string for `key`, or `None` when absent.
-    ///
-    /// Successor to `TStringList::get`.
-    /// **Deviation:** C++ writes `*dest = EOS` for a missing key; we return
-    /// `None` (idiomatic Rust — see type-level doc).
     pub fn get(&self, key: u16) -> Option<&str> {
         self.map.get(&key).map(String::as_str)
     }

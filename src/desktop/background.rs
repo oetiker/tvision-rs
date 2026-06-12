@@ -21,24 +21,23 @@ use crate::view::{DrawCtx, Rect, View, ViewState};
 ///
 /// # Turbo Vision heritage
 ///
-/// Ports `TBackground` (`tbkgrnd.cpp`), which overrides only `draw`. The
-/// `getPalette` (`cpBackground "\x01"`) colour index becomes
-/// [`Role::Background`] (deviation D7), and the streaming machinery is dropped
-/// (deviation D12).
+/// Ports `TBackground` (`tbkgrnd.cpp`), which overrides only its draw method. The
+/// background colour index becomes [`Role::Background`] (deviation D7), and the
+/// streaming machinery is dropped (deviation D12).
 pub struct Background {
     st: ViewState,
-    /// The fill character. TV's `char pattern`.
+    /// The fill character.
     pub pattern: char,
 }
 
 impl Background {
-    /// `TBackground::TBackground(bounds, aPattern)` — construct a background.
+    /// Construct a background filling `bounds` with `pattern`.
     ///
-    /// Sets `growMode = gfGrowHiX | gfGrowHiY` so the background stretches
-    /// with its owner on the right and bottom edges, faithful to the C++ ctor.
+    /// Sets the grow mode so the background stretches with its owner on the right
+    /// and bottom edges, always covering the desktop.
     pub fn new(bounds: Rect, pattern: char) -> Self {
         let mut st = ViewState::new(bounds);
-        // C++: growMode = gfGrowHiX | gfGrowHiY
+        // Grow with the owner's right and bottom edges.
         st.grow_mode.hi_x = true;
         st.grow_mode.hi_y = true;
         Background { st, pattern }
@@ -54,20 +53,15 @@ impl View for Background {
         &mut self.st
     }
 
-    /// `TBackground::draw` — fill the entire extent with `pattern`.
-    ///
-    /// C++ body: `b.moveChar(0, pattern, getColor(0x01), size.x)` per row, then
-    /// `writeLine(0, 0, size.x, size.y, b)`. Here this collapses to a single
-    /// `ctx.fill` call; `getColor(0x01)` maps to [`Role::Background`].
+    /// Fill the entire extent with `pattern`, styled with [`Role::Background`].
     fn draw(&mut self, ctx: &mut DrawCtx) {
         let ext = self.st.get_extent();
         let style = ctx.style(Role::Background);
         ctx.fill(ext, self.pattern, style);
     }
 
-    // `TBackground::handleEvent` — NOT overridden in the C++ source.
-    // The inherited `TView::handleEvent` is a no-op base (mouse-down select
-    // relocated to the group). Default here; no override needed.
+    // The background does not handle events — it uses the default no-op routing
+    // (mouse-down selection happens in the owning group).
 }
 
 #[cfg(test)]
@@ -91,8 +85,8 @@ mod tests {
     #[test]
     fn new_sets_grow_hi_x_and_hi_y() {
         let bg = Background::new(Rect::new(0, 0, 10, 5), '▒');
-        assert!(bg.st.grow_mode.hi_x, "gfGrowHiX must be set");
-        assert!(bg.st.grow_mode.hi_y, "gfGrowHiY must be set");
+        assert!(bg.st.grow_mode.hi_x, "grow-right must be set");
+        assert!(bg.st.grow_mode.hi_y, "grow-down must be set");
         // lo_x, lo_y, rel, fixed must stay clear
         assert!(!bg.st.grow_mode.lo_x);
         assert!(!bg.st.grow_mode.lo_y);
@@ -103,9 +97,9 @@ mod tests {
     #[test]
     fn new_inherits_view_state_defaults() {
         let bg = Background::new(Rect::new(5, 3, 25, 10), '░');
-        // sfVisible must be set (TView ctor default)
+        // visible must be set (view-state default)
         assert!(bg.st.state.visible);
-        // dmLimitLoY must be set (TView ctor default)
+        // limit_lo_y must be set (view-state default)
         assert!(bg.st.drag_mode.limit_lo_y);
     }
 

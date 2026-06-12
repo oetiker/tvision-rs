@@ -38,21 +38,19 @@
 //!
 //! # Turbo Vision heritage
 //!
-//! Ports `TFrame` (`tframe.cpp` / `framelin.cpp`). C++ `TFrame::draw` and
-//! `handleEvent` reach up through `owner` into the `TWindow`; rstv instead
-//! pushes the needed data down from the window (deviation D3). Inheritance
-//! becomes the [`View`] trait plus [`ViewState`] composition (deviation D2),
-//! the `wf*` flag word becomes [`WindowFlags`] (deviation D5), and palette
-//! lookups become [`Role`]-keyed theme styles (deviation D7).
+//! Ports `TFrame` (`tframe.cpp` / `framelin.cpp`). The original frame's draw and
+//! event handling reached up through the owner into the window; rstv instead
+//! pushes the needed data down from the window (deviation D3). Inheritance becomes
+//! the [`View`] trait plus [`ViewState`] composition (deviation D2), the frame
+//! flag word becomes [`WindowFlags`] (deviation D5), and palette lookups become
+//! [`Role`]-keyed theme styles (deviation D7).
 //!
-//! One C++ behavior is not reproduced: the `framelin.cpp` sibling tee-walk —
-//! the `├┬┤┴` joins drawn where a nested framed view meets the group frame.
-//! That machinery (`FrameMask` / `frameChars[33]` / `initFrame` plus a
-//! sibling loop) needs the bounds of neighboring views, which the owner-data-
-//! down design (deviation D3) does not give a child. rstv draws plain
-//! corners and edges instead — byte-identical to C++ for the common case of a
-//! window whose border no framed sibling touches. The tee/cross glyphs remain
-//! seeded in [`Glyphs`](crate::theme::Glyphs) but unused.
+//! One behavior is not reproduced: the sibling tee-walk — the `├┬┤┴` joins drawn
+//! where a nested framed view meets the group frame. That machinery needs the
+//! bounds of neighboring views, which the owner-data-down design (deviation D3)
+//! does not give a child. rstv draws plain corners and edges instead — identical
+//! for the common case of a window whose border no framed sibling touches. The
+//! tee/cross glyphs remain seeded in [`Glyphs`](crate::theme::Glyphs) but unused.
 
 use crate::capture::TrackMask;
 use crate::command::Command;
@@ -189,11 +187,11 @@ impl View for Frame {
         &mut self.st
     }
 
-    /// `TFrame::draw` — paint the border, title, number and icons.
+    /// Paint the border, title, number and icons.
     ///
-    /// State selection is faithful to C++ (`dragging` checked first, then
-    /// `!active`, else `active`); the role family follows the owner's
-    /// [`WindowPalette`] (blue family shown; `Gray` substitutes `FrameGray*`):
+    /// State selection checks `dragging` first, then `!active`, else `active`; the
+    /// role family follows the owner's [`WindowPalette`] (blue family shown; `Gray`
+    /// substitutes `FrameGray*`):
     ///
     /// | state    | border role     | line set    |
     /// |----------|-----------------|-------------|
@@ -204,8 +202,8 @@ impl View for Frame {
     /// We draw the box fully first, then overlay the number / title / icons onto
     /// the top row (and the resize icons onto the bottom row).
     ///
-    /// The `framelin.cpp` sibling tee-walk is not reproduced — we draw plain
-    /// corners/edges; see the module docs.
+    /// The sibling tee-walk is not reproduced — we draw plain corners/edges; see
+    /// the module docs.
     fn draw(&mut self, ctx: &mut DrawCtx) {
         // Cache the absolute origin for the close-icon mouse-tracking capture:
         // the MouseTrackCapture converts absolute mouse coords to view-local
@@ -219,8 +217,8 @@ impl View for Frame {
             return;
         }
 
-        // -- Palette → role family (the C++ resolves through the owner's
-        // palette: cpBlueWindow vs cpCyanWindow vs cpGrayDialog).
+        // -- Palette → role family (selected by the owner's window palette:
+        // blue window vs cyan window vs gray dialog).
         let (r_dragging, r_passive, r_active, r_icon) = match self.palette {
             WindowPalette::Blue => (
                 Role::FrameDragging,
@@ -242,7 +240,7 @@ impl View for Frame {
             ),
         };
 
-        // -- State → (border role, double-line) -- faithful order: dragging first.
+        // -- State → (border role, double-line) -- check dragging first.
         let (border_role, double) = if self.st.state.dragging {
             (r_dragging, false)
         } else if !self.st.state.active {
@@ -304,19 +302,16 @@ impl View for Frame {
             }
         }
 
-        // -- 2. Title budget `l` (dropped). --------------------------------
-        // C++ builds a budget `l = size.x - 10`, then `l -= 6` if (wfClose|wfZoom)
-        // and `l -= 4` if a number is shown, and passes it to `getTitle(l)`.
-        // But base `TWindow::getTitle(short)` **ignores its argument and returns
-        // the full title** (`twindow.cpp`), and the drawn width is then recomputed
-        // as `min(strwidth(title), width-10)` — so the `-6` / `-4` reductions never
-        // cap the drawn title for a base window (a subclass could abbreviate). The
-        // budget is therefore dead here and is not computed; we cap the *drawn*
-        // title to `width - 10` in step 4, matching `moveStr(i, title, …, l)`.
+        // -- 2. Title budget (dropped). ------------------------------------
+        // The original computed a width budget to pass to its title getter, but the
+        // base window's getter ignores that argument and returns the full title;
+        // the drawn width is then recomputed as min(title width, width-10). So the
+        // budget never caps the drawn title for a base window (a subclass could
+        // abbreviate). It is therefore dead here and not computed; we cap the
+        // *drawn* title to `width - 10` in step 4.
 
         // -- 3. Window number (top row). -----------------------------------
-        // C++: if number != wnNoNumber && number < 10 { l -= 4; ... } — the
-        // `l -= 4` only fed the dropped budget above, so only the draw remains.
+        // Drawn only when a number is set and is a single digit.
         if let Some(n) = self.number
             && n < 10
         {
@@ -327,20 +322,16 @@ impl View for Frame {
         }
 
         // -- 4. Title (top row), centered. ---------------------------------
-        // C++: title = getTitle(l); l = min(strwidth(title), width-10); l = max(l, 0);
-        //      i = (width - l) >> 1; putChar(i-1, ' '); moveStr(i, title, cTitle, l);
-        //      putChar(i+l, ' ');
-        // Base `getTitle` returns the full title, so the effective cap is
-        // `width - 10` (truncation = `TText::scroll`, our `text::scroll`).
+        // The effective cap is `width - 10`; truncation goes through text::scroll.
         if let Some(title) = &self.title {
             let cap = w - 10;
             let (end, lw) = crate::text::scroll(title, cap, false);
             let lw = lw as i32;
             let truncated = &title[..end];
-            // C++ centers at i=(width-l)>>1 with flanking spaces at i-1 and i+l,
-            // drawn unconditionally once the title pointer is non-null (so Some("")
-            // and the w<10 clamp-to-0 case still punch two spaces into the border
-            // center). Flanking spaces + title, all in the border style.
+            // Center at i=(width-lw)>>1 with flanking spaces at i-1 and i+lw, drawn
+            // unconditionally once the title is Some (so Some("") and the w<10
+            // clamp-to-0 case still punch two spaces into the border center).
+            // Flanking spaces + title, all in the border style.
             let i = (w - lw) >> 1;
             ctx.put_char(i - 1, 0, ' ', border);
             ctx.put_str(i, 0, truncated, border);
@@ -377,36 +368,30 @@ impl View for Frame {
     /// used directly.
     ///
     /// Handled here (top-row clicks while active):
-    /// * **close** — `x` in `2..=4` with `wfClose` and active: arm the
-    ///   mouse-track capture (up-only mask, faithful to the empty `evMouse`-masked
-    ///   loop in `tframe.cpp:157-158`); post `cmClose` only on `MouseUp` over the
-    ///   close zone (`tframe.cpp:159-162` release-confirm).
-    /// * **zoom** — `x` in `(w-5)..=(w-3)` (or a double-click) with `wfZoom`:
-    ///   `post(cmZoom)`, consume. Checked *after* close, so a double-click inside
-    ///   the close hot-zone resolves to close (faithful: the close branch runs
-    ///   first in C++ too).
+    /// * **close** — `x` in `2..=4` when the close flag is set and active: arm a
+    ///   mouse-track capture (up-only mask, swallowing everything until release);
+    ///   post [`Command::CLOSE`] only on release over the close zone.
+    /// * **zoom** — `x` in `(w-5)..=(w-3)` (or a double-click) when the zoom flag is
+    ///   set: post [`Command::ZOOM`], consume. Checked *after* close, so a
+    ///   double-click inside the close hot-zone resolves to close.
     ///
-    /// Drag cases are handled by the owning `Window` via `start_drag`/`DragCapture`:
-    /// * `wfMove` title-bar drag: the top-row click not on an icon is left
-    ///   unconsumed on purpose — `Window::handle_event` starts the move drag.
-    /// * bottom-row grow drags (`wfGrow`): left unconsumed so `Window` starts
-    ///   a `DragKind::Grow` or `DragKind::GrowLeft` capture.
-    /// * middle-button move: left unconsumed so `Window` starts a move drag.
+    /// Drag cases are handled by the owning `Window`:
+    /// * title-bar move drag: the top-row click not on an icon is left unconsumed
+    ///   on purpose — the window starts the move drag.
+    /// * bottom-row grow drags: left unconsumed so the window starts a grow capture.
+    /// * middle-button move: left unconsumed so the window starts a move drag.
     ///
-    /// The base `View::handle_event` is a no-op, so there is nothing to call
-    /// through to (the C++ `TView::handleEvent(event)` did the auto-select, which
-    /// relocated to `Group`; a frame is not selectable anyway).
+    /// A frame is not selectable, so there is no auto-select on click and nothing
+    /// to call through to.
     fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
         match *ev {
             Event::MouseDown(m) => {
                 let w = self.st.size.x;
                 if m.position.y == 0 && self.st.state.active {
                     if self.flags.close && (2..=4).contains(&m.position.x) {
-                        // C++ tframe.cpp:156-167: enter `while(mouseEvent(event, evMouse))`
-                        // with an empty body (every mouse event discarded until up),
-                        // then check the up position. A3 seam: arm an up-only capture
-                        // (mouse_move / mouse_auto / wheel all false — faithfully
-                        // swallows everything until MouseUp), then check in the MouseUp arm.
+                        // Arm an up-only capture (mouse_move / mouse_auto / wheel all
+                        // false — swallows every mouse event until release), then
+                        // confirm the release position in the MouseUp arm.
                         if let Some(id) = self.st.id() {
                             self.close_pressed = true;
                             ctx.start_mouse_track(
@@ -422,7 +407,7 @@ impl View for Frame {
                         } else {
                             // Degenerate fallback (no ViewId — ids are stamped
                             // at Group::insert, so this is test-only): post ON
-                            // DOWN, diverging from the C++ release-confirm.
+                            // DOWN, skipping the release-confirm.
                             ctx.post(Command::CLOSE);
                             ev.clear();
                         }
@@ -432,23 +417,21 @@ impl View for Frame {
                         ctx.post(Command::ZOOM);
                         ev.clear();
                     }
-                    // else: wfMove title-bar drag — left unconsumed ON PURPOSE so
-                    // Window::handle_event picks it up and starts the move drag.
+                    // else: title-bar move drag — left unconsumed ON PURPOSE so the
+                    // window picks it up and starts the move drag.
                 }
                 // else: bottom-row grow drags + middle-button move — left unconsumed
-                // ON PURPOSE so Window::handle_event starts the grow/move drag.
+                // ON PURPOSE so the window starts the grow/move drag.
             }
 
             // ---------------------------------------------------------------
-            // MouseUp arm — post-loop release-confirm (`tframe.cpp:159-162`):
-            // post cmClose only if the button is released over the close zone.
-            // Guarded by `close_pressed` against stray MouseUp events.
+            // MouseUp arm — release-confirm: post a Close command only if the
+            // button is released over the close zone. Guarded by `close_pressed`
+            // against stray MouseUp events.
             // ---------------------------------------------------------------
             Event::MouseUp(m) if self.close_pressed => {
                 self.close_pressed = false;
-                // C++ tframe.cpp:159-160:
-                //   mouse = makeLocal(event.mouse.where);
-                //   if (mouse.y == 0 && mouse.x >= 2 && mouse.x <= 4) { post cmClose; }
+                // Confirm the release is on the top row, over the close zone.
                 if m.position.y == 0 && (2..=4).contains(&m.position.x) {
                     ctx.post(Command::CLOSE);
                 }
@@ -587,11 +570,11 @@ mod tests {
         assert!(f.zoomed());
     }
 
-    // -- draw: title cap is width-10 even with close/zoom (faithful getTitle) --
+    // -- draw: title cap is width-10 even with close/zoom (faithful title fetch) --
 
     /// The reduced budget `l` (after the `-6` close/zoom and `-4` number
-    /// subtractions) is passed only to `getTitle`, which the **base** window
-    /// ignores; the drawn title is capped to `width - 10`. So with close+zoom
+    /// subtractions) is passed only to the title-fetch step, which the **base**
+    /// window ignores; the drawn title is capped to `width - 10`. So with close+zoom
     /// set and a title of 8 cols (≤ width-10 = 10, but > width-10-6 = 4), the
     /// full 8 chars must still show (not 4).
     #[test]
@@ -748,7 +731,7 @@ mod tests {
 
     // -- draw: cyan palette → FrameCyan* role family ----
 
-    /// With `palette = Cyan` (`wpCyanWindow`), the border AND interior must
+    /// With `palette = Cyan`, the border AND interior must
     /// carry the `FrameCyan*` styles — never the blue `Frame*` family.
     #[test]
     fn cyan_palette_draws_border_and_interior_in_cyan_roles() {
@@ -789,10 +772,10 @@ mod tests {
         );
     }
 
-    // -- handle_event: close (release-confirm, tframe.cpp:156-167) ------------
+    // -- handle_event: close (release-confirm) --------------------------------
 
-    /// Degenerate fallback (no ViewId — uninserted frame): `cmClose` fires on
-    /// mouse-**down**, preserving backwards compat for pure-unit tests.
+    /// Degenerate fallback (no ViewId — uninserted frame): the Close command fires
+    /// on mouse-**down**, preserving backwards compat for pure-unit tests.
     #[test]
     fn click_close_icon_posts_close_on_down_no_id() {
         let mut f = Frame::new(Rect::new(0, 0, 20, 6));
@@ -819,8 +802,8 @@ mod tests {
     }
 
     /// With a ViewId (inserted frame): mouse-down in close zone arms tracking;
-    /// `cmClose` fires only on `MouseUp` over the close zone
-    /// (`tframe.cpp:159-160` release-confirm).
+    /// the Close command fires only on `MouseUp` over the close zone
+    /// (release-confirm).
     #[test]
     fn click_close_icon_release_confirm_with_id() {
         let mut f = Frame::new(Rect::new(0, 0, 20, 6));
@@ -831,7 +814,7 @@ mod tests {
         });
         let _id = stamp_id(&mut f);
 
-        // MouseDown in the close zone: arms tracking, no cmClose yet.
+        // MouseDown in the close zone: arms tracking, no Close command yet.
         let mut out = VecDeque::new();
         let mut timers = crate::timer::TimerQueue::new();
         let mut deferred: Vec<crate::view::Deferred> = vec![];
@@ -843,9 +826,9 @@ mod tests {
         }
         assert!(
             out.is_empty(),
-            "no cmClose on down — deferred release-confirm"
+            "no Close command on down — deferred release-confirm"
         );
-        assert!(f.close_pressed, "tracking armed");
+        assert!(f.close_pressed, "tracking armed (no command yet)");
         assert_eq!(deferred.len(), 1, "PushCapture deferred");
         assert!(
             matches!(deferred[0], crate::view::Deferred::PushCapture(_)),
@@ -855,7 +838,7 @@ mod tests {
             assert_eq!(h.view(), Some(_id), "capture routes to this frame's id");
         }
 
-        // MouseUp over the close zone: cmClose fires.
+        // MouseUp over the close zone: the Close command fires.
         let mut out2 = VecDeque::new();
         let mut deferred2: Vec<crate::view::Deferred> = vec![];
         {
@@ -869,8 +852,8 @@ mod tests {
         assert_eq!(out2[0], Event::Command(Command::CLOSE));
     }
 
-    /// Press close icon, release OUTSIDE the close zone: no `cmClose`
-    /// (the `tframe.cpp:159-160` position check fails).
+    /// Press close icon, release OUTSIDE the close zone: no Close command
+    /// (the position check fails).
     #[test]
     fn close_icon_release_outside_no_close() {
         let mut f = Frame::new(Rect::new(0, 0, 20, 6));
@@ -892,7 +875,7 @@ mod tests {
         }
         assert!(f.close_pressed);
 
-        // MouseUp outside the close zone (x = 10, top row): no cmClose.
+        // MouseUp outside the close zone (x = 10, top row): no Close command.
         let mut out2 = VecDeque::new();
         let mut deferred2: Vec<crate::view::Deferred> = vec![];
         {
@@ -904,7 +887,7 @@ mod tests {
         assert!(!f.close_pressed, "tracking cleared even without close");
         assert!(
             out2.is_empty(),
-            "no cmClose when released outside the close zone"
+            "no Close command when released outside the close zone"
         );
     }
 
@@ -1013,7 +996,7 @@ mod tests {
     fn snapshot_active_frame() {
         let theme = Theme::classic_blue();
         let mut f = Frame::new(Rect::new(0, 0, 20, 6));
-        f.st.state.active = true; // no group to propagate sfActive in the test
+        f.st.state.active = true; // no group to propagate the active state in the test
         f.set_title(Some("Edit".into()));
         f.set_flags(WindowFlags {
             r#move: true,
@@ -1060,7 +1043,7 @@ mod tests {
     }
 
     /// The downcast seam: `Frame` overrides `as_any_mut` so an owner can reach
-    /// it concretely (e.g. `TWindow::zoom` pushing `set_zoomed`); a plain view's
+    /// it concretely (e.g. a window's zoom pushing `set_zoomed`); a plain view's
     /// base `as_any_mut` returns `None`.
     #[test]
     fn as_any_mut_seam_resolves_frame_but_not_a_plain_view() {

@@ -25,11 +25,11 @@
 //!
 //! # Turbo Vision heritage
 //! Ports the `TClipboard` text path (`tclipbrd.cpp`), whose copy is native-first
-//! with the internal `localText` touched only after the native write fails. The
-//! Unix native + OSC 52 emit rungs follow `unixcon.cpp` / `termio.cpp`. C++
-//! detects a `setOsc52Clipboard` capability before claiming success; since
-//! crossterm owns the input parser, rstv cannot probe and instead always reports
-//! the internal fallback after emitting.
+//! with the internal buffer touched only after the native write fails. The Unix
+//! native + OSC 52 emit rungs follow `unixcon.cpp` / `termio.cpp`. The original
+//! detected an OSC 52 capability before claiming success; since crossterm owns
+//! the input parser, rstv cannot probe and instead always reports the internal
+//! fallback after emitting.
 
 use std::io;
 

@@ -17,20 +17,19 @@
 //!
 //! ### Which help contexts a def applies to
 //!
-//! C++ `TStatusDef(min, max, ...)` selects its items when the current help
-//! context falls in a numeric range `[min, max]` — contiguous integer blocks
-//! that indexed a help-topic table. Because a [`HelpCtx`] here is a namespaced
-//! `&'static str` with no ordering, [`HelpCtxRange`] is instead a small matcher:
-//! the universal def becomes [`HelpCtxRange::All`], and the rare context-split
-//! case becomes an explicit membership set ([`HelpCtxRange::OneOf`]). It stays
+//! A [`StatusDef`] selects its items based on the current help context. Because
+//! a [`HelpCtx`] here is a namespaced `&'static str` with no ordering,
+//! [`HelpCtxRange`] is a small matcher rather than a numeric range: the universal
+//! def is [`HelpCtxRange::All`] (matches anything), and the rare context-split
+//! case is an explicit membership set ([`HelpCtxRange::OneOf`]). It stays
 //! `Clone + PartialEq + Eq`, like [`Menu`](crate::menu::Menu).
 //!
 //! # Turbo Vision heritage
 //!
-//! Ports `TStatusItem` and `TStatusDef` (`menus.h`, `tstatusl.cpp`). The C++
-//! singly linked lists (`next`) become [`Vec`]s, and the numeric help-context
-//! range becomes [`HelpCtxRange`] because help contexts are now namespaced
-//! strings rather than integers (deviation D1).
+//! Ports `TStatusItem` and `TStatusDef` (`menus.h`, `tstatusl.cpp`). The singly
+//! linked lists become [`Vec`]s, and the numeric help-context range becomes
+//! [`HelpCtxRange`] because help contexts are now namespaced strings rather than
+//! integers (deviation D1).
 
 use crate::command::Command;
 use crate::event::KeyEvent;
@@ -47,18 +46,17 @@ pub use status_line::{StatusColors, StatusLine};
 ///
 /// # Turbo Vision heritage
 ///
-/// Ports `TStatusItem` (`menus.h`); the C++ `char *text` becomes
-/// `Option<String>` (`None` is `text == 0`).
+/// Ports `TStatusItem` (`menus.h`); the optional label becomes `Option<String>`
+/// (`None` = a hidden binding).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StatusItem {
-    /// The displayed label (C++ `char *text`). `None` is the C++ `text == 0` — a
-    /// hidden hotkey binding that draws nothing and consumes no horizontal space.
+    /// The displayed label. `None` is a hidden hotkey binding that draws nothing
+    /// and consumes no horizontal space.
     pub text: Option<String>,
-    /// The accelerator key (C++ `TKey keyCode`). `None` is the C++ `kbNoKey` —
-    /// in our key model the absence of a key event. Mirrors
+    /// The accelerator key. `None` means no key is bound. Mirrors
     /// [`MenuItem`](crate::menu::MenuItem)'s `key_code`.
     pub key_code: Option<KeyEvent>,
-    /// The command emitted when chosen / its hotkey is pressed (C++ `command`).
+    /// The command emitted when chosen / its hotkey is pressed.
     pub command: Command,
 }
 
@@ -76,9 +74,8 @@ impl StatusItem {
         }
     }
 
-    /// Build a hidden hotkey binding (C++ `TStatusItem(0, key, cmd)`): no text,
-    /// so it draws nothing and consumes no width, but its accelerator still fires
-    /// `command`.
+    /// Build a hidden hotkey binding: no text, so it draws nothing and consumes
+    /// no width, but its accelerator still fires `command`.
     pub fn key(key_code: impl Into<Option<KeyEvent>>, command: Command) -> Self {
         StatusItem {
             text: None,
@@ -91,7 +88,7 @@ impl StatusItem {
 /// Which help contexts a [`StatusDef`] applies to (see the module docs).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum HelpCtxRange {
-    /// The universal def every real app uses (the `TProgram` default). Matches
+    /// The universal def every real app uses (the program-wide default). Matches
     /// **any** help context.
     All,
     /// The rare context-split case: an explicit set of help contexts this def
@@ -100,8 +97,8 @@ pub enum HelpCtxRange {
 }
 
 impl HelpCtxRange {
-    /// Whether `ctx` selects this def — ports the C++
-    /// `helpCtx >= min && helpCtx <= max` test (`findItems`, `tstatusl.cpp:122`).
+    /// Whether `ctx` selects this def: `All` matches anything, `OneOf` matches
+    /// membership in its set.
     pub fn matches(&self, ctx: HelpCtx) -> bool {
         match self {
             HelpCtxRange::All => true,
@@ -115,37 +112,34 @@ impl HelpCtxRange {
 ///
 /// # Turbo Vision heritage
 ///
-/// Ports `TStatusDef` (`menus.h`); the C++ linked list (`next`) becomes the
-/// outer `Vec<StatusDef>` the [`StatusLine`](status_line::StatusLine) owns, and
-/// the inner `items` list is a [`Vec<StatusItem>`].
+/// Ports `TStatusDef` (`menus.h`); the linked list of defs becomes the outer
+/// `Vec<StatusDef>` the [`StatusLine`](status_line::StatusLine) owns, and the
+/// inner items list is a [`Vec<StatusItem>`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StatusDef {
-    /// Which help contexts this def applies to (C++ `[min, max]`).
+    /// Which help contexts this def applies to.
     pub range: HelpCtxRange,
-    /// The items shown when this def is selected (C++ `items`).
+    /// The items shown when this def is selected.
     pub items: Vec<StatusItem>,
 }
 
 impl StatusDef {
-    /// Start building a list of [`StatusDef`]s fluently — the successor of the
-    /// C++ `operator+` chains over `TStatusDef` / `TStatusItem`
-    /// (`menu.cpp:70-94`).
+    /// Start building a list of [`StatusDef`]s fluently.
     pub fn list() -> StatusDefListBuilder {
         StatusDefListBuilder::default()
     }
 }
 
 /// A fluent builder for the `Vec<StatusDef>` a [`StatusLine`](status_line::StatusLine)
-/// owns — the idiomatic replacement for the C++ `operator+` overloads that
-/// chained `TStatusDef` / `TStatusItem` nodes.
+/// owns.
 #[derive(Default)]
 pub struct StatusDefListBuilder {
     defs: Vec<StatusDef>,
 }
 
 impl StatusDefListBuilder {
-    /// Append the universal def ([`HelpCtxRange::All`]) — C++
-    /// `TStatusDef(0, 0xFFFF, ...)`. The closure fills its items.
+    /// Append the universal def ([`HelpCtxRange::All`], matches any context). The
+    /// closure fills its items.
     pub fn def_all(mut self, build: impl FnOnce(StatusItemsBuilder) -> StatusItemsBuilder) -> Self {
         let items = build(StatusItemsBuilder::default()).build();
         self.defs.push(StatusDef {
@@ -155,8 +149,9 @@ impl StatusDefListBuilder {
         self
     }
 
-    /// Append a context-restricted def ([`HelpCtxRange::OneOf`]) — the rare
-    /// `tvdemo`-style split. The closure fills its items.
+    /// Append a context-restricted def ([`HelpCtxRange::OneOf`]) — the rare case
+    /// where the status line differs per help context. The closure fills its
+    /// items.
     pub fn def_one_of(
         mut self,
         contexts: impl IntoIterator<Item = HelpCtx>,
@@ -189,7 +184,7 @@ pub struct StatusItemsBuilder {
 }
 
 impl StatusItemsBuilder {
-    /// Append a visible item — `TStatusItem(text, key, cmd)`.
+    /// Append a visible item (label, optional accelerator, command).
     pub fn item(
         mut self,
         text: impl Into<String>,
@@ -200,7 +195,7 @@ impl StatusItemsBuilder {
         self
     }
 
-    /// Append a hidden hotkey binding — `TStatusItem(0, key, cmd)` (no text).
+    /// Append a hidden hotkey binding (no text).
     pub fn key_item(mut self, key_code: impl Into<Option<KeyEvent>>, command: Command) -> Self {
         self.items.push(StatusItem::key(key_code, command));
         self
@@ -228,9 +223,9 @@ mod tests {
         KeyEvent::from(Key::F(1))
     }
 
-    /// The builder must reproduce, node for node, the tree the C++ `operator+`
-    /// chain produces for a canonical default status line. The expected tree is
-    /// hand-built with struct/enum literals so a builder bug cannot pass silently.
+    /// The builder must reproduce, node for node, the canonical default
+    /// status-line tree. The expected tree is hand-built with struct/enum literals
+    /// so a builder bug cannot pass silently.
     #[test]
     fn builder_reproduces_default_status_line() {
         let built = StatusDef::list()
@@ -255,7 +250,7 @@ mod tests {
                     command: Command::QUIT,
                 },
                 StatusItem {
-                    text: None, // hidden hotkey binding (text == 0)
+                    text: None, // hidden hotkey binding (no label)
                     key_code: Some(KeyEvent::from(Key::F(10))),
                     command: Command::MENU,
                 },

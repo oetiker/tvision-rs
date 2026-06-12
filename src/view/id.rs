@@ -2,10 +2,10 @@
 //!
 //! ## Why this exists
 //!
-//! C++ Turbo Vision threads raw `TView*` pointers in every direction: `owner`
-//! (upward), a circular `next`/`prev` sibling ring, and `current`/`selected`
-//! cross-links inside groups. Rust forbids aliased mutable references, so rstv
-//! splits the pointer web into two clean pieces:
+//! A view tree needs links in every direction: each view to its parent, each
+//! view to its siblings, and each group to its focused/selected child. Rust
+//! forbids aliased mutable references, so those links cannot all be live
+//! pointers. rstv splits them into two clean pieces:
 //!
 //! * **Downward ownership is a tree** — a `Group` owns
 //!   `children: Vec<Box<dyn View>>`.

@@ -17,12 +17,12 @@
 //!
 //! # Turbo Vision heritage
 //!
-//! Ports the `cm*` command family and `TCommandSet` (`views.h`,
-//! `tcmdset.cpp`). C++ commands were hand-assigned `int`s; here a command's
-//! identity is a namespaced `&'static str` instead, so the command space is
-//! open and extensions cannot collide (deviation D1). The integers existed
-//! only for serialization (dropped) and to index a 256-bit set (now a
-//! [`HashSet`]), so commands no longer carry a number.
+//! Ports the `cm*` command family and `TCommandSet` (`views.h`, `tcmdset.cpp`).
+//! Commands were originally hand-assigned `int`s; here a command's identity is a
+//! namespaced `&'static str` instead, so the command space is open and extensions
+//! cannot collide (deviation D1). The integers existed only for serialization
+//! (dropped) and to index a 256-bit set (now a [`HashSet`]), so commands no longer
+//! carry a number.
 
 use std::collections::HashSet;
 use std::ops::{AddAssign, BitAndAssign, BitOrAssign, SubAssign};
@@ -33,9 +33,9 @@ use std::ops::{AddAssign, BitAndAssign, BitOrAssign, SubAssign};
 /// application-specific commands collision-safely.
 ///
 /// The field is private: a `Command` is an opaque token. The associated
-/// constants below are the framework's standard vocabulary (each annotated with
-/// the C++ symbol it ports), and external apps/views use [`Command::custom`] to
-/// define their own, namespacing under their own dotted prefix:
+/// constants below are the framework's standard vocabulary, and external
+/// apps/views use [`Command::custom`] to define their own, namespacing under their
+/// own dotted prefix:
 ///
 /// ```
 /// const REFRESH: tvision::Command = tvision::Command::custom("myapp.refresh");
@@ -48,8 +48,8 @@ use std::ops::{AddAssign, BitAndAssign, BitOrAssign, SubAssign};
 ///
 /// # Turbo Vision heritage
 ///
-/// Faithful to the `cm*` command family (`views.h`), which were plain `int`s;
-/// here a command's identity is a namespaced `&'static str` (deviation D1).
+/// Ports the `cm*` command family (`views.h`), which were plain `int`s; here a
+/// command's identity is a namespaced `&'static str` (deviation D1).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Command(&'static str);
 
@@ -74,194 +74,187 @@ impl Command {
         self.0
     }
 
-    // --- Core commands (views.h) ---
-    /// `cmValid` — also the zero/default command.
+    // --- Core commands ---
+    /// The no-op / always-valid command; also the zero/default command.
     pub const VALID: Command = Command("tv.valid");
-    /// `cmQuit`
+    /// Quit the application.
     pub const QUIT: Command = Command("tv.quit");
-    /// `cmError`
+    /// Report a runtime error (a beep / non-action).
     pub const ERROR: Command = Command("tv.error");
-    /// `cmMenu`
+    /// Open the menu bar.
     pub const MENU: Command = Command("tv.menu");
-    /// `cmClose`
+    /// Close the active window.
     pub const CLOSE: Command = Command("tv.close");
-    /// `cmZoom`
+    /// Maximize / restore the active window.
     pub const ZOOM: Command = Command("tv.zoom");
-    /// `cmResize`
+    /// Enter window resize mode.
     pub const RESIZE: Command = Command("tv.resize");
-    /// `cmNext`
+    /// Focus the next window.
     pub const NEXT: Command = Command("tv.next");
-    /// `cmPrev`
+    /// Send the active window to the back (focus the previous one).
     pub const PREV: Command = Command("tv.prev");
-    /// `cmHelp`
+    /// Open context help.
     pub const HELP: Command = Command("tv.help");
 
-    // --- Standard dialog result commands (dialogs.h) ---
-    /// `cmOK`
+    // --- Standard dialog result commands ---
+    /// Confirm / accept a dialog.
     pub const OK: Command = Command("tv.ok");
-    /// `cmCancel`
+    /// Cancel a dialog (always permitted).
     pub const CANCEL: Command = Command("tv.cancel");
-    /// `cmYes`
+    /// Answer "yes" in a confirmation dialog.
     pub const YES: Command = Command("tv.yes");
-    /// `cmNo`
+    /// Answer "no" in a confirmation dialog.
     pub const NO: Command = Command("tv.no");
-    /// `cmDefault`
+    /// Activate a dialog's default button (broadcast on Enter).
     pub const DEFAULT: Command = Command("tv.default");
 
-    // --- Standard editing commands / clipboard (editors.h) ---
-    /// `cmCut`
+    // --- Standard editing / clipboard commands ---
+    /// Cut the selection to the clipboard.
     pub const CUT: Command = Command("tv.cut");
-    /// `cmCopy`
+    /// Copy the selection to the clipboard.
     pub const COPY: Command = Command("tv.copy");
-    /// `cmPaste`
+    /// Paste from the clipboard.
     pub const PASTE: Command = Command("tv.paste");
-    /// `cmUndo`
+    /// Undo the last edit.
     pub const UNDO: Command = Command("tv.undo");
-    /// `cmClear`
+    /// Clear (delete) the selection.
     pub const CLEAR: Command = Command("tv.clear");
 
-    // --- Window management (app.h) ---
-    /// `cmTile`
+    // --- Window management ---
+    /// Tile the open windows into a grid.
     pub const TILE: Command = Command("tv.tile");
-    /// `cmCascade`
+    /// Cascade the open windows in an offset stack.
     pub const CASCADE: Command = Command("tv.cascade");
 
-    // --- Application menu commands (app.h) ---
-    /// `cmNew`
+    // --- Application menu commands ---
+    /// Create a new document.
     pub const NEW: Command = Command("tv.new");
-    /// `cmOpen`
+    /// Open a document.
     pub const OPEN: Command = Command("tv.open");
-    /// `cmSave`
+    /// Save the current document.
     pub const SAVE: Command = Command("tv.save");
-    /// `cmSaveAs`
+    /// Save the current document under a new name.
     pub const SAVE_AS: Command = Command("tv.save_as");
-    /// `cmSaveAll`
+    /// Save all open documents.
     pub const SAVE_ALL: Command = Command("tv.save_all");
-    /// `cmChDir`
+    /// Change the working directory.
     pub const CH_DIR: Command = Command("tv.ch_dir");
-    /// `cmDosShell`
+    /// Drop to a shell prompt.
     pub const DOS_SHELL: Command = Command("tv.dos_shell");
-    /// `cmCloseAll`
+    /// Close all open windows.
     pub const CLOSE_ALL: Command = Command("tv.close_all");
 
-    // --- Broadcast / message commands (views.h, dialogs.h) ---
-    /// `cmReceivedFocus`
+    // --- Broadcast / message commands ---
+    /// A view received focus (broadcast).
     pub const RECEIVED_FOCUS: Command = Command("tv.received_focus");
-    /// `cmReleasedFocus`
+    /// A view is about to release focus (broadcast; can be vetoed).
     pub const RELEASED_FOCUS: Command = Command("tv.released_focus");
-    /// `cmCommandSetChanged`
+    /// The set of enabled commands changed (broadcast).
     pub const COMMAND_SET_CHANGED: Command = Command("tv.command_set_changed");
-    /// `cmScrollBarChanged`
+    /// A scroll bar's value changed (broadcast; `source` names the scroll bar).
     pub const SCROLL_BAR_CHANGED: Command = Command("tv.scroll_bar_changed");
-    /// `cmScrollBarClicked`
+    /// A scroll bar was clicked (broadcast).
     pub const SCROLL_BAR_CLICKED: Command = Command("tv.scroll_bar_clicked");
-    /// `cmSelectWindowNum`
+    /// Select the desktop window by number (the Alt-N shortcut).
     pub const SELECT_WINDOW_NUM: Command = Command("tv.select_window_num");
-    /// `cmListItemSelected`
+    /// A list item was activated (broadcast).
     pub const LIST_ITEM_SELECTED: Command = Command("tv.list_item_selected");
-    /// `cmScreenChanged`
+    /// The screen size changed (broadcast).
     pub const SCREEN_CHANGED: Command = Command("tv.screen_changed");
-    /// `cmRecordHistory` (dialogs.h)
+    /// Record the current input-line value into its history list.
     pub const RECORD_HISTORY: Command = Command("tv.record_history");
 
-    // --- Editor search/replace commands (editors.h) ---
-    /// `cmFind`
+    // --- Editor search/replace commands ---
+    /// Open the find dialog.
     pub const FIND: Command = Command("tv.find");
-    /// `cmReplace`
+    /// Open the replace dialog.
     pub const REPLACE: Command = Command("tv.replace");
-    /// `cmSearchAgain`
+    /// Repeat the last search.
     pub const SEARCH_AGAIN: Command = Command("tv.search_again");
 
-    // --- Editor movement / edit commands (editors.h `cm*` 500..526) ---
-    /// `cmCharLeft`
+    // --- Editor movement / edit commands ---
+    /// Move the cursor one character left.
     pub const CHAR_LEFT: Command = Command("tv.char_left");
-    /// `cmCharRight`
+    /// Move the cursor one character right.
     pub const CHAR_RIGHT: Command = Command("tv.char_right");
-    /// `cmWordLeft`
+    /// Move the cursor one word left.
     pub const WORD_LEFT: Command = Command("tv.word_left");
-    /// `cmWordRight`
+    /// Move the cursor one word right.
     pub const WORD_RIGHT: Command = Command("tv.word_right");
-    /// `cmLineStart`
+    /// Move the cursor to the start of the line.
     pub const LINE_START: Command = Command("tv.line_start");
-    /// `cmLineEnd`
+    /// Move the cursor to the end of the line.
     pub const LINE_END: Command = Command("tv.line_end");
-    /// `cmLineUp`
+    /// Move the cursor up one line.
     pub const LINE_UP: Command = Command("tv.line_up");
-    /// `cmLineDown`
+    /// Move the cursor down one line.
     pub const LINE_DOWN: Command = Command("tv.line_down");
-    /// `cmPageUp`
+    /// Scroll up one page.
     pub const PAGE_UP: Command = Command("tv.page_up");
-    /// `cmPageDown`
+    /// Scroll down one page.
     pub const PAGE_DOWN: Command = Command("tv.page_down");
-    /// `cmTextStart`
+    /// Move the cursor to the start of the document.
     pub const TEXT_START: Command = Command("tv.text_start");
-    /// `cmTextEnd`
+    /// Move the cursor to the end of the document.
     pub const TEXT_END: Command = Command("tv.text_end");
-    /// `cmNewLine`
+    /// Insert a line break.
     pub const NEW_LINE: Command = Command("tv.new_line");
-    /// `cmBackSpace`
+    /// Delete the character before the cursor.
     pub const BACK_SPACE: Command = Command("tv.back_space");
-    /// `cmDelChar`
+    /// Delete the character at the cursor.
     pub const DEL_CHAR: Command = Command("tv.del_char");
-    /// `cmDelWord`
+    /// Delete the word at the cursor.
     pub const DEL_WORD: Command = Command("tv.del_word");
-    /// `cmDelStart`
+    /// Delete from the cursor to the start of the line.
     pub const DEL_START: Command = Command("tv.del_start");
-    /// `cmDelEnd`
+    /// Delete from the cursor to the end of the line.
     pub const DEL_END: Command = Command("tv.del_end");
-    /// `cmDelLine`
+    /// Delete the current line.
     pub const DEL_LINE: Command = Command("tv.del_line");
-    /// `cmInsMode`
+    /// Toggle insert/overwrite mode.
     pub const INS_MODE: Command = Command("tv.ins_mode");
-    /// `cmStartSelect`
+    /// Begin a selection.
     pub const START_SELECT: Command = Command("tv.start_select");
-    /// `cmHideSelect`
+    /// Hide the current selection.
     pub const HIDE_SELECT: Command = Command("tv.hide_select");
-    /// `cmIndentMode`
+    /// Toggle auto-indent mode.
     pub const INDENT_MODE: Command = Command("tv.indent_mode");
-    /// `cmUpdateTitle`
+    /// Update the window title (e.g. after a save).
     pub const UPDATE_TITLE: Command = Command("tv.update_title");
-    /// `cmSelectAll`
+    /// Select the entire document.
     pub const SELECT_ALL: Command = Command("tv.select_all");
-    /// `cmDelWordLeft`
+    /// Delete the word to the left of the cursor.
     pub const DEL_WORD_LEFT: Command = Command("tv.del_word_left");
-    /// `cmEncoding`
+    /// Change the text encoding.
     pub const ENCODING: Command = Command("tv.encoding");
 
-    // --- File-dialog commands (stddlg.h) ---
-    /// `cmFileOpen` (stddlg.h `1001`)
+    // --- File-dialog commands ---
+    /// The file dialog's Open button.
     pub const FILE_OPEN: Command = Command("tv.file_open");
-    /// `cmFileReplace` (stddlg.h `1002`)
+    /// The file dialog's Replace button.
     pub const FILE_REPLACE: Command = Command("tv.file_replace");
-    /// `cmFileClear` (stddlg.h `1003`)
+    /// The file dialog's Clear button.
     pub const FILE_CLEAR: Command = Command("tv.file_clear");
-    /// `cmFileInit` (stddlg.h `1004`)
+    /// Re-read the file dialog's directory listing.
     pub const FILE_INIT: Command = Command("tv.file_init");
-    /// `cmChangeDir` (stddlg.h `1005`)
+    /// Confirm a directory change in the change-directory dialog.
     pub const CHANGE_DIR: Command = Command("tv.change_dir");
-    /// `cmRevert` (stddlg.h `1006`)
+    /// Revert the change-directory dialog to the current directory.
     pub const REVERT: Command = Command("tv.revert");
-    /// `cmFileFocused` (stddlg.h `102`) — broadcast by `TFileList::focusItem` on
-    /// every focus change; the focused file record is the payload (carried via
-    /// the broadcast's resolvable `source`, resolved by the pump's
-    /// `ResolveFocusedFile`).
+    /// A file in the file list gained focus (broadcast on every focus change; the
+    /// focused file record is carried via the broadcast's resolvable `source`).
     pub const FILE_FOCUSED: Command = Command("tv.file_focused");
-    /// `cmFileDoubleClicked` (stddlg.h, next after `cmFileFocused`) — broadcast by
-    /// `TFileList::selectItem`. Faithfully payload-less in rstv (the only consumer,
-    /// `TFileDialog::handleEvent`, just turns it into `cmOK`).
+    /// A file in the file list was double-clicked (broadcast). Payload-less in
+    /// rstv: the file dialog just turns it into [`OK`](Command::OK).
     pub const FILE_DOUBLE_CLICKED: Command = Command("tv.file_double_clicked");
 
-    /// `cmOutlineItemSelected = 301` (outline.h) — broadcast by
-    /// `TOutlineViewer::selected` overrides (the base does nothing). Faithfully
-    /// payload-less in rstv.
+    /// An outline-viewer item was selected (broadcast). Payload-less in rstv.
     pub const OUTLINE_ITEM_SELECTED: Command = Command("tv.outline_item_selected");
 
-    // --- Theme editor commands (C8) ---
-    /// Open the foreground color picker for the selected theme role
-    /// (`ThemeEditorBody` Fg button / `f` hotkey). rstv-native.
+    // --- Theme editor commands ---
+    /// Open the foreground color picker for the selected theme role (rstv-native).
     pub const THEME_EDIT_FG: Command = Command("tv.theme_edit_fg");
-    /// Open the background color picker for the selected theme role
-    /// (`ThemeEditorBody` Bg button / `b` hotkey). rstv-native.
+    /// Open the background color picker for the selected theme role (rstv-native).
     pub const THEME_EDIT_BG: Command = Command("tv.theme_edit_bg");
 }
 
@@ -272,28 +265,28 @@ impl Command {
 /// constructor — "all commands" is not enumerable. The set itself is
 /// polarity-neutral; the framework's **enabled-by-default policy** lives in
 /// [`Program`](crate::Program), which keeps its current set as the complement —
-/// a **disabled set** (a denylist). The `enable_cmd`/`disable_cmd` method names
-/// port the C++ API and mean insert/remove regardless of which polarity a
-/// particular owner stores; the polarity-neutral [`insert`](Self::insert) /
-/// [`remove`](Self::remove) aliases are preferred at sites where the set's
-/// meaning is not "enabled commands" (e.g. the disabled set).
+/// a **disabled set** (a denylist). The `enable_cmd`/`disable_cmd` methods mean
+/// insert/remove regardless of which polarity a particular owner stores; the
+/// polarity-neutral [`insert`](Self::insert) / [`remove`](Self::remove) aliases
+/// are preferred at sites where the set's meaning is not "enabled commands" (e.g.
+/// the disabled set).
 ///
 /// # Turbo Vision heritage
 ///
-/// Faithful to `TCommandSet` (`views.h`, `tcmdset.cpp`); the `uchar cmds[32]`
-/// bit array (256 bits) becomes a [`HashSet<Command>`] (deviation D1).
+/// Ports `TCommandSet` (`views.h`, `tcmdset.cpp`); the 256-bit array becomes a
+/// [`HashSet<Command>`] (deviation D1).
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct CommandSet {
     cmds: HashSet<Command>,
 }
 
 impl CommandSet {
-    /// An empty command set. Ports `TCommandSet::TCommandSet()` (all bits zero).
+    /// An empty command set.
     pub fn new() -> Self {
         CommandSet::default()
     }
 
-    /// Whether `cmd` is enabled. Ports `TCommandSet::has`.
+    /// Whether `cmd` is enabled.
     pub fn has(&self, cmd: Command) -> bool {
         self.cmds.contains(&cmd)
     }
@@ -303,12 +296,12 @@ impl CommandSet {
         self.has(cmd)
     }
 
-    /// Enable a single command. Ports `TCommandSet::enableCmd(int)`.
+    /// Enable a single command.
     pub fn enable_cmd(&mut self, cmd: Command) {
         self.cmds.insert(cmd);
     }
 
-    /// Disable a single command. Ports `TCommandSet::disableCmd(int)`.
+    /// Disable a single command.
     pub fn disable_cmd(&mut self, cmd: Command) {
         self.cmds.remove(&cmd);
     }
@@ -327,64 +320,62 @@ impl CommandSet {
         self.disable_cmd(cmd);
     }
 
-    /// Enable every command in `other` (set union). Ports
-    /// `TCommandSet::enableCmd(const TCommandSet&)` / `operator |=`.
+    /// Enable every command in `other` (set union).
     pub fn enable_set(&mut self, other: &CommandSet) {
         self.cmds.extend(other.cmds.iter().copied());
     }
 
-    /// Disable every command in `other` (set difference). Ports
-    /// `TCommandSet::disableCmd(const TCommandSet&)`.
+    /// Disable every command in `other` (set difference).
     pub fn disable_set(&mut self, other: &CommandSet) {
         for cmd in &other.cmds {
             self.cmds.remove(cmd);
         }
     }
 
-    /// Whether no commands are enabled. Ports `TCommandSet::isEmpty`.
+    /// Whether no commands are enabled.
     pub fn is_empty(&self) -> bool {
         self.cmds.is_empty()
     }
 }
 
-// --- Operator ports (views.h inline operators + tcmdset.cpp friends) ---
+// --- Operator overloads ---
 
-/// Ports `TCommandSet::operator += (int)` → `enableCmd`.
+/// `set += cmd` enables a single command.
 impl AddAssign<Command> for CommandSet {
     fn add_assign(&mut self, cmd: Command) {
         self.enable_cmd(cmd);
     }
 }
 
-/// Ports `TCommandSet::operator -= (int)` → `disableCmd`.
+/// `set -= cmd` disables a single command.
 impl SubAssign<Command> for CommandSet {
     fn sub_assign(&mut self, cmd: Command) {
         self.disable_cmd(cmd);
     }
 }
 
-/// Ports `TCommandSet::operator += (const TCommandSet&)` → `enableCmd` (union).
+/// `set += other` enables every command in `other` (union).
 impl AddAssign<&CommandSet> for CommandSet {
     fn add_assign(&mut self, other: &CommandSet) {
         self.enable_set(other);
     }
 }
 
-/// Ports `TCommandSet::operator -= (const TCommandSet&)` → `disableCmd`.
+/// `set -= other` disables every command in `other` (difference).
 impl SubAssign<&CommandSet> for CommandSet {
     fn sub_assign(&mut self, other: &CommandSet) {
         self.disable_set(other);
     }
 }
 
-/// Ports `TCommandSet::operator |= ` (set union).
+/// `set |= other` is the set union.
 impl BitOrAssign<&CommandSet> for CommandSet {
     fn bitor_assign(&mut self, other: &CommandSet) {
         self.enable_set(other);
     }
 }
 
-/// Ports `TCommandSet::operator &= ` (set intersection).
+/// `set &= other` is the set intersection.
 impl BitAndAssign<&CommandSet> for CommandSet {
     fn bitand_assign(&mut self, other: &CommandSet) {
         self.cmds.retain(|cmd| other.cmds.contains(cmd));
