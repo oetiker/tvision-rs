@@ -406,7 +406,9 @@ pub struct Editor {
     lock_count: u8,
     /// `updateFlags` — pending `uf*` redraw flags.
     update_flags: u8,
-    /// `keyState` — the pending first stroke of a two-key chord, if any.
+    /// The pending first stroke of a two-key chord. Set when a key resolves to
+    /// `Resolve::Prefix`; combined with the next stroke and then cleared. Replaces
+    /// the C++ `keyState` i32 prefix machine (0 = idle, 1 = Ctrl-Q, 2 = Ctrl-K).
     pending: Option<KeyStroke>,
     /// `lineEndingType`.
     line_ending: LineEnding,
@@ -3293,8 +3295,9 @@ mod tests {
     #[test]
     fn keymap_arrows_and_named() {
         use crate::event::Key;
-        use crate::keymap::{KeyStroke, Resolve, resolve_global};
-        let r = |k| resolve_global(None, KeyStroke::from_event(key(k)));
+        use crate::keymap::{KeyStroke, Keymap, Resolve};
+        let km = Keymap::word_star();
+        let r = |k| km.resolve(None, KeyStroke::from_event(key(k)));
         assert!(matches!(r(Key::Left),     Resolve::Command(c) if c == Command::CHAR_LEFT));
         assert!(matches!(r(Key::Home),     Resolve::Command(c) if c == Command::LINE_START));
         assert!(matches!(r(Key::PageDown), Resolve::Command(c) if c == Command::PAGE_DOWN));
@@ -3304,8 +3307,9 @@ mod tests {
 
     #[test]
     fn keymap_ctrl_letters() {
-        use crate::keymap::{KeyStroke, Resolve, resolve_global};
-        let r = |ke| resolve_global(None, KeyStroke::from_event(ke));
+        use crate::keymap::{KeyStroke, Keymap, Resolve};
+        let km = Keymap::word_star();
+        let r = |ke| km.resolve(None, KeyStroke::from_event(ke));
         assert!(matches!(r(ctrl('s')), Resolve::Command(c) if c == Command::CHAR_LEFT));
         assert!(matches!(r(ctrl('y')), Resolve::Command(c) if c == Command::DEL_LINE));
         assert!(matches!(r(ctrl('u')), Resolve::Command(c) if c == Command::UNDO));
@@ -3314,34 +3318,30 @@ mod tests {
     #[test]
     fn keymap_two_key_prefixes() {
         use crate::event::Key;
-        use crate::keymap::{KeyStroke, Resolve, resolve_global};
-        let ks = |ke| KeyStroke::from_event(ke);
+        use crate::keymap::{KeyStroke, Keymap, Resolve};
+        let km = Keymap::word_star();
+        let ks = KeyStroke::from_event;
         // Ctrl-Q → prefix.
-        assert!(matches!(
-            resolve_global(None, ks(ctrl('q'))),
-            Resolve::Prefix
-        ));
+        assert!(matches!(km.resolve(None, ks(ctrl('q'))), Resolve::Prefix));
         // Ctrl-K → prefix.
-        assert!(matches!(
-            resolve_global(None, ks(ctrl('k'))),
-            Resolve::Prefix
-        ));
+        assert!(matches!(km.resolve(None, ks(ctrl('k'))), Resolve::Prefix));
         // Ctrl-Q then 'f' → FIND.
         let q = ks(ctrl('q'));
         assert!(matches!(
-            resolve_global(Some(q), ks(key(Key::Char('f')))),
+            km.resolve(Some(q), ks(key(Key::Char('f')))),
             Resolve::Command(c) if c == Command::FIND
         ));
         // Ctrl-K then 'b' → START_SELECT.
         let k = ks(ctrl('k'));
         assert!(matches!(
-            resolve_global(Some(k), ks(key(Key::Char('b')))),
+            km.resolve(Some(k), ks(key(Key::Char('b')))),
             Resolve::Command(c) if c == Command::START_SELECT
         ));
     }
 
     #[test]
     fn convert_event_prefix_then_command() {
+        let _g = crate::keymap::GlobalKeymapGuard::new(crate::keymap::Keymap::word_star());
         let mut e = ed();
         // Ctrl-K starts a prefix and clears the event.
         let mut ev = Event::KeyDown(ctrl('k'));
@@ -3358,7 +3358,8 @@ mod tests {
     /// Regression: plain Backspace must delete the character to the left.
     /// The WordStar default (seeded in Phase 1) binds `backspace → BACK_SPACE`,
     /// so this test needs no `set_global`.  Before the Phase 2 refactor,
-    /// plain Backspace had no arm in `scan_key_map` and was a no-op.
+    /// plain Backspace had no binding in the hardcoded match table and was a
+    /// no-op.
     #[test]
     fn plain_backspace_deletes_char_left() {
         let mut e = ed();
@@ -3433,10 +3434,11 @@ mod tests {
     }
 
     /// Regression: Ctrl-Del must map to cmDelWord (delete word to the right), not
-    /// cmClear — firstKeys lists `kbCtrlDel, cmDelWord` before the dead
-    /// `kbCtrlDel, cmClear`, and scanKeyMap returns the FIRST match.
+    /// cmClear — the WordStar preset binds `ctrl+delete → DEL_WORD` and omits the
+    /// dead `cmClear` binding per the keymap design.
     #[test]
     fn ctrl_del_deletes_word_to_the_right() {
+        let _g = crate::keymap::GlobalKeymapGuard::new(crate::keymap::Keymap::word_star());
         let mut e = ed();
         insert(&mut e, "foo bar");
         e.set_cur_ptr(0, 0);
