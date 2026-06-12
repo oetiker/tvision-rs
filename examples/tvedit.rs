@@ -25,6 +25,14 @@ use tvision::{
 };
 
 // ---------------------------------------------------------------------------
+// Example-local command constants for keymap switching
+// ---------------------------------------------------------------------------
+
+const KEYMAP_WORDSTAR: Command = Command::custom("tvedit.keymap.wordstar");
+const KEYMAP_CUA: Command = Command::custom("tvedit.keymap.cua");
+const KEYMAP_EMACS: Command = Command::custom("tvedit.keymap.emacs");
+
+// ---------------------------------------------------------------------------
 // TEditorApp
 // ---------------------------------------------------------------------------
 
@@ -124,6 +132,13 @@ impl TEditApp {
                     .command_key("~P~revious", Command::PREV, shift_f6(), "Shift-F6")
                     .command_key("~C~lose", Command::CLOSE, ctrl_w(), "Ctrl-W")
             })
+            .submenu("~O~ptions", alt('o'), |m| {
+                m.submenu("~K~eyboard mapping", None::<KeyEvent>, |k| {
+                    k.command("~W~ordStar", KEYMAP_WORDSTAR)
+                        .command("~C~UA", KEYMAP_CUA)
+                        .command("~E~macs", KEYMAP_EMACS)
+                })
+            })
             .build();
         Some(Box::new(MenuBar::new(r, menu)))
     }
@@ -148,6 +163,12 @@ impl TEditApp {
                 next_num += 1;
             } else if cmd == Command::CH_DIR {
                 prog.exec_view(Box::new(ChDirDialog::new(CD_NORMAL, 0)));
+            } else if cmd == KEYMAP_WORDSTAR {
+                tvision::keymap::set_global(tvision::Keymap::word_star());
+            } else if cmd == KEYMAP_CUA {
+                tvision::keymap::set_global(tvision::Keymap::cua());
+            } else if cmd == KEYMAP_EMACS {
+                tvision::keymap::set_global(tvision::Keymap::emacs());
             }
         });
     }
