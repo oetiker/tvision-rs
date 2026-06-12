@@ -53,6 +53,7 @@ struct HelloApp {
 
 impl HelloApp {
     /// `HelloApp::HelloApp` → `TProgInit(initStatusLine, initMenuBar, initDeskTop)`.
+    // ANCHOR: setup
     fn new(backend: Box<dyn Backend>) -> Self {
         let program = Program::new(
             backend,
@@ -68,6 +69,7 @@ impl HelloApp {
         // disabled, until a window grants them on selection.
         HelloApp { program }
     }
+    // ANCHOR_END: setup
 
     /// `TApplication::initDeskTop` — `r.a.y++; r.b.y--` to inset the desktop one
     /// row below the menu bar and one row above the status line, the patterned
@@ -191,6 +193,7 @@ fn alt_f3() -> KeyEvent {
 // int main()
 // ---------------------------------------------------------------------------
 
+// ANCHOR: main
 fn main() -> io::Result<()> {
     // CrosstermBackend::new() owns the whole terminal lifecycle (raw mode,
     // alternate screen, mouse capture; restored on drop / panic / signal) —
@@ -199,3 +202,4 @@ fn main() -> io::Result<()> {
     let _result: Command = app.run();
     Ok(())
 }
+// ANCHOR_END: main

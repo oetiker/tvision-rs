@@ -1,3 +1,5 @@
-# first app
+# Your first app
 
-_Stub. Content lands in Plan 2._
+```rust,no_run
+{{#rustdoc_include ../../../../examples/hello.rs:main}}
+```
