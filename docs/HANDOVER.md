@@ -7,35 +7,51 @@
 > Read this, then [CLAUDE.md](file:///home/oetiker/checkouts/rstv/CLAUDE.md)
 > (orientation / locked decisions / cross-cutting seams), then start.
 >
-> **Direction = [`docs/BACKLOG.md`](file:///home/oetiker/checkouts/rstv/docs/BACKLOG.md)**
-> (the PORT-ORDER successor). All 92 PORT-ORDER rows are ✅ — the post-port
-> **backlog run** is the work now: FOUNDATION seams (Phase A, done) →
-> mechanical fan-out (Phase B, nearly done) → Phase C backlogged features.
-> When a row lands: add an IMPLEMENTATION-LOG section, tick the BACKLOG row,
+> **Direction:** the 92-class port is ✅ complete and the post-port backlog
+> (`docs/BACKLOG.md`, Phases A/B/C) is exhausted. The work now is the
+> **developer documentation** — content is authored and a user-facing cleanup
+> landed this session; what's left is the docs polish + example gallery in
+> "Next" below. When something lands: add an IMPLEMENTATION-LOG section and
 > update this file.
 
-## Current state (2026-06-12, developer-docs tooling landed)
+## Current state (2026-06-12, docs content + user-facing cleanup landed)
 
-**Code HEAD = `2b3656a`; 1177 lib tests + 14 xtask tests green; clippy + fmt clean.**
+**Code HEAD = `2e2153b`; 1177 lib tests + 15 xtask tests green; clippy
+`--all-targets` + fmt clean; `cargo xtask docs` OK + link check clean.**
 
-**Developer-documentation system — Plan 1 landed** (merge `2b3656a`). A pure-`cargo`
-docs machine, separate from the porting work: **`cargo xtask docs`** builds the
-mdBook guide *and* rustdoc into ONE integrated GitHub Pages site (guide at root,
-rustdoc copied to `/api/`, a Guide⇄API toggle header, bidirectional links, gated by
-an owned book↔api link checker). mdBook is driven **as a library dependency** — no
-mise, no Makefile. Screens are colored selectable HTML via `tmux capture-pane -e` →
-an owned Rust ANSI→HTML converter (`xtask/src/ansi_html.rs`, reuses
-`tvision::Color::BIOS_RGB`). Also `cargo xtask docs --serve` and `cargo xtask
-screens`. The book lives in `docs/book/` (Part I–V skeleton; **prose is unwritten —
-that is Plan 2**). Spec + plan: `docs/superpowers/specs/2026-06-12-*` and
-`docs/superpowers/plans/2026-06-12-developer-documentation-tooling.md`.
-- **Deviations from the plan (intentional):** rustdoc builds into an isolated target
-  subdir (`<target>/rstv-rustdoc`) so the shared dev-box target doesn't leak sibling
-  crates' docs into `api/`; the link checker skips rustdoc machine-noise + api/ chrome.
-- **Deferred to Plan 2:** real mermaid runtime JS (placeholder empty file for now),
-  all page prose, `src/theme/` rustdoc gap + doctests, per-page screenshots.
-- **Action for repo owner:** Settings → Pages → Source = "GitHub Actions" (not
-  scriptable) before the `.github/workflows/docs.yml` deploy can publish.
+This session authored **all the developer-docs content** and ran a **user-facing
+quality pass** over both doc layers (on top of the Plan 1 tooling machine, merge
+`2b3656a`):
+- **All 32 guide pages authored** (Parts I–V) — Part I vertical slice, then
+  Parts II–V via a subagent author→review pipeline. Fixed the screenshot-clobber
+  bug (`looks_blank()` guard in `xtask/src/screens.rs` — a blank tmux capture
+  used to overwrite the committed HTML).
+- **User-facing cleanup (rustdoc + guide):** stripped porting bookkeeping (row
+  numbers, `Dn` labels, FOUNDATION/MECHANICAL, internal-doc refs, breadcrumbs);
+  audited every stale "deferred" against the code (the real Deferred-channel
+  *feature* kept); **rewrote rustdoc primary prose Rust-first** — a Rust dev who
+  never used Turbo Vision can read it — with all C++ confined to a concise
+  `# Turbo Vision heritage` section per item; added **Guide cross-links** from
+  all 22 modules into their narrative chapter.
+- **Project renamed to `rstv`** (branding only: crate stays `tvision`, namespace
+  stays `tv::`, C++ origin stays "Turbo Vision").
+- **Guide IA:** `port/faithful.md` = philosophy+gateway; `reference/deviations.md`
+  = the canonical "Differences from C++ Turbo Vision" (`#d1`..`#d15` anchors,
+  visible `D2 ·` numbers); new first-class `port/capture.md`; `modal.md` narrowed.
+- Spec + plan:
+  `docs/superpowers/specs/2026-06-12-api-docs-user-facing-cleanup-design.md` +
+  `docs/superpowers/plans/2026-06-12-docs-user-facing-cleanup.md`.
+
+Key commits (newest first): `2e2153b` guide cross-links · `183d3f4` rustdoc
+Rust-first · `6cf9383` D-numbers visible · `d56c9b3` cleanup+rename · `2a28bb5`
+guide Parts II–V · `35b3aca` Part I + screenshot guard.
+
+**Tooling recap (Plan 1, `2b3656a`):** `cargo xtask docs` builds the mdBook guide
+*and* rustdoc into ONE Pages site (guide at root, rustdoc at `/api/`, Guide⇄API
+toggle, owned book↔api link checker, rustdoc into isolated `<target>/rstv-rustdoc`).
+Also `--serve` and `cargo xtask screens`. **Repo-owner action (still pending):**
+Settings → Pages → Source = "GitHub Actions" before `.github/workflows/docs.yml`
+can publish. Mermaid runtime JS is still a placeholder.
 
 ### Porting state (unchanged since `5407109`, configurable keymap)
 
@@ -211,38 +227,46 @@ This session ran the **backlog run** end to end:
 
 *(none — all paused worktrees integrated this session)*
 
-## Next — Plan 2: developer-documentation content (IN PROGRESS)
+## Next — docs polish + examples (content + user-facing cleanup DONE)
 
-**Plan 2 (docs content authoring) is underway.** Tasks enumerated at the tail of
-`docs/superpowers/plans/2026-06-12-developer-documentation-tooling.md`.
+The guide prose (Plan 2) **and** the user-facing cleanup/rename/IA/heritage/
+guide-links pass landed this session. The docs now read for library users.
+**Remaining docs work, in three planned phases (the user's call on order):**
 
-**Done — ALL 32 guide pages authored** (2026-06-12, this session):
-- **Part I (Getting Started)** vertical slice: `README.md` + 3 `getting-started/`
-  pages with embedded screenshot, `{{#rustdoc_include}}` code from
-  `examples/hello.rs`, working guide→API links. Proved the full
-  author→`cargo xtask docs`→link-check pipeline. Also fixed the screenshot-clobber
-  bug (blank tmux capture used to overwrite committed HTML — now guarded by
-  `looks_blank()` in `xtask/src/screens.rs`).
-- **Parts II–V** (29 pages: `port/`, `apps/`, `internals/`, `reference/`) via a
-  `Workflow` author→review pipeline, each grounded in source + design-spec §6,
-  links resolved against a type→rustdoc-path map. Integrated, tag-stripped,
-  spot-checked vs source. See IMPLEMENTATION-LOG.
+1. **Guide-page Rust-first pass.** The mdBook pages themselves still mention C++
+   (~32 pages by `grep -rl 'C++' docs/book/src`). **Part II (`port/`) is
+   intentionally C++-aware** (the veteran chapter) and `reference/symbol-map` +
+   `deviations` are *about* C++ — leave those. But `getting-started/`, `apps/`,
+   and `internals/` should be Rust-first like the API now is. Same standard as
+   the rustdoc pass (see the `rstv-api-docs-user-facing` + `no-deferred-state`
+   memories).
+2. **Example gallery (Phase 2) — agreed approach "B".** One parameterized
+   `gallery` example binary with a per-widget `// ANCHOR:`-marked setup fn,
+   selected by a CLI arg; each visible widget (~30: Button, CheckBoxes, Cluster,
+   InputLine, ListBox, ScrollBar, Window, Dialog, MenuBar, StatusLine, Memo,
+   Editor, …) gets a minimal example + a tmux screenshot. Needs a small `args`
+   field on `xtask` `Screen`. **Why:** every documented line then compiles.
+3. **Verified docs (Phase 3).** Convert the remaining `rust,ignore` guide snippets
+   to anchored-example / doctest form, then turn ON `mdbook test` + `cargo test
+   --doc` as CI gates. **Gotcha:** the Part I snippets are `rust,ignore` excerpts
+   (e.g. `:setup`/`:main`) — switch to whole-program anchors first or the gate
+   fails on partial includes.
 
-**Remaining Plan 2 work (NOT prose — the guide text is complete):**
-- Complete `src/theme/` rustdoc to parity + `#![doc(html_logo_url/favicon)]`.
-- Promote reference examples to doctests; add outbound guide links in module
-  `//!` docs; grow `xtask/src/screens.rs` `SCREENS` (with `keys`) for per-page
-  shots; vendor the real mermaid runtime (deferred Task 7).
-- **Then** add `mdbook test` + `cargo test --doc` CI gates. **Gotcha:** the Part I
-  guide snippets are `rust,ignore` excerpts — switch them to whole-program anchors
-  before the `mdbook test` gate, or it fails on the partial includes.
+**Smaller follow-ups:** complete `src/theme/` rustdoc to parity;
+`#![doc(html_logo_url/favicon)]` crate attrs; vendor the real mermaid runtime;
+optionally **hyperlink** the heritage `(deviation Dn)` citations (currently plain
+text — would need per-item relative rustdoc→guide paths, link-checked).
 
-**Porting backlog:** Phase A + B + C fully ✅; latent edge notes resolved (see
-above). The porting backlog is exhausted — a new *feature* phase would need its
-own planning (separate from the docs work above).
+**Intentionally left:** C++ references inside `#[cfg(test)]` doc comments (test
+provenance, **not** rendered in rustdoc) — a separate large pass only if wanted.
 
-**Standing deferrals:** none — `init/doneHistory` resolved (moot: thread-local
-Vec auto-inits/auto-drops; stale TODOs removed from `application.rs`).
+**Porting backlog:** Phase A + B + C fully ✅ — exhausted. A new *feature* phase
+would need its own planning, separate from the docs work above.
+
+**Standing principle (this session):** the port is DONE, so docs/comments never
+say "deferred" — only "ported" or "deliberately not ported, with a reason" (the
+`no-deferred-state` memory). The rustdoc primary prose assumes **zero C++
+knowledge**; C++ lives only in `# Turbo Vision heritage` sections.
 
 **C1 reuse note for later rows:** the find/replace prompt reused the
 `request_message_box` async-modal seam (`answer_to` + `then_command`) and the
