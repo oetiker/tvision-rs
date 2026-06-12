@@ -42,6 +42,34 @@ HTML embeds the screenshot + expands all anchors; `fmt`/`clippy --all-targets`
 clean; 15 xtask tests green (+`blank_capture_is_detected`); `hello` builds.
 **Next:** fan out Parts II–V subagent-style with two-stage review.
 
+## Plan 2 — docs content: Parts II–V authored (29 pages) (2026-06-12)
+
+Fanned out the remaining guide pages with a `Workflow` author→review pipeline
+(29 pages, 58 agents): Part II (`port/`, the idiomatic-port narrative behind
+D1–D13), Part III (`apps/`, task recipes), Part IV (`internals/`, architecture
+→ the *Writing your own View* capstone), Part V (`reference/`, API-layout /
+symbol-map / deviations / screenshot tooling). Each authoring agent was grounded
+in the cited source modules + the design-spec §6 outline + the Part I tone
+template; each review agent fact-checked against source, polished, and fixed
+links. Every guide→API link was resolved against a pre-computed type→rustdoc-path
+map (re-exports resolve to their **defining-module** path, e.g.
+`api/tvision/app/struct.Program.html`).
+
+Orchestrator integration pass: two pages had leaked tool-call tags
+(`</content>`/`</invoke>`) in their tail — stripped. Spot-checked the
+highest-stakes pages against source: `internals/custom-view.md` (the three
+required `View` methods `state`/`state_mut`/`draw`; `ViewState::new`,
+`get_extent`, `DrawCtx::style`/`fill`/`put_str` all confirmed) and
+`internals/event-loop.md` (the `pump_once` phase order matches `app/program.rs`).
+Verified: `cargo xtask docs` → `OK`, link check clean; all 29 pages carry an H1
+and balanced code fences.
+
+**Plan 2 prose is now complete (all 32 guide pages authored).** Remaining Plan 2
+tasks are *not* prose: `src/theme/` rustdoc to parity + `#![doc(html_logo_url/
+favicon)]`; promoting reference snippets to real doctests + whole-program guide
+anchors; growing `SCREENS` for per-page screenshots; the mermaid runtime; then
+the `mdbook test` + `cargo test --doc` CI gates. See HANDOVER.
+
 ## Fix tvdemo file viewer scrolling + `ScrollBar::with_keyboard` (2026-06-12)
 
 Pre-existing bug (not keymap-related): tvdemo's read-only file viewer wouldn't

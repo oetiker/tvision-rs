@@ -216,18 +216,19 @@ This session ran the **backlog run** end to end:
 **Plan 2 (docs content authoring) is underway.** Tasks enumerated at the tail of
 `docs/superpowers/plans/2026-06-12-developer-documentation-tooling.md`.
 
-**Done — Part I (Getting Started) vertical slice** (2026-06-12, this session):
-authored `README.md` + the 3 `getting-started/` pages with embedded screenshot,
-`{{#rustdoc_include}}` code from `examples/hello.rs`, and working guide→API
-links. Proved the full author→`cargo xtask docs`→link-check pipeline. Also fixed
-the screenshot-clobber bug (blank tmux capture used to overwrite committed HTML —
-now guarded by `looks_blank()` in `xtask/src/screens.rs`). See IMPLEMENTATION-LOG.
+**Done — ALL 32 guide pages authored** (2026-06-12, this session):
+- **Part I (Getting Started)** vertical slice: `README.md` + 3 `getting-started/`
+  pages with embedded screenshot, `{{#rustdoc_include}}` code from
+  `examples/hello.rs`, working guide→API links. Proved the full
+  author→`cargo xtask docs`→link-check pipeline. Also fixed the screenshot-clobber
+  bug (blank tmux capture used to overwrite committed HTML — now guarded by
+  `looks_blank()` in `xtask/src/screens.rs`).
+- **Parts II–V** (29 pages: `port/`, `apps/`, `internals/`, `reference/`) via a
+  `Workflow` author→review pipeline, each grounded in source + design-spec §6,
+  links resolved against a type→rustdoc-path map. Integrated, tag-stripped,
+  spot-checked vs source. See IMPLEMENTATION-LOG.
 
-**Remaining Plan 2 work:**
-- **Part II–V page prose** (~28 stub pages) — fan out subagent-style with
-  two-stage review. The Part I pages are the tone/structure template; the
-  per-page outline is design spec
-  `docs/superpowers/specs/2026-06-12-developer-documentation-design.md` §6.
+**Remaining Plan 2 work (NOT prose — the guide text is complete):**
 - Complete `src/theme/` rustdoc to parity + `#![doc(html_logo_url/favicon)]`.
 - Promote reference examples to doctests; add outbound guide links in module
   `//!` docs; grow `xtask/src/screens.rs` `SCREENS` (with `keys`) for per-page
