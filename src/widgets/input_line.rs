@@ -847,11 +847,20 @@ impl View for InputLine {
                     }
                 }
 
-                // SELECT_ALL establishes a selection that the post-dispatch tail
-                // (which clears the selection on any non-extend movement) must NOT
-                // wipe. It is the only repertoire command whose effect IS the
-                // selection, so it bypasses the tail's reset.
-                let keep_selection = cmd == Some(Command::SELECT_ALL);
+                // The post-dispatch tail clears the selection on any non-extend
+                // movement. These commands must bypass that reset:
+                //  * SELECT_ALL — its effect IS the selection.
+                //  * PASTE — `do_paste` only QUEUES a deferred paste; the tail runs
+                //    synchronously first, so zeroing the selection here would make
+                //    the deferred `paste_text` find nothing to replace (regression).
+                //  * COPY — keep the visible selection after copying (faithful to
+                //    the old Command-arm COPY).
+                //  * CUT — `do_cut` already zeroed the selection; listed for
+                //    consistency (harmless either way).
+                let keep_selection = matches!(
+                    cmd,
+                    Some(Command::SELECT_ALL | Command::CUT | Command::COPY | Command::PASTE)
+                );
 
                 let mut handled = true;
                 match cmd {
@@ -2224,7 +2233,7 @@ mod tests {
     #[test]
     fn cua_ctrl_c_copies_in_input_line() {
         let _g = crate::keymap::GlobalKeymapGuard::new(crate::keymap::Keymap::cua());
-        let mut il = field(12, "hello");
+        let (mut il, _id) = field_with_id(12, "hello");
         il.state.state.active = true;
 
         // Ctrl-A → SELECT_ALL.
@@ -2244,6 +2253,27 @@ mod tests {
             }
         });
         assert_eq!(clipboard_text, Some("hello"));
+        // COPY must LEAVE the selection intact (the KeyDown tail's
+        // sel-reset is bypassed for clipboard commands).
+        assert_eq!(il.sel_start, 0, "selection survives COPY");
+        assert_eq!(il.sel_end, 5, "selection survives COPY");
+
+        // PASTE over the live selection must replace it: do_paste queues a
+        // deferred InputLinePaste, and the selection must still be present for
+        // the pump's paste_text/delete_select to act on (regression guard — the
+        // tail must not have zeroed it).
+        let mut ev = ctrl_key(Key::Char('v'));
+        let (_, deferred, ()) = with_ctx_d(|ctx| il.handle_event(&mut ev, ctx));
+        assert!(
+            deferred
+                .iter()
+                .any(|d| matches!(d, Deferred::InputLinePaste(_))),
+            "Ctrl-V queues a deferred paste"
+        );
+        assert_eq!(
+            il.sel_end, 5,
+            "selection still live when the deferred paste runs"
+        );
     }
 
     /// Under every preset, plain Enter resolves to NEW_LINE — outside the
