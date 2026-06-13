@@ -52,6 +52,11 @@ pub struct Splitter {
     abs_origin: Point,
     /// Active divider being mouse-dragged (Task 6).
     dragging: Option<usize>,
+    /// Opt-in: join this splitter's linework — interior `├`/`┼` divider crossings
+    /// and (when it is a window's body) the divider→frame junctions the window
+    /// brokers. Default `false` — an un-joined splitter renders plain `│`/`─`
+    /// dividers and emits no frame marks. Cascades to pane sub-splitters.
+    joined: bool,
 }
 
 impl Splitter {
@@ -66,6 +71,34 @@ impl Splitter {
             saved_weights: Vec::new(),
             abs_origin: bounds.a,
             dragging: None,
+            joined: false,
+        }
+    }
+
+    /// Builder: opt this splitter's linework into joining — its divider lines
+    /// connect to each other (interior `├`/`┼` crossings) and, when it is a
+    /// window's body, to the surrounding frame (the window auto-brokers). Joining
+    /// cascades to pane sub-splitters, so a nested grid needs `.joined()` only on
+    /// the outermost splitter.
+    pub fn joined(mut self) -> Self {
+        self.set_joined(true);
+        self
+    }
+
+    /// Set joining at runtime. Propagates to pane sub-splitters (ancestor joined
+    /// ⇒ subtree joined), so the whole grid follows the outermost setting.
+    pub fn set_joined(&mut self, on: bool) {
+        self.joined = on;
+        let ids = self.group.child_ids_in_order();
+        for id in ids {
+            if let Some(sub) = self
+                .group
+                .child_mut(id)
+                .and_then(|v| v.as_any_mut())
+                .and_then(|a| a.downcast_mut::<Splitter>())
+            {
+                sub.set_joined(on);
+            }
         }
     }
 
@@ -94,6 +127,17 @@ impl Splitter {
     pub fn insert(&mut self, view: Box<dyn View>, c: Constraints) -> ViewId {
         let id = self.group.insert(view);
         self.slots.push(Slot::from_constraints(c));
+        // If this splitter is already joined, a sub-splitter pane added afterwards
+        // must inherit it (so `.joined()` set before adding panes still cascades).
+        if self.joined
+            && let Some(sub) = self
+                .group
+                .child_mut(id)
+                .and_then(|v| v.as_any_mut())
+                .and_then(|a| a.downcast_mut::<Splitter>())
+        {
+            sub.set_joined(true);
+        }
         self.resolve_layout_local();
         id
     }
@@ -232,6 +276,9 @@ impl Splitter {
     /// (the only child accessor `Group` exposes is `&mut`). The owning window
     /// already holds the `&mut Splitter`, so this is free there.
     pub(crate) fn frame_junction_marks(&mut self, frame_bounds: Rect) -> Vec<JunctionMark> {
+        if !self.joined {
+            return Vec::new();
+        }
         let mut out = Vec::new();
         self.collect_frame_marks(frame_bounds, &mut out);
         out
@@ -621,7 +668,9 @@ impl View for Splitter {
         self.abs_origin = ctx.origin();
         self.group.draw(ctx);
         self.draw_dividers(ctx);
-        self.draw_interior_crossings(ctx);
+        if self.joined {
+            self.draw_interior_crossings(ctx);
+        }
     }
 
     fn change_bounds(&mut self, bounds: Rect) {
@@ -972,6 +1021,7 @@ mod view_tests {
         use crate::junction::{Edge, Weight};
         let frame_bounds = Rect::new(0, 0, 13, 5);
         let mut sp = Splitter::cols();
+        sp.set_joined(true);
         sp.change_bounds(Rect::new(1, 1, 12, 4));
         sp.insert(Fill::boxed('A'), Constraints::flex());
         sp.insert(Fill::boxed('B'), Constraints::flex());
@@ -992,21 +1042,38 @@ mod view_tests {
     #[test]
     fn frame_marks_handle_divider_emits_nothing() {
         let frame_bounds = Rect::new(0, 0, 13, 5);
-        let mut sp = Splitter::cols().default_divider(DividerStyle::Handle);
+        let mut sp = Splitter::cols()
+            .default_divider(DividerStyle::Handle)
+            .joined();
         sp.change_bounds(Rect::new(1, 1, 12, 4));
         sp.insert(Fill::boxed('A'), Constraints::flex());
         sp.insert(Fill::boxed('B'), Constraints::flex());
+        // Joined, but a Handle divider draws no full line, so it abuts nothing.
         assert!(sp.frame_junction_marks(frame_bounds).is_empty());
     }
 
     #[test]
     fn frame_marks_inset_splitter_emits_nothing() {
         let frame_bounds = Rect::new(0, 0, 13, 7);
-        let mut sp = Splitter::cols();
+        let mut sp = Splitter::cols().joined();
         sp.change_bounds(Rect::new(2, 2, 11, 5)); // not adjacent to any frame edge
         sp.insert(Fill::boxed('A'), Constraints::flex());
         sp.insert(Fill::boxed('B'), Constraints::flex());
+        // Joined, but the splitter is inset from every frame edge, so no abutment.
         assert!(sp.frame_junction_marks(frame_bounds).is_empty());
+    }
+
+    #[test]
+    fn frame_marks_empty_when_not_joined() {
+        let frame_bounds = Rect::new(0, 0, 13, 5);
+        let mut sp = Splitter::cols(); // NOT joined
+        sp.change_bounds(Rect::new(1, 1, 12, 4));
+        sp.insert(Fill::boxed('A'), Constraints::flex());
+        sp.insert(Fill::boxed('B'), Constraints::flex());
+        assert!(
+            sp.frame_junction_marks(frame_bounds).is_empty(),
+            "no marks unless joined"
+        );
     }
 
     #[test]
@@ -1017,6 +1084,7 @@ mod view_tests {
             .pane(Fill::boxed('L'), Constraints::flex())
             .pane(Fill::boxed('F'), Constraints::flex());
         let mut outer = Splitter::cols();
+        outer.set_joined(true); // OUTER only — propagation joins the inner sub-splitter
         outer.change_bounds(Rect::new(1, 1, 21, 6));
         outer.insert(Fill::boxed('T'), Constraints::fixed(8));
         outer.insert(Box::new(inner), Constraints::flex());
@@ -1053,10 +1121,26 @@ mod view_tests {
             .pane(Fill::boxed('L'), Constraints::flex())
             .pane(Fill::boxed('F'), Constraints::flex());
         let mut outer = Splitter::cols();
+        outer.set_joined(true); // join the linework so the crossing tee renders
         outer.change_bounds(Rect::new(0, 0, 20, 7));
         outer.insert(Fill::boxed('T'), Constraints::fixed(6));
         outer.insert(Box::new(inner), Constraints::flex());
         insta::assert_snapshot!(render(&mut outer, 20, 7));
+    }
+
+    #[test]
+    fn interior_crossings_absent_when_not_joined() {
+        // Same grid as interior_crossing_grid_renders_left_tee but NOT joined:
+        // the outer divider column stays plain │ (no ├).
+        let inner = Splitter::rows()
+            .pane(Fill::boxed('L'), Constraints::flex())
+            .pane(Fill::boxed('F'), Constraints::flex());
+        let mut outer = Splitter::cols(); // NOT joined
+        outer.change_bounds(Rect::new(0, 0, 20, 7));
+        outer.insert(Fill::boxed('T'), Constraints::fixed(6));
+        outer.insert(Box::new(inner), Constraints::flex());
+        let out = render(&mut outer, 20, 7);
+        assert!(!out.contains('├'), "no interior tee unless joined:\n{out}");
     }
 
     #[test]

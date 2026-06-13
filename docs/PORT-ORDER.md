@@ -57,8 +57,9 @@ no Turbo Vision ancestor, so no row. See spec
 [`docs/superpowers/specs/2026-06-13-splitter-design.md`](docs/superpowers/specs/2026-06-13-splitter-design.md)
 and plan [`docs/superpowers/plans/2026-06-13-splitter.md`](docs/superpowers/plans/2026-06-13-splitter.md).
 Frame-joining (divider↔frame tee glyphs `┬`/`┴`/`┤` and divider↔divider
-crossings `├`/`┼`) is implemented on `feat/splitter` via `Window::with_joined_lines()`
-(opt-in, off by default; no change to plain windows). See spec
+crossings `├`/`┼`) is implemented on `feat/splitter` via `Splitter::joined()`
+(opt-in, off by default; cascades to sub-splitters; the window auto-brokers a
+joined splitter body to its frame, so plain windows are unchanged). See spec
 [`docs/superpowers/specs/2026-06-13-splitter-frame-joining-design.md`](docs/superpowers/specs/2026-06-13-splitter-frame-joining-design.md)
 and plan [`docs/superpowers/plans/2026-06-13-splitter.md`](docs/superpowers/plans/2026-06-13-splitter.md).
 

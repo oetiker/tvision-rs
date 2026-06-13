@@ -7,6 +7,15 @@ applies the third review's mechanical fixes (`frame_junction_marks` is `&mut sel
 since `Group` exposes only `&mut` child access; `skip(as_any_mut)` is optional, the
 override body is what matters). Third review: **no remaining blocking issues** —
 ready to implement.
+
+**v5 (2026-06-13):** the opt-in was relocated from `Window::with_joined_lines()`
+to `Splitter::joined()` — one flag gating BOTH halves (divider→frame and
+divider→divider), cascading to sub-splitters; the window auto-brokers a joined
+splitter body to its frame. This resolves a v4 inconsistency where interior
+crossings were always-on while only frame-joining was gated. (Realizes this
+spec's own "Future: auto-enable when a Splitter is the window's body — drop the
+explicit flag" note.)
+
 **Builds on:** `Splitter` (rstv-original extension) — spec
 [`2026-06-13-splitter-design.md`](2026-06-13-splitter-design.md), plan
 [`2026-06-13-splitter.md`](../plans/2026-06-13-splitter.md). Implemented on branch
@@ -91,8 +100,10 @@ local, no read-back.
 
 ## Scope
 
-**In scope:** a window may opt in to joining the linework of the splitter(s) it
-hosts — divider→frame and divider→divider (including nested grids).
+**In scope:** a `Splitter` may opt in (`Splitter::joined()`, v5) to joining its
+linework — divider→frame and divider→divider (including nested grids); the window
+auto-brokers a joined splitter body to its frame. (v4 carried the flag on the
+window; see the v5 amendment above.)
 
 **Non-goals:**
 - No change to any window that does not opt in. Plain windows, dialogs, the file
@@ -122,7 +133,7 @@ hosts — divider→frame and divider→divider (including nested grids).
 ## Design overview — two composition sites, both owner-data-down
 
 ```
-Window::draw (only when joined_lines):
+Window::draw (always auto-brokers; marks empty unless the splitter is joined):
   1. marks = interior_splitter.frame_junction_marks(frame_bounds)   // parent→child
   2. frame_child.set_junction_marks(marks)                          // owner-data-down
   3. self.group.draw(ctx)        // Frame composes tees from marks (faithful
@@ -216,19 +227,23 @@ ordering/guard requirements:
 With no marks, the output is identical to today. This is the faithful `frameLine`
 composition, minus the forbidden sideways walk (the data arrives pre-computed).
 
-### 4. `Window` — opt-in flag + brokering draw override (`src/window/window.rs`)
+### 4. `Window` — auto-brokering draw override (`src/window/window.rs`)
 
-- Add `joined_lines: bool` (default `false`) + builder `with_joined_lines(self)
-  -> Self` / setter.
-- Override `draw` (Window currently delegates it to its group): when
-  `joined_lines`, (a) find the interior splitter child by trying an `as_any_mut` →
+> **v5:** the opt-in flag moved to `Splitter::joined()` (Component 5). The window
+> no longer carries `joined_lines` / `with_joined_lines`; its `draw` *always*
+> brokers, and a non-joined splitter (or no splitter) yields an empty mark set, so
+> a plain window is unchanged. The historical v4 description follows.
+
+- Override `draw` (Window currently delegates it to its group): (a) find the
+  interior splitter child by trying an `as_any_mut` →
   `downcast_mut::<Splitter>()` on each non-frame child (the one that succeeds is
   the splitter; needs the Component-5 `Splitter` override), (b) collect its
   `frame_junction_marks(frame_bounds)` into an owned `Vec`, (c) **drop that borrow**
   and then downcast the Frame child (`downcast_mut::<Frame>()`, the existing zoom
   precedent) and `set_junction_marks`, then (d) draw the group as usual. When the
-  flag is off (or there is no splitter child), it is behaviorally identical to the
-  delegated draw — existing window snapshots must not change.
+  splitter is not joined (or there is no splitter child), the marks are empty, so
+  it is behaviorally identical to the delegated draw — existing window snapshots
+  must not change.
 
 ```rust
 fn draw(&mut self, ctx: &mut DrawCtx) {
@@ -310,13 +325,14 @@ the zoom flag to its Frame — `window.rs:357-365`.)
 ### 6. Example (`examples/splitter.rs`)
 
 Rework the demo into the grid — `Splitter::cols([tree, Splitter::rows([list,
-form])])` sized into the interior of a `Window::…with_joined_lines()`. Must build
-and run; shows `┬ ┴ ┤` against the frame and the interior `├`.
+form])]).joined()` sized into the interior of a plain `Window::new(...)` (the
+window auto-brokers the joined splitter body to its frame). Must build and run;
+shows `┬ ┴ ┤` against the frame and the interior `├`.
 
 ## Data flow
 
 ```
-Window::draw (joined_lines):
+Window::draw (auto-broker; marks empty unless the splitter is joined):
   interior_splitter.frame_junction_marks(frame_bounds)   // recursive, layout-only
       → [JunctionMark{edge, offset, stem}, …]
   frame_child.set_junction_marks(marks)                  // owner-data-down
@@ -361,10 +377,10 @@ other's focus state.
 - **`Splitter::frame_junction_marks`** unit tests: a 2-pane cols splitter abutting
   a frame yields the two correct top/bottom marks; a nested grid yields the
   expected set including the inner divider's right-edge mark.
-- **Snapshot tests** (HeadlessBackend) on a small `Window::with_joined_lines`:
-  passive single frame → `┬…┴`; active double frame → `╤…╧`; the grid → interior
-  `├` + `┤` to the right frame.
-- **Regression:** an existing window snapshot WITHOUT the flag is unchanged.
+- **Snapshot tests** (HeadlessBackend) on a small plain window hosting a
+  `Splitter::…joined()` body: passive single frame → `┬…┴`; active double frame →
+  `╤…╧`; the grid → interior `├` + `┤` to the right frame.
+- **Regression:** a window hosting an un-joined splitter is unchanged.
   **No new `View` trait method** is added — the only delegate change is
   `Splitter` providing a one-line `as_any_mut` override body (`skip` optional), and
   since `as_any_mut` is already declared in `tvision-macros/src/specs.rs`, the

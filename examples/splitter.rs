@@ -1,9 +1,10 @@
 //! `splitter` — a nested-grid window using the [`Splitter`] widget: a fixed
 //! tree sidebar beside a right column that stacks a scrolling list over a
 //! small form. The two splitters (vertical outer + horizontal inner) are
-//! nested inside a [`tvision::Window`] that opts into `with_joined_lines()`,
-//! so the divider lines join the window frame (`┬`/`┴`/`┤`) and each other
-//! (`├`) at every crossing.
+//! nested inside a plain [`tvision::Window`]; the outer [`Splitter`] is built
+//! `.joined()`, so its divider lines join each other (`├`) at every crossing —
+//! and the window automatically joins a joined splitter body to its frame
+//! (`┬`/`┴`/`┤`). Joining cascades, so only the outer splitter opts in.
 //!
 //! This is the N-ary resizable splitter in action. The panes are real Turbo
 //! Vision controls (an [`Outline`] tree, a [`ListBox`], and a form [`Group`]
@@ -187,8 +188,7 @@ impl SplitterApp {
 
         // A window sized to a generous chunk of the desktop.
         let win_rect = Rect::new(r.a.x + 2, r.a.y + 1, r.b.x - 2, r.b.y - 1);
-        let mut win = tvision::Window::new(win_rect, Some("Multi-pane Splitter".to_string()), 1)
-            .with_joined_lines();
+        let mut win = tvision::Window::new(win_rect, Some("Multi-pane Splitter".to_string()), 1);
 
         // The window interior in LOCAL coords: frame-inset by one cell each side.
         let ext = win.state().get_extent();
@@ -204,12 +204,14 @@ impl SplitterApp {
             .pane(form, Constraints::flex().min(6));
 
         // Outer: a fixed tree sidebar column beside the right grid, with a thin
-        // Line divider so the seam joins the window frame (┬/┴) and the inner
-        // horizontal divider (├).
+        // Line divider. Built `.joined()` so the seam joins the window frame
+        // (┬/┴, auto-brokered by the window) and the inner horizontal divider (├);
+        // joining cascades to the inner `right` splitter.
         let split = Splitter::cols()
             .pane(tree, Constraints::fixed(22))
             .pane(Box::new(right), Constraints::flex())
-            .divider(0, DividerStyle::Line);
+            .divider(0, DividerStyle::Line)
+            .joined();
 
         let split_id = win.insert_child(Box::new(split));
         // Size the splitter to fill the window interior so it lays the panes out.

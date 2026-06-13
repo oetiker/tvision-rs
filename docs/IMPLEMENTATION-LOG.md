@@ -34,6 +34,18 @@ Gated and additive. See spec
 [`docs/superpowers/specs/2026-06-13-splitter-frame-joining-design.md`](docs/superpowers/specs/2026-06-13-splitter-frame-joining-design.md)
 and plan [`docs/superpowers/plans/2026-06-13-splitter.md`](docs/superpowers/plans/2026-06-13-splitter.md).
 
+- **Task 8 — relocate the opt-in to `Splitter::joined()` (v5):** the whole-feature
+  review found the opt-in inconsistent — `Window::with_joined_lines()` gated only
+  the divider→frame half, while the divider→divider interior crossings were
+  always-on. Fixed by moving the single flag onto the `Splitter`
+  (`joined()`/`set_joined()`, default false), which gates BOTH halves and cascades
+  to pane sub-splitters (so a nested grid opts in once, on the outermost
+  splitter). The `Window` now **auto-brokers**: its `draw` always probes for an
+  interior splitter and pushes its marks to the frame — empty unless joined, so a
+  plain window (or one with an un-joined splitter) is byte-for-byte unchanged.
+  `Window::with_joined_lines`/`set_joined_lines`/the `joined_lines` field are
+  removed; the example builds a plain window with a `.joined()` splitter.
+
 ## `Splitter` — N-ary resizable multi-pane view (rstv-original, 2026-06-13)
 
 A generic, configurable, N-ary resizable multi-pane view (`widgets::splitter`) —

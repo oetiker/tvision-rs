@@ -49,14 +49,16 @@
 //!
 //! The classic sibling tee-walk (`TFrame::frameLine` reaching sideways to read
 //! its siblings' bounds) is **not** reproduced as a sideways walk — deviation D3
-//! forbids a child reaching its siblings. Instead, a window that opts into
-//! line-joining (`Window::with_joined_lines`) computes the divider abutments from
-//! its `Splitter` child and pushes them **down** to this frame as
+//! forbids a child reaching its siblings. Instead, a window that hosts a joined
+//! [`Splitter`](crate::widgets::Splitter) (opted in via
+//! [`Splitter::joined`](crate::widgets::Splitter::joined)) auto-brokers: it
+//! computes the divider abutments from its `Splitter` child and pushes them
+//! **down** to this frame as
 //! [`JunctionMark`](crate::junction::JunctionMark)s via
 //! [`set_junction_marks`](Frame::set_junction_marks); the frame then substitutes
 //! the matching tee glyph at each marked edge cell — the same visual result as
-//! `frameLine`, fed by pushed data. A frame with no marks (every non-joined
-//! window) draws plain corners and edges, exactly as before.
+//! `frameLine`, fed by pushed data. A frame with no marks (every window without a
+//! joined splitter) draws plain corners and edges, exactly as before.
 
 use crate::capture::TrackMask;
 use crate::command::Command;
