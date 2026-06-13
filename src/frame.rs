@@ -47,16 +47,21 @@
 //! flag word becomes [`WindowFlags`] (deviation D5), and palette lookups become
 //! [`Role`]-keyed theme styles (deviation D7).
 //!
-//! One behavior is not reproduced: the sibling tee-walk — the `├┬┤┴` joins drawn
-//! where a nested framed view meets the group frame. That machinery needs the
-//! bounds of neighboring views, which the owner-data-down design (deviation D3)
-//! does not give a child. rstv draws plain corners and edges instead — identical
-//! for the common case of a window whose border no framed sibling touches. The
-//! tee/cross glyphs remain seeded in [`Glyphs`](crate::theme::Glyphs) but unused.
+//! The classic sibling tee-walk (`TFrame::frameLine` reaching sideways to read
+//! its siblings' bounds) is **not** reproduced as a sideways walk — deviation D3
+//! forbids a child reaching its siblings. Instead, a window that opts into
+//! line-joining (`Window::with_joined_lines`) computes the divider abutments from
+//! its `Splitter` child and pushes them **down** to this frame as
+//! [`JunctionMark`](crate::junction::JunctionMark)s via
+//! [`set_junction_marks`](Frame::set_junction_marks); the frame then substitutes
+//! the matching tee glyph at each marked edge cell — the same visual result as
+//! `frameLine`, fed by pushed data. A frame with no marks (every non-joined
+//! window) draws plain corners and edges, exactly as before.
 
 use crate::capture::TrackMask;
 use crate::command::Command;
 use crate::event::Event;
+use crate::junction::{Edge, JunctionMark, Weight, frame_junction};
 use crate::theme::Role;
 use crate::view::{Context, DrawCtx, GrowMode, Point, Rect, View, ViewState};
 use crate::window::{WindowFlags, WindowPalette};
@@ -96,6 +101,10 @@ pub struct Frame {
     /// Whether the close-icon press-and-hold track is in flight. Guarded
     /// against stray `MouseUp` events.
     close_pressed: bool,
+    /// Divider abutment marks pushed down by the owning window each draw
+    /// (owner-data-down). Empty = today's plain frame, so non-joined windows are
+    /// byte-for-byte unchanged. See [`set_junction_marks`](Frame::set_junction_marks).
+    junction_marks: Vec<JunctionMark>,
 }
 
 impl Frame {
@@ -121,6 +130,7 @@ impl Frame {
             palette: WindowPalette::Blue,
             abs_origin: Point::new(0, 0),
             close_pressed: false,
+            junction_marks: Vec::new(),
         }
     }
 
@@ -178,6 +188,37 @@ impl Frame {
     pub fn palette(&self) -> WindowPalette {
         self.palette
     }
+
+    /// Owner-data-down: the owning window pushes the divider abutment marks the
+    /// frame should join into its border. Replaced each draw; empty = a plain
+    /// frame (non-joined windows unchanged). Faithful re-expression of TV's
+    /// `frameLine` tee-walk, fed by pushed data instead of a sideways sibling walk.
+    ///
+    /// Called by `Window::with_joined_lines` (Task 3 of the splitter feature).
+    // The caller lives in the not-yet-landed Task 3; suppress the dead-code lint
+    // until that integration lands.
+    #[allow(dead_code)]
+    pub(crate) fn set_junction_marks(&mut self, marks: Vec<JunctionMark>) {
+        self.junction_marks = marks;
+    }
+
+    /// The junction glyph to substitute at an **interior** border cell on `edge`
+    /// at `offset`, if a mark lands there; `None` to keep the plain edge glyph.
+    /// `bar` is the frame's own weight. Callers only invoke this on interior edge
+    /// cells, so corner offsets never reach here — the corner guard is structural
+    /// (the draw loops skip the corners).
+    fn junction_at(
+        &self,
+        edge: Edge,
+        offset: i32,
+        bar: Weight,
+        g: &crate::theme::Glyphs,
+    ) -> Option<char> {
+        self.junction_marks
+            .iter()
+            .find(|m| m.edge == edge && m.offset == offset)
+            .map(|m| frame_junction(edge, bar, m.stem, g))
+    }
 }
 
 impl View for Frame {
@@ -204,8 +245,9 @@ impl View for Frame {
     /// We draw the box fully first, then overlay the number / title / icons onto
     /// the top row (and the resize icons onto the bottom row).
     ///
-    /// The sibling tee-walk is not reproduced — we draw plain corners/edges; see
-    /// the module docs.
+    /// Marked interior edge cells get a junction tee (owner-data-down via
+    /// `set_junction_marks`); with no marks the corners/edges are plain. See the
+    /// module docs.
     fn draw(&mut self, ctx: &mut DrawCtx) {
         // Cache the absolute origin for the close-icon mouse-tracking capture:
         // the MouseTrackCapture converts absolute mouse coords to view-local
@@ -250,6 +292,11 @@ impl View for Frame {
         } else {
             (r_active, true)
         };
+        let bar = if double {
+            Weight::Double
+        } else {
+            Weight::Single
+        };
         let border = ctx.style(border_role);
         let icon = ctx.style(r_icon);
 
@@ -275,29 +322,41 @@ impl View for Frame {
         };
 
         // -- 1. The box (all in the border style). --------------------------
-        // Top row: tl, ─ across the interior, tr.
+        // Top row: tl, ─ (or a tee at a marked cell) across the interior, tr.
         ctx.put_char(0, 0, tl, border);
         for x in 1..w - 1 {
-            ctx.put_char(x, 0, h_edge, border);
+            let ch = self
+                .junction_at(Edge::Top, x, bar, &glyphs)
+                .unwrap_or(h_edge);
+            ctx.put_char(x, 0, ch, border);
         }
         if w >= 2 {
             ctx.put_char(w - 1, 0, tr, border);
         }
-        // Middle rows: │, spaces across the interior, │.
+        // Middle rows: │ (or a tee at a marked cell), spaces, │ (or a tee).
         for y in 1..h - 1 {
-            ctx.put_char(0, y, v_edge, border);
+            let lch = self
+                .junction_at(Edge::Left, y, bar, &glyphs)
+                .unwrap_or(v_edge);
+            ctx.put_char(0, y, lch, border);
             for x in 1..w - 1 {
                 ctx.put_char(x, y, ' ', border);
             }
             if w >= 2 {
-                ctx.put_char(w - 1, y, v_edge, border);
+                let rch = self
+                    .junction_at(Edge::Right, y, bar, &glyphs)
+                    .unwrap_or(v_edge);
+                ctx.put_char(w - 1, y, rch, border);
             }
         }
-        // Bottom row: bl, ─ across, br.
+        // Bottom row: bl, ─ (or a tee at a marked cell) across, br.
         if h >= 2 {
             ctx.put_char(0, h - 1, bl, border);
             for x in 1..w - 1 {
-                ctx.put_char(x, h - 1, h_edge, border);
+                let ch = self
+                    .junction_at(Edge::Bottom, x, bar, &glyphs)
+                    .unwrap_or(h_edge);
+                ctx.put_char(x, h - 1, ch, border);
             }
             if w >= 2 {
                 ctx.put_char(w - 1, h - 1, br, border);
@@ -1042,6 +1101,67 @@ mod tests {
             f.draw(&mut dc);
         });
         insta::assert_snapshot!(screen.snapshot());
+    }
+
+    // -- junction marks: tee substitution ------------------------------------
+
+    #[test]
+    fn junction_marks_substitute_tees_on_interior_edges() {
+        use crate::junction::{Edge, JunctionMark, Weight};
+        // Passive (single-line) frame so the bar weight is Single.
+        let mut f = Frame::new(Rect::new(0, 0, 20, 6));
+        f.set_junction_marks(vec![
+            JunctionMark {
+                edge: Edge::Top,
+                offset: 8,
+                stem: Weight::Single,
+            },
+            JunctionMark {
+                edge: Edge::Bottom,
+                offset: 8,
+                stem: Weight::Single,
+            },
+            JunctionMark {
+                edge: Edge::Right,
+                offset: 3,
+                stem: Weight::Single,
+            },
+        ]);
+        let buf = render_frame(&mut f, 20, 6);
+        assert_eq!(buf.get(8, 0).symbol(), "┬", "top-edge mark → ┬");
+        assert_eq!(buf.get(8, 5).symbol(), "┴", "bottom-edge mark → ┴");
+        assert_eq!(buf.get(19, 3).symbol(), "┤", "right-edge mark → ┤");
+        assert_eq!(buf.get(5, 0).symbol(), "─", "unmarked top stays ─");
+        assert_eq!(buf.get(0, 0).symbol(), "┌");
+        assert_eq!(buf.get(19, 0).symbol(), "┐");
+    }
+
+    #[test]
+    fn no_marks_is_byte_for_byte_unchanged() {
+        let mut a = Frame::new(Rect::new(0, 0, 20, 6));
+        a.st.state.active = true;
+        let mut b = Frame::new(Rect::new(0, 0, 20, 6));
+        b.st.state.active = true;
+        b.set_junction_marks(vec![]);
+        let ba = render_frame(&mut a, 20, 6);
+        let bb = render_frame(&mut b, 20, 6);
+        for y in 0..6 {
+            assert_eq!(row_text(&ba, y), row_text(&bb, y), "row {y} identical");
+        }
+    }
+
+    #[test]
+    fn active_double_frame_uses_mixed_tee_for_single_stem() {
+        use crate::junction::{Edge, JunctionMark, Weight};
+        let mut f = Frame::new(Rect::new(0, 0, 20, 6));
+        f.st.state.active = true; // double-line bar
+        f.set_junction_marks(vec![JunctionMark {
+            edge: Edge::Top,
+            offset: 8,
+            stem: Weight::Single,
+        }]);
+        let buf = render_frame(&mut f, 20, 6);
+        assert_eq!(buf.get(8, 0).symbol(), "╤", "double bar + single stem → ╤");
     }
 
     /// The downcast seam: `Frame` overrides `as_any_mut` so an owner can reach
