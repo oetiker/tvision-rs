@@ -21,6 +21,7 @@ pub mod list_viewer;
 pub mod outline;
 mod scrollbar;
 mod scroller;
+pub mod splitter;
 mod static_text;
 pub mod terminal;
 
