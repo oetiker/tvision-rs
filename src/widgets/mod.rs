@@ -40,5 +40,6 @@ pub use list_viewer::{ListRoles, ListViewer, ListViewerState};
 pub use outline::{Node, Outline, OutlineViewer, OutlineViewerState, ov_update};
 pub use scrollbar::ScrollBar;
 pub use scroller::Scroller;
+pub use splitter::{Constraints, DividerStyle, Orientation, Splitter};
 pub use static_text::{Label, ParamText, StaticText};
 pub use terminal::{Terminal, TextDevice};

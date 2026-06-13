@@ -121,6 +121,7 @@ pub use view::{
 pub use widgets::Indicator;
 pub use widgets::{Button, ButtonFlags};
 pub use widgets::{CheckBoxes, Cluster, ClusterKind, MultiCheckBoxes, RadioButtons};
+pub use widgets::{Constraints, DividerStyle, Orientation, Splitter};
 pub use widgets::{
     EditWindow, Editor, InputLine, LimitMode, ListBox, ListRoles, ListViewer, ListViewerState,
     ScrollBar, Scroller, SortedListBox,

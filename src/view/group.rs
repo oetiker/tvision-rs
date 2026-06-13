@@ -198,6 +198,15 @@ impl Group {
             .collect()
     }
 
+    /// Child ids in **insertion order** (oldest first). `children` is stored
+    /// back-to-front for painting and [`Group::insert`] *pushes*, so the storage
+    /// order already equals the insertion order — a forward iteration suffices.
+    /// Unlike [`tileable_ids`](Self::tileable_ids) this neither reverses nor
+    /// filters: the splitter needs its panes parallel to its solver slots.
+    pub(crate) fn child_ids_in_order(&self) -> Vec<ViewId> {
+        self.children.iter().map(|c| c.id).collect()
+    }
+
     /// Mutably borrow child `id`'s view — for an owner reaching into one of its
     /// own children by concrete type (downcast via [`View::as_any_mut`], e.g. a
     /// window reaching its frame). `None` for a stale/foreign id.
