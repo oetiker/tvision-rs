@@ -54,7 +54,9 @@ pub fn run() -> Result<()> {
     let mut failures = Vec::new();
     let mut tested = 0usize;
     for item in book.book.iter() {
-        let BookItem::Chapter(ch) = item else { continue };
+        let BookItem::Chapter(ch) = item else {
+            continue;
+        };
         let Some(rel) = ch.source_path.as_ref().or(ch.path.as_ref()) else {
             continue; // draft chapter — nothing to compile
         };
