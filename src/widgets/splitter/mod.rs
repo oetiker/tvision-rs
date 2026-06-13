@@ -148,6 +148,36 @@ impl Splitter {
         }
     }
 
+    /// Builder: add a pane (discards the returned id — for static layouts). Chains.
+    pub fn pane(mut self, view: Box<dyn View>, c: Constraints) -> Self {
+        self.insert(view, c);
+        self
+    }
+
+    /// Builder: set the default divider style for gaps without an explicit style.
+    pub fn default_divider(mut self, style: DividerStyle) -> Self {
+        self.default_style = style;
+        self.resolve_layout_local();
+        self
+    }
+
+    /// Builder: set the style of divider `i` (between pane `i` and `i+1`).
+    pub fn divider(mut self, i: usize, style: DividerStyle) -> Self {
+        self.ensure_divider_len();
+        if i < self.divider_styles.len() {
+            self.divider_styles[i] = style;
+        }
+        self
+    }
+
+    /// Grow `divider_styles` to cover all current gaps, filling with `default_style`.
+    fn ensure_divider_len(&mut self) {
+        let want = self.slots.len().saturating_sub(1);
+        while self.divider_styles.len() < want {
+            self.divider_styles.push(self.default_style);
+        }
+    }
+
     /// Compute each child's `Rect` from the solver and apply via `change_bounds`.
     /// Local (no `Context`) — used at insert/build/resize time.
     fn resolve_layout_local(&mut self) {
@@ -291,5 +321,32 @@ mod view_tests {
         sp.insert(Fill::boxed('A'), Constraints::flex());
         sp.insert(Fill::boxed('B'), Constraints::flex());
         insta::assert_snapshot!(render(&mut sp, 6, 7)); // AAA rows, ────── divider row, BBB rows
+    }
+
+    #[test]
+    fn builder_builds_same_layout_as_imperative() {
+        let mut imperative = Splitter::cols();
+        imperative.change_bounds(Rect::new(0, 0, 13, 2));
+        imperative.insert(Fill::boxed('A'), Constraints::flex());
+        imperative.insert(Fill::boxed('B'), Constraints::flex());
+
+        let mut built = Splitter::cols()
+            .pane(Fill::boxed('A'), Constraints::flex())
+            .pane(Fill::boxed('B'), Constraints::flex());
+        built.change_bounds(Rect::new(0, 0, 13, 2));
+
+        assert_eq!(render(&mut imperative, 13, 2), render(&mut built, 13, 2));
+    }
+
+    #[test]
+    fn per_divider_override_renders() {
+        let mut sp = Splitter::cols()
+            .default_divider(DividerStyle::Hidden)
+            .pane(Fill::boxed('A'), Constraints::flex())
+            .pane(Fill::boxed('B'), Constraints::flex())
+            .pane(Fill::boxed('C'), Constraints::flex())
+            .divider(1, DividerStyle::Line); // seam after pane 1 (B|C) visible; others hidden
+        sp.change_bounds(Rect::new(0, 0, 14, 1)); // 3 panes, 2 dividers, 12 content => 4/4/4
+        insta::assert_snapshot!(render(&mut sp, 14, 1)); // AAAA BBBB│CCCC
     }
 }
