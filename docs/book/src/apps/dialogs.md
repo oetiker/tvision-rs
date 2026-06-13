@@ -39,6 +39,13 @@ A button carries the [`Command`](commands.md) it broadcasts when pressed. The
 conventional end commands are `Command::OK` and `Command::CANCEL`; a message box
 also uses `Command::YES` / `Command::NO`.
 
+A dialog assembled this way — a labelled input, check boxes, and the two
+buttons — looks like this:
+
+{{#include ../screens/dialog.html}}
+
+The runnable source is the `dialog` entry in the [widget gallery](../gallery.md).
+
 ## Running it modally
 
 You do not insert a dialog into the view tree yourself. You hand it to

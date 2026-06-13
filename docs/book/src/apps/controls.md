@@ -23,6 +23,12 @@ use tv::widgets::{Button, ButtonFlags};
 let ok = Button::new(bounds, "~O~K", Command::OK, ButtonFlags { default: true, ..Default::default() });
 ```
 
+{{#include ../screens/button.html}}
+
+A runnable, captured example of every control on this page — buttons, check
+boxes, radio buttons, input lines, and more — is in the
+[widget gallery](../gallery.md).
+
 ## Check boxes & radio buttons
 
 These share one engine, the

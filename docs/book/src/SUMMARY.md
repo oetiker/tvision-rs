@@ -34,6 +34,10 @@
 - [Theming & colors](apps/theming.md)
 - [Text editing](apps/text-editing.md)
 
+# Widget Gallery
+
+- [Widget gallery](gallery.md)
+
 # How It Works
 
 - [The view tree](internals/view-tree.md)

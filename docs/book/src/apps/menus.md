@@ -55,9 +55,15 @@ Three things to notice:
 Wrap the finished `Menu` in a
 [`MenuBar`](../api/tvision/menu/menu_bar/struct.MenuBar.html) and return it from
 your `init_menu_bar` factory. `F10` enters the bar; the `Alt` accelerators open
-submenus directly. The complete factory is in
+submenus directly. With the `File` menu pulled down it looks like this:
+
+{{#include ../screens/menubar.html}}
+
+The complete factory is in
 [`examples/hello.rs`](https://github.com/oetiker/rstv/blob/main/examples/hello.rs)
-— see [Your first app](../getting-started/first-app.md).
+— see [Your first app](../getting-started/first-app.md); the runnable menu/status
+sources are the `menubar` and `statusline` entries in the
+[widget gallery](../gallery.md).
 
 ## The status line
 
