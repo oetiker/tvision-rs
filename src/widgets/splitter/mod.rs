@@ -507,6 +507,14 @@ impl Splitter {
     /// needs `Group::child_mut` (the `&self draw_dividers` cannot do this). Reads
     /// the child's positions into owned data (borrow released) before drawing on
     /// this splitter's own cells via `ctx`.
+    ///
+    /// Scope: each outer divider is joined from the pane(s) it borders. The common
+    /// grid (one perpendicular sub-splitter per outer divider) renders correctly.
+    /// Two ADJACENT perpendicular sub-splitters whose dividers coincide on the same
+    /// shared outer-divider cell would need a `┼` (the [`Junction::Cross`] glyph
+    /// exists for it); that topology is not composed here — the last-written tee
+    /// wins — and is left for a future extension. Mixed-weight crossings are
+    /// likewise out of scope (the glyph uses the outer divider's weight).
     fn draw_interior_crossings(&mut self, ctx: &mut DrawCtx) {
         if self.slots.len() < 2 {
             return; // no dividers of our own → nothing to cross
@@ -1035,6 +1043,8 @@ mod view_tests {
 
     #[test]
     fn interior_crossing_grid_renders_left_tee() {
+        // `├` is Junction::TeeRight (vertical bar, branch pointing RIGHT into the
+        // inner pane); "left tee" in the name refers to the glyph's open-left shape.
         // Outer cols: [tree(fixed 6) | inner-rows(flex)]. The inner rows splitter
         // has a horizontal divider; where it meets the outer vertical divider, the
         // outer divider cell must show ├ (a vertical line branching right into the
