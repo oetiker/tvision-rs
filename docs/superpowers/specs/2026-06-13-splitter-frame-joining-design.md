@@ -1,7 +1,9 @@
 # Splitter Frame-Joining — design
 
 **Date:** 2026-06-13
-**Status:** Proposed (for review) — v2, after a Turbo-Vision-mindset review
+**Status:** Proposed (for review) — v3, after two Turbo-Vision-mindset reviews
+(v2 fixed the read-back/trait-method issues; v3 fixes the `as_any_mut` downcast
+keystone the second review found)
 **Builds on:** `Splitter` (rstv-original extension) — spec
 [`2026-06-13-splitter-design.md`](2026-06-13-splitter-design.md), plan
 [`2026-06-13-splitter.md`](../plans/2026-06-13-splitter.md). Implemented on branch
@@ -95,8 +97,19 @@ hosts — divider→frame and divider→divider (including nested grids).
 - **No buffer read-back / screen inspection** (rejected by review as re-adding
   what D8 deleted).
 - **No new `View` trait method.** Producers are concrete (`Splitter`, `Frame`);
-  the window reaches them by the existing `as_any` downcast (the same mechanism
-  Window already uses to push the zoom flag to its Frame).
+  the window/parent reaches them by the existing `as_any_mut` downcast (the same
+  mechanism Window already uses to push the zoom flag to its Frame —
+  `window.rs:357-365` → `child_mut → as_any_mut → downcast_mut::<Frame>()`). This
+  works for `Frame` because `Frame` overrides `as_any_mut` to return `Some(self)`
+  (`frame.rs:450-452`). **Keystone fix (required):** `Splitter` does **not** yet
+  do this — its `#[delegate(to = group)]` forwards `as_any_mut` to the inner
+  `Group`, which returns `None`, so a parent cannot currently downcast a pane (or
+  the window's interior child) to `Splitter`. This design therefore requires
+  `Splitter` to override `as_any_mut` itself (see Component 5). That is **not** a
+  new trait method (`as_any_mut` already exists and is in
+  `tvision-macros/src/specs.rs`), so the `delegate_view` spy test stays green — it
+  is only a `skip(as_any_mut)` + a one-line override, exactly the `Frame`
+  precedent.
 - No coupling of divider line-*weight* to window focus. Dividers keep their
   natural weight; mixed junction glyphs bridge single↔double.
 - No new "split window" constructor (YAGNI).
@@ -185,56 +198,98 @@ impl Frame {
 `Frame::draw` is extended: as it emits each border cell, if a mark matches that
 edge+offset it writes `frame_junction(edge, self_weight, mark.stem, glyphs)`
 instead of the plain edge/corner glyph (`self_weight` = Double when active, Single
-otherwise — the frame already branches on this). With no marks, the output is
-identical to today. This is the faithful `frameLine` composition, minus the
-forbidden sideways walk (the data arrives pre-computed).
+otherwise — the frame already branches on this, `frame.rs:246-252`). The per-cell
+top/middle/bottom edge loops (`frame.rs:277-305`) make this a clean drop-in. Two
+ordering/guard requirements:
+- **Corner guard:** ignore any mark at a corner offset (0 or `size.x-1` /
+  `size.y-1`) — corners keep their corner glyph. (A divider abutment can only land
+  on an interior edge cell for an interior-filling splitter, but guard explicitly.)
+- **Apply marks before the title/number/icon overlays** (`frame.rs:307-362`) so an
+  icon never lands on a junction. (Junctions are interior-edge cells, away from the
+  top-center title, so this is non-conflicting in practice — but ordering it this
+  way is unambiguous.)
+
+With no marks, the output is identical to today. This is the faithful `frameLine`
+composition, minus the forbidden sideways walk (the data arrives pre-computed).
 
 ### 4. `Window` — opt-in flag + brokering draw override (`src/window/window.rs`)
 
 - Add `joined_lines: bool` (default `false`) + builder `with_joined_lines(self)
   -> Self` / setter.
 - Override `draw` (Window currently delegates it to its group): when
-  `joined_lines`, (a) find the interior splitter child via `as_any` downcast,
-  (b) ask it for `frame_junction_marks(frame_bounds)`, (c) push them to the Frame
-  child via `set_junction_marks`, then (d) draw the group as usual. When the flag
-  is off (or there is no splitter child), it is behaviorally identical to the
+  `joined_lines`, (a) find the interior splitter child by trying an `as_any_mut` →
+  `downcast_mut::<Splitter>()` on each non-frame child (the one that succeeds is
+  the splitter; needs the Component-5 `Splitter` override), (b) collect its
+  `frame_junction_marks(frame_bounds)` into an owned `Vec`, (c) **drop that borrow**
+  and then downcast the Frame child (`downcast_mut::<Frame>()`, the existing zoom
+  precedent) and `set_junction_marks`, then (d) draw the group as usual. When the
+  flag is off (or there is no splitter child), it is behaviorally identical to the
   delegated draw — existing window snapshots must not change.
 
 ```rust
 fn draw(&mut self, ctx: &mut DrawCtx) {
     if self.joined_lines {
         let fb = self.frame_bounds();
-        if let Some(marks) = self.interior_splitter()      // as_any downcast
-                                   .map(|s| s.frame_junction_marks(fb)) {
-            if let Some(frame) = self.frame_mut() {         // child[0], typed
-                frame.set_junction_marks(marks);
-            }
+        // Borrow the splitter child mutably only to READ its layout; the marks
+        // Vec is owned, so the borrow ends before we touch the frame child.
+        let marks = self.interior_splitter_mut()           // child_mut + downcast_mut::<Splitter>
+                        .map(|s| s.frame_junction_marks(fb));
+        if let (Some(marks), Some(frame)) = (marks, self.frame_mut()) { // downcast_mut::<Frame>
+            frame.set_junction_marks(marks);
         }
     }
     self.group.draw(ctx);
 }
 ```
 
-Marks come from layout state (divider positions), which is valid before drawing —
-so computing them at the top of `draw` is fine and always current. (The window
-already reaches its Frame concretely to push the zoom flag; this reuses that
-parent→child channel.)
+`interior_splitter_mut()` iterates the group's non-frame children and returns the
+first that `downcast_mut::<Splitter>()` succeeds on (no stored id needed). The two
+child borrows (splitter, then frame) are **sequential** — the marks are cloned out
+between them, so only one `&mut` child is live at a time (D3-safe, no aliasing).
+`frame_junction_marks` itself is `&self` on `Splitter`; the window simply holds the
+`&mut Splitter` transiently to call it. Marks come from layout state (divider
+positions), valid before drawing, so computing them at the top of `draw` is always
+current. (This reuses the exact parent→child channel Window already uses to push
+the zoom flag to its Frame — `window.rs:357-365`.)
 
-### 5. `Splitter` — frame marks + interior crossings (`src/widgets/splitter/mod.rs`)
+### 5. `Splitter` — downcast keystone + frame marks + interior crossings (`src/widgets/splitter/mod.rs`)
 
+- **Keystone — make `Splitter` downcastable** (required by Components 4 and by the
+  interior crossings below). Add `as_any_mut` to the delegate skip list and
+  override it, exactly like `Frame` (`frame.rs:450-452`):
+  ```rust
+  #[crate::delegate(to = group, skip(as_any_mut))]
+  impl View for Splitter { /* existing overrides … */
+      fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> { Some(self) }
+  }
+  ```
+  This is **not** a new `View` method (`as_any_mut` already exists / is in
+  `specs.rs`), so the `delegate_view` spy test stays green. Without it,
+  `splitter.as_any_mut()` forwards to the inner `Group` and returns `None`, and
+  every downcast in this design fails.
 - `pub(crate) fn frame_junction_marks(&self, frame_bounds: Rect) -> Vec<JunctionMark>`:
   for each of this splitter's dividers, if its end abuts the given frame edge,
   emit a mark (edge, frame-local offset, this divider's weight). **Recurses into
-  pane sub-splitters** (a nested splitter's divider that reaches the outer frame
-  contributes its own mark), translating coordinates into frame-local space. A
-  `Hidden`/`Locked` divider that drew nothing emits no mark. Pure function of
-  layout — no drawing, unit-testable.
-- **Interior crossings in `draw_dividers`:** after drawing a divider, for each
-  adjacent pane that is a `Splitter` (via `as_any` downcast) with perpendicular
-  dividers, overlay the correct tee/cross (`divider_junction`) on this divider's
-  own cell at the meeting position (e.g. an inner `rows` splitter on the right of
-  an outer vertical divider → `├` at the inner divider's row). Weight-correct;
-  draws only on *this* splitter's own cells.
+  pane sub-splitters** (reached by `child_mut → as_any_mut → downcast_mut::<Splitter>`),
+  translating coordinates into frame-local space (see "Coordinates" — the frame
+  interior starts at `(1,1)`, so a child's parent-local position is offset by the
+  splitter's own origin and then by the frame inset). A `Hidden`/`Locked` divider
+  that drew nothing emits no mark. Pure function of layout — no drawing,
+  unit-testable. (It is `&self`; recursion borrows each pane child `&mut`
+  transiently only to read — the read returns owned data, so borrows don't overlap.)
+- **Interior crossings — composed in `draw(&mut self)`, not the `&self`
+  `draw_dividers`.** After `self.group.draw(ctx)` + `self.draw_dividers(ctx)`, run
+  `self.draw_interior_crossings(ctx)` (which is `&mut self`): for each adjacent pane
+  that `downcast_mut::<Splitter>()` succeeds on, read its perpendicular divider
+  positions (owned `Vec`, borrow released), then overlay the correct tee/cross
+  (`divider_junction`) on *this* splitter's own divider cells at the meeting
+  positions (e.g. an inner `rows` splitter on the right of an outer vertical divider
+  → `├` at the inner divider's row). It draws only on this splitter's own cells, via
+  `ctx`. (The `&self draw_dividers` cannot do this — reading a child needs `&mut`
+  access, and `Group` exposes only `&mut` child accessors; hence the move to
+  `draw`.) Children are laid out (`resolve_layout_local`) before the parent draws,
+  so the child divider positions are valid — the only hazard is the access path,
+  resolved by using `draw(&mut self)` + `child_mut`.
 
 ### 6. Example (`examples/splitter.rs`)
 
@@ -257,7 +312,12 @@ Window::draw (joined_lines):
 
 All coordinates are **owner-local** (frame-local marks; splitter-local crossings),
 consistent with the downward `DrawCtx` convention — no absolute/screen coords, no
-read-back.
+read-back. Concretely, a divider at splitter-local axis position `dx` maps to a
+frame-edge offset of `splitter.origin - frame.origin + dx`; for a top-level
+splitter filling a window interior that is `1 + dx` (the frame inset is one cell).
+A nested sub-splitter adds its own parent-local origin first. `frame_bounds` is
+passed in so the splitter never assumes the inset — it computes the offset from the
+actual frame rect.
 
 ## Weight handling
 
@@ -275,8 +335,8 @@ other's focus state.
   frame joins with `╦/╩` (active) or `╥/╨` (passive) — still correct.
 - **Splitter inset from the frame** (a margin): the divider end does not abut the
   frame edge, so no mark is emitted → nothing joins (correct).
-- **Window not containing a splitter:** `interior_splitter()` is `None` → no marks
-  → unchanged.
+- **Window not containing a splitter:** `interior_splitter_mut()` is `None` (no
+  child downcasts to `Splitter`) → no marks → unchanged.
 
 ## Testing (D11)
 
@@ -289,8 +349,13 @@ other's focus state.
   passive single frame → `┬…┴`; active double frame → `╤…╧`; the grid → interior
   `├` + `┤` to the right frame.
 - **Regression:** an existing window snapshot WITHOUT the flag is unchanged.
-  Because **no `View` trait method is added**, `tvision-macros/src/specs.rs` and
-  the `delegate_view` spy test need **no change** (a plus of this design over v1).
+  **No new `View` trait method** is added — the only delegate change is
+  `Splitter` adding `skip(as_any_mut)` + a one-line `as_any_mut` override (the
+  `Frame` precedent), and since `as_any_mut` is already declared in
+  `tvision-macros/src/specs.rs`, the `delegate_view` spy test stays green with no
+  `specs.rs` edit. A focused test should assert `(&mut splitter as &mut dyn
+  View).as_any_mut().and_then(|a| a.downcast_mut::<Splitter>()).is_some()` so the
+  keystone override can't silently regress.
 
 ## Alternatives considered
 
