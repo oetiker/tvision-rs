@@ -30,6 +30,7 @@ has no sensible base default — are the only methods you *must* write; everythi
 else defaults.
 
 ```rust,ignore
+// Illustrative sketch — not a standalone program.
 fn state(&self) -> &ViewState { &self.state }
 fn state_mut(&mut self) -> &mut ViewState { &mut self.state }
 ```
@@ -44,7 +45,10 @@ also derives from *concrete* widgets: an "About" box is `class AboutDialog :
 public TDialog`, reusing all of `TDialog`'s behaviour and overriding only
 `draw`. With no inheritance, you can't extend `Dialog`; you **embed** one:
 
-```rust,ignore
+```rust
+# use tvision as tv;
+# use tv::Dialog;
+# #[allow(dead_code)]
 struct AboutDialog { dialog: Dialog }
 ```
 
@@ -60,7 +64,11 @@ The `#[delegate]` attribute macro (from the `tvision-macros` crate, re-exported
 as `tv::delegate`) fills the gap automatically. You write only the methods that
 differ; the macro injects a forwarder for the rest:
 
-```rust,ignore
+```rust
+# use tvision as tv;
+# use tv::{delegate, Dialog, View, DrawCtx};
+# #[allow(dead_code)]
+# struct AboutDialog { dialog: Dialog }
 #[delegate(to = dialog)]
 impl View for AboutDialog {
     fn draw(&mut self, ctx: &mut DrawCtx) { /* custom paint */ }

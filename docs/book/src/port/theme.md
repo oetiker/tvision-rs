@@ -24,9 +24,13 @@ scheme:
 
 A view never walks a palette chain. It asks the theme for the role it wants:
 
-```rust,ignore
-let style = ctx.theme.style(Role::FrameActive);
-let corner = ctx.theme.glyphs().frame_tl; // ┌
+```rust
+# use tvision as tv;
+# use tv::Role;
+# fn _demo(ctx: &tv::DrawCtx) {
+let _style = ctx.style(Role::FrameActive);
+let _corner = ctx.glyphs().frame_tl; // ┌
+# }
 ```
 
 ## `Role` is the palette index, named

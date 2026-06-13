@@ -32,9 +32,12 @@ and that method pushes the
 variant onto a single queue. The loop drains the queue once per pump, in
 insertion order, and applies each effect against the state it owns.
 
-```rust,ignore
+```rust
+# use tvision as tv;
+# fn _demo(ctx: &mut tv::Context, id: tv::ViewId) {
 // inside a view's handle_event: "close me" — recorded, not performed.
-ctx.request_close(self.id());
+ctx.request_close(id);
+# }
 ```
 
 Each variant names an effect on loop-owned state that the view could not do

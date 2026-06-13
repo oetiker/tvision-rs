@@ -23,7 +23,9 @@ tv = { package = "tvision", version = "0.1" }
 Now everything is reachable through the `tv::` namespace — the path is the
 namespace the old `T` prefix was faking:
 
-```rust,ignore
+```rust
+# #![allow(unused_imports)]
+# use tvision as tv;
 use tv::{Program, Desktop, MenuBar, StatusLine, CrosstermBackend};
 ```
 

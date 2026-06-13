@@ -12,7 +12,11 @@ which you **match arm-by-arm** instead of masking. Each `ev*` class maps onto on
 variant, and the variant *carries the payload that class actually uses* — so the
 compiler, not a convention, guarantees you only read fields that exist:
 
-```rust,ignore
+```rust
+# use tvision as tv;
+# use tv::Event;
+# #[allow(unused_variables)]
+# fn _demo(event: Event) {
 match event {
     Event::KeyDown(k)         => { /* k.key, k.modifiers */ }
     Event::MouseDown(m)       => { /* m.position, m.buttons */ }
@@ -20,6 +24,7 @@ match event {
     Event::Broadcast { .. }   => { /* a command for whoever cares */ }
     _ => {}
 }
+# }
 ```
 
 A handled event is consumed by setting it to [`Event::Nothing`](../api/tvision/event/enum.Event.html) —

@@ -10,8 +10,12 @@ and not `options`.
 We have the bytes to spare, so rstv turns each flag word into a plain
 struct of named `bool` fields. The bit just becomes a field:
 
-```rust,ignore
+```rust
+# use tvision as tv;
+# use tv::View;
+# fn _demo(view: &dyn tv::View) {
 if view.state().state.focused { /* ... */ }   // was: state & sfFocused
+# }
 ```
 
 ## The four families

@@ -16,10 +16,11 @@ App code constantly mints its own commands, so [`Command`](../api/tvision/comman
 is **open**: a one-field newtype around a `&'static str`, with the framework's
 standard commands exposed as `SCREAMING_SNAKE` associated constants.
 
-```rust,ignore
-let ok     = tv::Command::OK;     // ports cmOK   — value "tv.ok"
-let cancel = tv::Command::CANCEL; // ports cmCancel
-let quit   = tv::Command::QUIT;   // ports cmQuit
+```rust
+# use tvision as tv;
+let _ok     = tv::Command::OK;     // ports cmOK   — value "tv.ok"
+let _cancel = tv::Command::CANCEL; // ports cmCancel
+let _quit   = tv::Command::QUIT;   // ports cmQuit
 ```
 
 The integer never comes back. In C++ those numbers existed only to serialize a
@@ -28,8 +29,10 @@ needed, so a command's value is now pure *identity*: a namespaced string. Your
 app defines its own with [`Command::custom`](../api/tvision/command/struct.Command.html#method.custom),
 picking a dotted prefix unique to you:
 
-```rust,ignore
+```rust
+# use tvision as tv;
 const REFRESH: tv::Command = tv::Command::custom("myapp.refresh");
+# let _ = REFRESH;
 ```
 
 The dotted prefix is the namespace the `cm` prefix was faking — `tv.*` for the
