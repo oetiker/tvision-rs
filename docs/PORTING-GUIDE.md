@@ -49,8 +49,8 @@ prefixed global constants; a 256-entry `TCommandSet`. The prefixes are manual
 namespacing — 1991 C++ had no real namespaces.
 
 **Deviation.**
-- Crate published as `tvision`; **house style `tv::`** on every type/constant
-  (consumers add `tv = { package = "tvision" }` once, no `use` needed). The path
+- Crate published as `rstv`; **house style `tv::`** on every type/constant
+  (consumers add `tv = { package = "rstv" }` once, no `use` needed). The path
   *is* the namespace the `T` prefix was faking.
 - Drop the `T` prefix (`TView` → `tv::View`). Methods are `snake_case`
   (`handleEvent` → `handle_event`).

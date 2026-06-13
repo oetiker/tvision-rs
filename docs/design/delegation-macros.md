@@ -51,8 +51,8 @@ zero runtime/binary cost.
 
 ## Architecture
 
-`tvision-macros` is a workspace member (`proc-macro = true`). `tvision` depends on
-it and re-exports `pub use tvision_macros::delegate;`.
+`rstv-macros` is a workspace member (`proc-macro = true`). `rstv` depends on
+it and re-exports `pub use rstv_macros::delegate;`.
 
 `#[delegate(to = <field>, skip(m1, m2, …))]` on an `impl Trait for Type` block:
 
@@ -86,17 +86,17 @@ error — a typo can't silently turn into a forward.
 ### Path resolution works under any consumer alias
 
 Generated forwarder signatures name crate types (`ViewState`, `DrawCtx`, `Point`,
-…). They must resolve in three places: inside the `tvision` lib, in its examples,
+…). They must resolve in three places: inside the `rstv` lib, in its examples,
 and downstream — where the house style imports the crate under an arbitrary alias
-(`tv = { package = "tvision" }`). The recipe:
+(`tv = { package = "rstv" }`). The recipe:
 
-- `src/lib.rs` declares `extern crate self as tvision;` (so `::tvision::T` resolves
+- `src/lib.rs` declares `extern crate self as rstv;` (so `::rstv::T` resolves
   *inside* the lib).
 - The macro asks `proc-macro-crate` for the crate's name *at the call site* and
-  emits `::<that name>::T`. `crate_name("tvision")` returns `Itself`/`Name("tvision")`
-  in-crate and in examples (both → `tvision`), and `Name("tv")` (or whatever the
+  emits `::<that name>::T`. `crate_name("rstv")` returns `Itself`/`Name("rstv")`
+  in-crate and in examples (both → `rstv`), and `Name("tv")` (or whatever the
   consumer chose) downstream. **Never `crate::`** — that would resolve to the
-  *example/consumer* crate, not `tvision`.
+  *example/consumer* crate, not `rstv`.
 
 This was proven by a spike before the spec was written: a delegated type compiled
 and forwarded correctly from an internal module, from `examples/hello.rs`, and

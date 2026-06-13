@@ -53,7 +53,7 @@ drains → `pending_modal` → `pump_and_drive`). The modal-close site at 886 mu
 
 - Every `impl View::valid` (Group, Dialog, Window, InputLine, Editor, FileEditor,
   test stubs).
-- `tvision-macros/src/specs.rs` `valid` forwarder (line ~36) → new signature.
+- `rstv-macros/src/specs.rs` `valid` forwarder (line ~36) → new signature.
 - `Group::valid` (`group.rs:847`) `children.iter().all(|c| c.view.valid(cmd))` →
   manual `iter_mut` loop threading `&mut ctx`, **keeping the short-circuit**
   (C++ `firstThat` stops at the first invalid child).

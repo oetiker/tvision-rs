@@ -106,11 +106,11 @@ pub use keymap::{KeyStroke, Keymap, Resolve};
 pub use menu::{
     Menu, MenuBar, MenuBox, MenuBuilder, MenuItem, MenuView, MenuViewState, alt, popup_menu,
 };
+pub use rstv_macros::delegate;
 pub use screen::{Buffer, Cell, DrawBuffer};
 pub use status::{HelpCtxRange, StatusColors, StatusDef, StatusItem, StatusLine};
 pub use theme::{Role, Theme};
 pub use timer::{Clock, ManualClock, SystemClock, TimerId, TimerQueue};
-pub use rstv_macros::delegate;
 pub use validate::{
     FilterValidator, LookupValidator, PXPictureValidator, RangeValidator, RegexError,
     RegexValidator, StringLookupValidator, Validator,

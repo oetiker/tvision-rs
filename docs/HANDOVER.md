@@ -14,26 +14,31 @@
 > **no committed next phase** — see "Next" for the optional follow-ups. When
 > something lands: add an IMPLEMENTATION-LOG section and update this file.
 
-## Current state (2026-06-13, Docs Phase 3 landed — verified-docs gates live)
+## Current state (2026-06-13, Docs Phase 3 landed + crate renamed to `rstv`)
 
-**Code HEAD = `21e09df` + uncommitted CI/log/handover wiring (this commit);
-1183 lib tests + 15 xtask + 7 doctests green; clippy `--all-targets` + fmt clean;
-`cargo xtask docs` OK + link check clean + 0 leftover include directives.**
+**The crate is now `rstv`** (was `tvision`); the proc-macro crate is `rstv-macros`;
+the `tv::` house-style alias is unchanged (`tv = { package = "rstv" }`). See the
+rename entry at the top of IMPLEMENTATION-LOG. Upstream `magiblot/tvision` and the
+C++ source paths (`source/tvision`, `scratch/tvision-spec`) are NOT renamed.
+
+**Code HEAD ≈ `9490dbe` (rename) + this doc pass; 1183 lib + 15 xtask + 7 doctests
+green; clippy `--all-targets` + fmt clean; `cargo xtask test` + `cargo xtask docs`
+clean (link check + 0 leftover include directives).**
 
 Docs Phase 3 made the guide self-verifying (full IMPLEMENTATION-LOG section at
 top). The keystone is a **`cargo xtask test`** gate: it runs `rustdoc --test`
-per chapter with `--extern tvision=<rlib> -L deps` (NOT mdBook's `book.test`,
-which can only pass `-L` and so can never resolve `use tvision::…`). Guide code
+per chapter with `--extern rstv=<rlib> -L deps` (NOT mdBook's `book.test`,
+which can only pass `-L` and so can never resolve `use rstv::…`). Guide code
 blocks were triaged — user-facing snippets converted to compiling doctests via a
-hidden `# use tvision as tv;` + uncalled `# fn _demo(recv: &mut tv::Foo){…}`
+hidden `# use rstv as tv;` + uncalled `# fn _demo(recv: &mut tv::Foo){…}`
 wrapper; genuinely-internal sketches kept `rust,ignore` with an explicit
 `// Illustrative sketch …` label. `docs.yml` now runs `cargo build --examples`,
-`cargo test --doc -p tvision`, and `cargo xtask test` before `cargo xtask docs`.
+`cargo test --doc -p rstv`, and `cargo xtask test` before `cargo xtask docs`.
 
 **Phase-3 gotchas for the next editor:**
-- **Doctest convention:** in the book, the crate is `tvision`, NOT `tv`. Any new
-  ```` ```rust ```` guide block must add a hidden `# use tvision as tv;` (or
-  `extern`-free `# use tvision::…;`). For method calls on a live `Program`/
+- **Doctest convention:** in the book, the crate is `rstv`, NOT `tv`. Any new
+  ```` ```rust ```` guide block must add a hidden `# use rstv as tv;` (or
+  `extern`-free `# use rstv::…;`). For method calls on a live `Program`/
   `Context`/view, wrap in a hidden uncalled `# fn _demo(recv: &mut tv::Foo){…}`.
   After editing, run `cargo xtask test` — it prints the real rustc error.
 - **Never silence unused-var warnings with visible `let _ = …` in teaching code**
@@ -99,7 +104,7 @@ quality pass** over both doc layers (on top of the Plan 1 tooling machine, merge
   never used Turbo Vision can read it — with all C++ confined to a concise
   `# Turbo Vision heritage` section per item; added **Guide cross-links** from
   all 22 modules into their narrative chapter.
-- **Project renamed to `rstv`** (branding only: crate stays `tvision`, namespace
+- **Project renamed to `rstv`** (branding only: crate stays `rstv`, namespace
   stays `tv::`, C++ origin stays "Turbo Vision").
 - **Guide IA:** `port/faithful.md` = philosophy+gateway; `reference/deviations.md`
   = the canonical "Differences from C++ Turbo Vision" (`#d1`..`#d15` anchors,
@@ -191,7 +196,7 @@ Remaining latent edge notes (not worth fixing now):
   invalidate_all. `libc` dep added. Two-stage reviewed.
 - **C7 ✅ (`8c9bf85` + `20871fd`)** — help-ctx refresh / OneOf status line.
   `View::get_help_ctx()` trait method (default: delegates to
-  `ViewState::get_help_ctx()`); forwarder in `tvision-macros/src/specs.rs`;
+  `ViewState::get_help_ctx()`); forwarder in `rstv-macros/src/specs.rs`;
   `delegate_view` spy updated (27 methods). `Program::pump_once` idle arm wires
   `TStatusLine::update()`: reads `captures.top_modal_view()` as rstv's
   `TheTopView` equivalent, calls `v.get_help_ctx()`, then `sl.set_help_ctx(top_ctx)`
@@ -310,13 +315,13 @@ the guide's code is self-verifying. Remaining candidates, none committed:
   exhausted — Phase A+B+C all ✅).
 
 When editing the guide, follow the Phase-3 doctest convention in "Current state"
-(hidden `# use tvision as tv;` + `# fn _demo(recv){…}` wrapper; run
+(hidden `# use rstv as tv;` + `# fn _demo(recv){…}` wrapper; run
 `cargo xtask test`).
 
 ### Verifying docs edits
 - Integrated tree, `CARGO_TARGET_DIR=/home/oetiker/scratch/cargo-target`.
 - `cargo xtask test` (guide doctests — prints the real rustc error), `cargo test
-  --doc -p tvision` (src doctests), `cargo build --examples`, then `cargo xtask
+  --doc -p rstv` (src doctests), `cargo build --examples`, then `cargo xtask
   docs` (regenerates screenshots ≈40s deterministic; builds + link-checks).
 - After any `{{#rustdoc_include}}` edit, grep the built HTML for leftover
   directives (`grep -rl rustdoc_include docs/book/book` must be empty) — the link
@@ -407,6 +412,6 @@ C2/C9 dialogs should follow the same shape rather than inventing new seams.
   out-of-scope changes are a real failure mode (a B2 implementer modified
   the pump unprompted; review caught it and the proper redesign landed).
 - When you add a `View` trait method, add a matching forwarder to
-  `tvision-macros/src/specs.rs` (the `delegate_view` spy test catches
+  `rstv-macros/src/specs.rs` (the `delegate_view` spy test catches
   existing methods, not brand-new defaulted ones). A new `Deferred` variant
   needs NO forwarder. Validator-trait methods are NOT `View` methods.

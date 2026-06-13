@@ -35,7 +35,7 @@ that is native Rust.
   port in the guide or commits** — the guide is purely C++→Rust.
 
 ## Commands
-This is a **Cargo workspace** (`tvision` + `tvision-macros`) — use `--workspace`.
+This is a **Cargo workspace** (`rstv` + `rstv-macros`) — use `--workspace`.
 
 ```bash
 export CARGO_TARGET_DIR=/home/oetiker/scratch/cargo-target  # artifacts land HERE, not ./target
@@ -102,7 +102,7 @@ after a session restart — until then, create the worktree manually at the
 `/scratch` path and dispatch a non-isolated subagent).
 
 ## Locked decisions (details in the guide)
-Crate `tvision`, house style `tv::`; drop `T` prefix; `snake_case` methods;
+Crate `rstv`, house style `tv::`; drop `T` prefix; `snake_case` methods;
 constant families → open newtypes with SCREAMING_SNAKE assoc consts
 (`tv::Command::OK`); inheritance → `View` trait + `ViewState` composition;
 pointers → `ViewId` handles + downward `Context`; events → `enum Event` + match;
@@ -148,16 +148,16 @@ D-rule / design note, not here.
 completion is tracked per row (✅) in `docs/PORT-ORDER.md`; per-commit rationale
 is in `docs/IMPLEMENTATION-LOG.md`.** This section deliberately does **not**
 restate the phase-by-phase snapshot (it goes stale) — read those three. The
-`#[delegate]` proc-macro (`tvision-macros`) is landed and adopted codebase-wide.
+`#[delegate]` proc-macro (`rstv-macros`) is landed and adopted codebase-wide.
 
 ## Conventions
 - English for all code/comments/identifiers (user-facing strings may be localized).
 - Commit messages end with the project's Co-Authored-By trailer
 - **Delegation (D2 embed-and-delegate):** a type that embeds an inner view forwards
   the un-overridden `View` methods via `#[delegate(to = <field>)]` (proc-macro in
-  `tvision-macros`; re-exported as `tvision::delegate`). Write only the methods that
+  `rstv-macros`; re-exported as `rstv::delegate`). Write only the methods that
   differ; `skip(<m>)` leaves a method at its trait default. **When you add a `View`
-  trait method, add a matching forwarder to `tvision-macros/src/specs.rs`** — the
+  trait method, add a matching forwarder to `rstv-macros/src/specs.rs`** — the
   spy test `tests/delegate_view.rs` catches a forgotten forwarder for existing
   methods, but a brand-new defaulted method would silently not forward. Adopting
   the macro at an existing site is behaviour-preserving (`skip(...)` = exactly what

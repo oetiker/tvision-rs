@@ -5,6 +5,34 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## Crate rename: `tvision` → `rstv` (2026-06-13)
+
+User call: "go full rstv and drop the tvision crate name — it may lead to
+confusion." With product, repo, and (now) crate sharing one name, the only
+remaining "tvision" was the published crate. Renamed the crate `tvision` → `rstv`
+and the proc-macro crate `tvision-macros` → `rstv-macros`; the short `tv::`
+house-style alias is **kept** (`tv = { package = "rstv" }`), so the namespace and
+all guide snippets are unchanged. (This reverses the prior "crate stays tvision"
+locked decision; CLAUDE.md updated.) Crate was unpublished (v0.1.0) — no crates.io
+disruption.
+
+Mechanical, gate-verified sweep (targeted patterns; the upstream
+`magiblot/tvision` and C++ source paths `source/tvision`/`include/tvision`/
+`scratch/tvision-spec` are deliberately preserved):
+- Code: Cargo package names + dir rename, `extern crate self as rstv`, the
+  delegate macro's `crate_name("rstv")` path resolution, `use tvision`→`use rstv`.
+- insta: 84 snapshot baselines renamed `tvision__*`→`rstv__*` (content is
+  crate-name-agnostic; unchanged — verified).
+- Guide: `../api/tvision/`→`../api/rstv/` links, `use rstv`, prose; rustdoc now
+  builds to `doc/rstv/`. The xtask doctest gate now passes `--extern
+  rstv=librstv.rlib`.
+- Methodology docs (CLAUDE.md locked decision, HANDOVER, PORTING-GUIDE, design/)
+  updated; archived plans + this log's prior entries keep their original wording.
+
+Verified: 1183 lib + 15 xtask + 7 doctests green; clippy `--all-targets` + fmt
+clean; `cargo xtask test` + `cargo xtask docs` (link check + 0 leftover includes)
+clean. Commit `9490dbe` (code+guide) + this doc pass.
+
 ## Docs Phase 3 — verified docs / doctest gates (2026-06-13)
 
 Made the guide's code self-verifying so it cannot silently drift. Scope: FULL

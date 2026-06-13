@@ -41,10 +41,7 @@ pub fn run() -> Result<()> {
         rlib.display()
     );
     let deps = target.join("debug").join("deps");
-    let extern_arg = format!(
-        "rstv={}",
-        rlib.to_str().context("rlib path is not UTF-8")?
-    );
+    let extern_arg = format!("rstv={}", rlib.to_str().context("rlib path is not UTF-8")?);
 
     // 2. Enumerate chapter source files via mdBook (respects SUMMARY.md; skips
     //    draft chapters that have no source path).
