@@ -26,7 +26,7 @@ A clickable command button — the `~` marks the hot-letter; `default: true` mak
 {{#include screens/button.html}}
 
 ```rust,ignore
-{{#rustdoc_include ../../examples/gallery.rs:button}}
+{{#rustdoc_include ../../../examples/gallery.rs:button}}
 ```
 
 ### Check boxes
@@ -37,7 +37,7 @@ bitmask.
 {{#include screens/checkboxes.html}}
 
 ```rust,ignore
-{{#rustdoc_include ../../examples/gallery.rs:checkboxes}}
+{{#rustdoc_include ../../../examples/gallery.rs:checkboxes}}
 ```
 
 ### Radio buttons
@@ -48,7 +48,7 @@ index.
 {{#include screens/radiobuttons.html}}
 
 ```rust,ignore
-{{#rustdoc_include ../../examples/gallery.rs:radiobuttons}}
+{{#rustdoc_include ../../../examples/gallery.rs:radiobuttons}}
 ```
 
 ## Text entry & labels
@@ -61,7 +61,7 @@ hot-letter focuses the field.
 {{#include screens/inputline.html}}
 
 ```rust,ignore
-{{#rustdoc_include ../../examples/gallery.rs:inputline}}
+{{#rustdoc_include ../../../examples/gallery.rs:inputline}}
 ```
 
 ### Input line with history
@@ -72,7 +72,7 @@ named channel.
 {{#include screens/history.html}}
 
 ```rust,ignore
-{{#rustdoc_include ../../examples/gallery.rs:history}}
+{{#rustdoc_include ../../../examples/gallery.rs:history}}
 ```
 
 ### Static text
@@ -82,7 +82,7 @@ Read-only text with word-wrap; a leading `\x03` centers a line.
 {{#include screens/statictext.html}}
 
 ```rust,ignore
-{{#rustdoc_include ../../examples/gallery.rs:statictext}}
+{{#rustdoc_include ../../../examples/gallery.rs:statictext}}
 ```
 
 ## Lists & trees
@@ -96,7 +96,7 @@ wrapper view is the idiomatic deferred-init pattern.
 {{#include screens/listbox.html}}
 
 ```rust,ignore
-{{#rustdoc_include ../../examples/gallery.rs:listbox}}
+{{#rustdoc_include ../../../examples/gallery.rs:listbox}}
 ```
 
 ### Outline
@@ -107,7 +107,7 @@ scroll bars.
 {{#include screens/outline.html}}
 
 ```rust,ignore
-{{#rustdoc_include ../../examples/gallery.rs:outline}}
+{{#rustdoc_include ../../../examples/gallery.rs:outline}}
 ```
 
 ## Scrolling & display
@@ -120,7 +120,7 @@ A vertical and a horizontal scroll bar; the thumb position comes from the public
 {{#include screens/scrollbar.html}}
 
 ```rust,ignore
-{{#rustdoc_include ../../examples/gallery.rs:scrollbar}}
+{{#rustdoc_include ../../../examples/gallery.rs:scrollbar}}
 ```
 
 ### Memo
@@ -131,7 +131,7 @@ content.
 {{#include screens/memo.html}}
 
 ```rust,ignore
-{{#rustdoc_include ../../examples/gallery.rs:memo}}
+{{#rustdoc_include ../../../examples/gallery.rs:memo}}
 ```
 
 ### Terminal
@@ -142,7 +142,7 @@ A scrolling output view you *write into*. `init` and `write_bytes` need a
 {{#include screens/terminal.html}}
 
 ```rust,ignore
-{{#rustdoc_include ../../examples/gallery.rs:terminal}}
+{{#rustdoc_include ../../../examples/gallery.rs:terminal}}
 ```
 
 ## Windows & dialogs
@@ -154,7 +154,7 @@ A plain titled, movable, resizable window that hosts child views.
 {{#include screens/window.html}}
 
 ```rust,ignore
-{{#rustdoc_include ../../examples/gallery.rs:window}}
+{{#rustdoc_include ../../../examples/gallery.rs:window}}
 ```
 
 ### Dialog
@@ -165,7 +165,7 @@ buttons — the canonical Turbo Vision dialog.
 {{#include screens/dialog.html}}
 
 ```rust,ignore
-{{#rustdoc_include ../../examples/gallery.rs:dialog}}
+{{#rustdoc_include ../../../examples/gallery.rs:dialog}}
 ```
 
 ### Message box
@@ -176,7 +176,7 @@ helper builds one for you; this shows the equivalent assembled by hand.)
 {{#include screens/messagebox.html}}
 
 ```rust,ignore
-{{#rustdoc_include ../../examples/gallery.rs:messagebox}}
+{{#rustdoc_include ../../../examples/gallery.rs:messagebox}}
 ```
 
 ### Color picker
@@ -186,7 +186,7 @@ The truecolor picker dialog — a four-tab RGB / HSV / palette surface.
 {{#include screens/colorpicker.html}}
 
 ```rust,ignore
-{{#rustdoc_include ../../examples/gallery.rs:colorpicker}}
+{{#rustdoc_include ../../../examples/gallery.rs:colorpicker}}
 ```
 
 ### File dialog
@@ -197,7 +197,7 @@ buttons. The lists fill themselves when the dialog is run modally.
 {{#include screens/filedialog.html}}
 
 ```rust,ignore
-{{#rustdoc_include ../../examples/gallery.rs:filedialog}}
+{{#rustdoc_include ../../../examples/gallery.rs:filedialog}}
 ```
 
 ### Change-directory dialog
@@ -207,7 +207,7 @@ A directory chooser with a navigable tree.
 {{#include screens/chdirdialog.html}}
 
 ```rust,ignore
-{{#rustdoc_include ../../examples/gallery.rs:chdirdialog}}
+{{#rustdoc_include ../../../examples/gallery.rs:chdirdialog}}
 ```
 
 ### Editor window
@@ -218,7 +218,7 @@ line:column indicator.
 {{#include screens/editor.html}}
 
 ```rust,ignore
-{{#rustdoc_include ../../examples/gallery.rs:editor}}
+{{#rustdoc_include ../../../examples/gallery.rs:editor}}
 ```
 
 ## Application chrome
@@ -230,7 +230,7 @@ The top menu bar, built from nested pull-downs with hot-keys and accelerators.
 {{#include screens/menubar.html}}
 
 ```rust,ignore
-{{#rustdoc_include ../../examples/gallery.rs:menubar}}
+{{#rustdoc_include ../../../examples/gallery.rs:menubar}}
 ```
 
 ### Status line
@@ -241,5 +241,5 @@ clicked or keyed.
 {{#include screens/statusline.html}}
 
 ```rust,ignore
-{{#rustdoc_include ../../examples/gallery.rs:statusline}}
+{{#rustdoc_include ../../../examples/gallery.rs:statusline}}
 ```
