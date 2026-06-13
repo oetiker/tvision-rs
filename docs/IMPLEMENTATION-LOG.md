@@ -5,6 +5,54 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## Docs Phase 3 — verified docs / doctest gates (2026-06-13)
+
+Made the guide's code self-verifying so it cannot silently drift. Scope: FULL
+(confirmed with user) — a real compile gate for every guide code block, the src
+rustdoc doctests turned on, and all three gates wired into CI.
+
+- **New `cargo xtask test` gate** (`xtask/src/test.rs`). It compiles every
+  non-`ignore` ```` ```rust ```` block in the guide as a doctest. **Foundation
+  gotcha found + fixed mid-run:** mdBook's `MDBook::test(library_paths)` only
+  forwards `-L` search paths, so a doctest's `use tvision::…;` fails with "no
+  external crate tvision" (the crate never enters the extern prelude), and an
+  `extern crate` form instead trips "multiple candidates" against the shared
+  target dir's many stale `libtvision-*.rlib`. The first cut of the gate appeared
+  to pass only because the book had zero non-`ignore` blocks. Fix: invoke
+  `rustdoc --test <chapter.md> --edition 2024 --extern tvision=<rlib> -L deps`
+  per chapter (chapters enumerated via `Book::iter()`); rustdoc extracts the
+  blocks, honours `ignore`, processes hidden `#` lines, and — unlike mdBook —
+  **surfaces the real rustc error** on failure. The stable unhashed
+  `<target>/debug/libtvision.rlib` is used for `--extern`. Verified the gate
+  fails (exit 1 + E0424 with source line) on a deliberately-broken block.
+- **3 src rustdoc doctests turned on** (`lib.rs`, `backend/headless.rs`,
+  `desktop/background.rs`): `ignore` → compiling via hidden-line scaffolding; the
+  headless one drops the dev-only `insta::assert_snapshot!` (unavailable to
+  doctests). `cargo test --doc -p tvision`: **7 passed, 0 ignored** (was 4/3).
+- **Guide code blocks triaged + converted.** Convention: the book is an external
+  consumer, so a hidden `# use tvision as tv;` plus a hidden, uncalled
+  `# fn _demo(recv: &mut tv::Foo) { … }` wrapper lets a snippet type-check against
+  the real public API without constructing a runtime object or a terminal.
+  Converted **apps/** (14 blocks), **port/** + getting-started/installation
+  (8 blocks), **internals/custom-view** (Banner + delegate) and
+  **internals/drawing** (DrawBuffer). `theme.md` corrected to the public
+  `ctx.style`/`ctx.glyphs` (the `ctx.theme` field is private). Genuinely-internal
+  sketches stay `rust,ignore` with an explicit `// Illustrative sketch — not a
+  standalone program.` label: brokering's pump broker, the Deferred-drain match,
+  the event-loop skeleton, skeleton.md's `Program::new` shape, screenshots.md's
+  xtask `Screen` literal, and inheritance.md's bare trait-method bodies. The
+  example-backed `{{#rustdoc_include}}` blocks (gallery + hello) stay `ignore` —
+  their *example* compiles, which `cargo build --examples` covers.
+- **CI (`docs.yml`):** added `cargo build --examples`, `cargo test --doc -p
+  tvision`, and `cargo xtask test` ahead of `cargo xtask docs`.
+
+State: 1183 lib tests + 15 xtask + 7 doctests green; clippy `--all-targets` + fmt
+clean; `cargo xtask docs` OK + link check clean + 0 leftover include directives.
+
+Commits (oldest→newest): `43daeed` gate · `73b85d2` src doctests · `4b13429`
+gate `--extern` fix · `af7c926` apps/ · `d623bfe` rustfmt · `403e855` port/ +
+installation · `21e09df` internals/custom-view + labels · (this) CI wiring + log.
+
 ## Docs Phase 2 — widget gallery (2026-06-13)
 
 Built the example gallery (agreed approach B): every visible widget gets a
