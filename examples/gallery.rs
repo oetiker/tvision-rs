@@ -586,22 +586,36 @@ fn outline() -> Box<dyn View> {
 // ANCHOR_END: outline
 
 // ANCHOR: filedialog
-/// A `FileDialog` with an `Open` button. The file list is populated by
-/// `reset_current` when the dialog becomes the current view on the desktop.
+/// A `FileDialog` with an `Open` button. The file list is read from the current
+/// directory by `reset_current` when the dialog is shown modally. (The gallery
+/// first `cd`s into a small fixture dir so the listing is reproducible; a real
+/// app just builds the dialog.)
 fn filedialog() -> Box<dyn View> {
+    enter_gallery_fixture();
     let fd = FileDialog::new("*.*", "Open a File", "~N~ame", FD_OPEN_BUTTON, 2);
     Box::new(fd)
 }
 // ANCHOR_END: filedialog
 
 // ANCHOR: chdirdialog
-/// A `ChDirDialog` (Change Directory). The directory tree is populated by
-/// `reset_current` when the dialog is made current on the desktop.
+/// A `ChDirDialog` (Change Directory). The directory tree reflects the current
+/// directory, read by `reset_current` when the dialog is shown modally. (The
+/// gallery `cd`s into a fixture dir first for a reproducible tree.)
 fn chdirdialog() -> Box<dyn View> {
+    enter_gallery_fixture();
     let cd = ChDirDialog::new(CD_NORMAL, 3);
     Box::new(cd)
 }
 // ANCHOR_END: chdirdialog
+
+/// Switch into a committed fixture directory (`examples/gallery_fixture`) so the
+/// file/directory dialogs list fixed, reproducible content instead of whatever
+/// happens to be in the working directory. Gallery scaffolding only — not part
+/// of the widget API.
+fn enter_gallery_fixture() {
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/gallery_fixture");
+    let _ = std::env::set_current_dir(dir);
+}
 
 // ===========================================================================
 // Default chrome (used whenever a specimen does not replace it).
