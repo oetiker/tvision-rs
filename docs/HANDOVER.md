@@ -230,9 +230,9 @@ This session ran the **backlog run** end to end:
 ## Next — docs polish + examples (content + user-facing cleanup DONE)
 
 The guide prose, the user-facing cleanup/rename/IA/heritage/guide-links pass,
-**and the guide-page Rust-first pass (Phase 1 below)** have all landed. The docs
-now read for library users, guide and API alike. **Remaining docs work — two
-phases (the user's call on order):**
+the guide-page Rust-first pass (Phase 1), **and the example gallery (Phase 2)**
+have all landed. The docs now read for library users, guide and API alike, with
+a screenshot+code gallery of every widget. **Remaining docs work — one phase:**
 
 1. ~~**Guide-page Rust-first pass.**~~ ✅ **DONE this session** (see
    IMPLEMENTATION-LOG "Docs Phase 1 (guide)"). The 16 narrative pages under
@@ -244,17 +244,29 @@ phases (the user's call on order):**
    are now all intentional asides** (heritage blockquotes, linked `[deviation Dn]`
    citations, light parentheticals) — a future `grep 'C++'` will still hit them;
    that is expected.
-2. **Example gallery (Phase 2) — agreed approach "B".** One parameterized
-   `gallery` example binary with a per-widget `// ANCHOR:`-marked setup fn,
-   selected by a CLI arg; each visible widget (~30: Button, CheckBoxes, Cluster,
-   InputLine, ListBox, ScrollBar, Window, Dialog, MenuBar, StatusLine, Memo,
-   Editor, …) gets a minimal example + a tmux screenshot. Needs a small `args`
-   field on `xtask` `Screen`. **Why:** every documented line then compiles.
+2. ~~**Example gallery (Phase 2) — approach "B".**~~ ✅ **DONE this session**
+   (see IMPLEMENTATION-LOG "Docs Phase 2"). `examples/gallery.rs` renders one
+   widget per CLI arg; 20 widgets each have a `// ANCHOR:` builder + a
+   deterministic screenshot; a new **Widget Gallery** guide page
+   (`gallery.md`) pairs each screenshot with its anchored code, and key captures
+   are embedded into controls/dialogs/menus. `xtask Screen` got the `args` field.
+   **For Phase 3:** the gallery builders are whole `fn`s (Class-B ones include a
+   wrapper `struct`+`impl`) — closer to compilable than the Part I `:setup`/`:main`
+   excerpts, but they are `fn`-fragments, not whole programs, so a `mdbook test`
+   gate still needs them wrapped or switched to doctests.
 3. **Verified docs (Phase 3).** Convert the remaining `rust,ignore` guide snippets
    to anchored-example / doctest form, then turn ON `mdbook test` + `cargo test
    --doc` as CI gates. **Gotcha:** the Part I snippets are `rust,ignore` excerpts
    (e.g. `:setup`/`:main`) — switch to whole-program anchors first or the gate
-   fails on partial includes.
+   fails on partial includes. The gallery `// ANCHOR:` builders (Phase 2) are the
+   same shape — real code, but `fn`-fragments needing a wrapper to compile as a
+   doctest.
+
+**In-flight on `main` (NOT docs work):** a parallel agent landed a `tv::Splitter`
+foundation (`src/widgets/splitter/`, spec `c48b976`, solver `5ab3ffc`) directly
+on `main` (no worktree), interleaving with the gallery commits. It compiles
+clean but the plan (`docs/superpowers/plans/2026-06-13-splitter.md`, untracked)
+is only partially done. Confirm its status with the user before building on it.
 
 **Smaller follow-ups:** complete `src/theme/` rustdoc to parity;
 `#![doc(html_logo_url/favicon)]` crate attrs; vendor the real mermaid runtime;

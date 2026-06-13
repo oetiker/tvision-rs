@@ -5,6 +5,46 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## Docs Phase 2 — widget gallery (2026-06-13)
+
+Built the example gallery (agreed approach B): every visible widget gets a
+minimal, compiling builder fn that ALSO drives its screenshot, so no documented
+widget line is dead.
+
+- **`examples/gallery.rs`** renders ONE widget per run, chosen by a CLI arg. A
+  `Specimen` dispatcher (`OnDesktop` insert+run / `Modal` exec_view / `Menu` /
+  `Status`) whose three factory closures consult the selection; no-arg run lists
+  the names. Each widget is a `// ANCHOR: <name>` builder the guide includes
+  verbatim. 20 widgets: button, menubar, statusline, checkboxes, radiobuttons,
+  inputline, statictext, scrollbar, history, dialog, memo, colorpicker,
+  messagebox, window, editor, listbox, terminal, outline, filedialog,
+  chdirdialog.
+- **Class-B widgets** (listbox, terminal, outline) need a `&mut Context` to
+  populate, which a plain builder lacks → a thin `#[delegate]` wrapper view runs
+  the `new_list`/`init`+`write_bytes`/`ov_update` on its first `handle_event`
+  (the crate's own deferred-init pattern). **filedialog/chdirdialog** are shown
+  through the `Modal` variant (`exec_view`) so `reset_current` fills their
+  file/directory lists — a desktop insert leaves them empty.
+- **xtask `Screen` gained an `args` field** (passed after `--`); `regenerate`
+  now dedupes pre-builds and, on a flaky blank capture, keeps the committed file
+  and continues instead of aborting the batch. 21 screens (hello + 20),
+  deterministic (0 flaky), committed as colored HTML under `src/screens/`.
+- **New "Widget Gallery" guide page** (`gallery.md` + SUMMARY section): each
+  widget's screenshot + its anchored builder code. Key captures also embedded
+  into their topic pages (button→controls, dialog→dialogs, menubar→menus).
+- Commits: `340842a` foundation+Screen.args · `ed08caf` 10 control specimens ·
+  `17e95e9` windows/lists/dialogs + Modal seam · `a6ce0a1` gallery page+embeds.
+  `cargo xtask docs` OK + link check clean; fmt + clippy --all-targets green.
+
+**Heads-up — interleaved Splitter commits.** A parallel agent working on a new
+`tv::Splitter` feature landed its work on `main` without a worktree, so its
+commits (`c48b976` spec, `5ab3ffc` layout solver — which also swept in the
+gallery Batch B `examples/gallery.rs` edits) are interleaved between the gallery
+commits. The Splitter foundation (`src/widgets/splitter/`) compiles clean; the
+multi-task plan (`docs/superpowers/plans/2026-06-13-splitter.md`, untracked) is
+only partially landed (solver + spec). Not gallery work — flagged so the next
+session knows it is in-flight, not finished.
+
 ## Docs Phase 1 (guide) — Rust-first guide-page pass (2026-06-12)
 
 Pushed the same Rust-first standard the rustdoc got (heritage quarantined,
