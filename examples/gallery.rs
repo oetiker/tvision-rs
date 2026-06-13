@@ -15,12 +15,12 @@
 use std::{env, io};
 
 use rstv::{
-    Button, ButtonFlags, CD_NORMAL, ChDirDialog, CheckBoxes, Color, ColorPicker, Command, Context,
-    CrosstermBackend, Desktop, Dialog, EditWindow, Event, FD_OPEN_BUTTON, FileDialog,
-    HistoryWindow, InputLine, Key, KeyEvent, Label, ListBox, Memo, Menu, MenuBar, MenuBox, Node,
-    Outline, OutlineViewer, Program, RadioButtons, Rect, ScrollBar, ScrollBarOptions, StaticText,
-    StatusDef, StatusLine, SystemClock, THistory, Tab, Terminal, TextDevice, Theme, View, ViewId,
-    Window, alt, delegate, history_add, ov_update,
+    Button, ButtonFlags, CD_NORMAL, ChDirDialog, CheckBoxes, Color, ColorPicker, Command,
+    Constraints, Context, CrosstermBackend, Desktop, Dialog, EditWindow, Event, FD_OPEN_BUTTON,
+    FileDialog, HistoryWindow, InputLine, Key, KeyEvent, Label, ListBox, Memo, Menu, MenuBar,
+    MenuBox, Node, Outline, OutlineViewer, Program, RadioButtons, Rect, ScrollBar,
+    ScrollBarOptions, Splitter, StaticText, StatusDef, StatusLine, SystemClock, THistory, Tab,
+    Terminal, TextDevice, Theme, View, ViewId, Window, alt, delegate, history_add, ov_update,
 };
 
 /// How a specimen is shown. Most widgets are leaf controls hosted in a dialog on
@@ -59,6 +59,7 @@ fn specimen(name: &str) -> Option<Specimen> {
         "colorpicker" => OnDesktop(colorpicker),
         "messagebox" => OnDesktop(messagebox),
         "window" => OnDesktop(window),
+        "splitter" => OnDesktop(splitter),
         "editor" => OnDesktop(editor),
         "listbox" => OnDesktop(listbox),
         "terminal" => OnDesktop(terminal),
@@ -86,6 +87,7 @@ const NAMES: &[&str] = &[
     "colorpicker",
     "messagebox",
     "window",
+    "splitter",
     "editor",
     "listbox",
     "terminal",
@@ -444,6 +446,45 @@ fn window() -> Box<dyn View> {
     Box::new(win)
 }
 // ANCHOR_END: window
+
+// ANCHOR: splitter
+/// A `Splitter` laying out three panes inside a window, with `.joined()` so the
+/// divider lines connect to the window frame (`┬ ┴ ┤`) and to each other (`├`).
+/// The left column is a fixed-width sidebar; the right column is itself split
+/// into two stacked rows. Drag a seam to resize; `F6` enters keyboard reconfig.
+fn splitter() -> Box<dyn View> {
+    let mut win = Window::new(Rect::new(2, 1, 56, 17), Some("Splitter".to_string()), 1);
+    let ext = win.state().get_extent();
+    let interior = Rect::new(1, 1, ext.b.x - 1, ext.b.y - 1);
+
+    // Right column: two stacked panes (a horizontal seam between them).
+    let right = Splitter::rows()
+        .pane(
+            Box::new(StaticText::new(Rect::new(0, 0, 1, 1), "list pane")),
+            Constraints::flex(),
+        )
+        .pane(
+            Box::new(StaticText::new(Rect::new(0, 0, 1, 1), "form pane")),
+            Constraints::flex(),
+        );
+
+    // Outer: a fixed sidebar beside the right column; `.joined()` connects all
+    // the divider lines to each other and to the window frame.
+    let split = Splitter::cols()
+        .pane(
+            Box::new(StaticText::new(Rect::new(0, 0, 1, 1), "tree pane")),
+            Constraints::fixed(16),
+        )
+        .pane(Box::new(right), Constraints::flex())
+        .joined();
+
+    let split_id = win.insert_child(Box::new(split));
+    if let Some(v) = win.child_mut(split_id) {
+        v.change_bounds(interior);
+    }
+    Box::new(win)
+}
+// ANCHOR_END: splitter
 
 // ANCHOR: editor
 /// An `EditWindow` opened on a small sample file written to a temp path. The

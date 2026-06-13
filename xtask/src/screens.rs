@@ -171,6 +171,15 @@ pub const SCREENS: &[Screen] = &[
         settle_ms: 700,
     },
     Screen {
+        name: "splitter",
+        example: "gallery",
+        args: &["splitter"],
+        cols: 64,
+        rows: 22,
+        keys: &[],
+        settle_ms: 700,
+    },
+    Screen {
         name: "editor",
         example: "gallery",
         args: &["editor"],

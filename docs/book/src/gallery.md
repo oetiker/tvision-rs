@@ -157,6 +157,19 @@ A plain titled, movable, resizable window that hosts child views.
 {{#rustdoc_include ../../../examples/gallery.rs:window}}
 ```
 
+### Splitter
+
+Resizable multi-pane layout. `Splitter::cols()`/`rows()` arrange panes along one
+axis with draggable divider seams; `.joined()` connects the divider lines to the
+window frame (`┬ ┴ ┤`) and to each other (`├`). The left column here is a fixed
+sidebar; the right column is split into two rows.
+
+{{#include screens/splitter.html}}
+
+```rust,ignore
+{{#rustdoc_include ../../../examples/gallery.rs:splitter}}
+```
+
 ### Dialog
 
 A modal form combining a labelled input, check boxes, and `OK` / `Cancel`

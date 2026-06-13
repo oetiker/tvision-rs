@@ -106,6 +106,112 @@ win.state_mut().options.tileable = true;
 The `hello` example wires `Command::TILE` / `Command::CASCADE` menu items that
 route to these calls, so its three demo windows rearrange on command.
 
+## Splitter — resizable panes
+
+A [`Splitter`](../api/rstv/widgets/splitter/struct.Splitter.html) divides a
+rectangle into N panes along one axis, separated by 1-cell divider seams that the
+user can drag to resize. It is the idiomatic way to build IDE-style or
+file-manager-style layouts inside a window.
+
+### Axes and panes
+
+```rust,ignore
+use rstv::{Splitter, Constraints};
+
+// Side-by-side panes (vertical dividers):
+let h = Splitter::cols()
+    .pane(left_view, Constraints::fixed(20))   // 20-cell sidebar
+    .pane(right_view, Constraints::flex());     // rest of the space
+
+// Stacked panes (horizontal dividers):
+let v = Splitter::rows()
+    .pane(top_view, Constraints::flex())
+    .pane(bottom_view, Constraints::flex());
+```
+
+`Splitter::cols()` splits along x (side-by-side); `Splitter::rows()` splits along
+y (stacked). Each `.pane(view, constraints)` call appends a pane.
+
+### Constraints
+
+[`Constraints`](../api/rstv/widgets/splitter/layout/struct.Constraints.html) control how
+much space a pane claims along the axis:
+
+| Constructor | Meaning |
+| --- | --- |
+| `Constraints::flex()` | Elastic — takes its share of remaining space (weight 1) |
+| `Constraints::weight(w)` | Elastic with a custom weight |
+| `Constraints::fixed(n)` | Pinned to exactly `n` cells |
+| `.min(n)` builder | Minimum size in cells |
+
+### Divider styles
+
+[`DividerStyle`](../api/rstv/widgets/splitter/enum.DividerStyle.html) controls
+how a seam looks and behaves:
+
+| Variant | Look | Draggable? |
+| --- | --- | --- |
+| `Line` (default) | Always-visible `│` / `─` | Yes |
+| `Handle` | Clean — only a grab nub at midpoint | Yes |
+| `Hidden` | Invisible in normal use | Only in reconfig mode |
+| `Locked` | Invisible and immovable | Never |
+
+Set a per-seam style with `.divider(i, style)` or a blanket default with
+`.default_divider(style)`.
+
+### Live drag and `F6` reconfig
+
+Dragging a `Line` or `Handle` seam with the mouse resizes immediately. Pressing
+`F6` (or whatever key you bind to `Command::NEXT`) enters *reconfig mode*: the
+selected seam is highlighted and arrow keys move it; `Tab` cycles between seams;
+`Esc` restores the pre-reconfig weights; `Enter` confirms. `Locked` seams are
+skipped in reconfig mode.
+
+### Nested splitters
+
+A `Splitter` can contain another `Splitter` as a pane, building grid layouts:
+
+```rust,ignore
+use rstv::{Splitter, Constraints, StaticText, Rect};
+
+// Right column: two stacked panes.
+let right = Splitter::rows()
+    .pane(Box::new(StaticText::new(Rect::new(0, 0, 1, 1), "top")), Constraints::flex())
+    .pane(Box::new(StaticText::new(Rect::new(0, 0, 1, 1), "bottom")), Constraints::flex());
+
+// Outer: fixed sidebar + the nested right column.
+let split = Splitter::cols()
+    .pane(Box::new(StaticText::new(Rect::new(0, 0, 1, 1), "sidebar")), Constraints::fixed(16))
+    .pane(Box::new(right), Constraints::flex());
+```
+
+### Joined linework
+
+By default a splitter draws plain `│`/`─` dividers. Call `.joined()` on the
+**outermost** splitter to connect the divider lines:
+
+- to the surrounding window frame: `┬` / `┴` at the top and bottom edges, `├` /
+  `┤` at the left and right edges;
+- to each other inside nested splitters: interior `├` / `┤` / `┬` / `┴` / `┼`
+  crossings.
+
+Joining cascades — you only need `.joined()` on the outermost splitter; all
+nested pane-splitters inherit it automatically. Override the grow mode (a
+splitter fills its owner by default) with `.with_grow_mode(GrowMode::default())`
+for a fixed-size splitter.
+
+```rust,ignore
+use rstv::{Splitter, Constraints, StaticText, Rect};
+
+let split = Splitter::cols()
+    .pane(Box::new(StaticText::new(Rect::new(0, 0, 1, 1), "left")), Constraints::flex())
+    .pane(Box::new(StaticText::new(Rect::new(0, 0, 1, 1), "right")), Constraints::flex())
+    .joined();   // connects divider lines to the window frame
+```
+
+A live example showing `.joined()` on a nested three-pane layout is in the
+[Widget gallery](../gallery.md).
+
 ## See also
 
 - [Dialogs & data](dialogs.md) — modal windows with gather/scatter
