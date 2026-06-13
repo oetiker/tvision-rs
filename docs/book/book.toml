@@ -1,6 +1,6 @@
 [book]
-title = "tvision — Developer Guide"
-description = "Building TUI applications with the tvision crate (rstv)."
+title = "rstv — Developer Guide"
+description = "Building TUI applications with rstv (the `tvision` crate)."
 authors = ["Tobias Oetiker"]
 language = "en"
 src = "src"

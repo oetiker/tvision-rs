@@ -1,6 +1,7 @@
-# The tvision Developer Guide
+# The rstv Developer Guide
 
-`tvision` is a TUI framework for Rust: a faithful, idiomatic port of
+**rstv** is a TUI framework for Rust — distributed as the `tvision` crate: a
+faithful, idiomatic port of
 [magiblot/tvision](https://github.com/magiblot/tvision), the modern C++
 incarnation of Borland's **Turbo Vision**. If you have ever driven a DOS-era
 dialog with overlapping windows, a top menu bar, and a bottom status line, you
