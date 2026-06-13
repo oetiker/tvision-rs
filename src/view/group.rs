@@ -342,6 +342,25 @@ impl Group {
         self.children.push(Child { id, view });
     }
 
+    /// Build/runtime removal of a direct child by id (no `Context`). Drops the child
+    /// from `children`; clears `current` if it pointed at the removed child. The
+    /// in-event-loop close path uses `Deferred::Close`/[`remove`](Self::remove)
+    /// (with `Context`) instead.
+    ///
+    /// Returns `true` if the child was found and removed, `false` if the id was
+    /// not a direct child.
+    pub(crate) fn remove_child_by_id(&mut self, id: ViewId) -> bool {
+        if let Some(pos) = self.children.iter().position(|c| c.id == id) {
+            self.children.remove(pos);
+            if self.current == Some(id) {
+                self.current = None;
+            }
+            true
+        } else {
+            false
+        }
+    }
+
     /// Remove the child named by `id` (no-op if it is not a child).
     ///
     /// Removing a visible+selectable child re-establishes currency

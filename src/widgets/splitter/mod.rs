@@ -6,7 +6,7 @@ use crate::theme::Role;
 use crate::view::{Context, DrawCtx, Group, Point, Rect, View, ViewId, ViewState};
 
 pub use layout::{Constraints, Orientation};
-use layout::{Slot, solve};
+use layout::{Slot, relax_weight, solve};
 
 /// How the seam *after* a given pane looks and behaves.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -284,6 +284,76 @@ impl Splitter {
             cursor += size + 1;
         }
     }
+
+    // -- runtime mutators -------------------------------------------------------
+
+    /// Index of the pane with this id, in slot/insertion order.
+    fn pane_index(&self, id: ViewId) -> Option<usize> {
+        self.group
+            .child_ids_in_order()
+            .iter()
+            .position(|&c| c == id)
+    }
+
+    /// Replace a pane's constraints at runtime; re-solves.
+    pub fn set_constraints(&mut self, id: ViewId, c: Constraints) {
+        if let Some(i) = self.pane_index(id) {
+            self.slots[i] = Slot::from_constraints(c);
+            self.resolve_layout_local();
+        }
+    }
+
+    /// Set divider `i`'s style at runtime.
+    pub fn set_divider_style(&mut self, i: usize, style: DividerStyle) {
+        self.ensure_divider_len();
+        if i < self.divider_styles.len() {
+            self.divider_styles[i] = style;
+        }
+    }
+
+    /// Set the default divider style at runtime.
+    pub fn set_default_divider_style(&mut self, style: DividerStyle) {
+        self.default_style = style;
+    }
+
+    /// Remove a pane (and its slot); re-solves. Returns `true` if found.
+    pub fn remove(&mut self, id: ViewId) -> bool {
+        if let Some(i) = self.pane_index(id) {
+            self.group.remove_child_by_id(id);
+            self.slots.remove(i);
+            if i < self.divider_styles.len() {
+                self.divider_styles.remove(i);
+            }
+            self.resolve_layout_local();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Make a (possibly fixed) pane flexible WITHOUT moving any divider: drop its
+    /// min/max to (0, `i32::MAX`) and set its weight to the position-preserving
+    /// closed form (Σ flexible weights × current_size / current_free).
+    pub fn relax(&mut self, id: ViewId) {
+        let Some(i) = self.pane_index(id) else {
+            return;
+        };
+        let sizes = solve(&self.slots, self.content_len());
+        let cur = sizes.get(i).copied().unwrap_or(0);
+        let others: f64 = self
+            .slots
+            .iter()
+            .enumerate()
+            .filter(|(k, s)| *k != i && s.weight > 0.0)
+            .map(|(_, s)| s.weight)
+            .sum();
+        let free = self.content_len() - self.slots.iter().map(|s| s.min).sum::<i32>();
+        let w = relax_weight(others, cur, free);
+        self.slots[i].min = 0;
+        self.slots[i].max = i32::MAX;
+        self.slots[i].weight = w;
+        self.resolve_layout_local();
+    }
 }
 
 #[crate::delegate(to = group)]
@@ -510,5 +580,35 @@ mod view_tests {
             before, after,
             "fixed pane is immovable — divider does not move"
         );
+    }
+
+    #[test]
+    fn relax_does_not_move_dividers() {
+        let mut sp = Splitter::cols();
+        sp.change_bounds(Rect::new(0, 0, 41, 1)); // 3 panes, 2 dividers, 39 content
+        let a = sp.insert(Fill::boxed('A'), Constraints::fixed(12));
+        sp.insert(Fill::boxed('B'), Constraints::flex());
+        sp.insert(Fill::boxed('C'), Constraints::flex());
+        let before = solve(&sp.slots, sp.content_len());
+        sp.relax(a);
+        let after = solve(&sp.slots, sp.content_len());
+        assert_eq!(before, after, "relax keeps every pane the same size");
+        assert!(
+            sp.slots[0].min != sp.slots[0].max,
+            "pane A is now draggable (not fixed)"
+        );
+    }
+
+    #[test]
+    fn remove_pane_resolves_remaining() {
+        let mut sp = Splitter::cols();
+        sp.change_bounds(Rect::new(0, 0, 21, 1)); // after remove: 2 panes, 1 divider, 20 content
+        let a = sp.insert(Fill::boxed('A'), Constraints::flex());
+        sp.insert(Fill::boxed('B'), Constraints::flex());
+        sp.insert(Fill::boxed('C'), Constraints::flex());
+        assert!(sp.remove(a));
+        let sizes = solve(&sp.slots, sp.content_len());
+        assert_eq!(sizes.len(), 2);
+        assert_eq!(sizes.iter().sum::<i32>(), sp.content_len());
     }
 }
