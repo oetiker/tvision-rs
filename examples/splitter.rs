@@ -31,8 +31,8 @@ use std::io;
 
 use tvision::{
     Backend, Button, ButtonFlags, Command, Constraints, Context, CrosstermBackend, Desktop, Event,
-    Group, InputLine, Key, KeyEvent, Label, ListBox, Menu, MenuBar, Node, Outline, Program, Rect,
-    Splitter, StatusDef, StatusLine, SystemClock, Theme, View, alt, delegate,
+    Group, GrowMode, InputLine, Key, KeyEvent, Label, ListBox, Menu, MenuBar, Node, Outline,
+    Program, Rect, Splitter, StatusDef, StatusLine, SystemClock, Theme, View, alt, delegate,
 };
 
 // ---------------------------------------------------------------------------
@@ -219,6 +219,15 @@ impl SplitterApp {
         let split_id = win.insert_child(Box::new(split));
         if let Some(v) = win.child_mut(split_id) {
             v.change_bounds(interior);
+            // Track the window's resize: the bottom-right edge follows the window
+            // (keeping the one-cell frame inset on the top-left), exactly like the
+            // frame's own grow mode — so the panes (and their joined linework)
+            // resize in lockstep with the window instead of lagging/overpainting it.
+            v.state_mut().grow_mode = GrowMode {
+                hi_x: true,
+                hi_y: true,
+                ..Default::default()
+            };
         }
 
         desktop.insert_view(Box::new(win));
