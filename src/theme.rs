@@ -551,6 +551,42 @@ pub struct Glyphs {
     /// Single-line cross `┼` (`\xC5`) — unused.
     pub frame_cross: char,
 
+    // --- Frame glyphs — double-line tee/cross joins ---
+    /// Double-line left tee `╠` (U+2560).
+    pub frame_tee_l_d: char,
+    /// Double-line right tee `╣` (U+2563).
+    pub frame_tee_r_d: char,
+    /// Double-line top tee `╦` (U+2566).
+    pub frame_tee_t_d: char,
+    /// Double-line bottom tee `╩` (U+2569).
+    pub frame_tee_b_d: char,
+    /// Double-line cross `╬` (U+256C).
+    pub frame_cross_d: char,
+
+    // --- Frame glyphs — mixed: double BAR, single perpendicular STEM ---
+    /// Double-bar top tee, single stem `╤` (U+2564).
+    pub frame_tee_t_dh: char,
+    /// Double-bar bottom tee, single stem `╧` (U+2567).
+    pub frame_tee_b_dh: char,
+    /// Double-bar left tee, single stem `╞` (U+255E).
+    pub frame_tee_l_dv: char,
+    /// Double-bar right tee, single stem `╡` (U+2561).
+    pub frame_tee_r_dv: char,
+    /// Double-bar cross, single horizontal stem `╪` (U+256A).
+    pub frame_cross_dh: char,
+    /// Double-bar cross, single vertical stem `╫` (U+256B).
+    pub frame_cross_dv: char,
+
+    // --- Frame glyphs — mixed: single BAR, double perpendicular STEM ---
+    /// Single-bar top tee, double stem `╥` (U+2565).
+    pub frame_tee_t_sh: char,
+    /// Single-bar bottom tee, double stem `╨` (U+2568).
+    pub frame_tee_b_sh: char,
+    /// Single-bar left tee, double stem `╟` (U+255F).
+    pub frame_tee_l_sv: char,
+    /// Single-bar right tee, double stem `╢` (U+2562).
+    pub frame_tee_r_sv: char,
+
     // --- Frame icon strings — `~`-toggled for `put_cstr` ---
     /// Close icon `"[~■~]"` — `[` `]` in the frame role, `■` in `FrameIcon`.
     pub close_icon: &'static str,
@@ -629,6 +665,27 @@ impl Default for Glyphs {
             frame_tee_t: '\u{252C}',
             frame_tee_b: '\u{2534}',
             frame_cross: '\u{253C}',
+
+            // Frame double-line tee/cross joins: ╠ ╣ ╦ ╩ ╬
+            frame_tee_l_d: '\u{2560}',
+            frame_tee_r_d: '\u{2563}',
+            frame_tee_t_d: '\u{2566}',
+            frame_tee_b_d: '\u{2569}',
+            frame_cross_d: '\u{256C}',
+
+            // Mixed: double bar / single stem: ╤ ╧ ╞ ╡ ╪ ╫
+            frame_tee_t_dh: '\u{2564}',
+            frame_tee_b_dh: '\u{2567}',
+            frame_tee_l_dv: '\u{255E}',
+            frame_tee_r_dv: '\u{2561}',
+            frame_cross_dh: '\u{256A}',
+            frame_cross_dv: '\u{256B}',
+
+            // Mixed: single bar / double stem: ╥ ╨ ╟ ╢
+            frame_tee_t_sh: '\u{2565}',
+            frame_tee_b_sh: '\u{2568}',
+            frame_tee_l_sv: '\u{255F}',
+            frame_tee_r_sv: '\u{2562}',
 
             // Frame icon strings (~ toggles the FrameIcon style for the bright glyph):
             //   close "[~■~]"  zoom "[~↑~]"  unZoom "[~↕~]"
@@ -956,5 +1013,25 @@ mod tests {
         assert_eq!(t.glyphs().unzoom_icon, "[~\u{2195}~]"); // [~↕~]
         assert_eq!(t.glyphs().drag_icon, "~\u{2500}\u{2518}~"); // ~─┘~
         assert_eq!(t.glyphs().drag_left_icon, "~\u{2514}\u{2500}~"); // ~└─~
+    }
+
+    #[test]
+    fn junction_glyphs_seeded() {
+        let t = Theme::classic_blue();
+        let g = t.glyphs();
+        // double
+        assert_eq!(g.frame_tee_t_d, '╦');
+        assert_eq!(g.frame_tee_b_d, '╩');
+        assert_eq!(g.frame_tee_l_d, '╠');
+        assert_eq!(g.frame_tee_r_d, '╣');
+        assert_eq!(g.frame_cross_d, '╬');
+        // mixed: double bar / single stem
+        assert_eq!(g.frame_tee_t_dh, '╤');
+        assert_eq!(g.frame_tee_b_dh, '╧');
+        assert_eq!(g.frame_tee_l_dv, '╞');
+        assert_eq!(g.frame_tee_r_dv, '╡');
+        // mixed: single bar / double stem
+        assert_eq!(g.frame_tee_t_sh, '╥');
+        assert_eq!(g.frame_tee_b_sh, '╨');
     }
 }

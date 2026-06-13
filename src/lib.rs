@@ -68,6 +68,7 @@ pub mod dialog;
 pub mod event;
 pub mod frame;
 pub mod help;
+pub mod junction;
 pub mod keymap;
 pub mod menu;
 pub mod screen;
@@ -101,6 +102,7 @@ pub use event::{
 };
 pub use frame::Frame;
 pub use help::HelpCtx;
+pub use junction::{Edge, JunctionMark, Weight};
 pub use keymap::{KeyStroke, Keymap, Resolve};
 pub use menu::{
     Menu, MenuBar, MenuBox, MenuBuilder, MenuItem, MenuView, MenuViewState, alt, popup_menu,
