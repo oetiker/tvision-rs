@@ -1,0 +1,17 @@
+---
+source: src/widgets/splitter/mod.rs
+expression: "render(&mut sp, 13, 3)"
+---
+size: 13x3
+cursor: hidden
+text:
+|AAAAAA BBBBBB|
+|AAAAAA BBBBBB|
+|AAAAAA BBBBBB|
+attr:
+|aaaaaa.aaaaaa|
+|aaaaaa.aaaaaa|
+|aaaaaa.aaaaaa|
+legend:
+  . default
+  a fg=RGB(0,0,0) bg=RGB(0,170,170)

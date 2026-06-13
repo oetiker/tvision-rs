@@ -5,15 +5,16 @@ expression: "render(&mut sp, 32, 4)"
 size: 32x4
 cursor: hidden
 text:
-|AAAAAAAAAA BBBBBBBBBB CCCCCCCCCC|
-|AAAAAAAAAA BBBBBBBBBB CCCCCCCCCC|
-|AAAAAAAAAA BBBBBBBBBB CCCCCCCCCC|
-|AAAAAAAAAA BBBBBBBBBB CCCCCCCCCC|
+|AAAAAAAAAA│BBBBBBBBBB│CCCCCCCCCC|
+|AAAAAAAAAA│BBBBBBBBBB│CCCCCCCCCC|
+|AAAAAAAAAA│BBBBBBBBBB│CCCCCCCCCC|
+|AAAAAAAAAA│BBBBBBBBBB│CCCCCCCCCC|
 attr:
-|aaaaaaaaaa.aaaaaaaaaa.aaaaaaaaaa|
-|aaaaaaaaaa.aaaaaaaaaa.aaaaaaaaaa|
-|aaaaaaaaaa.aaaaaaaaaa.aaaaaaaaaa|
-|aaaaaaaaaa.aaaaaaaaaa.aaaaaaaaaa|
+|aaaaaaaaaabaaaaaaaaaabaaaaaaaaaa|
+|aaaaaaaaaabaaaaaaaaaabaaaaaaaaaa|
+|aaaaaaaaaabaaaaaaaaaabaaaaaaaaaa|
+|aaaaaaaaaabaaaaaaaaaabaaaaaaaaaa|
 legend:
   . default
   a fg=RGB(0,0,0) bg=RGB(0,170,170)
+  b fg=RGB(170,170,170) bg=RGB(0,0,170)

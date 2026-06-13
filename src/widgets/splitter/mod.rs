@@ -1,6 +1,7 @@
 pub mod layout;
 
 use crate::event::Event;
+use crate::theme::Role;
 use crate::view::{Context, DrawCtx, Group, Point, Rect, View, ViewId, ViewState};
 
 pub use layout::{Constraints, Orientation};
@@ -39,12 +40,9 @@ pub struct Splitter {
     /// Per-pane solver slots, parallel to the group's children in INSERTION order.
     slots: Vec<Slot>,
     /// Per-divider styles (len ≤ panes−1); `default_style` fills any gap.
-    #[allow(dead_code)]
     divider_styles: Vec<DividerStyle>,
-    #[allow(dead_code)]
     default_style: DividerStyle,
     /// Reconfig-mode selected divider (Task 8). `None` = normal use.
-    #[allow(dead_code)]
     reconfig: Option<usize>,
     /// Absolute origin captured each `draw`, for the mouse-track capture (Task 6).
     #[allow(dead_code)]
@@ -93,6 +91,63 @@ impl Splitter {
         id
     }
 
+    /// The effective style of divider `i` (between pane `i` and `i+1`).
+    fn style_of(&self, i: usize) -> DividerStyle {
+        self.divider_styles
+            .get(i)
+            .copied()
+            .unwrap_or(self.default_style)
+    }
+
+    /// Paint the N−1 dividers into the 1-cell gaps. Called by `draw` AFTER the
+    /// group paints its children. `ctx` is the splitter's own draw context
+    /// (origin == splitter bounds origin), so coordinates are local (0-based).
+    fn draw_dividers(&self, ctx: &mut DrawCtx) {
+        let b = self.group.state().get_bounds();
+        let sizes = solve(&self.slots, self.content_len());
+        // Extract glyph chars before any mutable put_char borrow.
+        let (frame_v, frame_h, frame_v_d, frame_h_d) = {
+            let g = ctx.glyphs();
+            (g.frame_v, g.frame_h, g.frame_v_d, g.frame_h_d)
+        };
+        // `run` = length of the divider line across the cross-axis (local).
+        let run = match self.orientation {
+            Orientation::Cols => b.b.y - b.a.y,
+            Orientation::Rows => b.b.x - b.a.x,
+        };
+        let mut cursor = 0i32; // local position along the split axis
+        for i in 0..self.slots.len().saturating_sub(1) {
+            cursor += sizes.get(i).copied().unwrap_or(0);
+            let style = self.style_of(i);
+            let active = self.reconfig.is_some();
+            let role = if active && self.reconfig == Some(i) {
+                Role::FrameDragging
+            } else {
+                Role::FramePassive
+            };
+            let st = ctx.style(role);
+            let (line_glyph, nub_glyph) = match self.orientation {
+                Orientation::Cols => (if active { frame_v_d } else { frame_v }, frame_v),
+                Orientation::Rows => (if active { frame_h_d } else { frame_h }, frame_h),
+            };
+            let draw_full = matches!(style, DividerStyle::Line) || active;
+            let draw_handle = matches!(style, DividerStyle::Handle) && !active;
+            for k in 0..run {
+                let (x, y) = match self.orientation {
+                    Orientation::Cols => (cursor, k),
+                    Orientation::Rows => (k, cursor),
+                };
+                if draw_full {
+                    ctx.put_char(x, y, line_glyph, st);
+                } else if draw_handle && k == run / 2 {
+                    ctx.put_char(x, y, nub_glyph, st);
+                }
+                // Hidden / Locked in normal mode: draw nothing (pane background shows).
+            }
+            cursor += 1; // step over the divider cell
+        }
+    }
+
     /// Compute each child's `Rect` from the solver and apply via `change_bounds`.
     /// Local (no `Context`) — used at insert/build/resize time.
     fn resolve_layout_local(&mut self) {
@@ -129,7 +184,7 @@ impl View for Splitter {
     fn draw(&mut self, ctx: &mut DrawCtx) {
         self.abs_origin = ctx.origin();
         self.group.draw(ctx);
-        // Task 4 adds divider drawing here.
+        self.draw_dividers(ctx);
     }
 
     fn change_bounds(&mut self, bounds: Rect) {
@@ -208,5 +263,33 @@ mod view_tests {
         sp.insert(Fill::boxed('B'), Constraints::flex());
         sp.insert(Fill::boxed('C'), Constraints::flex());
         insta::assert_snapshot!(render(&mut sp, 32, 4));
+    }
+
+    #[test]
+    fn dividers_line_style() {
+        let mut sp = Splitter::cols(); // default_style == Line
+        sp.change_bounds(Rect::new(0, 0, 13, 3)); // 2 panes => 1 divider, 12 content => 6/6
+        sp.insert(Fill::boxed('A'), Constraints::flex());
+        sp.insert(Fill::boxed('B'), Constraints::flex());
+        insta::assert_snapshot!(render(&mut sp, 13, 3)); // AAAAAA│BBBBBB ×3 rows
+    }
+
+    #[test]
+    fn dividers_hidden_style_is_seamless() {
+        let mut sp = Splitter::cols();
+        sp.default_style = DividerStyle::Hidden;
+        sp.change_bounds(Rect::new(0, 0, 13, 3));
+        sp.insert(Fill::boxed('A'), Constraints::flex());
+        sp.insert(Fill::boxed('B'), Constraints::flex());
+        insta::assert_snapshot!(render(&mut sp, 13, 3)); // AAAAAA BBBBBB (blank gap)
+    }
+
+    #[test]
+    fn dividers_rows_orientation() {
+        let mut sp = Splitter::rows();
+        sp.change_bounds(Rect::new(0, 0, 6, 7)); // 2 panes => 1 divider, 6 content rows => 3/3
+        sp.insert(Fill::boxed('A'), Constraints::flex());
+        sp.insert(Fill::boxed('B'), Constraints::flex());
+        insta::assert_snapshot!(render(&mut sp, 6, 7)); // AAA rows, ────── divider row, BBB rows
     }
 }
