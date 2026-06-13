@@ -29,6 +29,10 @@ use tvision::{
 enum Specimen {
     /// A view (a dialog or a window) placed on the desktop.
     OnDesktop(fn() -> Box<dyn View>),
+    /// A dialog shown modally via `exec_view` — the faithful path for the
+    /// self-managing file/directory dialogs, whose lists are filled by
+    /// `reset_current` when the modal becomes current.
+    Modal(fn() -> Box<dyn View>),
     /// A rich menu bar (the screenshot opens it with a keystroke).
     Menu(fn() -> Menu),
     /// A rich status line.
@@ -57,8 +61,8 @@ fn specimen(name: &str) -> Option<Specimen> {
         "listbox" => OnDesktop(listbox),
         "terminal" => OnDesktop(terminal),
         "outline" => OnDesktop(outline),
-        "filedialog" => OnDesktop(filedialog),
-        "chdirdialog" => OnDesktop(chdirdialog),
+        "filedialog" => Modal(filedialog),
+        "chdirdialog" => Modal(chdirdialog),
         _ => return None,
     })
 }
@@ -689,8 +693,17 @@ fn main() -> io::Result<()> {
         |r| Some(make_status(r, spec)),
         |r| Some(make_menu(r, spec)),
     );
-    // run() idles after painting; the screenshot tooling captures the static
-    // frame and then kills the session (no quit command is ever sent).
-    let _ = program.run();
+    // Both `run` and `exec_view` idle after painting; the screenshot tooling
+    // captures the static frame and then kills the session (no quit/close
+    // command is ever sent). A `Modal` specimen is shown via `exec_view` so its
+    // `reset_current` runs — that is what fills the file/directory lists.
+    match spec {
+        Specimen::Modal(build) => {
+            let _ = program.exec_view(build());
+        }
+        _ => {
+            let _ = program.run();
+        }
+    }
     Ok(())
 }
