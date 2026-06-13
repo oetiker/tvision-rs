@@ -2,6 +2,7 @@ pub mod layout;
 
 use crate::capture::TrackMask;
 use crate::event::{Event, Key};
+use crate::junction::{Edge, JunctionMark, Weight};
 use crate::theme::Role;
 use crate::view::{Context, DrawCtx, Group, Point, Rect, View, ViewId, ViewState};
 
@@ -222,6 +223,97 @@ impl Splitter {
             }
         }
         Some(pos)
+    }
+
+    /// Owner-data-down producer: for each divider whose drawn line abuts a frame
+    /// edge, emit a [`JunctionMark`] in `frame_bounds`-local coordinates; recurses
+    /// into pane sub-splitters. A pure function of layout (no drawing), but `&mut
+    /// self` because reaching a pane child to recurse needs `Group::child_mut`
+    /// (the only child accessor `Group` exposes is `&mut`). The owning window
+    /// already holds the `&mut Splitter`, so this is free there.
+    // caller lands in Task 5 (Window broker)
+    #[allow(dead_code)]
+    pub(crate) fn frame_junction_marks(&mut self, frame_bounds: Rect) -> Vec<JunctionMark> {
+        let mut out = Vec::new();
+        self.collect_frame_marks(frame_bounds, &mut out);
+        out
+    }
+
+    /// Recursive worker for [`frame_junction_marks`]. `frame_bounds` stays in the
+    /// window group's coordinate space across the recursion (the frame and every
+    /// (sub-)splitter share that space).
+    fn collect_frame_marks(&mut self, fb: Rect, out: &mut Vec<JunctionMark>) {
+        let b = self.group.state().get_bounds();
+        let sizes = solve(&self.slots, self.content_len());
+        let stem = if self.reconfig.is_some() {
+            Weight::Double
+        } else {
+            Weight::Single
+        };
+        let fw = fb.b.x - fb.a.x; // frame width
+        let fh = fb.b.y - fb.a.y; // frame height
+
+        let mut cursor = 0i32; // splitter-local 0-based axis position
+        for i in 0..self.slots.len().saturating_sub(1) {
+            cursor += sizes.get(i).copied().unwrap_or(0);
+            let local = cursor; // this divider's local axis position
+            let draws_full =
+                matches!(self.style_of(i), DividerStyle::Line) || self.reconfig.is_some();
+            if draws_full {
+                match self.orientation {
+                    Orientation::Cols => {
+                        let off = (b.a.x - fb.a.x) + local;
+                        let interior = off > 0 && off < fw - 1;
+                        if interior && b.a.y == fb.a.y + 1 {
+                            out.push(JunctionMark {
+                                edge: Edge::Top,
+                                offset: off,
+                                stem,
+                            });
+                        }
+                        if interior && b.b.y == fb.b.y - 1 {
+                            out.push(JunctionMark {
+                                edge: Edge::Bottom,
+                                offset: off,
+                                stem,
+                            });
+                        }
+                    }
+                    Orientation::Rows => {
+                        let off = (b.a.y - fb.a.y) + local;
+                        let interior = off > 0 && off < fh - 1;
+                        if interior && b.a.x == fb.a.x + 1 {
+                            out.push(JunctionMark {
+                                edge: Edge::Left,
+                                offset: off,
+                                stem,
+                            });
+                        }
+                        if interior && b.b.x == fb.b.x - 1 {
+                            out.push(JunctionMark {
+                                edge: Edge::Right,
+                                offset: off,
+                                stem,
+                            });
+                        }
+                    }
+                }
+            }
+            cursor += 1; // step over the divider cell
+        }
+
+        // Recurse into pane sub-splitters (child_mut → as_any_mut → downcast).
+        let ids = self.group.child_ids_in_order();
+        for id in ids {
+            if let Some(sp) = self
+                .group
+                .child_mut(id)
+                .and_then(|v| v.as_any_mut())
+                .and_then(|a| a.downcast_mut::<Splitter>())
+            {
+                sp.collect_frame_marks(fb, out);
+            }
+        }
     }
 
     /// Hit-test a **local** point to the divider index whose cell it lands on.
@@ -766,6 +858,70 @@ mod view_tests {
         sp.change_bounds(Rect::new(0, 0, 13, 1));
         sp.enter_reconfig(); // a previously-hidden divider should now light up (double-line ║)
         insta::assert_snapshot!(render(&mut sp, 13, 1));
+    }
+
+    #[test]
+    fn frame_marks_two_pane_cols_abut_top_and_bottom() {
+        use crate::junction::{Edge, Weight};
+        let frame_bounds = Rect::new(0, 0, 13, 5);
+        let mut sp = Splitter::cols();
+        sp.change_bounds(Rect::new(1, 1, 12, 4));
+        sp.insert(Fill::boxed('A'), Constraints::flex());
+        sp.insert(Fill::boxed('B'), Constraints::flex());
+        let marks = sp.frame_junction_marks(frame_bounds);
+        assert_eq!(marks.len(), 2, "one top + one bottom mark");
+        assert!(marks.contains(&crate::junction::JunctionMark {
+            edge: Edge::Top,
+            offset: 6,
+            stem: Weight::Single
+        }));
+        assert!(marks.contains(&crate::junction::JunctionMark {
+            edge: Edge::Bottom,
+            offset: 6,
+            stem: Weight::Single
+        }));
+    }
+
+    #[test]
+    fn frame_marks_handle_divider_emits_nothing() {
+        let frame_bounds = Rect::new(0, 0, 13, 5);
+        let mut sp = Splitter::cols().default_divider(DividerStyle::Handle);
+        sp.change_bounds(Rect::new(1, 1, 12, 4));
+        sp.insert(Fill::boxed('A'), Constraints::flex());
+        sp.insert(Fill::boxed('B'), Constraints::flex());
+        assert!(sp.frame_junction_marks(frame_bounds).is_empty());
+    }
+
+    #[test]
+    fn frame_marks_inset_splitter_emits_nothing() {
+        let frame_bounds = Rect::new(0, 0, 13, 7);
+        let mut sp = Splitter::cols();
+        sp.change_bounds(Rect::new(2, 2, 11, 5)); // not adjacent to any frame edge
+        sp.insert(Fill::boxed('A'), Constraints::flex());
+        sp.insert(Fill::boxed('B'), Constraints::flex());
+        assert!(sp.frame_junction_marks(frame_bounds).is_empty());
+    }
+
+    #[test]
+    fn frame_marks_nested_grid_inner_divider_hits_right_frame() {
+        use crate::junction::Edge;
+        let frame_bounds = Rect::new(0, 0, 22, 7);
+        let inner = Splitter::rows()
+            .pane(Fill::boxed('L'), Constraints::flex())
+            .pane(Fill::boxed('F'), Constraints::flex());
+        let mut outer = Splitter::cols();
+        outer.change_bounds(Rect::new(1, 1, 21, 6));
+        outer.insert(Fill::boxed('T'), Constraints::fixed(8));
+        outer.insert(Box::new(inner), Constraints::flex());
+        let marks = outer.frame_junction_marks(frame_bounds);
+        assert!(
+            marks.iter().any(|m| m.edge == Edge::Right),
+            "inner horizontal divider must abut the right frame edge, got {marks:?}"
+        );
+        assert!(
+            marks.iter().filter(|m| m.edge == Edge::Top).count() == 1,
+            "outer vertical divider abuts the top edge once"
+        );
     }
 
     #[test]
