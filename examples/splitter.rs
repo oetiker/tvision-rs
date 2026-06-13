@@ -1,16 +1,19 @@
-//! `splitter` — a multi-pane window built from the [`Splitter`] widget: a tree
-//! sidebar, a scrolling list, and a small form, side by side in ONE window,
-//! separated by draggable divider seams.
+//! `splitter` — a nested-grid window using the [`Splitter`] widget: a fixed
+//! tree sidebar beside a right column that stacks a scrolling list over a
+//! small form. The two splitters (vertical outer + horizontal inner) are
+//! nested inside a [`tvision::Window`] that opts into `with_joined_lines()`,
+//! so the divider lines join the window frame (`┬`/`┴`/`┤`) and each other
+//! (`├`) at every crossing.
 //!
-//! This is the N-ary resizable splitter in action. The three panes are real
-//! Turbo Vision controls (an [`Outline`] tree, a [`ListBox`], and a form
-//! [`Group`] of [`InputLine`]s + a [`Button`]); the [`Splitter`] lays them out
-//! along one axis and brokers the divider drags.
+//! This is the N-ary resizable splitter in action. The panes are real Turbo
+//! Vision controls (an [`Outline`] tree, a [`ListBox`], and a form [`Group`]
+//! of [`InputLine`]s + a [`Button`]); the [`Splitter`] lays them out and
+//! brokers the divider drags.
 //!
 //! Controls:
-//!   - **Mouse:** drag a `Line` or `Handle` divider seam to resize the panes
-//!     on either side (the left seam here is a thin `Line`, the right a thicker
-//!     `Handle`).
+//!   - **Mouse:** drag a `Line` divider seam to resize the panes on either
+//!     side. There are two seams: vertical (between tree and right column) and
+//!     horizontal (between list and form).
 //!   - **F6:** enter divider-reconfig mode. Then:
 //!       - `Tab` / `Shift-Tab` pick which divider to move,
 //!       - arrow keys nudge the selected divider,
@@ -184,26 +187,29 @@ impl SplitterApp {
 
         // A window sized to a generous chunk of the desktop.
         let win_rect = Rect::new(r.a.x + 2, r.a.y + 1, r.b.x - 2, r.b.y - 1);
-        let mut win = tvision::Window::new(win_rect, Some("Multi-pane Splitter".to_string()), 1);
+        let mut win = tvision::Window::new(win_rect, Some("Multi-pane Splitter".to_string()), 1)
+            .with_joined_lines();
 
-        // The window interior in LOCAL coords: frame-inset by one cell on each
-        // side (same convention the other examples use for an interior child).
+        // The window interior in LOCAL coords: frame-inset by one cell each side.
         let ext = win.state().get_extent();
         let interior = Rect::new(1, 1, ext.b.x - 1, ext.b.y - 1);
 
-        // Three panes, laid out left-to-right with vertical divider seams.
-        // The panes are given `interior` as a starting rect; the splitter's
-        // `change_bounds` re-flows them to their solved column widths.
         let tree = build_tree(interior);
         let list = build_list(interior);
         let form = build_form(interior);
 
+        // Right side: list stacked over form, separated by a horizontal divider.
+        let right = Splitter::rows()
+            .pane(list, Constraints::flex().min(3))
+            .pane(form, Constraints::flex().min(6));
+
+        // Outer: a fixed tree sidebar column beside the right grid, with a thin
+        // Line divider so the seam joins the window frame (┬/┴) and the inner
+        // horizontal divider (├).
         let split = Splitter::cols()
-            .pane(tree, Constraints::fixed(22)) // pinned tree sidebar
-            .pane(list, Constraints::flex().min(12)) // flexible list, never below 12
-            .pane(form, Constraints::weight(2)) // form takes twice a unit weight
-            .divider(0, DividerStyle::Line) // thin seam after the tree
-            .default_divider(DividerStyle::Handle); // thicker handle elsewhere
+            .pane(tree, Constraints::fixed(22))
+            .pane(Box::new(right), Constraints::flex())
+            .divider(0, DividerStyle::Line);
 
         let split_id = win.insert_child(Box::new(split));
         // Size the splitter to fill the window interior so it lays the panes out.

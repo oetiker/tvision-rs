@@ -56,6 +56,11 @@ integer flexbox solver, draggable dividers, and an F6 keyboard reconfig mode) �
 no Turbo Vision ancestor, so no row. See spec
 [`docs/superpowers/specs/2026-06-13-splitter-design.md`](docs/superpowers/specs/2026-06-13-splitter-design.md)
 and plan [`docs/superpowers/plans/2026-06-13-splitter.md`](docs/superpowers/plans/2026-06-13-splitter.md).
+Frame-joining (divider↔frame tee glyphs `┬`/`┴`/`┤` and divider↔divider
+crossings `├`/`┼`) is implemented on `feat/splitter` via `Window::with_joined_lines()`
+(opt-in, off by default; no change to plain windows). See spec
+[`docs/superpowers/specs/2026-06-13-splitter-frame-joining-design.md`](docs/superpowers/specs/2026-06-13-splitter-frame-joining-design.md)
+and plan [`docs/superpowers/plans/2026-06-13-splitter.md`](docs/superpowers/plans/2026-06-13-splitter.md).
 
 **Out of scope** (present in `tv.h` but in no guide module): the **help system**
 (`helpbase.cpp`/`help.cpp` → `THelpViewer`/`THelpWindow`/`THelpFile`) and

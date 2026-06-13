@@ -5,6 +5,35 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## Splitter frame-joining — divider↔frame + divider↔divider line-joining (rstv-original, 2026-06-13)
+
+Opt-in feature (`Window::with_joined_lines()`) that renders tee glyphs where a
+`Splitter` divider meets a `Window` frame (`┬`/`┴`/`┤`) and interior crossings
+where a nested perpendicular divider meets an outer divider (`├`/`┼`). Off by
+default — plain windows are unchanged. Executed in 7 tasks on `feat/splitter`.
+
+- **Task 1 — `crate::junction` vocabulary + glyphs:** `Junction` enum +
+  per-role glyph table; `Theme` gains `frame_junction` lookup.
+- **Task 2 — `Frame` mark-aware draw:** `Frame::draw` reads owner-pushed
+  `JunctionMark`s and substitutes tee glyphs at marked columns/rows — a D3-legal
+  revival of TV's `frameLine` tee-walk, fed by marks rather than a C++ callback.
+- **Tasks 3–4 — `Splitter` keystone + `frame_junction_marks` producer:**
+  `Splitter::as_any_mut` (D3 downcast seam) + `frame_junction_marks()` returns
+  the set of `(axis, offset)` marks for the owning `Window` to push.
+- **Task 5 — `Window::with_joined_lines` broker:** builder method; on
+  `change_bounds` the window finds its embedded splitter via downcast, collects
+  marks, and pushes them to `Frame`.
+- **Task 6 — interior `├`/`┼` crossings (rstv-original):** `Splitter::draw`
+  inspects sibling divider positions for nested perpendicular splitters and
+  draws crossing glyphs — no Turbo Vision ancestor for this behavior.
+- **Task 7 — reworked grid example:** `examples/splitter.rs` rebuilt as a
+  nested grid (`cols[tree, rows[list, form]]`) inside `with_joined_lines()`;
+  module doc updated.
+
+Gated and additive. See spec
+[`docs/superpowers/specs/2026-06-13-splitter-frame-joining-design.md`](docs/superpowers/specs/2026-06-13-splitter-frame-joining-design.md)
+and plan [`docs/superpowers/plans/2026-06-13-splitter.md`](docs/superpowers/plans/2026-06-13-splitter.md).
+
 ## `Splitter` — N-ary resizable multi-pane view (rstv-original, 2026-06-13)
 
 A generic, configurable, N-ary resizable multi-pane view (`widgets::splitter`) —
