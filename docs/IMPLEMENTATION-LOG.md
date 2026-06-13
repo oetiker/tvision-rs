@@ -35,6 +35,17 @@ widget line is dead.
 - Commits: `340842a` foundation+Screen.args · `ed08caf` 10 control specimens ·
   `17e95e9` windows/lists/dialogs + Modal seam · `a6ce0a1` gallery page+embeds.
   `cargo xtask docs` OK + link check clean; fmt + clippy --all-targets green.
+- **Determinism + review polish** (`c6dbc4d`, `9cb916d`, `2161782`): a committed
+  `examples/gallery_fixture/` the file/dir dialogs `cd` into (reproducible
+  listings); fixed the gallery `rustdoc_include` depth (`../../../`, was unprocessed
+  so code blocks showed the raw directive — the link checker does not validate
+  include resolution); and a screenshot-polish pass from review — `tmux
+  capture-pane -N` (full-width menu/status bars; tmux was trimming trailing
+  colored cells), scroll bars moved to the right/bottom edges, outline via
+  `standard_scroll_bar`, history shown with its recall drop-down open, color
+  picker opened on the Plane tab (new `ColorPicker::select_tab(Tab)`), a nested
+  `File ▸ Recent` sub-menu, and a new `contextmenu` (`MenuBox`) specimen — 21
+  widgets total.
 
 **Heads-up — interleaved Splitter commits.** A parallel agent working on a new
 `tv::Splitter` feature landed its work on `main` without a worktree, so its
