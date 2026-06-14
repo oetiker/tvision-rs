@@ -137,6 +137,83 @@ fn apply_sgr(state: &mut Sgr, params: &[i64]) {
     }
 }
 
+/// One rendered screen cell: a character with its resolved RGB colors.
+/// Produced by [`parse_grid`] for the GIF rasterizer (`gif.rs`).
+#[derive(Clone, Copy)]
+pub struct Cell {
+    pub ch: char,
+    pub fg: (u8, u8, u8),
+    pub bg: (u8, u8, u8),
+    pub bold: bool,
+}
+
+fn resolve(c: Col, default_rgb: (u8, u8, u8)) -> (u8, u8, u8) {
+    match c {
+        Col::Rgb(r, g, b) => (r, g, b),
+        Col::Default => default_rgb,
+    }
+}
+
+/// Parse ANSI/SGR text (from `tmux capture-pane -e -p -N`) into a grid of cells,
+/// one inner `Vec` per screen row. Shares the SGR engine with [`ansi_to_html`];
+/// `Col::Default` resolves to light-grey on black (TV paints real colours, so
+/// the defaults only show through where tmux emitted no SGR).
+pub fn parse_grid(input: &str) -> Vec<Vec<Cell>> {
+    const DEF_FG: (u8, u8, u8) = (170, 170, 170);
+    const DEF_BG: (u8, u8, u8) = (0, 0, 0);
+    let mut rows: Vec<Vec<Cell>> = vec![Vec::new()];
+    let mut state = Sgr::reset();
+    let mut chars = input.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\x1b' {
+            if chars.peek() == Some(&'[') {
+                chars.next();
+                let mut buf = String::new();
+                let mut final_byte = None;
+                for c in chars.by_ref() {
+                    if c.is_ascii_alphabetic() {
+                        final_byte = Some(c);
+                        break;
+                    }
+                    buf.push(c);
+                }
+                if final_byte == Some('m') {
+                    let params: Vec<i64> = if buf.is_empty() {
+                        vec![0]
+                    } else {
+                        buf.split(';')
+                            .map(|s| s.parse::<i64>().unwrap_or(0))
+                            .collect()
+                    };
+                    apply_sgr(&mut state, &params);
+                }
+            }
+            continue;
+        }
+        if ch == '\r' {
+            continue;
+        }
+        if ch == '\n' {
+            rows.push(Vec::new());
+            continue;
+        }
+        let (mut fg, mut bg) = (state.fg, state.bg);
+        if state.reverse {
+            std::mem::swap(&mut fg, &mut bg);
+        }
+        rows.last_mut().unwrap().push(Cell {
+            ch,
+            fg: resolve(fg, DEF_FG),
+            bg: resolve(bg, DEF_BG),
+            bold: state.bold,
+        });
+    }
+    if rows.last().is_some_and(|r| r.is_empty()) {
+        rows.pop();
+    }
+    rows
+}
+
 /// Convert ANSI/SGR text (from `tmux capture-pane -e -p`) to an HTML fragment.
 pub fn ansi_to_html(input: &str) -> String {
     let mut out = String::from("<pre class=\"tv-screen\">");

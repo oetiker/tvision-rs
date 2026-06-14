@@ -25,3 +25,10 @@ rows that need it) retains its own license header in the vendored file(s):
 
 crossterm (MIT) is used as a normal dependency, hidden behind the `Backend`
 trait (D11); it is not vendored.
+
+  * DejaVu Sans Mono (Bitstream Vera / DejaVu license — free to reproduce and
+    distribute) is bundled under `xtask/assets/` and used ONLY by the
+    `cargo xtask demo` recorder to rasterize terminal frames into the demo
+    animation. It is a build-tool asset, not part of the published `rstv` crate.
+    The full license is preserved at `xtask/assets/DejaVuSansMono-LICENSE.txt`.
+    https://dejavu-fonts.github.io/

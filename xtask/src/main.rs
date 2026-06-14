@@ -2,8 +2,10 @@
 
 mod ansi_html;
 mod build;
+mod demo;
 mod linkcheck;
 mod paths;
+mod raster;
 mod screens;
 mod serve;
 mod test;
@@ -17,7 +19,8 @@ fn usage() -> ! {
          commands:\n\
          \x20 docs [--serve]   build the integrated doc site (guide + api); --serve = watch+serve\n\
          \x20 screens          regenerate the tmux screenshots only\n\
-         \x20 test             run mdbook doctests (compile the guide's rust blocks)\n"
+         \x20 test             run mdbook doctests (compile the guide's rust blocks)\n\
+         \x20 demo             record docs/demo/tvdemo.webp (drive tvdemo in tmux, rasterize frames)\n"
     );
     std::process::exit(2)
 }
@@ -31,6 +34,7 @@ fn main() -> Result<()> {
         }
         Some("screens") => screens::regenerate(),
         Some("test") => test::run(),
+        Some("demo") => demo::run(),
         _ => usage(),
     }
 }

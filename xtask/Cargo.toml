@@ -11,3 +11,9 @@ mdbook-mermaid = "0.14"
 notify = "6"
 tiny_http = "0.12"
 anyhow = "1"
+# Owned tmux-capture -> animated-WebP renderer (xtask/src/demo.rs): rasterize
+# each captured frame with a bundled mono font, encode animated WebP — no
+# external recorder. `image` is used for the RGBA buffer + per-scene PNG dumps.
+ab_glyph = "0.2"
+image = { version = "0.25", default-features = false, features = ["png"] }
+webp = "0.3"
