@@ -18,10 +18,10 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use rstv::{
-    Backend, Button, ButtonFlags, Command, CrosstermBackend, Desktop, Dialog, DrawCtx, Event,
-    Frame, Key, KeyEvent, KeyModifiers, Menu, MenuBar, Program, Rect, Role, ScrollBarOptions,
-    Scroller, StaticText, StatusDef, StatusLine, SystemClock, Theme, View, ViewId, ViewState,
-    Window, WindowFlags, alt, delegate,
+    Backend, Button, ButtonFlags, Color, ColorPicker, Command, Constraints, CrosstermBackend,
+    Desktop, Dialog, DrawCtx, Event, Frame, Key, KeyEvent, KeyModifiers, Menu, MenuBar, Program,
+    Rect, Role, ScrollBarOptions, Scroller, Splitter, StaticText, StatusDef, StatusLine,
+    SystemClock, Tab, Theme, View, ViewId, ViewState, Window, WindowFlags, alt, delegate,
 };
 
 // ---------------------------------------------------------------------------
@@ -39,6 +39,8 @@ const CMD_OPEN: Command = Command::custom("tvdemo.open");
 const CALC_BUTTON: Command = Command::custom("tvdemo.calcbtn");
 const ASCII_FOCUSED: Command = Command::custom("tvdemo.asciifocused");
 const CMD_FND_EV_VIEW: Command = Command::custom("tvdemo.fndevview");
+const CMD_COLORS: Command = Command::custom("tvdemo.colors");
+const CMD_SPLIT: Command = Command::custom("tvdemo.split");
 
 // ---------------------------------------------------------------------------
 // Key helpers
@@ -1523,6 +1525,8 @@ impl TVDemo {
                     .command("Ca~l~endar", CMD_CALENDAR)
                     .command("Ascii ~T~able", CMD_ASCII)
                     .command("~C~alculator", CMD_CALC)
+                    .command("Color Pic~k~er", CMD_COLORS)
+                    .command("~S~plitter", CMD_SPLIT)
                     .command_key("~E~vent Viewer", CMD_EVENT_VIEW, alt0(), "Alt-0")
             })
             .submenu("~F~ile", alt('f'), |m| {
@@ -1579,6 +1583,10 @@ impl TVDemo {
                 prog.desktop_insert(Box::new(AsciiWindow::new()));
             } else if cmd == CMD_CALC {
                 prog.desktop_insert(Box::new(Calculator::new()));
+            } else if cmd == CMD_COLORS {
+                prog.desktop_insert(color_window());
+            } else if cmd == CMD_SPLIT {
+                prog.desktop_insert(splitter_window());
             } else if cmd == CMD_EVENT_VIEW {
                 let r = prog.desktop_rect();
                 prog.desktop_insert(Box::new(EventViewer::new(r)));
@@ -1605,6 +1613,63 @@ impl TVDemo {
             }
         });
     }
+}
+
+// ---------------------------------------------------------------------------
+// Color picker + Splitter (rstv widgets, opened as desktop windows)
+// ---------------------------------------------------------------------------
+
+/// A truecolor [`ColorPicker`] on its hue/saturation plane, in a dialog.
+fn color_window() -> Box<dyn View> {
+    let mut dlg = Dialog::new(Rect::new(6, 1, 68, 24), Some("Select Color".to_string()));
+    let mut picker = ColorPicker::new(Rect::new(2, 2, 60, 20), Color::Rgb(30, 144, 255));
+    picker.select_tab(Tab::Plane);
+    dlg.insert_child(Box::new(picker));
+    dlg.insert_child(Box::new(Button::new(
+        Rect::new(8, 20, 20, 22),
+        "~O~K",
+        Command::OK,
+        ButtonFlags {
+            default: true,
+            ..ButtonFlags::new()
+        },
+    )));
+    dlg.insert_child(Box::new(Button::new(
+        Rect::new(42, 20, 56, 22),
+        "~C~ancel",
+        Command::CANCEL,
+        ButtonFlags::new(),
+    )));
+    Box::new(dlg)
+}
+
+/// A [`Splitter`] grid: a fixed sidebar beside a column split into two stacked
+/// rows, `.joined()` so the seams connect to the window frame and each other.
+fn splitter_window() -> Box<dyn View> {
+    let mut win = Window::new(Rect::new(3, 1, 59, 18), Some("Splitter".to_string()), 1);
+    let ext = win.state().get_extent();
+    let interior = Rect::new(1, 1, ext.b.x - 1, ext.b.y - 1);
+    let right = Splitter::rows()
+        .pane(
+            Box::new(StaticText::new(Rect::new(0, 0, 1, 1), "list pane")),
+            Constraints::flex(),
+        )
+        .pane(
+            Box::new(StaticText::new(Rect::new(0, 0, 1, 1), "form pane")),
+            Constraints::flex(),
+        );
+    let split = Splitter::cols()
+        .pane(
+            Box::new(StaticText::new(Rect::new(0, 0, 1, 1), "tree pane")),
+            Constraints::fixed(16),
+        )
+        .pane(Box::new(right), Constraints::flex())
+        .joined();
+    let split_id = win.insert_child(Box::new(split));
+    if let Some(v) = win.child_mut(split_id) {
+        v.change_bounds(interior);
+    }
+    Box::new(win)
 }
 
 // ---------------------------------------------------------------------------

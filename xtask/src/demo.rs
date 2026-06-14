@@ -37,28 +37,34 @@ const fn scene(keys: &'static [&'static str], hold_cs: u16) -> Scene {
 ///   - F5 zooms/restores the top window.
 fn tour() -> Vec<Scene> {
     vec![
-        scene(&[], 120),                   // the desktop
-        scene(&["F10"], 70),               // menu bar active
-        scene(&["Down"], 90),              // system menu open
-        scene(&["Enter"], 180),            // About dialog (hero)
+        scene(&[], 110),                   // the desktop
+        scene(&["F10"], 60),               // menu bar active
+        scene(&["Down"], 130),             // system menu (incl. Color Picker + Splitter)
+        scene(&["Enter"], 160),            // About dialog (hero)
         scene(&["Escape"], 50),            // dismiss
-        scene(&["F10", "Down", "l"], 110), // Calendar window
-        scene(&["F10", "Down", "c"], 110), // Calculator window
+        scene(&["F10", "Down", "c"], 100), // Calculator window
         // press buttons: 6 * 7 = → 42
-        scene(&["6"], 40),
-        scene(&["*"], 40),
-        scene(&["7"], 40),
-        scene(&["="], 150),
-        // drag the calculator around (size/move mode)
-        scene(&["C-F5"], 70),
-        scene(&["Left"], 30),
-        scene(&["Left"], 30),
-        scene(&["Up"], 30),
-        scene(&["Enter"], 100),                              // confirm move
-        scene(&["F10", "Down", "t"], 110),                   // Ascii-table window
-        scene(&["F10", "Right", "Right", "Down", "a"], 170), // cascade (hero)
-        scene(&["F5"], 150),                                 // zoom top window
-        scene(&["F5"], 110),                                 // restore
+        scene(&["6"], 35),
+        scene(&["*"], 35),
+        scene(&["7"], 35),
+        scene(&["="], 130),
+        // drag the calculator (size/move mode)
+        scene(&["C-F5"], 60),
+        scene(&["Left"], 26),
+        scene(&["Up"], 26),
+        scene(&["Enter"], 90),             // confirm move
+        scene(&["F10", "Down", "l"], 100), // Calendar window
+        // Color picker — drag across the hue/sat plane; "New" sweeps live.
+        scene(&["F10", "Down", "k"], 130), // open Color Picker
+        scene(&["\x1b[<0;12;7M"], 40),     // mouse-press on the plane
+        scene(&["\x1b[<32;20;10M"], 45),   // drag…
+        scene(&["\x1b[<32;30;14M"], 45),
+        scene(&["\x1b[<32;40;19M"], 45),
+        scene(&["\x1b[<0;40;19m"], 120), // release (final picked colour)
+        scene(&["F10", "Down", "s"], 150), // Splitter grid (joined panes)
+        scene(&["F10", "Right", "Right", "Down", "a"], 170), // cascade (all windows)
+        scene(&["F5"], 140),             // zoom top window
+        scene(&["F5"], 110),             // restore
     ]
 }
 
@@ -115,8 +121,14 @@ pub fn run() -> Result<()> {
 
     for (i, sc) in scenes.iter().enumerate() {
         for key in sc.keys {
-            tmux(&["send-keys", "-t", session, key])?;
-            sleep(Duration::from_millis(320));
+            // Keys beginning with ESC are raw SGR mouse sequences — send them
+            // literally (`-l`); everything else is a named key for send-keys.
+            if key.starts_with('\x1b') {
+                tmux(&["send-keys", "-t", session, "-l", key])?;
+            } else {
+                tmux(&["send-keys", "-t", session, key])?;
+            }
+            sleep(Duration::from_millis(300));
         }
         sleep(Duration::from_millis(420));
         let captured = tmux(&["capture-pane", "-t", session, "-e", "-p", "-N"])?;
