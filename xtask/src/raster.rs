@@ -87,8 +87,8 @@ impl Renderer {
                 // so they reach the exact integer cell edges and tile seamlessly
                 // (font glyphs leave a ~1px anti-aliased gap at cell boundaries —
                 // visible on frames, window shadows, and colour-picker swatches).
-                if let Some(dirs) = box_dirs(cell.ch) {
-                    self.draw_box(&mut img, x0, y0, dirs, cell.fg);
+                if let Some(spec) = box_spec(cell.ch) {
+                    self.draw_box(&mut img, x0, y0, spec, cell.fg);
                     continue;
                 }
                 if self.draw_block(&mut img, x0, y0, cell.ch, cell.fg) {
@@ -121,18 +121,15 @@ impl Renderer {
         img
     }
 
-    /// Paint a box-drawing line char as exact rectangles. Arms run from the cell
-    /// centre to the integer cell edge, so adjacent cells' lines meet with no gap.
-    /// Single arms are 2px; double arms are two 1px strokes straddling the centre.
-    fn draw_box(
-        &self,
-        img: &mut RgbaImage,
-        x0: u32,
-        y0: u32,
-        dirs: (bool, bool, bool, bool, bool),
-        fg: (u8, u8, u8),
-    ) {
-        let (up, right, down, left, dbl) = dirs;
+    /// Paint a box-drawing line char as exact rectangles. `spec` is the weight of
+    /// each arm `[up, right, down, left]` — 0 = none, 1 = single, 2 = double. All
+    /// strokes share one thickness (so single and double lines look balanced), and
+    /// arms run edge-to-centre and cross at the junction, so mixed connectors
+    /// (`╤ ╢ ╪ …`) join cleanly and adjacent cells tile with no gap.
+    fn draw_box(&self, img: &mut RgbaImage, x0: u32, y0: u32, spec: [u8; 4], fg: (u8, u8, u8)) {
+        const T: i32 = 2; // stroke thickness
+        const OFF: i32 = 2; // double-stroke offset from the centre line
+        let [up, right, down, left] = spec;
         let (cw, ch) = (self.cell_w as i32, self.cell_h as i32);
         let (mx, my) = (cw / 2, ch / 2);
         let color = Rgba([fg.0, fg.1, fg.2, 255]);
@@ -143,38 +140,59 @@ impl Renderer {
                 }
             }
         };
-        if !dbl {
-            // 2px strokes centred on (mx, my); arms overlap at the centre.
-            if left {
-                rect(0, mx + 1, my - 1, my + 1);
+        // Stroke centre-lines: a horizontal line has 1 or 2 rows; a vertical 1 or 2 cols.
+        let hw = left.max(right); // horizontal weight
+        let vw = up.max(down); // vertical weight
+        let ycs: &[i32] = match hw {
+            2 => &[my - OFF, my + OFF],
+            1 => &[my],
+            _ => &[],
+        };
+        let xcs: &[i32] = match vw {
+            2 => &[mx - OFF, mx + OFF],
+            1 => &[mx],
+            _ => &[],
+        };
+        // Horizontal strokes: each spans from the left edge (if a left arm) to the
+        // right edge (if a right arm), otherwise only to the crossing vertical(s).
+        if hw > 0 {
+            let xa = if left > 0 {
+                0
+            } else if !xcs.is_empty() {
+                xcs.iter().min().unwrap() - T / 2
+            } else {
+                mx
+            };
+            let xb = if right > 0 {
+                cw
+            } else if !xcs.is_empty() {
+                xcs.iter().max().unwrap() + T / 2
+            } else {
+                mx
+            };
+            for &yc in ycs {
+                rect(xa, xb, yc - T / 2, yc - T / 2 + T);
             }
-            if right {
-                rect(mx - 1, cw, my - 1, my + 1);
-            }
-            if up {
-                rect(mx - 1, mx + 1, 0, my + 1);
-            }
-            if down {
-                rect(mx - 1, mx + 1, my - 1, ch);
-            }
-        } else {
-            // Two 1px lines: horizontals at rows my-2 & my+1, verticals at cols
-            // mx-2 & mx+1 — consistent across cells so doubles line up + tile.
-            if left {
-                rect(0, mx + 2, my - 2, my - 1);
-                rect(0, mx + 2, my + 1, my + 2);
-            }
-            if right {
-                rect(mx - 2, cw, my - 2, my - 1);
-                rect(mx - 2, cw, my + 1, my + 2);
-            }
-            if up {
-                rect(mx - 2, mx - 1, 0, my + 2);
-                rect(mx + 1, mx + 2, 0, my + 2);
-            }
-            if down {
-                rect(mx - 2, mx - 1, my - 2, ch);
-                rect(mx + 1, mx + 2, my - 2, ch);
+        }
+        // Vertical strokes: span top/bottom edges (if up/down arms), else to the
+        // crossing horizontal(s) so the junction fills.
+        if vw > 0 {
+            let ya = if up > 0 {
+                0
+            } else if !ycs.is_empty() {
+                ycs.iter().min().unwrap() - T / 2
+            } else {
+                my
+            };
+            let yb = if down > 0 {
+                ch
+            } else if !ycs.is_empty() {
+                ycs.iter().max().unwrap() + T / 2
+            } else {
+                my
+            };
+            for &xc in xcs {
+                rect(xc - T / 2, xc - T / 2 + T, ya, yb);
             }
         }
     }
@@ -238,33 +256,54 @@ impl Renderer {
     }
 }
 
-/// Box-drawing line chars we render as rectangles: `(up, right, down, left, double)`.
-/// `None` ⇒ not a handled box char (fall back to the font).
-fn box_dirs(ch: char) -> Option<(bool, bool, bool, bool, bool)> {
-    let (t, f) = (true, false);
+/// Arm weights `[up, right, down, left]` for a box-drawing line char: 0 = none,
+/// 1 = single, 2 = double. Covers single, double, and mixed single/double
+/// connectors. `None` ⇒ not a handled box char (fall back to the font).
+fn box_spec(ch: char) -> Option<[u8; 4]> {
     Some(match ch {
-        '─' => (f, t, f, t, f),
-        '│' => (t, f, t, f, f),
-        '┌' => (f, t, t, f, f),
-        '┐' => (f, f, t, t, f),
-        '└' => (t, t, f, f, f),
-        '┘' => (t, f, f, t, f),
-        '├' => (t, t, t, f, f),
-        '┤' => (t, f, t, t, f),
-        '┬' => (f, t, t, t, f),
-        '┴' => (t, t, f, t, f),
-        '┼' => (t, t, t, t, f),
-        '═' => (f, t, f, t, t),
-        '║' => (t, f, t, f, t),
-        '╔' => (f, t, t, f, t),
-        '╗' => (f, f, t, t, t),
-        '╚' => (t, t, f, f, t),
-        '╝' => (t, f, f, t, t),
-        '╠' => (t, t, t, f, t),
-        '╣' => (t, f, t, t, t),
-        '╦' => (f, t, t, t, t),
-        '╩' => (t, t, f, t, t),
-        '╬' => (t, t, t, t, t),
+        // singles
+        '─' => [0, 1, 0, 1],
+        '│' => [1, 0, 1, 0],
+        '┌' => [0, 1, 1, 0],
+        '┐' => [0, 0, 1, 1],
+        '└' => [1, 1, 0, 0],
+        '┘' => [1, 0, 0, 1],
+        '├' => [1, 1, 1, 0],
+        '┤' => [1, 0, 1, 1],
+        '┬' => [0, 1, 1, 1],
+        '┴' => [1, 1, 0, 1],
+        '┼' => [1, 1, 1, 1],
+        // doubles
+        '═' => [0, 2, 0, 2],
+        '║' => [2, 0, 2, 0],
+        '╔' => [0, 2, 2, 0],
+        '╗' => [0, 0, 2, 2],
+        '╚' => [2, 2, 0, 0],
+        '╝' => [2, 0, 0, 2],
+        '╠' => [2, 2, 2, 0],
+        '╣' => [2, 0, 2, 2],
+        '╦' => [0, 2, 2, 2],
+        '╩' => [2, 2, 0, 2],
+        '╬' => [2, 2, 2, 2],
+        // mixed single/double (used by single divider ↔ double frame joins)
+        '╒' => [0, 2, 1, 0],
+        '╓' => [0, 1, 2, 0],
+        '╕' => [0, 0, 1, 2],
+        '╖' => [0, 0, 2, 1],
+        '╘' => [1, 2, 0, 0],
+        '╙' => [2, 1, 0, 0],
+        '╛' => [1, 0, 0, 2],
+        '╜' => [2, 0, 0, 1],
+        '╞' => [1, 2, 1, 0],
+        '╟' => [2, 1, 2, 0],
+        '╡' => [1, 0, 1, 2],
+        '╢' => [2, 0, 2, 1],
+        '╤' => [0, 2, 1, 2],
+        '╥' => [0, 1, 2, 1],
+        '╧' => [1, 2, 0, 2],
+        '╨' => [2, 1, 0, 1],
+        '╪' => [1, 2, 1, 2],
+        '╫' => [2, 1, 2, 1],
         _ => return None,
     })
 }
