@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 description = "Delegation proc-macros for the rstv crate."
 license = "MIT"
+repository = "https://github.com/oetiker/rstv"
 publish = true
 
 [lib]

@@ -11,6 +11,9 @@ edition = "2024"
 description = "An idiomatic Rust port of Turbo Vision (magiblot/tvision)."
 license = "MIT"
 repository = "https://github.com/oetiker/rstv"
+homepage = "https://oetiker.github.io/rstv/"
+documentation = "https://oetiker.github.io/rstv/api/rstv/"
+readme = "README.md"
 keywords = ["tui", "terminal", "turbo-vision", "widgets"]
 categories = ["command-line-interface"]
 
