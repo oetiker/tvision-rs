@@ -67,9 +67,21 @@ fn tour() -> Vec<Scene> {
         scene(&["\x1b[<32;40;19M"], 45),
         scene(&["\x1b[<0;40;19m"], 120), // release (final picked colour)
         scene(&["F10", "Down", "s"], 150), // Splitter grid (joined panes)
+        // Resize the split window interactively: Ctrl-F5 enters resize mode; Tab
+        // cycles the target (window → each divider); arrows move the active
+        // target; Enter commits. Widen the tree pane, then grow the list pane.
+        scene(&["C-F5"], 80),  // enter resize mode (frame highlights)
+        scene(&["Tab"], 70),   // target the vertical divider (it glows)
+        scene(&["Right"], 50), // drag it right — the tree pane widens…
+        scene(&["Right"], 50),
+        scene(&["Right"], 60),
+        scene(&["Tab"], 70),  // target the horizontal divider
+        scene(&["Down"], 50), // grow the list pane…
+        scene(&["Down"], 60),
+        scene(&["Enter"], 150), // commit the new layout
         scene(&["F10", "Right", "Right", "Down", "a"], 170), // cascade (all windows)
-        scene(&["F5"], 140),             // zoom top window
-        scene(&["F5"], 110),             // restore
+        scene(&["F5"], 140),    // zoom top window
+        scene(&["F5"], 110),    // restore
     ]
 }
 

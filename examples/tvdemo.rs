@@ -1661,9 +1661,9 @@ fn splitter_window() -> Box<dyn View> {
     let split = Splitter::cols()
         .pane(
             Box::new(StaticText::new(Rect::new(0, 0, 1, 1), "tree pane")),
-            Constraints::fixed(16),
+            Constraints::weight(2).min(12),
         )
-        .pane(Box::new(right), Constraints::flex())
+        .pane(Box::new(right), Constraints::weight(3))
         .joined();
     let split_id = win.insert_child(Box::new(split));
     if let Some(v) = win.child_mut(split_id) {
