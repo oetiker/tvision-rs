@@ -59,7 +59,6 @@ pub struct Splitter {
     /// The divider that is the active keyboard resize target (highlighted), if any.
     active_divider: Option<usize>,
     /// Weight snapshot taken at [`Splitter::begin_resize_session`]; restored on Esc cancel.
-    #[allow(dead_code)] // written/read by the resize session API (next task wires the caller)
     saved_weights: Vec<f64>,
     /// Absolute origin captured each `draw`, for the mouse-track capture (Task 6).
     abs_origin: Point,
@@ -551,7 +550,6 @@ impl Splitter {
     /// its own dividers to appear in the list — `self.state().id()` is `None` before
     /// insertion, and its own dividers would then be silently omitted (recursion into
     /// inserted sub-splitters is unaffected).
-    #[allow(dead_code)] // pub(crate) API called by the window resize capture (next task)
     pub(crate) fn begin_resize_session(&mut self) -> Vec<(ViewId, usize, Orientation)> {
         // Only splitters that contribute a movable divider take a snapshot — they
         // are the only ones that appear in the capture's target list and thus the
@@ -588,7 +586,6 @@ impl Splitter {
     /// Set (or clear) which divider is the active resize target. Drives the
     /// `FrameDragging` highlight in `draw_dividers`. Per-splitter (not recursive):
     /// the broker addresses each splitter by id.
-    #[allow(dead_code)] // pub(crate) API called by the window resize capture (next task)
     pub(crate) fn set_active_divider(&mut self, sel: Option<usize>) {
         self.active_divider = sel;
     }
@@ -596,7 +593,6 @@ impl Splitter {
     /// Move divider `index` by `delta` cells along the split axis, then re-flow
     /// children synchronously (no `ctx` at broker-apply time — `resolve_layout_local`
     /// writes child bounds directly).
-    #[allow(dead_code)] // pub(crate) API called by the window resize capture (next task)
     pub(crate) fn nudge_divider(&mut self, index: usize, delta: i32) {
         if let Some(p) = self.divider_axis_pos(index) {
             self.drag_divider_to(index, p + delta);
@@ -606,7 +602,6 @@ impl Splitter {
 
     /// End the resize session. On `!commit` restore the snapshotted weights (Esc).
     /// Clears the highlight and the snapshot. Per-splitter (not recursive).
-    #[allow(dead_code)] // pub(crate) API called by the window resize capture (next task)
     pub(crate) fn end_resize_session(&mut self, commit: bool) {
         if !commit && self.saved_weights.len() == self.slots.len() {
             for (s, w) in self.slots.iter_mut().zip(&self.saved_weights) {
@@ -620,7 +615,6 @@ impl Splitter {
 
     /// True if this splitter has ≥1 movable divider (used by the window to decide
     /// whether to enable Command::RESIZE / offer divider targets).
-    #[allow(dead_code)] // pub(crate) API called by the window resize capture (next task)
     pub(crate) fn has_movable_divider(&self) -> bool {
         (0..self.slots.len().saturating_sub(1)).any(|i| self.style_of(i).movable())
     }
