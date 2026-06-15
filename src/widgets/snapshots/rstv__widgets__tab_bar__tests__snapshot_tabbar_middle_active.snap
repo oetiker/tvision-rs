@@ -1,0 +1,15 @@
+---
+source: src/widgets/tab_bar.rs
+expression: render(1)
+---
+size: 30x1
+cursor: hidden
+text:
+|Presets ┌RGB┐ Hue/Sat         |
+attr:
+|abbbbbb.caccc.abbbbbb.........|
+legend:
+  . default
+  a fg=RGB(255,255,85) bg=RGB(170,170,170)
+  b fg=RGB(0,0,0) bg=RGB(170,170,170)
+  c fg=RGB(255,255,255) bg=RGB(170,170,170)

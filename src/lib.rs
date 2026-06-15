@@ -124,6 +124,7 @@ pub use view::{
     StateFlag, View, ViewId, ViewState,
 };
 pub use widgets::Indicator;
+pub use widgets::TabBar;
 pub use widgets::{Button, ButtonFlags};
 pub use widgets::{CheckBoxes, Cluster, ClusterKind, MultiCheckBoxes, RadioButtons};
 pub use widgets::{Constraints, DividerStyle, Orientation, Splitter};
