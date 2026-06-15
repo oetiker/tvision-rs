@@ -2468,7 +2468,10 @@ impl Program {
                                     .and_then(|v| v.as_any_mut())
                                     .and_then(|a| a.downcast_mut::<PageStack>())
                                 {
-                                    ps.set_active(idx.max(0) as usize, &mut ctx);
+                                    // TabBar::value() is always non-negative, so a
+                                    // plain `as usize` matches the SyncScrollerDelta
+                                    // reference (no defensive max(0)).
+                                    ps.set_active(idx as usize, &mut ctx);
                                 }
                             }
                             // -- colorpick: the color-picker drag broker --

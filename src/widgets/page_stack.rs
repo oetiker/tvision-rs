@@ -56,8 +56,11 @@ impl PageStack {
     }
 
     /// Whether the page with `id` is currently visible. Returns `false` if the
-    /// id is not a direct child of this stack's group.
-    pub fn page_visible(&mut self, id: ViewId) -> bool {
+    /// id is not a direct child of this stack's group. Test-only assertion
+    /// helper (used by this module's unit tests and the program-level
+    /// integration test).
+    #[cfg(test)]
+    pub(crate) fn page_visible(&mut self, id: ViewId) -> bool {
         self.group
             .child_mut(id)
             .map(|v| v.state().state.visible)
@@ -70,7 +73,7 @@ impl PageStack {
             return;
         }
         // Copy ids to avoid borrowing self.pages and self.group simultaneously.
-        let pages: Vec<ViewId> = self.pages.clone();
+        let pages = self.pages.clone();
         for (i, &pid) in pages.iter().enumerate() {
             self.group.set_visible_descendant(pid, i == idx, ctx);
         }
@@ -88,12 +91,17 @@ impl View for PageStack {
     /// React to the bound `TabBar`'s broadcast by queuing a pump sync; then route
     /// the event into the group as usual.
     fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
+        // `source.is_some()` guards against an unbound stack (tab_bar == None)
+        // matching its own None via `source == self.tab_bar` (None == None).
+        // We then read the bound id off `self.tab_bar` (mirroring the scroller,
+        // which passes its bound `h/v_scroll_bar` rather than re-unwrapping
+        // `source`) — keeping `request_sync_page_stack`'s `tab_bar: ViewId`.
         if let Event::Broadcast { command, source } = *ev
             && command == Command::TAB_BAR_CHANGED
             && source.is_some()
             && source == self.tab_bar
+            && let Some(tab_id) = self.tab_bar
             && let Some(ps_id) = self.group.state().id()
-            && let Some(tab_id) = source
         {
             ctx.request_sync_page_stack(ps_id, tab_id);
         }
@@ -248,5 +256,44 @@ mod tests {
                 .any(|d| matches!(d, Deferred::PageStackSync { .. })),
             "broadcast from a different source must NOT queue PageStackSync"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Snapshot tests — show-one / hide-rest at the pixel level
+    // -----------------------------------------------------------------------
+
+    /// Build a 20×3 `PageStack` with two `StaticText` pages ("PAGE ZERO" /
+    /// "PAGE ONE"), switch to `active`, render through a `HeadlessBackend`, and
+    /// return the snapshot. Only the active page's text must appear.
+    fn render(active: usize) -> String {
+        use crate::backend::{HeadlessBackend, Renderer};
+        use crate::screen::Buffer;
+        use crate::theme::Theme;
+        use crate::widgets::StaticText;
+
+        let theme = Theme::classic_blue();
+        let bounds = Rect::new(0, 0, 20, 3);
+        let mut ps = PageStack::new(bounds);
+        ps.insert_page(Box::new(StaticText::new(bounds, "PAGE ZERO")));
+        ps.insert_page(Box::new(StaticText::new(bounds, "PAGE ONE")));
+        // Switch via the public API (needs a Context for the focus/visibility ops).
+        ctx_run(|ctx| ps.set_active(active, ctx));
+
+        let (backend, screen) = HeadlessBackend::new(20, 3);
+        let mut r = Renderer::new(Box::new(backend));
+        r.render(|buf: &mut Buffer| {
+            ps.draw(&mut DrawCtx::new(buf, &theme, bounds, bounds.a));
+        });
+        screen.snapshot()
+    }
+
+    #[test]
+    fn snapshot_first_page_active() {
+        insta::assert_snapshot!(render(0));
+    }
+
+    #[test]
+    fn snapshot_second_page_active() {
+        insta::assert_snapshot!(render(1));
     }
 }

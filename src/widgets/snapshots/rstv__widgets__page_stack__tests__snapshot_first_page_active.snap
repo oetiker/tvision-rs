@@ -1,0 +1,17 @@
+---
+source: src/widgets/page_stack.rs
+expression: render(0)
+---
+size: 20x3
+cursor: hidden
+text:
+|PAGE ZERO           |
+|                    |
+|                    |
+attr:
+|aaaaaaaaaaaaaaaaaaaa|
+|aaaaaaaaaaaaaaaaaaaa|
+|aaaaaaaaaaaaaaaaaaaa|
+legend:
+  . default
+  a fg=RGB(0,0,0) bg=RGB(170,170,170)
