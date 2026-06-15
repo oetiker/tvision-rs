@@ -1,28 +1,32 @@
 //! Truecolor color-picker — an rstv-original extension (NOT a faithful port).
 //!
-//! One [`ColorPicker`] view owns a shared [`model::ColorModel`]; four surfaces
-//! draw + handle events against it. Produces any [`Color`](crate::color::Color)
-//! variant.
+//! [`ColorPicker`] is a [`Group`](crate::view::Group) container assembled from a
+//! [`TabBar`](crate::widgets::TabBar) (tab strip), a
+//! [`PageStack`](crate::widgets::PageStack) of four surface pages, and an
+//! always-visible `InfoColumn`. The four surfaces and the info column share one
+//! `ColorModel` through a [`SharedModel`]. Produces any
+//! [`Color`](crate::color::Color) variant.
 
 pub(crate) mod drag;
+mod info;
 pub mod model;
+mod page;
 pub(crate) mod plane;
 pub(crate) mod presets;
 pub(crate) mod rgb;
 pub(crate) mod xterm256;
 
-use crate::color::{Color, Style};
-use crate::event::{Event, Key, hot_key};
-use crate::view::{Context, DrawCtx, Options, Point, Rect, View, ViewState};
-use model::{ColorModel, color_to_display_rgb};
+use std::cell::RefCell;
+use std::rc::Rc;
 
-// -- shared layout (picker-local) ---------------------------------------------
-/// Picker-local tab-bar row.
-pub(crate) const TAB_BAR_Y: i32 = 0;
-/// Picker-local x where the info column starts (right edge of the surface body).
-pub(crate) const INFO_COL_X: i32 = 38;
-/// Picker-local body top (first row below the tab bar).
-pub(crate) const BODY_TOP: i32 = 1;
+use crate::color::Color;
+use crate::data::FieldValue;
+use crate::event::{Event, Key, hot_key};
+use crate::view::{Context, DrawCtx, Group, Point, Rect, View, ViewId};
+use model::ColorModel;
+
+/// The picker's surfaces and info column share one model.
+pub(crate) type SharedModel = Rc<RefCell<model::ColorModel>>;
 
 /// A picker surface — draws + handles events against the shared [`ColorModel`].
 pub(crate) trait Surface {
@@ -55,307 +59,210 @@ pub enum Tab {
 impl Tab {
     const ORDER: [Tab; 4] = [Tab::Presets, Tab::Rgb, Tab::Plane, Tab::Xterm256];
 
-    /// Label for the tab bar, with `~X~` marking the hotkey letter.
+    /// Label for the tab bar, with `~X~` marking the (unique) hotkey letter.
     fn label(self) -> &'static str {
         match self {
             Tab::Presets => "~P~resets",
             Tab::Rgb => "~R~GB",
-            Tab::Plane => "Plane ~W~",
-            Tab::Xterm256 => "~6~",
+            Tab::Plane => "~H~ue/Sat",
+            Tab::Xterm256 => "~X~term",
         }
+    }
+
+    /// The four labels in tab order (Presets, Rgb, Plane, Xterm256).
+    fn labels() -> [&'static str; 4] {
+        [
+            Tab::Presets.label(),
+            Tab::Rgb.label(),
+            Tab::Plane.label(),
+            Tab::Xterm256.label(),
+        ]
     }
 
     fn idx(self) -> usize {
         Self::ORDER.iter().position(|&t| t == self).unwrap()
     }
-
-    fn cycle(self, forward: bool) -> Tab {
-        let i = self.idx();
-        let n = Self::ORDER.len();
-        Self::ORDER[if forward {
-            (i + 1) % n
-        } else {
-            (i + n - 1) % n
-        }]
-    }
 }
 
-// -- ColorPicker struct -------------------------------------------------------
+// -- ColorPicker container ----------------------------------------------------
 
-/// The reusable, embeddable truecolor color-picker view (Approach A).
-/// Owns the shared [`ColorModel`] + the four surfaces. Does NOT own OK/Cancel (dialog chrome).
+/// The reusable, embeddable truecolor color-picker view. A `Group` wrapping a
+/// `TabBar` + `PageStack` (four surface pages) + an `InfoColumn`, all sharing one
+/// `ColorModel`. Does NOT own OK/Cancel (dialog chrome).
 pub struct ColorPicker {
-    state: ViewState,
-    model: ColorModel,
-    pub(crate) active: Tab,
-    presets: presets::PresetsSurface,
-    rgb: rgb::RgbSurface,
-    plane: plane::PlaneSurface,
-    grid: xterm256::Xterm256Surface,
-    /// Picker-local origin (= ctx.origin()), cached each draw for the drag handler.
-    #[allow(dead_code)]
-    body_origin: Point,
-    /// The drag region being scrubbed, set when the drag capture is pushed.
-    #[allow(dead_code)]
-    pub(crate) active_drag: Option<drag::ColorDragRegion>,
-    /// The initial (old) color — shown in the info column as the "before" swatch.
-    old: Color,
+    group: Group,
+    tab_bar_id: ViewId,
+    page_stack_id: ViewId,
+    model: SharedModel,
+    /// A tab preselected via [`select_tab`](Self::select_tab) before the modal
+    /// loop, applied (page-switch sync queued) on the first event.
+    pending_tab: Option<usize>,
 }
+
+/// Info-column width. Sized to fit the widest readout (`Rgb(255,255,255)` is 16
+/// chars) plus a 1-cell left margin and a little slack → 18. With the real picker
+/// sizes (color_dialog 56 wide, gallery/tvdemo 58–60 wide) this leaves the
+/// surface body ≈ 38–42 cols, matching the old fixed `body=38` layout.
+const INFO_COL_W: i32 = 18;
 
 impl ColorPicker {
-    #[allow(dead_code)]
     pub fn new(bounds: Rect, initial: Color) -> Self {
-        let mut state = ViewState::new(bounds);
-        state.options = Options {
-            selectable: true,
-            first_click: true,
-            ..Default::default()
-        };
-        let model = ColorModel::new(initial);
+        let w = bounds.b.x - bounds.a.x;
+        let h = bounds.b.y - bounds.a.y;
+        let body_w = (w - INFO_COL_W).max(1);
+
+        let model: SharedModel = Rc::new(RefCell::new(ColorModel::new(initial)));
+
+        let mut group = Group::new(Rect::new(0, 0, w, h));
+        // Embeddable selectable child with first-click activation (port of the
+        // old ctor's `Options { selectable: true, first_click: true, .. }`).
+        {
+            let opts = &mut group.state_mut().options;
+            opts.selectable = true;
+            opts.first_click = true;
+        }
+
+        // Tab strip (row 0, body-width).
+        let labels = Tab::labels();
+        let tab_bar = crate::widgets::TabBar::new(Rect::new(0, 0, body_w, 1), &labels);
+        let tab_bar_id = group.insert(Box::new(tab_bar));
+
+        // Page stack (rows 1..h), one page per surface.
+        let mut page_stack = crate::widgets::PageStack::new(Rect::new(0, 1, body_w, h));
+        let ext = Rect::new(0, 0, body_w, (h - 1).max(1));
+        page_stack.insert_page(Box::new(page::SurfacePage::new(
+            ext,
+            presets::PresetsSurface::new(&model.borrow()),
+            model.clone(),
+        )));
+        page_stack.insert_page(Box::new(page::SurfacePage::new(
+            ext,
+            rgb::RgbSurface::new(),
+            model.clone(),
+        )));
+        page_stack.insert_page(Box::new(page::SurfacePage::new(
+            ext,
+            plane::PlaneSurface::new(),
+            model.clone(),
+        )));
+        page_stack.insert_page(Box::new(page::SurfacePage::new(
+            ext,
+            xterm256::Xterm256Surface::new(&model.borrow()),
+            model.clone(),
+        )));
+        page_stack.bind_tab_bar(tab_bar_id);
+        let page_stack_id = group.insert(Box::new(page_stack));
+
+        // Info column (right of the body, full height).
+        let info =
+            info::InfoColumn::new(Rect::new(w - INFO_COL_W, 0, w, h), model.clone(), initial);
+        group.insert(Box::new(info));
+
         ColorPicker {
-            presets: presets::PresetsSurface::new(&model),
-            rgb: rgb::RgbSurface::new(),
-            plane: plane::PlaneSurface::new(),
-            grid: xterm256::Xterm256Surface::new(&model),
+            group,
+            tab_bar_id,
+            page_stack_id,
             model,
-            active: Tab::Presets,
-            state,
-            body_origin: Point::new(0, 0),
-            active_drag: None,
-            old: initial,
+            pending_tab: None,
         }
     }
 
     /// The current selection — the contract `color_dialog` reads.
-    #[allow(dead_code)]
     pub fn color(&self) -> Color {
-        self.model.color
+        self.model.borrow().color
     }
 
     /// Open the picker on a specific [`Tab`]. By default the picker starts on the
     /// preset palette; call this to preselect another surface (e.g. the visual
-    /// hue/saturation [`Tab::Plane`]) when embedding the picker yourself.
+    /// hue/saturation [`Tab::Plane`]) when embedding the picker yourself. Called
+    /// BEFORE the modal loop (no `Context`): the TabBar value is set now so the
+    /// strip shows the right active tab immediately, and the page switch is
+    /// stashed to apply on the first event (the broker needs a `Context`).
     pub fn select_tab(&mut self, tab: Tab) {
-        self.active = tab;
+        self.pending_tab = Some(tab.idx());
+        self.set_tab_bar_value(tab.idx());
     }
 
-    /// Picker-local surface body rect (left of the info column, below the tab bar).
-    fn body_rect(&self) -> Rect {
-        let sz = self.state.size;
-        Rect::new(0, BODY_TOP, INFO_COL_X, sz.y)
-    }
-
-    fn active_surface(&self) -> &dyn Surface {
-        match self.active {
-            Tab::Presets => &self.presets,
-            Tab::Rgb => &self.rgb,
-            Tab::Plane => &self.plane,
-            Tab::Xterm256 => &self.grid,
+    /// Set the embedded `TabBar`'s value (no ctx — see `TabBar::set_value`).
+    fn set_tab_bar_value(&mut self, idx: usize) {
+        if let Some(tb) = self
+            .group
+            .child_mut(self.tab_bar_id)
+            .and_then(|v| v.as_any_mut())
+            .and_then(|a| a.downcast_mut::<crate::widgets::TabBar>())
+        {
+            View::set_value(tb, FieldValue::Int(idx as i32));
         }
     }
 
-    /// Apply a drag broker callback. Called by the pump's deferred-apply arm.
-    #[allow(dead_code)]
-    pub(crate) fn apply_drag(&mut self, pos: Point) {
-        let body = self.body_rect();
-        if let Some(region) = self.active_drag {
-            // Inline match to avoid borrowing all of self through a method call
-            let model = &mut self.model;
-            match self.active {
-                Tab::Presets => self.presets.apply_drag(region, pos, body, model),
-                Tab::Rgb => self.rgb.apply_drag(region, pos, body, model),
-                Tab::Plane => self.plane.apply_drag(region, pos, body, model),
-                Tab::Xterm256 => self.grid.apply_drag(region, pos, body, model),
-            }
-        }
+    /// Read the embedded `TabBar`'s selected index.
+    fn tab_bar_selected(&mut self) -> usize {
+        self.group
+            .child_mut(self.tab_bar_id)
+            .and_then(|v| v.as_any_mut())
+            .and_then(|a| a.downcast_mut::<crate::widgets::TabBar>())
+            .map(|tb| tb.selected())
+            .unwrap_or(0)
     }
 
-    /// Draw the info column (right of the body, picker-local x 38..56, rows 1..sz.y).
-    /// Shows: old swatch + new swatch + variant readout.
-    fn draw_info_column(&self, ctx: &mut DrawCtx) {
-        let sz = self.state.size;
-        let normal = ctx.style(crate::theme::Role::ScrollerNormal);
-        let info_rect = Rect::new(INFO_COL_X, BODY_TOP, sz.x, sz.y);
-        ctx.fill(info_rect, ' ', normal);
-
-        // Label
-        ctx.put_str(INFO_COL_X + 1, BODY_TOP, "Old:", normal);
-        // Old swatch (2 cells)
-        let old_swatch = match color_to_display_rgb(self.old) {
-            Some((r, g, b)) => Style::new(Color::Rgb(r, g, b), Color::Rgb(r, g, b)),
-            None => normal,
-        };
-        ctx.fill(
-            Rect::new(INFO_COL_X + 1, BODY_TOP + 1, INFO_COL_X + 5, BODY_TOP + 2),
-            ' ',
-            old_swatch,
-        );
-
-        ctx.put_str(INFO_COL_X + 1, BODY_TOP + 2, "New:", normal);
-        // New swatch (2 cells)
-        let new_swatch = match color_to_display_rgb(self.model.color) {
-            Some((r, g, b)) => Style::new(Color::Rgb(r, g, b), Color::Rgb(r, g, b)),
-            None => normal,
-        };
-        ctx.fill(
-            Rect::new(INFO_COL_X + 1, BODY_TOP + 3, INFO_COL_X + 5, BODY_TOP + 4),
-            ' ',
-            new_swatch,
-        );
-
-        // Variant readout
-        let variant_str = match self.model.color {
-            Color::Rgb(r, g, b) => format!("Rgb({},{},{})", r, g, b),
-            Color::Bios(n) => {
-                let bios_names = [
-                    "Black", "Blue", "Green", "Cyan", "Red", "Magenta", "Brown", "LGray", "DGray",
-                    "LBlue", "LGreen", "LCyan", "LRed", "LMag", "Yellow", "White",
-                ];
-                let name = bios_names.get(n as usize).copied().unwrap_or("?");
-                format!("Bios({}) {}", n, name)
-            }
-            Color::Indexed(n) => format!("Idx({})", n),
-            Color::Default => "Default".to_string(),
-        };
-        ctx.put_str(INFO_COL_X + 1, BODY_TOP + 5, &variant_str, normal);
+    /// Drive a tab change exactly as a strip click would: set the TabBar value and
+    /// queue the PageStack sync (the broker switches the visible page).
+    fn switch_to_tab(&mut self, idx: usize, ctx: &mut Context) {
+        self.set_tab_bar_value(idx);
+        ctx.request_sync_page_stack(self.page_stack_id, self.tab_bar_id);
     }
 }
 
+#[crate::delegate(to = group, skip(as_any_mut, handle_event, value, set_value))]
 impl View for ColorPicker {
-    fn state(&self) -> &ViewState {
-        &self.state
-    }
-    fn state_mut(&mut self) -> &mut ViewState {
-        &mut self.state
-    }
-
-    fn draw(&mut self, ctx: &mut DrawCtx) {
-        self.body_origin = ctx.origin();
-        let sz = self.state.size;
-        let bar_bg = ctx.style(crate::theme::Role::FramePassive);
-        let tab_normal = ctx.style(crate::theme::Role::ButtonNormal);
-        let tab_active = ctx.style(crate::theme::Role::ButtonSelected);
-
-        // Tab bar background
-        ctx.fill(Rect::new(0, TAB_BAR_Y, sz.x, TAB_BAR_Y + 1), ' ', bar_bg);
-
-        // Draw tab labels using put_cstr (handles ~X~ hotkey toggle)
-        let mut x = 1;
-        for t in Tab::ORDER {
-            let style = if t == self.active {
-                tab_active
-            } else {
-                tab_normal
-            };
-            // hotkey rendered in same style as rest for now
-            let w = ctx.put_cstr(x, TAB_BAR_Y, t.label(), style, style);
-            x += w + 1;
-        }
-
-        // Body
-        let body = self.body_rect();
-        self.active_surface().draw(ctx, body, &self.model);
-
-        // Info column
-        self.draw_info_column(ctx);
+    fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
+        Some(self)
     }
 
     fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
-        // 1. Tab switching: Ctrl+Left/Right
+        // On the first event after a pre-modal `select_tab`, apply the stashed
+        // page switch (set_value alone moved the strip; the broker moves the page).
+        if let Some(idx) = self.pending_tab.take() {
+            self.switch_to_tab(idx, ctx);
+        }
+
         if let Event::KeyDown(ke) = *ev {
+            // Ctrl+Left/Right cycle the tab.
             if ke.modifiers.ctrl && matches!(ke.key, Key::Left | Key::Right) {
-                self.active = self.active.cycle(matches!(ke.key, Key::Right));
+                let n = Tab::ORDER.len();
+                let cur = self.tab_bar_selected();
+                let next = if matches!(ke.key, Key::Right) {
+                    (cur + 1) % n
+                } else {
+                    (cur + n - 1) % n
+                };
+                self.switch_to_tab(next, ctx);
                 ev.clear();
                 return;
             }
-            // Alt+hotkey jumps to a tab
+            // Alt+hotkey jumps to a tab (P/R/H/X).
             if ke.modifiers.alt
                 && let Key::Char(c) = ke.key
             {
                 let up = c.to_ascii_uppercase();
                 for t in Tab::ORDER {
                     if hot_key(t.label()) == Some(up) {
-                        self.active = t;
+                        self.switch_to_tab(t.idx(), ctx);
                         ev.clear();
                         return;
                     }
                 }
             }
-            // Leave plain Tab/Shift+Tab for the dialog
+            // Plain Tab / Shift+Tab belong to the dialog — leave uncleared.
             if ke.key == Key::Tab {
                 return;
             }
         }
-        // Tab-label click in the tab bar
-        if let Event::MouseDown(me) = *ev
-            && me.position.y == TAB_BAR_Y
-        {
-            let mut x = 1i32;
-            for t in Tab::ORDER {
-                // Width of this tab label without the ~ chars
-                let w = t.label().chars().filter(|&c| c != '~').count() as i32;
-                if me.position.x >= x && me.position.x < x + w {
-                    self.active = t;
-                    ev.clear();
-                    return;
-                }
-                x += w + 1;
-            }
-        }
-        // Drag: if the active surface reports a draggable region at a MouseDown,
-        // record it in `active_drag`, apply the down-click immediately (so a plain
-        // click still works), and push a ColorDragCapture so subsequent MouseMove
-        // events keep scrubbing. Picker-local coords throughout — no pre-subtraction
-        // of BODY_TOP (surfaces subtract body.a exactly once).
-        let body = self.body_rect();
-        if let Event::MouseDown(me) = *ev {
-            // Borrow surfaces read-only first to check for a drag region.
-            let region = match self.active {
-                Tab::Presets => self.presets.drag_region_at(me.position, body),
-                Tab::Rgb => self.rgb.drag_region_at(me.position, body),
-                Tab::Plane => self.plane.drag_region_at(me.position, body),
-                Tab::Xterm256 => self.grid.drag_region_at(me.position, body),
-            };
-            if let Some(region) = region
-                && let Some(id) = self.state.id()
-            {
-                self.active_drag = Some(region);
-                let origin = self.body_origin;
-                // Apply the down-click immediately (single click works).
-                match self.active {
-                    Tab::Presets => {
-                        self.presets
-                            .apply_drag(region, me.position, body, &mut self.model)
-                    }
-                    Tab::Rgb => self
-                        .rgb
-                        .apply_drag(region, me.position, body, &mut self.model),
-                    Tab::Plane => self
-                        .plane
-                        .apply_drag(region, me.position, body, &mut self.model),
-                    Tab::Xterm256 => {
-                        self.grid
-                            .apply_drag(region, me.position, body, &mut self.model)
-                    }
-                }
-                // Push a capture so subsequent moves keep scrubbing.
-                ctx.push_capture(Box::new(drag::ColorDragCapture::new(id, origin)));
-                ev.clear();
-                return;
-            }
-        }
-        // Delegate to the active surface — inline match to split borrows correctly
-        let model = &mut self.model;
-        match self.active {
-            Tab::Presets => self.presets.handle_event(ev, body, model, ctx),
-            Tab::Rgb => self.rgb.handle_event(ev, body, model, ctx),
-            Tab::Plane => self.plane.handle_event(ev, body, model, ctx),
-            Tab::Xterm256 => self.grid.handle_event(ev, body, model, ctx),
-        }
-    }
 
-    fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
-        Some(self)
+        // Everything else routes into the group: a strip click broadcasts
+        // TAB_BAR_CHANGED → the PageStack broker switches the page; plain keys
+        // route to the focused page; the info column ignores them.
+        self.group.handle_event(ev, ctx);
     }
 }
 
@@ -365,18 +272,10 @@ impl View for ColorPicker {
 mod view_tests {
     use super::*;
     use crate::color::Color;
-    use crate::event::{Event, Key, KeyEvent, KeyModifiers};
+    use crate::event::{Key, KeyEvent, KeyModifiers};
     use crate::timer::TimerQueue;
-    use crate::view::{Context, Deferred, Rect, View};
+    use crate::view::Deferred;
     use std::collections::VecDeque;
-
-    fn with_ctx<R>(f: impl FnOnce(&mut Context) -> R) -> R {
-        let mut out = VecDeque::new();
-        let mut timers = TimerQueue::new();
-        let mut deferred: Vec<Deferred> = Vec::new();
-        let mut ctx = Context::new(&mut out, &mut timers, 0, &mut deferred);
-        f(&mut ctx)
-    }
 
     fn ctrl(k: Key) -> Event {
         Event::KeyDown(KeyEvent::new(
@@ -399,37 +298,62 @@ mod view_tests {
     }
 
     #[test]
-    fn ctrl_right_cycles_tab_forward() {
+    fn ctrl_right_cycles_tab_and_queues_sync() {
         let mut p = ColorPicker::new(Rect::new(0, 0, 56, 18), Color::Default);
-        assert_eq!(p.active, Tab::Presets);
-        let mut ev = ctrl(Key::Right);
-        with_ctx(|ctx| p.handle_event(&mut ev, ctx));
-        assert_eq!(p.active, Tab::Rgb);
-        assert!(ev.is_nothing());
-    }
+        assert_eq!(p.tab_bar_selected(), 0);
 
-    #[test]
-    fn ctrl_left_cycles_tab_backward_with_wrap() {
-        let mut p = ColorPicker::new(Rect::new(0, 0, 56, 18), Color::Default);
-        let mut ev = ctrl(Key::Left);
-        with_ctx(|ctx| p.handle_event(&mut ev, ctx));
-        assert_eq!(p.active, Tab::Xterm256); // wrapped
+        let mut out = VecDeque::new();
+        let mut timers = TimerQueue::new();
+        let mut deferred: Vec<Deferred> = Vec::new();
+        {
+            let mut ctx = Context::new(&mut out, &mut timers, 0, &mut deferred);
+            let mut ev = ctrl(Key::Right);
+            p.handle_event(&mut ev, &mut ctx);
+            assert!(ev.is_nothing());
+        }
+        assert_eq!(p.tab_bar_selected(), 1, "Ctrl+Right advances the TabBar");
+        assert!(
+            deferred
+                .iter()
+                .any(|d| matches!(d, Deferred::PageStackSync { .. })),
+            "a PageStackSync is queued so the page switches too"
+        );
     }
 
     #[test]
     fn plain_tab_is_left_unhandled() {
         let mut p = ColorPicker::new(Rect::new(0, 0, 56, 18), Color::Default);
+        let mut out = VecDeque::new();
+        let mut timers = TimerQueue::new();
+        let mut deferred: Vec<Deferred> = Vec::new();
+        let mut ctx = Context::new(&mut out, &mut timers, 0, &mut deferred);
         let mut ev = plain(Key::Tab);
-        with_ctx(|ctx| p.handle_event(&mut ev, ctx));
-        assert!(!ev.is_nothing(), "plain Tab must pass to dialog");
+        p.handle_event(&mut ev, &mut ctx);
+        assert!(!ev.is_nothing(), "plain Tab must pass to the dialog");
     }
 
     #[test]
     fn switching_tab_does_not_change_color() {
         let mut p = ColorPicker::new(Rect::new(0, 0, 56, 18), Color::Rgb(10, 20, 30));
+        let mut out = VecDeque::new();
+        let mut timers = TimerQueue::new();
+        let mut deferred: Vec<Deferred> = Vec::new();
+        let mut ctx = Context::new(&mut out, &mut timers, 0, &mut deferred);
         let mut ev = ctrl(Key::Right);
-        with_ctx(|ctx| p.handle_event(&mut ev, ctx));
+        p.handle_event(&mut ev, &mut ctx);
         assert_eq!(p.color(), Color::Rgb(10, 20, 30));
+    }
+
+    #[test]
+    fn select_tab_sets_strip_immediately() {
+        let mut p = ColorPicker::new(Rect::new(0, 0, 56, 18), Color::Default);
+        p.select_tab(Tab::Plane);
+        assert_eq!(
+            p.tab_bar_selected(),
+            Tab::Plane.idx(),
+            "select_tab moves the strip before any event"
+        );
+        assert_eq!(p.pending_tab, Some(Tab::Plane.idx()));
     }
 }
 
@@ -440,17 +364,19 @@ mod snap_tests {
     use crate::color::Color;
     use crate::screen::Buffer;
     use crate::theme::Theme;
-    use crate::view::{DrawCtx, Rect, View};
+    use crate::view::DrawCtx;
 
-    fn render_picker(initial: Color, active: Tab) -> String {
+    /// Render the whole picker Group at a realistic 56×18 (the color_dialog size).
+    /// A 40×12 canvas would shrink the body to 40−18=22 cols — too narrow for the
+    /// preset list to read — so we use the real picker size here.
+    fn render_picker(initial: Color, tab: Tab) -> String {
         let theme = Theme::classic_blue();
-        // Use a compact 40×12 backend to keep snapshot legend under control
-        let (backend, screen) = HeadlessBackend::new(40, 12);
+        let (backend, screen) = HeadlessBackend::new(56, 18);
         let mut r = Renderer::new(Box::new(backend));
-        let mut p = ColorPicker::new(Rect::new(0, 0, 40, 12), initial);
-        p.active = active;
+        let mut p = ColorPicker::new(Rect::new(0, 0, 56, 18), initial);
+        p.select_tab(tab);
         r.render(|buf: &mut Buffer| {
-            let bounds = Rect::new(0, 0, 40, 12);
+            let bounds = Rect::new(0, 0, 56, 18);
             let mut dc = DrawCtx::new(buf, &theme, bounds, bounds.a);
             p.draw(&mut dc);
         });
@@ -461,13 +387,4 @@ mod snap_tests {
     fn snapshot_picker_presets() {
         insta::assert_snapshot!(render_picker(Color::Bios(4), Tab::Presets));
     }
-
-    // snapshot_picker_rgb skipped: the RGB gradient bars produce one unique style
-    // per pixel (bar_w=32 × 3 bars = 96 styles), exhausting the 62-char legend.
-    // The rgb-standalone snapshot in rgb.rs covers the surface itself on a
-    // narrower canvas that fits within the legend limit.
-
-    // xterm256 surface snapshot skipped: the 16×16 palette grid uses more than
-    // 63 distinct styles in 40×12, exhausting the snapshot legend. The
-    // xterm256-standalone snapshot in xterm256.rs covers the surface itself.
 }

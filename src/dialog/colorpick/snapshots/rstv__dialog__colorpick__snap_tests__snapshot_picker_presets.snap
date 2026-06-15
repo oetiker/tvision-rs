@@ -2,42 +2,54 @@
 source: src/dialog/colorpick/mod.rs
 expression: "render_picker(Color::Bios(4), Tab::Presets)"
 ---
-size: 40x12
+size: 56x18
 cursor: hidden
 text:
-| Presets RGB Plane W 6                  |
-|   Default                             O|
-|   Black                                |
-|   Blue                                N|
-|   Green                                |
-|   Cyan                                 |
-|   Red                                 B|
-|   Magenta                              |
-|   Brown                                |
-|   Light Gray                           |
-|   Dark Gray                            |
-|   Light Blue                           |
+|┌Presets┐ RGB Hue/Sat Xterm            Old:             |
+|   Default                                              |
+|   Black                               New:             |
+|   Blue                                                 |
+|   Green                                                |
+|   Cyan                                Bios(4) Red      |
+|   Red                                                  |
+|   Magenta                                              |
+|   Brown                                                |
+|   Light Gray                                           |
+|   Dark Gray                                            |
+|   Light Blue                                           |
+|   Light Green                                          |
+|   Light Cyan                                           |
+|   Light Red                                            |
+|   Light Magenta                                        |
+|   Yellow                                               |
+|   White                                                |
 attr:
-|abbbbbbbacccacccccccacaaaaaaaaaaaaaaaaaa|
-|dddddddddddddddddddddddddddddddddddddddd|
-|eedddddddddddddddddddddddddddddddddddddf|
-|ggdddddddddddddddddddddddddddddddddddddd|
-|hhdddddddddddddddddddddddddddddddddddddf|
-|iidddddddddddddddddddddddddddddddddddddd|
-|ffjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjdd|
-|kkdddddddddddddddddddddddddddddddddddddd|
-|lldddddddddddddddddddddddddddddddddddddd|
-|mmdddddddddddddddddddddddddddddddddddddd|
-|nndddddddddddddddddddddddddddddddddddddd|
-|oodddddddddddddddddddddddddddddddddddddd|
+|abaaaaaaa.bcc.bcccccc.bcccc...........cccccccccccccccccc|
+|ddddddddddddddddddddddddddddddddddddddceeeeccccccccccccc|
+|ffddddddddddddddddddddddddddddddddddddcccccccccccccccccc|
+|ggddddddddddddddddddddddddddddddddddddceeeeccccccccccccc|
+|hhddddddddddddddddddddddddddddddddddddcccccccccccccccccc|
+|iiddddddddddddddddddddddddddddddddddddcccccccccccccccccc|
+|eejjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjcccccccccccccccccc|
+|kkddddddddddddddddddddddddddddddddddddcccccccccccccccccc|
+|llddddddddddddddddddddddddddddddddddddcccccccccccccccccc|
+|mmddddddddddddddddddddddddddddddddddddcccccccccccccccccc|
+|nnddddddddddddddddddddddddddddddddddddcccccccccccccccccc|
+|ooddddddddddddddddddddddddddddddddddddcccccccccccccccccc|
+|ppddddddddddddddddddddddddddddddddddddcccccccccccccccccc|
+|qqddddddddddddddddddddddddddddddddddddcccccccccccccccccc|
+|rrddddddddddddddddddddddddddddddddddddcccccccccccccccccc|
+|ssddddddddddddddddddddddddddddddddddddcccccccccccccccccc|
+|ttddddddddddddddddddddddddddddddddddddcccccccccccccccccc|
+|uuddddddddddddddddddddddddddddddddddddcccccccccccccccccc|
 legend:
   . default
-  a fg=RGB(170,170,170) bg=RGB(0,0,170)
-  b fg=RGB(255,255,255) bg=RGB(0,170,0)
-  c fg=RGB(0,0,0) bg=RGB(0,170,0)
+  a fg=RGB(255,255,255) bg=RGB(170,170,170)
+  b fg=RGB(255,255,85) bg=RGB(170,170,170)
+  c fg=RGB(0,0,0) bg=RGB(170,170,170)
   d fg=RGB(255,255,85) bg=RGB(0,0,170)
-  e fg=RGB(0,0,0) bg=RGB(0,0,0)
-  f fg=RGB(170,0,0) bg=RGB(170,0,0)
+  e fg=RGB(170,0,0) bg=RGB(170,0,0)
+  f fg=RGB(0,0,0) bg=RGB(0,0,0)
   g fg=RGB(0,0,170) bg=RGB(0,0,170)
   h fg=RGB(0,170,0) bg=RGB(0,170,0)
   i fg=RGB(0,170,170) bg=RGB(0,170,170)
@@ -47,3 +59,9 @@ legend:
   m fg=RGB(170,170,170) bg=RGB(170,170,170)
   n fg=RGB(85,85,85) bg=RGB(85,85,85)
   o fg=RGB(85,85,255) bg=RGB(85,85,255)
+  p fg=RGB(85,255,85) bg=RGB(85,255,85)
+  q fg=RGB(85,255,255) bg=RGB(85,255,255)
+  r fg=RGB(255,85,85) bg=RGB(255,85,85)
+  s fg=RGB(255,85,255) bg=RGB(255,85,255)
+  t fg=RGB(255,255,85) bg=RGB(255,255,85)
+  u fg=RGB(255,255,255) bg=RGB(255,255,255)
