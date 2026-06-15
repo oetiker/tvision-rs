@@ -7,14 +7,44 @@
 > Read this, then [CLAUDE.md](file:///home/oetiker/checkouts/rstv/CLAUDE.md)
 > (orientation / locked decisions / cross-cutting seams), then start.
 >
-> **Direction:** the 92-class port is ✅ complete and the post-port backlog
-> (`docs/BACKLOG.md`, Phases A/B/C) is exhausted. The work now is the
-> **developer documentation**. Docs Phases 1 (guide Rust-first pass), 2 (the
-> widget gallery) and **3 (verified docs / doctest gates)** are ✅ done. There is
-> **no committed next phase** — see "Next" for the optional follow-ups. When
-> something lands: add an IMPLEMENTATION-LOG section and update this file.
+> **Direction:** the 92-class port is ✅ complete, the post-port backlog
+> (`docs/BACKLOG.md`, Phases A/B/C) is exhausted, and the developer docs (Docs
+> Phases 1–3) are ✅ done. The work now is **post-port UI polish + targeted
+> rstv-original extensions** (e.g. the `Splitter`; an interactive-resize pass; a
+> dialog design guide + `TabBar`). When something lands: add an IMPLEMENTATION-LOG
+> section and update this file.
 
-## Current state (2026-06-13, Docs Phase 3 landed + crate renamed to `rstv`)
+## Current state (2026-06-15)
+
+**`main` HEAD = `dc02f63`; 1236 lib tests green; clippy `--all-targets` + fmt
+clean.** The porting + docs phases are behind us; work now proceeds on small
+feature/UX branches off `main` (branch-first, fast-forward merge, two-stage
+review per task).
+
+Most recently landed (rstv-original UI; **full narrative in IMPLEMENTATION-LOG**):
+the `Splitter` widget + `joined()` line-joining + the generated demo movie, then
+an **interactive-resize pass** — splitter divider resize is now folded into the
+window keyboard resize mode (Ctrl-F5 → Tab cycles window↔dividers; plain arrows
+move, Shift+arrows resize). New cross-cutting seam worth knowing:
+`Deferred::SplitterDivider` (the D3 broker that drives a `Splitter`'s resize
+session by `ViewId`), with a target-cycling `KeyboardResizeCapture`.
+
+### In flight (NOT on `main` yet): branch `dialog-design-guide`
+A **dialog design guide + reusable `TabBar` + color-picker refit** effort. The
+**design spec is committed** on that branch
+(`docs/superpowers/specs/2026-06-15-dialog-design-guide-and-tabbar-design.md`);
+**no implementation plan yet** (next step is `writing-plans`). Three sequenced
+pieces: (1) `docs/design/dialog-layout.md` + named layout constants (`STD_BUTTON`
+10×2, `BUTTON_GAP` 2, margins) + a `Dialog::button_row` helper; (2) a standalone
+**`TabBar`** widget (rstv-original, like `ScrollBar`: corner-cap active tab
+`┌Label┐`, ←→/hotkey/mouse, broadcasts on change); (3) refit the color picker
+(`src/dialog/colorpick/`) to use `TabBar`, drop the **blue chrome** (it wrongly
+used blue-window roles `FramePassive`/`ScrollerNormal` inside a *gray* dialog),
+add a blank line above the buttons, rename tabs **`Plane W`→`Hue/Sat`** and
+**`6`→`Xterm`**. Locked decisions are in the spec. **Resume by reviewing the spec
+with the user, then `writing-plans`.**
+
+## Previous state (2026-06-13, Docs Phase 3 landed + crate renamed to `rstv`)
 
 **The crate is now `rstv`** (was `tvision`); the proc-macro crate is `rstv-macros`;
 the `tv::` house-style alias is unchanged (`tv = { package = "rstv" }`). See the
@@ -74,16 +104,10 @@ wrapper; genuinely-internal sketches kept `rust,ignore` with an explicit
 compiling code* (they build in the example binary) but they are **`fn`-fragments,
 not whole programs** — see the Phase 3 gotcha in "Next".
 
-### In-flight on `main` (NOT docs, NOT yours): `tv::Splitter`
-A parallel agent landed a `tv::Splitter` foundation directly on `main` without a
-worktree, so commits `c48b976` (spec) and `5ab3ffc` (`src/widgets/splitter/`
-layout solver — which also swept in some gallery Batch-B `examples/gallery.rs`
-edits) are **interleaved** between the gallery commits. It compiles clean; its
-plan (`docs/superpowers/plans/2026-06-13-splitter.md`, untracked) is only
-partially landed. **Leave it alone** for Phase 3; confirm its status with the
-user before touching it. (A rust-analyzer "borrow error" you may see in
-`splitter/layout.rs` is a stale false positive — `cargo build`/`clippy` are clean;
-trust cargo.)
+### `tv::Splitter` — RESOLVED (fully landed; see "Current state" above)
+The `tv::Splitter` that was in-flight here is now complete on `main` (layout
+solver, `joined()` line-joining, interactive resize, demo). This stale in-flight
+note is retained only so older references resolve.
 
 ## Previous state (2026-06-12, docs content + user-facing cleanup landed)
 
@@ -298,10 +322,19 @@ This session ran the **backlog run** end to end:
 
 *(none — all paused worktrees integrated this session)*
 
-## Next — no committed phase (optional follow-ups only)
+## Next
 
-Docs Phases 1–3 are done. There is **no next phase queued.** The gates are live;
-the guide's code is self-verifying. Remaining candidates, none committed:
+**Active:** finish the **dialog design guide + `TabBar` + color-picker refit** on
+branch `dialog-design-guide` (spec committed; needs `writing-plans` → subagent-driven
+implementation). See "In flight" above.
+
+**Splitter resize follow-ups (noted in the resize spec, not started):** Cyan/Gray
+window-palette divider color (the splitter uses the Blue frame-role family — other
+palettes need palette threading into the splitter); larger Ctrl+arrow *divider*
+nudges (the window target already does ±8/±4).
+
+The docs phases are done and self-verifying. Older optional candidates, none
+committed:
 
 - **Clear the 107 rustdoc warnings** — broken intra-doc links (`ov_handle_event`,
   `ov_set_state`, `View::as_any_mut`, …) surfaced by `cargo xtask docs`. These

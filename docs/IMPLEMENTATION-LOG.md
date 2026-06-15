@@ -60,6 +60,18 @@ recorded in the spec. Spec
 [`docs/superpowers/specs/2026-06-14-splitter-resize-unification-design.md`](docs/superpowers/specs/2026-06-14-splitter-resize-unification-design.md),
 plan [`docs/superpowers/plans/2026-06-15-splitter-resize-unification.md`](docs/superpowers/plans/2026-06-15-splitter-resize-unification.md).
 
+**Follow-ups (same session, on `main`):**
+- **Window move-vs-grow fix (`fb569dc`):** testing revealed the keyboard resize
+  capture's `apply_delta` ignored Shift and applied **both** move and grow on
+  every arrow, so a window could not be cleanly resized. Fixed faithful to
+  `TView::change`: plain arrows MOVE (`dmDragMove`), **Shift+arrows GROW**
+  (`dmDragGrow`); `Ctrl` only scales the step (±8/±4). Four tests; the splitter
+  example + `apps/windows.md` wording updated.
+- **Demo movie shows resize (`dc02f63`):** the demo splitter's panes are now
+  weighted (movable dividers — the tree pane was a `fixed(16)` sidebar), and
+  `xtask/src/demo.rs` gained a `Ctrl-F5 → Tab → arrows → Enter` scene that widens
+  the tree pane and grows the list pane (regenerates `docs/demo/tvdemo.webp`).
+
 ## Splitter frame-joining — divider↔frame + divider↔divider line-joining (rstv-original, 2026-06-13)
 
 Opt-in feature (`Window::with_joined_lines()`) that renders tee glyphs where a
