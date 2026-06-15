@@ -80,6 +80,7 @@ impl Tab {
     }
 
     fn idx(self) -> usize {
+        // ORDER is exhaustive over all Tab variants, so position() always succeeds.
         Self::ORDER.iter().position(|&t| t == self).unwrap()
     }
 }
@@ -179,8 +180,9 @@ impl ColorPicker {
     /// strip shows the right active tab immediately, and the page switch is
     /// stashed to apply on the first event (the broker needs a `Context`).
     pub fn select_tab(&mut self, tab: Tab) {
-        self.pending_tab = Some(tab.idx());
-        self.set_tab_bar_value(tab.idx());
+        let idx = tab.idx();
+        self.pending_tab = Some(idx);
+        self.set_tab_bar_value(idx);
     }
 
     /// Set the embedded `TabBar`'s value (no ctx — see `TabBar::set_value`).

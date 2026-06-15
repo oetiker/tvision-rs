@@ -140,8 +140,8 @@ pub struct Button {
     /// Absolute screen position of button-local `(0, 0)`, cached each `draw`
     /// so the mouse-tracking capture
     /// ([`MouseTrackCapture`](crate::capture::MouseTrackCapture)) can convert
-    /// absolute mouse coordinates to button-local — the same approach as
-    /// [`ColorPicker::body_origin`](crate::dialog::ColorPicker).
+    /// absolute mouse coordinates to button-local — the same abs-origin caching
+    /// approach used by [`ScrollBar`](crate::widgets::ScrollBar).
     /// Initialized to `(0, 0)`; updated on the first `draw` pass.
     abs_origin: Point,
     /// Whether a mouse hold-track is in flight (between the arming `MouseDown`
@@ -305,7 +305,7 @@ impl View for Button {
     fn draw(&mut self, ctx: &mut DrawCtx) {
         // Cache the absolute origin for the mouse-tracking capture: the
         // MouseTrackCapture converts absolute mouse coords to button-local via
-        // this value, mirroring the ColorPicker `body_origin` pattern.
+        // this value (the same abs-origin caching pattern as ScrollBar).
         self.abs_origin = ctx.origin();
         let down = self.down;
         let (lo_role, hi_role) = self.state_roles();

@@ -138,8 +138,8 @@ pub struct TrackMask {
 /// widget runs its handling once on the press before the first forwarded event.
 ///
 /// `origin` is the absolute screen position of view-local `(0, 0)`, cached by
-/// the widget's last `draw` at push time (the `Button::abs_origin` /
-/// `ColorPicker::body_origin` pattern). Like the window drag capture, the
+/// the widget's last `draw` at push time (the `Button::abs_origin` pattern).
+/// Like the window drag capture, the
 /// origin is fixed for the duration of the hold: if the tracked view is moved /
 /// resized mid-hold the localization goes stale — acceptable, since a hold is
 /// short-lived and nothing moves the view while the (modal) hold swallows all

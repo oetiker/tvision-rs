@@ -1382,8 +1382,7 @@ impl<'a> Context<'a> {
     /// while held; its `MouseUp` arm runs once at release.
     ///
     /// `origin` is the absolute screen position of `view`-local `(0, 0)`, cached
-    /// by the widget's last `draw` (the `Button::abs_origin` /
-    /// `ColorPicker::body_origin` pattern).
+    /// by the widget's last `draw` (the `Button::abs_origin` pattern).
     ///
     /// The widget's `MouseUp` arm **must** be guarded by a `tracking` flag set
     /// at `MouseDown` time: `MouseUp` is not gated by `Group::wants`, so a
