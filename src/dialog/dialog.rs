@@ -77,7 +77,7 @@ impl Dialog {
     /// Returns the inserted ids in the given order.
     pub fn button_row(
         &mut self,
-        buttons: &[(&str, crate::command::Command, crate::widgets::ButtonFlags)],
+        buttons: &[(&str, Command, crate::widgets::ButtonFlags)],
         align: crate::dialog::ButtonRowAlign,
     ) -> Vec<ViewId> {
         use crate::dialog::ButtonRowAlign;

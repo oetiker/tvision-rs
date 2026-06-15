@@ -41,7 +41,7 @@ mod colorpick;
 #[allow(clippy::module_inception)]
 mod dialog;
 mod filedlg;
-pub mod layout;
+mod layout;
 mod msgbox;
 mod theme_editor;
 

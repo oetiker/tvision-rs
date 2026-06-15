@@ -40,7 +40,8 @@ let result = program.exec_view(Box::new(d));  // returns Command::OK / CANCEL / 
 ## 2. Interior margins
 
 Classic TV keeps content off the frame edges. The named constants in
-[`crate::dialog::layout`](crate::dialog::layout) encode the recovered values:
+`crate::dialog::layout` (re-exported flat under `crate::dialog`) encode the
+recovered values:
 
 | Constant | Value | Meaning |
 |---|---|---|
@@ -185,23 +186,26 @@ Each tab has a title and fires
 tab changes. The source-in-broadcast is the D3/D4 pattern (the same mechanism
 as `SCROLL_BAR_CHANGED` / `ScrollBar` → `Scroller` brokering): the pump's
 deferred-apply pass resolves the source id to the `PageStack` sibling and
-calls `set_value` on it with the new tab index.
+calls `set_active(idx, ctx)` on it with the new tab index.
 
 **`PageStack`** — a content multiplexer that holds one child per tab and shows
 only the currently selected page. It consumes `TAB_BAR_CHANGED` via the pump
 broker (cross-view sibling broker, D3) exactly as `Scroller` consumes
 `SCROLL_BAR_CHANGED`: the pump calls `group.find_mut(bar_id)` to read the bar's
-`value()`, then `page_stack.set_value(new_index)` to switch the visible page.
+`value()`, then `page_stack.set_active(idx, ctx)` to show/hide the pages and
+move focus to the newly active one (`set_active` is the show/hide+focus
+operation, distinct from the `set_value` View data-transfer method).
 
 Wiring a tabbed dialog:
 
 ```rust
 let bar = TabBar::new(Rect::new(1, 1, 39, 2), &["General", "Advanced"]);
-let pages = PageStack::new(Rect::new(1, 2, 39, 10), vec![
-    Box::new(general_group),
-    Box::new(advanced_group),
-]);
 let bar_id = d.insert_child(Box::new(bar));
+
+let mut pages = PageStack::new(Rect::new(1, 2, 39, 10));
+pages.insert_page(Box::new(general_group));
+pages.insert_page(Box::new(advanced_group));
+pages.bind_tab_bar(bar_id);
 let _pages_id = d.insert_child(Box::new(pages));
 // The pump brokers TAB_BAR_CHANGED from bar_id to the PageStack automatically.
 ```
