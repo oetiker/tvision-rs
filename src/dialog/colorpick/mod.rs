@@ -114,7 +114,12 @@ impl ColorPicker {
 
         let model: SharedModel = Rc::new(RefCell::new(ColorModel::new(initial)));
 
-        let mut group = Group::new(Rect::new(0, 0, w, h));
+        // The group carries the picker's real `bounds` (not a (0,0)-based extent):
+        // its origin is what the parent's `ctx.sub(child_bounds)` offsets by, so a
+        // non-zero placement (e.g. a dialog inserting the picker at (2,2)) lands
+        // correctly instead of overdrawing the parent's frame. Children below stay
+        // in (0,0)-based local coordinates.
+        let mut group = Group::new(bounds);
         // Embeddable selectable child with first-click activation (port of the
         // old ctor's `Options { selectable: true, first_click: true, .. }`).
         {
@@ -357,6 +362,22 @@ mod view_tests {
         );
         assert_eq!(p.pending_tab, Some(Tab::Plane.idx()));
     }
+
+    #[test]
+    fn picker_group_keeps_its_placement_origin() {
+        // Regression: the picker's Group must carry the real `bounds` (origin 2,2),
+        // not a (0,0)-based extent — otherwise the parent's `ctx.sub(child_bounds)`
+        // applies no offset and the picker overdraws the dialog frame (tab bar on
+        // the title row, left edge on the left border).
+        let p = ColorPicker::new(Rect::new(2, 2, 60, 19), Color::Default);
+        let b = View::state(&p).get_bounds();
+        assert_eq!((b.a.x, b.a.y), (2, 2), "picker keeps its placement origin");
+        assert_eq!(
+            (b.b.x - b.a.x, b.b.y - b.a.y),
+            (58, 17),
+            "picker keeps its size"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -388,5 +409,55 @@ mod snap_tests {
     #[test]
     fn snapshot_picker_presets() {
         insta::assert_snapshot!(render_picker(Color::Bios(4), Tab::Presets));
+    }
+
+    /// Extract the `text:` rows (the `|...|` lines) from a snapshot string.
+    fn text_rows(snap: &str) -> Vec<String> {
+        let mut rows = Vec::new();
+        let mut in_text = false;
+        for line in snap.lines() {
+            match line {
+                "text:" => in_text = true,
+                "attr:" | "legend:" => in_text = false,
+                _ if in_text && line.starts_with('|') && line.ends_with('|') => {
+                    rows.push(line[1..line.len() - 1].to_string());
+                }
+                _ => {}
+            }
+        }
+        rows
+    }
+
+    #[test]
+    fn picker_nested_at_offset_renders_below_and_right_of_origin() {
+        // Regression for the (0,0)-origin bug: place the picker at (2,2) inside a
+        // parent Group and render the parent. The tab bar must land on row 2 / col 2,
+        // never on the parent's (0,0) corner.
+        let theme = Theme::classic_blue();
+        let (backend, screen) = HeadlessBackend::new(60, 20);
+        let mut r = Renderer::new(Box::new(backend));
+        let mut parent = crate::view::Group::new(Rect::new(0, 0, 60, 20));
+        let mut picker = ColorPicker::new(Rect::new(2, 2, 60, 19), Color::Default);
+        picker.select_tab(Tab::Presets);
+        parent.insert(Box::new(picker));
+        r.render(|buf: &mut Buffer| {
+            let bounds = Rect::new(0, 0, 60, 20);
+            let mut dc = DrawCtx::new(buf, &theme, bounds, bounds.a);
+            parent.draw(&mut dc);
+        });
+        let rows = text_rows(&screen.snapshot());
+        assert!(
+            !rows[0].contains("Presets") && !rows[1].contains("Presets"),
+            "tab bar must not overdraw the parent's top rows; row0={:?} row1={:?}",
+            rows[0],
+            rows[1]
+        );
+        // Row 2 (the picker's origin) carries the tab strip, offset by 2 columns:
+        // 2 leading blanks, then the active corner-cap `┌Presets┐`.
+        assert!(
+            rows[2].starts_with("  ┌Presets┐"),
+            "tab strip starts 2 cols in with the active corner-cap; row2={:?}",
+            rows[2]
+        );
     }
 }
