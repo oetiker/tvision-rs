@@ -157,6 +157,11 @@ impl Command {
     pub const SCROLL_BAR_CHANGED: Command = Command("tv.scroll_bar_changed");
     /// A scroll bar was clicked (broadcast).
     pub const SCROLL_BAR_CLICKED: Command = Command("tv.scroll_bar_clicked");
+    /// Broadcast by a [`TabBar`](crate::widgets::TabBar) when its selected tab
+    /// changes; carries the bar's own [`ViewId`](crate::view::ViewId) as the
+    /// broadcast `source` so a sibling [`PageStack`](crate::widgets::PageStack)
+    /// can tell which bar fired (the D3/D4 pattern, mirroring SCROLL_BAR_CHANGED).
+    pub const TAB_BAR_CHANGED: Command = Command("tv.tab_bar_changed");
     /// Select the desktop window by number (the Alt-N shortcut).
     pub const SELECT_WINDOW_NUM: Command = Command("tv.select_window_num");
     /// A list item was activated (broadcast).
