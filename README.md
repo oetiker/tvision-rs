@@ -14,7 +14,7 @@ a window drag, a truecolor color picker, a splitter grid, and cascaded windows](
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Guide](https://img.shields.io/badge/docs-guide-success.svg)](https://oetiker.github.io/rstv/)
-[![API](https://img.shields.io/badge/docs-API-informational.svg)](https://oetiker.github.io/rstv/api/rstv/)
+[![API](https://img.shields.io/badge/docs-API-informational.svg)](https://docs.rs/rstv)
 
 </div>
 
@@ -67,7 +67,7 @@ dialog.insert_child(Box::new(Button::new(
 ```
 
 See [`examples/hello.rs`](examples/hello.rs) for a complete, runnable program, and
-the [Getting Started guide](https://oetiker.github.io/rstv/getting-started/) for a
+the [Getting Started guide](https://oetiker.github.io/rstv/) for a
 walk-through.
 
 ## Documentation
@@ -75,7 +75,8 @@ walk-through.
 - **[Developer Guide](https://oetiker.github.io/rstv/)** — the narrative you read
   to learn: getting started, building apps, how it works, and the widget gallery
   with live screenshots.
-- **[API reference](https://oetiker.github.io/rstv/api/rstv/)** — the rustdoc.
+- **[API reference](https://docs.rs/rstv)** — the rustdoc (also bundled into the
+  guide site at `/api/` under each version).
 
 Both layers read as one site; every code snippet is pulled from compiled examples
 and verified in CI, so the docs never drift.

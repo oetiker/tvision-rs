@@ -3,6 +3,15 @@ name: Docs
 on:
   push:
     branches: [main]
+    paths:
+      - 'src/**'
+      - 'docs/**'
+      - 'xtask/**'
+      - 'rstv-macros/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/docs.yml'
+      - '.github/scripts/manage-doc-versions.sh'
   workflow_dispatch:
 
 permissions:
@@ -10,12 +19,18 @@ permissions:
   pages: write
   id-token: write
 
+# Serialize Pages deploys; never cancel a half-finished deploy (would corrupt
+# the mirrored multi-version site).
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false
+
+env:
+  PAGES_URL: "https://oetiker.github.io/rstv"
 
 jobs:
   build:
+    name: Build dev docs
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -23,24 +38,75 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Install tmux (for screenshots)
         run: sudo apt-get update && sudo apt-get install -y tmux
-      - name: Compile examples (gallery + hello)
-        run: cargo build --examples
-      - name: Doctests (src rustdoc)
-        run: cargo test --doc -p rstv
-      - name: Guide doctests (mdbook code blocks)
-        run: cargo xtask test
-      - name: Build integrated site
+
+      # Host this build under /rstv/dev/ instead of /rstv/.
+      - name: Rebase doc URLs to /rstv/dev/
+        run: |
+          sed -i 's|^site-url = "/rstv/"|site-url = "/rstv/dev/"|' docs/book/book.toml
+          sed -i 's|href="/rstv/|href="/rstv/dev/|g' docs/book/theme/rustdoc-header.html
+          grep -n 'site-url' docs/book/book.toml
+          grep -n 'href=' docs/book/theme/rustdoc-header.html
+
+      - name: Build integrated site (guide + api)
         run: cargo xtask docs
-      - uses: actions/upload-pages-artifact@v3
+
+      - uses: actions/upload-artifact@v4
         with:
+          name: docs-dev
           path: docs/book/book
+          retention-days: 1
 
   deploy:
-    needs: build
+    name: Deploy to GitHub Pages
     runs-on: ubuntu-latest
+    needs: build
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts
+
+      - name: Download dev docs
+        uses: actions/download-artifact@v4
+        with:
+          name: docs-dev
+          path: new-docs
+
+      - name: Mirror existing GitHub Pages
+        run: |
+          mkdir -p site
+          wget --mirror --no-parent --no-host-directories \
+               --directory-prefix=site \
+               --reject="index.html?*" \
+               --execute robots=off \
+               --quiet \
+               "$PAGES_URL/" 2>/dev/null || echo "No existing site to mirror (first deployment?)"
+          find site -name "*.tmp" -delete 2>/dev/null || true
+          find site -name 'index.html?*' -delete 2>/dev/null || true
+
+      - name: Replace dev docs
+        run: |
+          rm -rf site/rstv/dev
+          mkdir -p site/rstv/dev
+          cp -r new-docs/* site/rstv/dev/
+
+      - name: Update versions and redirect
+        run: |
+          chmod +x .github/scripts/manage-doc-versions.sh
+          .github/scripts/manage-doc-versions.sh site/rstv cull
+          .github/scripts/manage-doc-versions.sh site/rstv update-json
+          .github/scripts/manage-doc-versions.sh site/rstv generate-redirect
+
+      - name: Show final site structure
+        run: |
+          ls -la site/rstv/
+          echo "versions.json:"; cat site/rstv/versions.json
+
+      - uses: actions/configure-pages@v4
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site/rstv
       - id: deployment
         uses: actions/deploy-pages@v4

@@ -1,0 +1,266 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_type:
+        description: 'Release type (semver bump from the latest tag)'
+        required: true
+        type: choice
+        options:
+          - bugfix
+          - feature
+          - major
+
+env:
+  CARGO_TERM_COLOR: always
+  PAGES_URL: "https://oetiker.github.io/rstv"
+
+jobs:
+  version:
+    name: Bump version and tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify main branch
+        run: |
+          if [ "${{ github.ref }}" != "refs/heads/main" ]; then
+            echo "::error::Releases must be created from the main branch"
+            exit 1
+          fi
+
+      # Fail before anything is committed/tagged/pushed if the publish secret is
+      # missing — otherwise the tag lands but `cargo publish` dies mid-release.
+      - name: Check crates.io token is set
+        run: |
+          if [ -z "${{ secrets.CRATES_IO_TOKEN }}" ]; then
+            echo "::error::CRATES_IO_TOKEN secret is not set"
+            exit 1
+          fi
+
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-edit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-edit
+
+      - name: Calculate new version
+        id: version
+        run: |
+          LATEST=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -1)
+          [ -z "$LATEST" ] && LATEST="v0.0.0"
+          MAJOR=$(echo "$LATEST" | sed 's/v\([0-9]*\)\.\([0-9]*\)\.\([0-9]*\)/\1/')
+          MINOR=$(echo "$LATEST" | sed 's/v\([0-9]*\)\.\([0-9]*\)\.\([0-9]*\)/\2/')
+          PATCH=$(echo "$LATEST" | sed 's/v\([0-9]*\)\.\([0-9]*\)\.\([0-9]*\)/\3/')
+          case "${{ inputs.release_type }}" in
+            major)   NEW_VERSION="$((MAJOR+1)).0.0" ;;
+            feature) NEW_VERSION="${MAJOR}.$((MINOR+1)).0" ;;
+            bugfix)  NEW_VERSION="${MAJOR}.${MINOR}.$((PATCH+1))" ;;
+          esac
+          echo "version=${NEW_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${NEW_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Releasing ${NEW_VERSION} (from ${LATEST})"
+
+      - name: Bump crate versions
+        run: |
+          # Bumps both published crates and the rstv-macros dependency pin in rstv.
+          # set-version also rewrites the workspace members' entries in Cargo.lock;
+          # the explicit `cargo update` makes that refresh deterministic. Do NOT
+          # swallow its failure — a stale lock would surface later in publish.
+          cargo set-version -p rstv -p rstv-macros "${{ steps.version.outputs.version }}"
+          cargo update -p rstv -p rstv-macros
+
+      - name: Roll CHANGELOG.md
+        run: |
+          DATE=$(date +%Y-%m-%d)
+          VERSION="${{ steps.version.outputs.version }}"
+          perl -i -0777 -pe '
+            s/## Unreleased\n+(### New\n(.*?))?(\n### Changed\n(.*?))?(\n### Fixed\n(.*?))?\n+(?=##|\z)/
+              "## Unreleased\n\n### New\n\n### Changed\n\n### Fixed\n\n" .
+              "## '"$VERSION"' - '"$DATE"'\n" .
+              ($2 ? "\n### New\n$2" : "") .
+              ($4 ? "\n### Changed\n$4" : "") .
+              ($6 ? "\n### Fixed\n$6" : "") .
+              "\n"
+            /se' CHANGELOG.md
+
+      - name: Commit and tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Cargo.toml Cargo.lock rstv-macros/Cargo.toml CHANGELOG.md
+          git commit -m "Release ${{ steps.version.outputs.tag }}"
+          git tag -a "${{ steps.version.outputs.tag }}" -m "Release ${{ steps.version.outputs.tag }}"
+          # Push branch and this one tag in a single atomic invocation (not --tags).
+          git push origin main "refs/tags/${{ steps.version.outputs.tag }}"
+
+  publish:
+    name: Publish to crates.io
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.tag }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Publish rstv-macros
+        run: cargo publish -p rstv-macros --token "${{ secrets.CRATES_IO_TOKEN }}"
+
+      - name: Publish rstv (retry while crates.io index propagates)
+        run: |
+          # rstv depends on the just-published rstv-macros; cargo publish verifies
+          # by building, which needs the new rstv-macros in the index. Propagation
+          # is usually seconds but unbounded, so retry with backoff instead of a
+          # fixed sleep.
+          for attempt in 1 2 3 4 5 6; do
+            if cargo publish -p rstv --token "${{ secrets.CRATES_IO_TOKEN }}"; then
+              echo "Published rstv on attempt $attempt"
+              exit 0
+            fi
+            echo "Attempt $attempt failed (rstv-macros may not be indexed yet); retrying in 30s…"
+            sleep 30
+          done
+          echo "::error::cargo publish -p rstv failed after retries"
+          exit 1
+
+  github-release:
+    name: Create GitHub release
+    needs: [version, publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.tag }}
+
+      - name: Extract release notes
+        run: |
+          VERSION="${{ needs.version.outputs.version }}"
+          # Print the body of this version's section: skip the "## <version> …"
+          # title line, stop at the next "## " header (or EOF if it is the last
+          # — the case for the very first release).
+          awk -v v="$VERSION" '
+            $0 ~ "^## " v " " { grab = 1; next }
+            grab && /^## /     { exit }
+            grab               { print }
+          ' CHANGELOG.md > release-notes.md
+          echo "----- release notes -----"; cat release-notes.md
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.version.outputs.tag }}
+          name: rstv ${{ needs.version.outputs.tag }}
+          body_path: release-notes.md
+          draft: false
+          prerelease: false
+
+  build-docs:
+    name: Build versioned docs
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.tag }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install tmux (for screenshots)
+        run: sudo apt-get update && sudo apt-get install -y tmux
+
+      - name: Rebase doc URLs to /rstv/${{ needs.version.outputs.tag }}/
+        run: |
+          TAG="${{ needs.version.outputs.tag }}"
+          sed -i "s|^site-url = \"/rstv/\"|site-url = \"/rstv/${TAG}/\"|" docs/book/book.toml
+          sed -i "s|href=\"/rstv/|href=\"/rstv/${TAG}/|g" docs/book/theme/rustdoc-header.html
+          grep -n 'site-url' docs/book/book.toml
+          grep -n 'href=' docs/book/theme/rustdoc-header.html
+
+      - name: Build integrated site (guide + api)
+        run: cargo xtask docs
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: docs-${{ needs.version.outputs.tag }}
+          path: docs/book/book
+          retention-days: 1
+
+  deploy-docs:
+    name: Deploy versioned docs
+    needs: [version, build-docs]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts
+
+      - name: Download versioned docs
+        uses: actions/download-artifact@v4
+        with:
+          name: docs-${{ needs.version.outputs.tag }}
+          path: new-docs
+
+      # NOTE: this reconstructs the whole multi-version site from the *live* Pages
+      # URL each run, so a release deploy that mirrors before a just-finished dev
+      # deploy has propagated to the CDN could drop the newest /dev/. The `pages`
+      # concurrency group (shared with docs.yml) serializes the jobs; the residual
+      # risk is the propagation window. Acceptable for now (byonk model); upgrade
+      # path is a persistent gh-pages branch as the canonical tree.
+      - name: Mirror existing GitHub Pages
+        run: |
+          mkdir -p site
+          wget --mirror --no-parent --no-host-directories \
+               --directory-prefix=site \
+               --reject="index.html?*" \
+               --execute robots=off \
+               --quiet \
+               "$PAGES_URL/" 2>/dev/null || echo "No existing site to mirror"
+          find site -name "*.tmp" -delete 2>/dev/null || true
+          find site -name 'index.html?*' -delete 2>/dev/null || true
+
+      - name: Add new version to site
+        run: |
+          TAG="${{ needs.version.outputs.tag }}"
+          rm -rf "site/rstv/$TAG"
+          mkdir -p "site/rstv/$TAG"
+          cp -r new-docs/* "site/rstv/$TAG/"
+
+      - name: Update versions and redirect
+        run: |
+          chmod +x .github/scripts/manage-doc-versions.sh
+          .github/scripts/manage-doc-versions.sh site/rstv cull
+          .github/scripts/manage-doc-versions.sh site/rstv update-json
+          .github/scripts/manage-doc-versions.sh site/rstv generate-redirect
+
+      - name: Show final site structure
+        run: |
+          ls -la site/rstv/
+          echo "versions.json:"; cat site/rstv/versions.json
+
+      - uses: actions/configure-pages@v4
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site/rstv
+      - id: deployment
+        uses: actions/deploy-pages@v4
