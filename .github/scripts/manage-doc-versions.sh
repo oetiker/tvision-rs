@@ -116,9 +116,15 @@ update_versions_json() {
 
     json_versions+="]"
 
+    # Emit a real JSON null (unquoted) when there is no stable release yet, so
+    # the redirect's `data.latest ? …` test is falsy. A quoted "null" string is
+    # truthy and would send the root to /rstv/null/.
+    local latest_json="null"
+    [[ -n "$latest" ]] && latest_json="\"$latest\""
+
     cat > "$VERSIONS_JSON" << EOF
 {
-  "latest": "${latest:-null}",
+  "latest": $latest_json,
   "versions": $json_versions
 }
 EOF
@@ -149,7 +155,8 @@ generate_redirect() {
         fetch('${URL_BASE}/versions.json')
             .then(function (r) { return r.json(); })
             .then(function (data) {
-                var target = data.latest ? ('${URL_BASE}/' + data.latest + '/') : '${URL_BASE}/dev/';
+                var stable = data.latest && data.latest !== 'null';
+                var target = stable ? ('${URL_BASE}/' + data.latest + '/') : '${URL_BASE}/dev/';
                 window.location.replace(target);
             })
             .catch(function () {
