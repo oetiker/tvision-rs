@@ -15,6 +15,26 @@
 > rebuild). When something lands: add an IMPLEMENTATION-LOG section and update
 > this file.
 
+## Current state (2026-06-17, going-public prep)
+
+The crate/repo/brand rename to **`tvision-rs`** is on `main` (the old name was
+taken on crates.io), and a README "how it was built / where it's going" section
+landed. Crate-level rustdoc + README now point at the repo `docs/` Markdown for
+LLM-friendly docs. **Still pending for launch:** publish to crates.io
+(`cargo publish -p tvision-rs-macros` then `-p tvision-rs`) and verify the
+Pages site at the new URL.
+
+New example **`examples/tcv.rs`** (`f47eaa3`) — a faithful re-port of the
+author's 1993 Turbo Pascal program *Tobi's Catalog Vision* (search-as-you-type
+catalog browser, embedded mock data). Building it as an outside *consumer*
+surfaced three framework gaps the internal widgets never hit. **Next actionable
+work:** [`docs/specs/2026-06-17-consumer-api-gaps.md`](file:///home/oetiker/checkouts/tvision-rs/docs/specs/2026-06-17-consumer-api-gaps.md)
+— (1) window decoration flags are `pub(crate)`; (2) no generic deferred
+`ExecView` for custom modals from a view; (3) `get_help_ctx` doesn't bubble to
+the focused child (C++ `TGroup::getHelpCtx`). Suggested order 1 → 3 → 2; the
+example documents each workaround in its header and should be made faithful as
+each lands.
+
 ## Current state (2026-06-15)
 
 **Branch `dialog-design-guide` HEAD = `5ab651a` (NOT yet on `main`); 1258 lib
