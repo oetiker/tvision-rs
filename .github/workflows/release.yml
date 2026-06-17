@@ -26,9 +26,14 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       tag: ${{ steps.version.outputs.tag }}
     steps:
+      # Check out with the release PAT so the version-bump commit/tag push is
+      # authenticated as the token owner (a repo admin) and bypasses branch
+      # protection on main. The default GITHUB_TOKEN (github-actions[bot]) cannot
+      # push to protected main.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          token: ${{ secrets.RELEASE_TOKEN }}
 
       - name: Verify main branch
         run: |
@@ -37,10 +42,14 @@ jobs:
             exit 1
           fi
 
-      # Fail before anything is committed/tagged/pushed if the publish secret is
-      # missing — otherwise the tag lands but `cargo publish` dies mid-release.
-      - name: Check crates.io token is set
+      # Fail before anything is committed/tagged/pushed if a required secret is
+      # missing — otherwise the tag lands but a later step dies mid-release.
+      - name: Check required secrets are set
         run: |
+          if [ -z "${{ secrets.RELEASE_TOKEN }}" ]; then
+            echo "::error::RELEASE_TOKEN secret is not set (needed to push to protected main)"
+            exit 1
+          fi
           if [ -z "${{ secrets.CRATES_IO_TOKEN }}" ]; then
             echo "::error::CRATES_IO_TOKEN secret is not set"
             exit 1
