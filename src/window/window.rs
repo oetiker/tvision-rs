@@ -227,14 +227,14 @@ impl Window {
         }
     }
 
-    // -- setters (used by subtypes such as Dialog to override defaults) ------
+    // -- setters and builders: public post-construction configuration surface --
 
-    /// Override the decoration flags after construction (a dialog, for example,
-    /// allows only move + close). Re-pushes to the frame child: construction
-    /// pushes the flags once, so a later change must re-push or the frame would
-    /// still draw the original zoom/grow icons. Resolves the frame child then
-    /// downcasts then calls [`Frame::set_flags`], the same seam `zoom` uses.
-    pub(crate) fn set_flags(&mut self, flags: WindowFlags) {
+    /// Override the decoration flags after construction. Re-pushes to the frame
+    /// child: construction pushes the flags once, so a later change must re-push
+    /// or the frame would still draw the original zoom/grow icons. Resolves the
+    /// frame child then downcasts then calls [`Frame::set_flags`], the same seam
+    /// `zoom` uses.
+    pub fn set_flags(&mut self, flags: WindowFlags) {
         self.flags = flags;
         if let Some(frame) = self
             .group
@@ -246,11 +246,11 @@ impl Window {
         }
     }
 
-    /// Override the colour scheme after construction (a dialog uses the gray
-    /// scheme). Re-pushes to the frame child (the [`set_flags`](Self::set_flags)
-    /// pattern) so the frame renders the matching role family: `Blue` →
-    /// `Role::Frame*`, `Cyan` → `Role::FrameCyan*`, `Gray` → `Role::FrameGray*`.
-    pub(crate) fn set_palette(&mut self, palette: WindowPalette) {
+    /// Override the colour scheme after construction. Re-pushes to the frame
+    /// child (the [`set_flags`](Self::set_flags) pattern) so the frame renders
+    /// the matching role family: `Blue` → `Role::Frame*`, `Cyan` →
+    /// `Role::FrameCyan*`, `Gray` → `Role::FrameGray*`.
+    pub fn set_palette(&mut self, palette: WindowPalette) {
         self.palette = palette;
         if let Some(frame) = self
             .group
@@ -262,10 +262,41 @@ impl Window {
         }
     }
 
-    /// Override the grow mode after construction (a dialog uses an empty grow mode
-    /// — it does not track its owner's resize).
-    pub(crate) fn set_grow_mode(&mut self, grow_mode: GrowMode) {
+    /// Override the grow mode after construction (a dialog uses an empty grow
+    /// mode — it does not track its owner's resize).
+    pub fn set_grow_mode(&mut self, grow_mode: GrowMode) {
         self.group.state_mut().grow_mode = grow_mode;
+    }
+
+    /// Override the drag mode after construction (the screen-edge limits the window
+    /// honors while being dragged). Mirrors [`set_grow_mode`](Self::set_grow_mode):
+    /// a plain write to the embedded group's [`ViewState::drag_mode`].
+    pub fn set_drag_mode(&mut self, drag_mode: DragMode) {
+        self.group.state_mut().drag_mode = drag_mode;
+    }
+
+    /// Builder form of [`set_flags`](Self::set_flags).
+    pub fn with_flags(mut self, flags: WindowFlags) -> Self {
+        self.set_flags(flags);
+        self
+    }
+
+    /// Builder form of [`set_palette`](Self::set_palette).
+    pub fn with_palette(mut self, palette: WindowPalette) -> Self {
+        self.set_palette(palette);
+        self
+    }
+
+    /// Builder form of [`set_grow_mode`](Self::set_grow_mode).
+    pub fn with_grow_mode(mut self, grow_mode: GrowMode) -> Self {
+        self.set_grow_mode(grow_mode);
+        self
+    }
+
+    /// Builder form of [`set_drag_mode`](Self::set_drag_mode).
+    pub fn with_drag_mode(mut self, drag_mode: DragMode) -> Self {
+        self.set_drag_mode(drag_mode);
+        self
     }
 
     /// Insert a child view into the embedded group.
@@ -2665,6 +2696,50 @@ mod tests {
             new_bounds.b.y - new_bounds.a.y,
             init_bounds.b.y - init_bounds.a.y,
             "Ctrl+Shift+Right: height must be UNCHANGED"
+        );
+    }
+
+    // -- consumer API: public decoration setters + with_* builders ------------
+
+    #[test]
+    fn flags_off_window_is_a_fixed_iconless_panel() {
+        // A consumer building TCV's fixed full-desktop panel: all decoration off.
+        let w = Window::new(Rect::new(0, 0, 24, 8), Some("Catalog".into()), 0)
+            .with_flags(WindowFlags::default()) // all four false
+            .with_grow_mode(GrowMode::default())
+            .with_drag_mode(DragMode::default());
+        assert_eq!(
+            w.flags(),
+            WindowFlags {
+                r#move: false,
+                grow: false,
+                close: false,
+                zoom: false,
+            },
+            "consumer can clear all decoration flags"
+        );
+        let gm = w.state().grow_mode;
+        assert!(
+            !gm.lo_x && !gm.lo_y && !gm.hi_x && !gm.hi_y && !gm.rel && !gm.fixed,
+            "consumer can clear grow_mode"
+        );
+    }
+
+    #[test]
+    fn with_palette_sets_and_pushes_to_frame() {
+        let mut w = Window::new(Rect::new(0, 0, 24, 8), Some("Cyan".into()), 1)
+            .with_palette(WindowPalette::Cyan);
+        assert_eq!(w.palette(), WindowPalette::Cyan);
+        let frame_id = w.frame_id();
+        let frame = w
+            .child_mut(frame_id)
+            .and_then(|v| v.as_any_mut())
+            .and_then(|a| a.downcast_mut::<crate::frame::Frame>())
+            .expect("window has a Frame child");
+        assert_eq!(
+            frame.palette(),
+            WindowPalette::Cyan,
+            "with_palette must propagate to the frame child"
         );
     }
 }
