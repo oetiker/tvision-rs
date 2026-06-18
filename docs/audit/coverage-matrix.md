@@ -14,7 +14,7 @@ Top-level index of the audit. One row per reference section; links to the per-se
 | Globals-363-378 | 363–378 | 3 | 35 | 43 | 0 | 0 | 18 | [Globals-363-378.md](reference/Globals-363-378.md) |
 | Globals-582-586 | 582–586 | 0 | 13 | 4 | 0 | 0 | 5 | [Globals-582-586.md](reference/Globals-582-586.md) |
 | PrimitiveTypes | 390–391 | 0 | 6 | 5 | 0 | 0 | 3 | [PrimitiveTypes.md](reference/PrimitiveTypes.md) |
-| TApplication | 379–382 | 7 | 3 | 0 | 0 | 1 | 7 | [TApplication.md](reference/TApplication.md) |
+| TApplication | 379–382 | 7 | 3 | 0 | 0 | 0 | 7 | [TApplication.md](reference/TApplication.md) |
 | TBackground | 382–383 | 3 | 2 | 1 | 0 | 0 | 2 | [TBackground.md](reference/TBackground.md) |
 | TBufStream | 383–386 | 0 | 0 | 13 | 0 | 0 | 0 | [TBufStream.md](reference/TBufStream.md) |
 | TButton | 386–390 | 11 | 8 | 3 | 0 | 0 | 7 | [TButton.md](reference/TButton.md) |
@@ -61,7 +61,7 @@ Top-level index of the audit. One row per reference section; links to the per-se
 | TItemList | 464 | 0 | 3 | 0 | 0 | 0 | 0 | [TItemList.md](reference/TItemList.md) |
 | TLabel | 465–467 | 4 | 3 | 3 | 0 | 0 | 3 | [TLabel.md](reference/TLabel.md) |
 | TListBox | 467–470 | 4 | 5 | 1 | 0 | 0 | 6 | [TListBox.md](reference/TListBox.md) |
-| TListViewer | 470–474 | 13 | 6 | 2 | 0 | 2 | 12 | [TListViewer.md](reference/TListViewer.md) |
+| TListViewer | 470–474 | 9 | 5 | 2 | 0 | 0 | 12 | [TListViewer.md](reference/TListViewer.md) |
 | TLookupValidator | 474–475 | 0 | 2 | 0 | 0 | 0 | 1 | [TLookupValidator.md](reference/TLookupValidator.md) |
 | TMemo | 475–477 | 2 | 5 | 2 | 0 | 0 | 4 | [TMemo.md](reference/TMemo.md) |
 | TMemoData | 477 | 0 | 3 | 1 | 0 | 0 | 1 | [TMemoData.md](reference/TMemoData.md) |
@@ -70,7 +70,7 @@ Top-level index of the audit. One row per reference section; links to the per-se
 | TMenuBox | 480–481 | 5 | 1 | 0 | 0 | 0 | 2 | [TMenuBox.md](reference/TMenuBox.md) |
 | TMenuItem | 481 | 2 | 11 | 0 | 0 | 0 | 12 | [TMenuItem.md](reference/TMenuItem.md) |
 | TMenuStr | 482 | 0 | 0 | 1 | 0 | 0 | 0 | [TMenuStr.md](reference/TMenuStr.md) |
-| TMenuView | 482–485 | 5 | 8 | 2 | 1 | 0 | 8 | [TMenuView.md](reference/TMenuView.md) |
+| TMenuView | 482–485 | 6 | 8 | 2 | 0 | 0 | 9 | [TMenuView.md](reference/TMenuView.md) |
 | TMonoSelector | 485 | 0 | 1 | 7 | 0 | 0 | 1 | [TMonoSelector.md](reference/TMonoSelector.md) |
 | TMultiCheckBoxes | 486–488 | 7 | 3 | 3 | 0 | 0 | 8 | [TMultiCheckBoxes.md](reference/TMultiCheckBoxes.md) |
 | TNode | 488 | 6 | 1 | 0 | 0 | 0 | 6 | [TNode.md](reference/TNode.md) |
@@ -95,7 +95,7 @@ Top-level index of the audit. One row per reference section; links to the per-se
 | TScroller | 527–530 | 5 | 8 | 6 | 0 | 0 | 11 | [TScroller.md](reference/TScroller.md) |
 | TSearchRec | 530 | 4 | 2 | 3 | 0 | 0 | 2 | [TSearchRec.md](reference/TSearchRec.md) |
 | TSortedCollection | 531–534 | 0 | 6 | 2 | 0 | 0 | 0 | [TSortedCollection.md](reference/TSortedCollection.md) |
-| TSortedListBox | 534–536 | 7 | 2 | 1 | 0 | 1 | 4 | [TSortedListBox.md](reference/TSortedListBox.md) |
+| TSortedListBox | 534–536 | 6 | 3 | 1 | 0 | 0 | 4 | [TSortedListBox.md](reference/TSortedListBox.md) |
 | TStaticText | 536–537 | 2 | 4 | 3 | 0 | 0 | 2 | [TStaticText.md](reference/TStaticText.md) |
 | TStatusDef | 537–538 | 0 | 6 | 0 | 0 | 0 | 3 | [TStatusDef.md](reference/TStatusDef.md) |
 | TStatusItem | 538–539 | 3 | 3 | 0 | 0 | 0 | 2 | [TStatusItem.md](reference/TStatusItem.md) |
@@ -117,9 +117,9 @@ Top-level index of the audit. One row per reference section; links to the per-se
 | TView | 560–576 | 28 | 45 | 5 | 0 | 0 | 28 | [TView.md](reference/TView.md) |
 | TWildStr | 577 | 0 | 1 | 0 | 0 | 0 | 0 | [TWildStr.md](reference/TWildStr.md) |
 | TWindow | 577–581 | 11 | 10 | 6 | 0 | 0 | 13 | [TWindow.md](reference/TWindow.md) |
-| **TOTAL** | — | **476** | **621** | **461** | **1** | **4** | **542** | — |
+| **TOTAL** | — | **472** | **621** | **461** | **0** | **0** | **543** | — |
 
-**Headline:** of 1559 catalogued reference entries, **476 ported** + **621 idiomatic-equivalent** = 1097 present; **461 deliberately not-ported** (DOS/EMS/stream/Pascal substrate + subsystems superseded by extensions, each a written reason); **1 missing** (candidate gap) and **4 suspect** (present-but-divergent). Zero unresolved entries.
+**Headline:** of 1559 catalogued reference entries, **472 ported** + **621 idiomatic-equivalent** = 1093 present; **461 deliberately not-ported** (DOS/EMS/stream/Pascal substrate + subsystems superseded by extensions, each a written reason); **0 missing** and **0 suspect**. Zero unresolved entries.
 
 ## Coverage & confidence
 
@@ -129,6 +129,5 @@ Top-level index of the audit. One row per reference section; links to the per-se
   317–586.
 - Every per-symbol Rust citation resolves against the `tvision-rs` source on
   `main`.
-- The `MISSING` and `SUSPECT` findings in [gap-report.md](gap-report.md) are the
-  actionable code items; the `NOT-PORTED` register is the intentional-omission
-  list.
+- No `MISSING` or `SUSPECT` findings remain; the `NOT-PORTED` register in
+  [gap-report.md](gap-report.md) is the intentional-omission list.

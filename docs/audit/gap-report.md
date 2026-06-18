@@ -2,30 +2,15 @@
 
 Derived from `reference/*.md`. See [`README.md`](README.md) for the axes. Back to [coverage-matrix](coverage-matrix.md).
 
-**Summary:** 1 missing · 4 wrong (suspect) · 461 deliberately not-ported (register below). Each missing/wrong item below is a candidate fix; the register is the do-not-re-flag list.
+**Summary:** 0 missing · 0 wrong (suspect) · 461 deliberately not-ported (register below). The register is the do-not-re-flag list.
 
 ## 1. Missing — capability the guide documents that has no counterpart
 
-### TMenuView — `GetHelpCtx` (method) (guide p. 484)
-CANDIDATE GAP — needs human confirmation. Guide: a dropped menu's `getHelpCtx` walks the `parentMenu` chain to return the highlighted item's `helpCtx`, so the status line shows per-item help while navigating a menu. No `get_help_ctx` override on any menu type; `Group::get_help_ctx` bubbles to the *current child*, but an open menu is a `MenuSession` modal capture, not a focused menu-view subtree, so the highlighted **item's** help context is never surfaced. The `parentMenu` chain in `menu_session.rs` is used only for event routing, not help-context. Behavior appears not ported.
+No missing capabilities.
 
 ## 2. Wrong — present but diverges from the 1992 spec (`SUSPECT`)
 
-### TApplication — `WriteShellMsg` (virtual method) (guide p. 381)
-- Rust: `println!` inline in `program_handle_event` (`src/app/program.rs:3319`)
-- Guide: virtual procedure; default prints "Type EXIT to return..." (DOS) or the SIGTSTP message (unix). Rust inlines the print statement directly in `program_handle_event` rather than exposing a virtual/overridable hook. The printed text matches the magiblot unix branch. However, the virtual override point is **not preserved** — user code cannot customize the shell message without forking the crate. This is an undocumented loss of extensibility. Not a behavior-correctness bug (message text is correct) but a deliberate API reduction that is not called out in any D-rule or comment. SUSPECT on the "intentional deviation not documented" axis.
-
-### TListViewer — `handleEvent` (method) (guide p. 472)
-- Rust: `tv::list_viewer::handle_event(this, ev, ctx)` free function
-- C++ event loop: mouse hold runs as a do-while polling `mouseEvent` inside `evMouseDown`. Rust replaces the loop with a capture-based state machine (D3 broker): `MouseDown` arms a `MouseTrackCapture`; pump delivers `MouseMove`/`MouseAuto`/`MouseUp` events. Behavior matches. **SUSPECT**: C++ scrollbar-changed broadcast reads `hScrollBar->value` directly inline (line 347: `focusItemNum(vScrollBar->value)`); Rust defers to a `SyncListViewer` op (pump broker). This is documented (D3) — so NOT suspect on that point. **However**: C++ `TView::handleEvent(event)` is called first (line 221: `TView::handleEvent(event)`); Rust does NOT call any base `handle_event` at the start of its free function — the `View` trait has no base `handle_event` equivalent for this. This is undocumented. In practice the C++ `TView::handleEvent` only processes `cmReceivedFocus`/`cmReleasedFocus` broadcasts (to auto-select the view); tvision-rs handles focus selection in `Group` instead, so it is likely intentional — but not commented. Flag SUSPECT until confirmed.
-
-### TListViewer — `setState` (method) (guide p. 473)
-- Rust: `tv::list_viewer::set_state(this, flag, enable, ctx)` free function
-- C++ checks `(aState & (sfSelected | sfActive | sfVisible)) != 0` to decide whether to show/hide scroll bars. Rust checks only `flag == Active || flag == Selected` — the `Visible` arm is **missing**. Consequence: if a list viewer is hidden/shown via `sfVisible` alone (without an accompanying Active/Selected change), its scroll bars will not track the visibility change. This deviation is **undocumented**. Doc score 2 because the existing doc describes what the function does without noting this gap.
-
-### TSortedListBox — `setData` / `set_value_ctx` (scatter) (guide p. 535)
-- Rust: `SortedListBox::value()` exists (gather); `set_value_ctx` is **not** implemented
-- C++ inherits `setData` from `TListBox` (focuses the item via `focusItem(p->selection)`). Rust `SortedListBox` overrides `View::value` for gather but not `set_value_ctx`, so the default no-op runs — a dialog scatter to a sorted list box silently fails to focus the target item (`ListBox`, by contrast, implements it at `src/widgets/list_box.rs:164`). Undocumented; may be intentional (sorted selection is search-driven) but should be confirmed.
+No diverging (suspect) items.
 
 ## 2b. Secondary observations (prose-flagged; not classified MISSING/SUSPECT)
 
