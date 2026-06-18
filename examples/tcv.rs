@@ -27,9 +27,9 @@ use std::io;
 use tvision_rs::widgets::list_viewer;
 use tvision_rs::{
     Backend, Button, ButtonFlags, Command, Context, CrosstermBackend, Desktop, Dialog, DrawCtx,
-    Event, HelpCtx, Key, Label, ListViewer, ListViewerState, MessageBoxButtons, MessageBoxKind,
-    Point, Program, Rect, Role, ScrollBar, StateFlag, StatusDef, StatusLine, SystemClock, Theme,
-    View, ViewId, ViewState, alt, delegate,
+    Event, GrowMode, HelpCtx, Key, Label, ListViewer, ListViewerState, MessageBoxButtons,
+    MessageBoxKind, Point, Program, Rect, Role, ScrollBar, StateFlag, StatusDef, StatusLine,
+    SystemClock, Theme, View, ViewId, ViewState, WindowFlags, alt, delegate,
 };
 
 // ---------------------------------------------------------------------------
@@ -594,6 +594,11 @@ impl View for DirBox {
 // Holds the header label, the search list, its scrollbar, and the three
 // buttons. It forwards the list's help context (browse/search) up to the status
 // line via `get_help_ctx`, and turns a `CMD_INFO` broadcast into an Info box.
+//
+// The original TCV.PAS set `Window^.Flags := $00; GrowMode := $00` to make
+// this a fixed, icon-less panel (no close/zoom icons, not movable). This is
+// now faithful via the public `with_flags`/`with_grow_mode` API (landed as
+// part of the consumer-API coverage axis).
 // ---------------------------------------------------------------------------
 
 struct DataWindow {
@@ -603,7 +608,9 @@ struct DataWindow {
 
 impl DataWindow {
     fn new(bounds: Rect) -> Self {
-        let mut dialog = Dialog::new(bounds, Some("Tobis Catalog Vision Version 2.2".to_string()));
+        let mut dialog = Dialog::new(bounds, Some("Tobis Catalog Vision Version 2.2".to_string()))
+            .with_flags(WindowFlags::default()) // TCV: Flags := $00 (fixed, no icons)
+            .with_grow_mode(GrowMode::default()); // TCV: GrowMode := $00
 
         let inner = bounds; // dialog-local coords start at (0,0)
         let w = inner.b.x - inner.a.x;
