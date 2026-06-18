@@ -603,7 +603,6 @@ impl View for DirBox {
 
 struct DataWindow {
     dialog: Dialog,
-    list_id: ViewId,
 }
 
 impl DataWindow {
@@ -658,7 +657,7 @@ impl DataWindow {
             Some(list_id),
         )));
 
-        DataWindow { dialog, list_id }
+        DataWindow { dialog }
     }
 }
 
@@ -667,21 +666,10 @@ impl View for DataWindow {
     fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
         Some(self)
     }
-
-    /// Dispatch as usual, then cache the focused list's help context (browse /
-    /// search) into our own state so `get_help_ctx` (which the status-line idle
-    /// path reads off the top modal view) reports the leaf's mode — the role
-    /// `TTCVStatLine.Hint` played, aggregated up through the modal window.
-    fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
-        self.dialog.handle_event(ev, ctx);
-        if let Some(mode) = self
-            .dialog
-            .child_mut(self.list_id)
-            .map(|v| v.get_help_ctx())
-        {
-            self.dialog.state_mut().help_ctx = mode;
-        }
-    }
+    // handle_event is forwarded by #[delegate(to = dialog)].
+    // Axis C.1 (Group::get_help_ctx bubble + program idle-path) means the
+    // focused DirBox's help_ctx now reaches the status line automatically —
+    // no manual cache into the dialog's state is needed.
 }
 
 // ---------------------------------------------------------------------------
@@ -821,7 +809,10 @@ mod tests {
             "row should render intact in browse mode"
         );
 
-        // Click a list row to focus the list, then type a search for "wolf".
+        // Click a list row to focus the list.  Send MouseDown + MouseUp to
+        // release the mouse-track capture before typing; while the capture is
+        // live (between Down and Up) keyboard events are swallowed by the
+        // hold handler.
         screen.push_event(Event::MouseDown(MouseEvent {
             position: Point::new(10, 5),
             buttons: MouseButtons {
@@ -831,13 +822,48 @@ mod tests {
             ..Default::default()
         }));
         app.program.pump_once();
+        screen.push_event(Event::MouseUp(MouseEvent {
+            position: Point::new(10, 5),
+            buttons: MouseButtons::default(),
+            ..Default::default()
+        }));
+        app.program.pump_once();
+
+        // After focusing the list the DirBox is in browse mode; the bubble
+        // (DirBox.help_ctx → Group::get_help_ctx → status-line idle path)
+        // must surface "BROWSE MODE" on the status line.
+        {
+            let frame = screen.snapshot();
+            assert!(
+                frame.contains("BROWSE MODE"),
+                "status line should show BROWSE MODE after focusing the list; got:\n{frame}"
+            );
+        }
+
+        // Type a search for "wolf" — now that the hold is released, keys reach
+        // the DirBox and activate search mode.
         for c in "wolf".chars() {
             screen.push_key(Key::Char(c), KeyModifiers::default());
             app.program.pump_once();
         }
+        // Drain deferred broadcasts (RECEIVED_FOCUS etc.) then get one true
+        // idle pump: the status-line idle arm reads group.get_help_ctx() only
+        // when out_events is empty.  Each key pump may leave 1-2 broadcasts;
+        // 8 extra pumps is conservative.
+        for _ in 0..8 {
+            app.program.pump_once();
+        }
 
-        // Search is active (the hardware cursor sits just past the match), and the
-        // focused row's text is still contiguous — not shifted/duplicated.
+        // Search is active: status line must now show SEARCH MODE.
+        {
+            let frame = screen.snapshot();
+            assert!(
+                frame.contains("SEARCH MODE"),
+                "status line should show SEARCH MODE while searching; got:\n{frame}"
+            );
+        }
+
+        // The focused row's text is still contiguous — not shifted/duplicated.
         assert!(
             screen.snapshot().contains(intact),
             "search overlay must not corrupt the focused row; got:\n{}",
