@@ -34,6 +34,6 @@ Rust module(s): src/widgets/list_viewer.rs   |   magiblot: include/tvision/views
 
 ## Summary
 
-- PORTED: 9   EQUIVALENT: 5   NOT-PORTED: 2   MISSING: 0   UNSURE: 0
+- PORTED: 13   EQUIVALENT: 6   NOT-PORTED: 2   MISSING: 0   UNSURE: 0
 - SUSPECT: 0   |   doc<3 (public): 12   |   → concept: 0
 - Remaining notable omission: `draw` omits the C++ `showMarkers` bracket glyphs at cell edges with no comment (flagged in the `draw` Notes above).

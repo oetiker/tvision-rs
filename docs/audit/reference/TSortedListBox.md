@@ -25,6 +25,6 @@ Rust module(s): src/widgets/list_box.rs (struct `SortedListBox`)   |   magiblot:
 
 ## Summary
 
-- PORTED: 6   EQUIVALENT: 3   NOT-PORTED: 1   MISSING: 0   UNSURE: 0
+- PORTED: 7   EQUIVALENT: 2   NOT-PORTED: 1   MISSING: 0   UNSURE: 0
 - SUSPECT: 0   |   doc<3 (public): 4   |   → concept: 0
 - Gather and scatter are symmetric: `value()` returns the focused index and `set_value_ctx` focuses that index, matching C++ `TListBox::getData`/`setData` inheritance.

@@ -61,7 +61,7 @@ Top-level index of the audit. One row per reference section; links to the per-se
 | TItemList | 464 | 0 | 3 | 0 | 0 | 0 | 0 | [TItemList.md](reference/TItemList.md) |
 | TLabel | 465–467 | 4 | 3 | 3 | 0 | 0 | 3 | [TLabel.md](reference/TLabel.md) |
 | TListBox | 467–470 | 4 | 5 | 1 | 0 | 0 | 6 | [TListBox.md](reference/TListBox.md) |
-| TListViewer | 470–474 | 9 | 5 | 2 | 0 | 0 | 12 | [TListViewer.md](reference/TListViewer.md) |
+| TListViewer | 470–474 | 13 | 6 | 2 | 0 | 0 | 12 | [TListViewer.md](reference/TListViewer.md) |
 | TLookupValidator | 474–475 | 0 | 2 | 0 | 0 | 0 | 1 | [TLookupValidator.md](reference/TLookupValidator.md) |
 | TMemo | 475–477 | 2 | 5 | 2 | 0 | 0 | 4 | [TMemo.md](reference/TMemo.md) |
 | TMemoData | 477 | 0 | 3 | 1 | 0 | 0 | 1 | [TMemoData.md](reference/TMemoData.md) |
@@ -95,7 +95,7 @@ Top-level index of the audit. One row per reference section; links to the per-se
 | TScroller | 527–530 | 5 | 8 | 6 | 0 | 0 | 11 | [TScroller.md](reference/TScroller.md) |
 | TSearchRec | 530 | 4 | 2 | 3 | 0 | 0 | 2 | [TSearchRec.md](reference/TSearchRec.md) |
 | TSortedCollection | 531–534 | 0 | 6 | 2 | 0 | 0 | 0 | [TSortedCollection.md](reference/TSortedCollection.md) |
-| TSortedListBox | 534–536 | 6 | 3 | 1 | 0 | 0 | 4 | [TSortedListBox.md](reference/TSortedListBox.md) |
+| TSortedListBox | 534–536 | 7 | 2 | 1 | 0 | 0 | 4 | [TSortedListBox.md](reference/TSortedListBox.md) |
 | TStaticText | 536–537 | 2 | 4 | 3 | 0 | 0 | 2 | [TStaticText.md](reference/TStaticText.md) |
 | TStatusDef | 537–538 | 0 | 6 | 0 | 0 | 0 | 3 | [TStatusDef.md](reference/TStatusDef.md) |
 | TStatusItem | 538–539 | 3 | 3 | 0 | 0 | 0 | 2 | [TStatusItem.md](reference/TStatusItem.md) |
@@ -117,9 +117,9 @@ Top-level index of the audit. One row per reference section; links to the per-se
 | TView | 560–576 | 28 | 45 | 5 | 0 | 0 | 28 | [TView.md](reference/TView.md) |
 | TWildStr | 577 | 0 | 1 | 0 | 0 | 0 | 0 | [TWildStr.md](reference/TWildStr.md) |
 | TWindow | 577–581 | 11 | 10 | 6 | 0 | 0 | 13 | [TWindow.md](reference/TWindow.md) |
-| **TOTAL** | — | **472** | **621** | **461** | **0** | **0** | **543** | — |
+| **TOTAL** | — | **477** | **621** | **461** | **0** | **0** | **543** | — |
 
-**Headline:** of 1559 catalogued reference entries, **472 ported** + **621 idiomatic-equivalent** = 1093 present; **461 deliberately not-ported** (DOS/EMS/stream/Pascal substrate + subsystems superseded by extensions, each a written reason); **0 missing** and **0 suspect**. Zero unresolved entries.
+**Headline:** of 1559 catalogued reference entries, **477 ported** + **621 idiomatic-equivalent** = 1098 present; **461 deliberately not-ported** (DOS/EMS/stream/Pascal substrate + subsystems superseded by extensions, each a written reason); **0 missing** and **0 suspect**. Zero unresolved entries.
 
 ## Coverage & confidence
 
