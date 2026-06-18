@@ -4,7 +4,7 @@ Top-level index of the audit. One row per reference section; links to the per-se
 
 **Reports:** [gap-report.md](gap-report.md) · [rustdoc-scorecard.md](rustdoc-scorecard.md) · [concept-coverage.md](concept-coverage.md)
 
-**Scope:** 108 reference sections · 1558 catalogued entries.
+**Scope:** 109 reference sections · 1559 catalogued entries.
 
 | Section | Pages | Ported | Equiv | Not-ported | Missing | Suspect | doc<3 | File |
 |---|---|--:|--:|--:|--:|--:|--:|---|
@@ -115,10 +115,12 @@ Top-level index of the audit. One row per reference section; links to the per-se
 | TVTransfer | 576–577 | 0 | 3 | 1 | 0 | 0 | 2 | [TVTransfer.md](reference/TVTransfer.md) |
 | TValidator | 557–560 | 4 | 8 | 4 | 0 | 0 | 3 | [TValidator.md](reference/TValidator.md) |
 | TView | 560–576 | 28 | 45 | 5 | 0 | 0 | 28 | [TView.md](reference/TView.md) |
+| TWildStr | 577 | 0 | 1 | 0 | 0 | 0 | 0 | [TWildStr.md](reference/TWildStr.md) |
 | TWindow | 577–581 | 11 | 10 | 6 | 0 | 0 | 13 | [TWindow.md](reference/TWindow.md) |
-| **TOTAL** | — | **476** | **620** | **461** | **1** | **5** | **542** | — |
+| **TOTAL** | — | **476** | **621** | **461** | **1** | **5** | **542** | — |
 
-**Headline:** of 1558 catalogued reference entries, **476 ported** + **620 idiomatic-equivalent** = 1096 present; **461 deliberately not-ported** (DOS/EMS/stream/Pascal substrate + subsystems superseded by extensions, each with a written reason); **1 missing** (candidate gap) and **5 suspect** (present-but-divergent). Zero unresolved entries.
+**Headline:** of 1559 catalogued reference entries, **476 ported** + **621 idiomatic-equivalent** = 1097 present; **461 deliberately not-ported** (DOS/EMS/stream/Pascal substrate + subsystems superseded by extensions, each with a written reason); **1 missing** (candidate gap) and **5 suspect** (present-but-divergent). Zero unresolved entries.
 
 ## Verification
-_(filled in Task 14: TOC reconciliation + anti-hallucination spot check)_
+
+_(filled below in Task 14: TOC reconciliation + anti-hallucination spot check)_
