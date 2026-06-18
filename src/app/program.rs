@@ -439,14 +439,6 @@ enum ModalCompletion {
         fg: bool,
     },
 
-    /// Result from the theme editor dialog. On [`Command::OK`], read the
-    /// `ThemeEditorBody`'s working theme and write it into the sink; the caller
-    /// installs it via `Program::set_theme`.
-    ThemeEdit {
-        /// `ViewId` of the `ThemeEditorBody` child inside the dialog.
-        editor_id: ViewId,
-        sink: std::rc::Rc<std::cell::RefCell<Option<crate::theme::Theme>>>,
-    },
 }
 
 impl Program {
@@ -1187,13 +1179,30 @@ impl Program {
             ButtonFlags::default(),
         )));
 
-        let sink = std::rc::Rc::new(std::cell::RefCell::new(None::<crate::theme::Theme>));
-        let completion = ModalCompletion::ThemeEdit {
-            editor_id: te_id,
-            sink: sink.clone(),
-        };
-        self.exec_view_with_completion(Box::new(d), Some(completion), Some(te_id), None, false);
-        if let Some(new_theme) = sink.borrow_mut().take() {
+        // Read the edited working theme out of the modal's own ThemeEditorBody by
+        // value at close (spec §6.6: a helper reaching its own known child; a whole
+        // Theme is too large to be a FieldValue, spec C-1). No Rc sink, no variant.
+        let new_theme = self
+            .exec_view_capture(
+                Box::new(d),
+                None,
+                Some(te_id),
+                None,
+                false,
+                |modal, cmd| {
+                    if cmd == Command::OK {
+                        modal
+                            .find_mut(te_id)
+                            .and_then(|v| v.as_any_mut())
+                            .and_then(|a| a.downcast_mut::<ThemeEditorBody>())
+                            .map(|te| te.working_theme().clone())
+                    } else {
+                        None
+                    }
+                },
+            )
+            .2;
+        if let Some(new_theme) = new_theme {
             self.set_theme(new_theme);
         }
     }
@@ -3239,19 +3248,6 @@ fn apply_modal_completion(
             None
         }
 
-        // theme editor dialog result — read the ThemeEditorBody's working
-        // theme and write into the sink on OK.
-        ModalCompletion::ThemeEdit { editor_id, sink } => {
-            if result == Command::OK {
-                let theme = group
-                    .find_mut(editor_id)
-                    .and_then(|v| v.as_any_mut())
-                    .and_then(|a| a.downcast_mut::<crate::dialog::ThemeEditorBody>())
-                    .map(|te| te.working_theme().clone());
-                *sink.borrow_mut() = theme;
-            }
-            None
-        }
     }
 }
 
@@ -10155,13 +10151,13 @@ mod tests {
             assert_eq!(program.capture_len(), 0, "ModalFrame popped on OK");
         }
 
-        /// OK with a modified working copy installs the new theme — exercises the
-        /// `ThemeEdit` ModalCompletion path directly (without going through the
-        /// color-picker sub-modal).
+        /// OK extracts the ThemeEditorBody's modified working theme BY VALUE — the
+        /// path Program::theme_editor uses (exec_view_with), replacing the old
+        /// Rc/RefCell sink that went away with the deleted ThemeEdit variant.
         #[test]
         fn theme_editor_ok_installs_new_theme() {
             use crate::color::{Color, Style};
-            use crate::dialog::ThemeEditorBody;
+            use crate::dialog::{Dialog, ThemeEditorBody};
             use crate::theme::{Role, Theme};
 
             let original = Theme::classic_blue();
@@ -10172,27 +10168,34 @@ mod tests {
             );
             assert_ne!(modified, original, "test setup: modified theme must differ");
 
-            // Build the ThemeEdit completion manually, wiring a ThemeEditorBody
-            // that already holds the modified working theme.
-            let te = ThemeEditorBody::new(crate::view::Rect::new(1, 1, 63, 19), modified.clone());
+            let (mut program, _handle, _clock) = program_with_desktop(80, 30);
 
-            // Insert the body into a temporary Group so find_mut works;
-            // insert() assigns and returns the ViewId.
-            let mut group = crate::view::Group::new(crate::view::Rect::new(0, 0, 64, 24));
-            let te_id = group.insert(Box::new(te));
+            // A theme-editor-shaped modal pre-seeded with the modified working theme.
+            let mut d = Dialog::new(
+                crate::view::Rect::new(0, 0, 64, 24),
+                Some("Theme Editor".to_string()),
+            );
+            let te_id = d.insert_child(Box::new(ThemeEditorBody::new(
+                crate::view::Rect::new(1, 1, 63, 19),
+                modified.clone(),
+            )));
 
-            let sink = std::rc::Rc::new(std::cell::RefCell::new(None::<Theme>));
-            let completion = ModalCompletion::ThemeEdit {
-                editor_id: te_id,
-                sink: sink.clone(),
-            };
-            apply_modal_completion(completion, Command::OK, &mut group, te_id);
-
-            let result = sink.borrow_mut().take();
+            program.out_events.push_back(Event::Command(Command::OK));
+            let extracted = program.exec_view_with(Box::new(d), |modal, cmd| {
+                if cmd == Command::OK {
+                    modal
+                        .find_mut(te_id)
+                        .and_then(|v| v.as_any_mut())
+                        .and_then(|a| a.downcast_mut::<ThemeEditorBody>())
+                        .map(|te| te.working_theme().clone())
+                } else {
+                    None
+                }
+            });
             assert_eq!(
-                result,
+                extracted,
                 Some(modified),
-                "ThemeEdit OK must write the modified working theme into the sink"
+                "OK must extract the modified working theme by value"
             );
         }
     }
