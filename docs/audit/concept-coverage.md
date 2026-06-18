@@ -167,4 +167,13 @@ means a deliberately-dropped subsystem (the mdBook documents the drop, so no gap
 
 ## → concept routes from Part 3 (appended by controller)
 
-_(grep of `→ concept` across reference/*.md — filled by the orchestrator after the Part 3 sweep.)_
+Per-symbol audit rows that flagged the doc gap as conceptual (belongs in the mdBook narrative, not a longer rustdoc comment):
+
+| Section | Entry | Why it's a concept gap |
+|---|---|---|
+| TGroup | `Phase` (field) | C++ `Phase: (phFocused, phPreProcess, phPostProcess)` read by subviews as `Owner^.Phase`. tvision-rs carries the phase on the shared `Context` (set by the router around each leg, save/restored unde… |
+| TGroup | `EndModal` (method) | C++ `EndModal(cmd)`: terminate the current modal view's modal state, returning `cmd` from `ExecView`. tvision-rs has no nested modal loop on the group; a view requests modal end via the deferred `E… |
+| TGroup | `ExecView` (method) | C++ `ExecView(P)`: save context, set `sfModal`, insert P, `Execute`, restore, return result (`cmCancel` if P nil). tvision-rs `exec_view` pushes a [`ModalFrame`] onto the capture stack and runs the… |
+| TGroup | `Execute` (method) | C++ `Execute`: the group's own `repeat GetEvent/HandleEvent until Valid(EndState)` modal loop. tvision-rs has ONE event loop in `Program` (`run` = `while end_state.is_none() { pump_once() }`); a gr… |
+| TStringLookupValidator | `Error` (method) | C++ `error` calls `MessageBox` to display "not in list" dialog. Rust `error` calls `ctx.request_message_box("Input is not in list of valid strings", Error, ok-only, None, None)` — the async-modal-f… |
+| TView | `DrawView` (method) | C++ `DrawView` = "draw only if `Exposed`". tvision-rs drops per-view exposure: the loop redraws the whole tree each pump and diffs against the prior buffer (D11/D-redraw). No `draw_view` method — `… |
