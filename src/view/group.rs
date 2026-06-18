@@ -870,7 +870,9 @@ impl View for Group {
                         .set_state(StateFlag::Focused, enable, ctx);
                 }
             }
-            StateFlag::Selected => {}
+            // Selected and Visible do not propagate to children from the group.
+            // Visible is delivered per-child by set_visible_descendant.
+            StateFlag::Selected | StateFlag::Visible => {}
         }
     }
 
@@ -1002,12 +1004,21 @@ impl View for Group {
     /// ([`reset_current`](Self::reset_current)) — in **both** directions (show and
     /// hide). A no-change write runs no tail (an idempotent toggle has no cascade).
     /// Recurses like [`find_mut`](Self::find_mut) when `id` is not a direct child.
+    ///
+    /// Delivers [`StateFlag::Visible`](crate::view::StateFlag::Visible) via
+    /// `child.set_state` so that widgets that own sibling scroll bars (e.g.
+    /// `ListViewer`) can show/hide them in sync — mirroring C++ `setState(sfVisible)`.
     fn set_visible_descendant(&mut self, id: ViewId, visible: bool, ctx: &mut Context) -> bool {
         if let Some(i) = self.index_of(id) {
-            let st = self.children[i].view.state_mut();
-            if st.state.visible != visible {
-                st.state.visible = visible;
-                if st.options.selectable {
+            let was_visible = self.children[i].view.state().state.visible;
+            if was_visible != visible {
+                // Deliver via set_state so overriding widgets (e.g. list viewers
+                // with scroll bars) can react.  set_state flips the flag through
+                // set_flag and runs any widget-specific side effects.
+                self.children[i]
+                    .view
+                    .set_state(StateFlag::Visible, visible, ctx);
+                if self.children[i].view.state().options.selectable {
                     // The visibility-change tail: re-establish the owning
                     // group's own currency.
                     Group::reset_current(self, ctx);

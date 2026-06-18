@@ -141,12 +141,12 @@ pub enum Deferred {
         /// New arrow step, or `None` to preserve `arrow_step`.
         arrow_step: Option<i32>,
     },
-    /// **Visibility direction**: show/hide a scroller's scrollbar. The pump
-    /// resolves `id` and sets `state.state.visible` (no downcast — `state_mut` is
-    /// on the trait; the painter skips `!visible` children). There is no
-    /// propagating `StateFlag::Visible` (no occlusion tracking — the whole tree is
-    /// redrawn each frame, so visibility carries no side effects), so it is set
-    /// directly on the [`ViewState`](crate::view::ViewState).
+    /// **Visibility direction**: show/hide a view. The pump routes through
+    /// `Group::set_visible_descendant`, which delivers
+    /// [`StateFlag::Visible`](crate::view::StateFlag::Visible) via
+    /// `child.set_state` so widgets with sibling scroll bars (e.g. `ListViewer`)
+    /// can show/hide them in sync. `StateFlag::Visible` does NOT propagate to
+    /// children (whole-tree redraw — no occlusion cache to maintain).
     SetVisible(ViewId, bool),
 
     // -- the splitter keyboard-resize broker (D3 sibling-broker) -------

@@ -270,6 +270,14 @@ pub enum StateFlag {
     Focused,
     /// `sfDragging` — the view is being dragged/resized.
     Dragging,
+    /// `sfVisible` — the view is shown/hidden.
+    ///
+    /// Unlike `Active`/`Selected`, this flag does NOT propagate to children
+    /// (whole-tree redraw means there is no occlusion cache to maintain).
+    /// Delivered by [`Group::set_visible_descendant`](crate::view::Group) so
+    /// that widgets that own sibling bars (e.g. `ListViewer`, `Scroller`) can
+    /// show/hide them in sync.
+    Visible,
 }
 
 // ---------------------------------------------------------------------------
@@ -466,6 +474,7 @@ impl ViewState {
             StateFlag::Selected => self.state.selected = enable,
             StateFlag::Focused => self.state.focused = enable,
             StateFlag::Dragging => self.state.dragging = enable,
+            StateFlag::Visible => self.state.visible = enable,
         }
     }
 

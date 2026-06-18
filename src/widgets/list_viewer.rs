@@ -435,11 +435,12 @@ pub fn on_bounds_changed<L: ListViewer + ?Sized>(this: &L, ctx: &mut Context) {
     }
 }
 
-/// Flip the flag (plus the focus broadcast), then on `Active`/`Selected`
+/// Flip the flag (plus the focus broadcast), then on `Active`/`Selected`/`Visible`
 /// show/hide BOTH bars.
 ///
 /// Visibility is `active && visible` — **both** (NOT the scroller's
-/// `active || selected`).
+/// `active || selected`). Matching C++ `TListViewer::setState` which fires on
+/// `sfSelected | sfActive | sfVisible`.
 pub fn set_state<L: ListViewer + ?Sized>(
     this: &mut L,
     flag: StateFlag,
@@ -458,7 +459,7 @@ pub fn set_state<L: ListViewer + ?Sized>(
             source,
         );
     }
-    if flag == StateFlag::Active || flag == StateFlag::Selected {
+    if flag == StateFlag::Active || flag == StateFlag::Selected || flag == StateFlag::Visible {
         // Show iff active && visible — BOTH, not the scroller's active||selected.
         let visible = this.lv().state.state.active && this.lv().state.state.visible;
         if let Some(h) = this.lv().h_scroll_bar {
@@ -471,8 +472,13 @@ pub fn set_state<L: ListViewer + ?Sized>(
 }
 
 /// Mouse + keyboard nav + the scrollbar broadcast filter. Reused verbatim by
-/// concrete list widgets. The mouse-down auto-select lives in `Group`, so it is
-/// omitted here.
+/// concrete list widgets.
+///
+/// **Intentional omission:** C++ `TListViewer::handleEvent` calls
+/// `TView::handleEvent(event)` first (line 221 of `tlstview.cpp`). That base
+/// call only performs mouse-down auto-select (focus the view on click), which
+/// tvision-rs relocates to `Group::route_event`. `TView::handleEvent` is a
+/// no-op for every other event class, so there is no base behavior to inherit.
 pub fn handle_event<L: ListViewer + ?Sized>(this: &mut L, ev: &mut Event, ctx: &mut Context) {
     match *ev {
         // -------------------------------------------------------------------
@@ -2150,5 +2156,51 @@ mod tests {
             l.handle_event(&mut ev, &mut ctx);
         }
         assert_eq!(l.lv.focused, 12, "4th tick: +size.y = +4 (right of view)");
+    }
+
+    // -- set_state sfVisible hides scroll bars ---------------------------------
+
+    /// Clearing `sfVisible` on an active+visible list viewer must enqueue
+    /// `SetVisible(_, false)` for both scroll bars.  Before Fix A (the guard
+    /// only checked Active|Selected), this test failed because the Visible arm
+    /// was absent and the deferred vec stayed empty.
+    #[test]
+    fn set_state_visible_false_hides_both_scroll_bars() {
+        let (_gh, h) = mint_id();
+        let (_gv, v) = mint_id();
+
+        // Construct active+visible so bars would normally be shown.
+        let mut l = FakeList::new(Rect::new(0, 0, 10, 5), 1, items(5), Some(h), Some(v));
+        // Manually set active+visible in the state flags so the inner body sees
+        // them.  We set the bits directly on the ViewState to avoid needing a
+        // full Group context for set_state(Active/Selected).
+        l.lv.state.state.active = true;
+        l.lv.state.state.visible = true;
+
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+
+        // Now hide the view via sfVisible — bars should be enqueued for hiding.
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            l.set_state(StateFlag::Visible, false, &mut ctx);
+        }
+
+        // Exactly two SetVisible(_, false) ops, one per bar.
+        assert_eq!(
+            deferred.len(),
+            2,
+            "expected 2 SetVisible ops, got {}",
+            deferred.len()
+        );
+        assert!(
+            matches!(deferred[0], Deferred::SetVisible(id, false) if id == h),
+            "first op must be SetVisible(h_scroll_bar, false)"
+        );
+        assert!(
+            matches!(deferred[1], Deferred::SetVisible(id, false) if id == v),
+            "second op must be SetVisible(v_scroll_bar, false)"
+        );
     }
 }

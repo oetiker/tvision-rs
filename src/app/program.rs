@@ -2087,15 +2087,15 @@ impl Program {
                                     sb.set_params(v, lo, hi, pg, ar, &mut ctx);
                                 }
                             }
-                            // Visibility direction (TScroller::showSBar →
-                            // show/hide): write the flag in the OWNING group
-                            // (no propagating StateFlag::Visible; the painter
-                            // skips !visible) and run the C++
-                            // setState(sfVisible) currency tail — if the flag
-                            // really changed and the child is selectable, the
-                            // owning group resetCurrents, BOTH directions.
-                            // Today's consumers (scrollbars / indicators) are
-                            // non-selectable, so the tail is a no-op for them.
+                            // Visibility direction: routes via
+                            // set_visible_descendant, which delivers
+                            // StateFlag::Visible via child.set_state so widgets
+                            // with scroll bars (e.g. ListViewer) can react.
+                            // StateFlag::Visible does NOT propagate to children.
+                            // If the flag changed and the child is selectable,
+                            // the owning group resetCurrents (both directions).
+                            // Today's scroll bar consumers are non-selectable,
+                            // so the currency tail is a no-op for them.
                             Deferred::SetVisible(id, visible) => {
                                 group.set_visible_descendant(id, visible, &mut ctx);
                             }
