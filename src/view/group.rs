@@ -893,6 +893,25 @@ impl View for Group {
         }
     }
 
+    /// The focused child's help context (recursively), falling back to the group's
+    /// own when there is no current child or the chain yields no context.
+    ///
+    /// # Turbo Vision heritage
+    /// Ports `TGroup::getHelpCtx`: returns `current->getHelpCtx()`, and only when
+    /// that is `hcNoContext` (or there is no current) falls back to
+    /// `TView::getHelpCtx` (own `help_ctx`, or `DRAGGING` while dragging). The
+    /// dragging case is therefore preserved by the fallback leg.
+    fn get_help_ctx(&self) -> crate::help::HelpCtx {
+        let from_current = self
+            .current
+            .and_then(|id| self.index_of(id))
+            .map(|i| self.children[i].view.get_help_ctx());
+        match from_current {
+            Some(h) if h != crate::help::HelpCtx::NO_CONTEXT => h,
+            _ => self.state().get_help_ctx(),
+        }
+    }
+
     /// Descend into the `current` child to find where the hardware cursor should
     /// sit, accumulating the child's `origin` so the result is in this group's
     /// coordinate frame. `None` if there is no current child or it wants no cursor
@@ -3004,5 +3023,49 @@ mod tests {
         let gathered = group.gather_data();
         assert_eq!(gathered[0], Some(FieldValue::Text("first".to_string())));
         assert_eq!(gathered[1], Some(FieldValue::Text("updated".to_string())));
+    }
+
+    #[test]
+    fn get_help_ctx_bubbles_to_current_child() {
+        use crate::help::HelpCtx;
+        use crate::view::SelectMode;
+        const LEAF: HelpCtx = HelpCtx::custom("test.leaf");
+        // Minimal selectable leaf carrying a help context.
+        struct Leaf {
+            st: ViewState,
+        }
+        impl View for Leaf {
+            fn state(&self) -> &ViewState {
+                &self.st
+            }
+            fn state_mut(&mut self) -> &mut ViewState {
+                &mut self.st
+            }
+            fn draw(&mut self, _ctx: &mut DrawCtx) {}
+        }
+
+        let mut g = Group::new(Rect::new(0, 0, 20, 10));
+        let mut st = ViewState::new(Rect::new(1, 1, 10, 3));
+        st.options.selectable = true;
+        st.help_ctx = LEAF;
+        let leaf = Box::new(Leaf { st });
+        let id = g.insert(leaf);
+
+        // No current child yet -> group's own context (NO_CONTEXT by default).
+        assert_eq!(g.get_help_ctx(), HelpCtx::NO_CONTEXT);
+
+        // Make the leaf current -> its context bubbles up.
+        let mut out = std::collections::VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<crate::view::Deferred> = Vec::new();
+        {
+            let mut ctx = Context::new(&mut out, &mut timers, 0, &mut deferred);
+            g.set_current(Some(id), SelectMode::Normal, &mut ctx);
+        }
+        assert_eq!(
+            g.get_help_ctx(),
+            LEAF,
+            "TGroup::getHelpCtx returns current child's context"
+        );
     }
 }
