@@ -26,7 +26,7 @@ Rust module(s): none   |   magiblot: `include/tvision/colorsel.h`
 | `newColor` (method) | 485 | NOT-PORTED | — | — | — | Broadcasts `cmColorSet` with the new attribute; no equivalent. |
 | `press` (method) | 485 | NOT-PORTED | — | — | — | Sets the selected attribute; no equivalent. |
 | `movedTo` (method) | 485 | NOT-PORTED | — | — | — | Updates focus and calls `newColor`; no equivalent. |
-| Normal/Highlight/Underline/Inverse attribute choices | 485 | EQUIVALENT | OK | `crate::color::Modifiers` struct-of-bools (`bold`, `italic`, `underline`, `reverse`, `dim`) in `src/color.rs` | 2 | The four Borland attributes (Normal, Highlight=bold, Underline, Inverse) all have counterparts in `Modifiers`.  The *attribute values* exist; the *interactive picker widget* does not. |
+| Normal/Highlight/Underline/Inverse attribute choices | 485 | EQUIVALENT | OK | `crate::color::Modifiers` struct-of-bools (`bold`, `italic`, `underline`, `blink`, `reverse`, `strike`, `no_shadow`) in `src/color.rs` | 2 | The four Borland attributes (Normal, Highlight=bold, Underline, Inverse) all have counterparts in `Modifiers`.  The *attribute values* exist; the *interactive picker widget* does not. CORRECTED (private-symbol re-check): was `bold`, `italic`, `underline`, `reverse`, `dim` — `dim` does not exist; actual fields are `bold`, `italic`, `underline`, `blink`, `reverse`, `strike`, `no_shadow`. |
 
 ## Summary
 

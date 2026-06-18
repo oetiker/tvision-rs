@@ -149,6 +149,16 @@ and the C++ source.
   every cited *private* symbol name is recommended as a follow-up; it does not
   change any gap conclusion.
 
-**Bottom line:** the audit is sound for its purpose — the actionable findings
-(1 missing, 3 wrong, the NOT-PORTED register, and the doc scorecard) are verified;
-low-confidence items are confined to internal-symbol name citations and are flagged.
+**Private-symbol re-check (completed):** the recommended follow-up was run — a
+12-agent fleet re-verified **every** cited Rust symbol across all 109 files
+against this branch's `src/`. **28 citations corrected, 0 left unverified**;
+bucket/correctness/doc classifications unchanged. See `README.md` →
+"Source baseline & the private-symbol re-check" for the breakdown (genuine
+hallucinations vs `main`-baseline alignment of in-flight `consumer-api-coverage`
+symbols). After this pass, every per-symbol citation resolves against this
+branch's `src/`.
+
+**Bottom line:** the audit is sound — the actionable findings (1 missing, 3 wrong,
+the NOT-PORTED register, the doc scorecard) are verified, and after the
+private-symbol re-check every per-symbol name/visibility citation resolves against
+this branch's `src/`.

@@ -82,3 +82,31 @@ Auditors are **read-only**. Each writes its own `reference/<Section>.md` (distin
 path → parallel-safe) and returns only status + counts. Roll-ups
 (`coverage-matrix`, `gap-report`, `rustdoc-scorecard`) are assembled by the
 orchestrator in a later pass.
+
+## Source baseline & the private-symbol re-check
+
+This audit branch is based on **`main`** (audit-only history, no `src/` changes).
+The audit itself was originally conducted against a working tree that *also*
+included the in-flight **`consumer-api-coverage`** work (public window/dialog
+decoration setters, `Group::get_help_ctx` bubbling, a `program.rs` help-ctx
+arm). A follow-up **private-symbol re-check** (a verification fleet over all 109
+files) then re-verified **every** cited Rust symbol against this branch's
+`main`-based `src/` and corrected all that didn't resolve:
+
+- **28 citations corrected** across 7 files; **0 left unverified** — every cited
+  symbol now resolves against this branch's `src/`. Each fix carries a
+  `CORRECTED (private-symbol re-check): was \`<old>\`` note in its row.
+- Genuine hallucinations caught (existed in **no** tree): e.g. `Modifiers.dim`
+  (→ `blink`/`strike`/`no_shadow`), `OutlineFlags::expanded`/`NodeState`
+  (→ the private `OV_*` consts).
+- Baseline-shift fixes (frontier symbol → its `main` form, since this branch is
+  `main`): `Group::get_help_ctx` override → the `View` default + `program.rs`
+  aggregation; `Dialog::set_palette`/`with_palette` → `pub(crate)
+  Window::set_palette`; plus `program.rs` line-number drift from the unmerged
+  help-ctx commit.
+
+**Confidence:** buckets, classifications, and the gap-report (missing/wrong) were
+adversarially spot-checked and hold; after the re-check, the per-symbol *name and
+visibility* citations also resolve against this branch. A few rows that describe
+the richer `consumer-api-coverage` forms will read more naturally once that work
+merges to `main`.

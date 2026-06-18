@@ -185,7 +185,7 @@ The C++ `mfXXXX` packed `aOptions` word is replaced by two typed enums: `Message
 
 | Guide entry | Pg | Bucket | Corr | Rust symbol / mapping | Doc | Notes |
 |---|---|---|---|---|---|---|
-| `MinWinSize` (constant, `Dialogs` unit) | 352 | PORTED | OK | `Window::size_limits` returns `min = Point::new(16, 6)` (`src/window/window.rs:1267`) | 2 | C++ `MinWinSize = TPoint{16,6}`. Rust: the `size_limits` override hard-codes `Point::new(16, 6)` as the floor. The test `title_and_size_limits` asserts this (line 1420). Documented in the `zoom` method comment ("min = 16×6") but not in a named public constant. Doc score 2 — the constant's meaning is implied by the override but there is no named `pub const MIN_WIN_SIZE` with its own rustdoc. |
+| `MinWinSize` (constant, `Dialogs` unit) | 352 | PORTED | OK | `Window::size_limits` returns `min = Point::new(16, 6)` (`src/window/window.rs:1234`) | 2 | C++ `MinWinSize = TPoint{16,6}`. Rust: the `size_limits` override hard-codes `Point::new(16, 6)` as the floor. The test `title_and_size_limits` asserts this (line 1389). Documented in the `zoom` method comment ("min = 16×6") but not in a named public constant. Doc score 2 — the constant's meaning is implied by the override but there is no named `pub const MIN_WIN_SIZE` with its own rustdoc. CORRECTED (private-symbol re-check): was `src/window/window.rs:1267` — line 1267 is a `use crate::theme` import in the test module; `fn size_limits` is at line 1234. |
 
 ---
 
@@ -340,9 +340,9 @@ All `of*` bit constants map to fields of the `Options` struct-of-bools (deviatio
 
 | Guide entry | Pg | Bucket | Corr | Rust symbol / mapping | Doc | Notes |
 |---|---|---|---|---|---|---|
-| `ovExpanded` ($01) | 357 | EQUIVALENT | OK | `const OV_EXPANDED: u16 = 0x01` (`src/widgets/outline.rs:66`) | 2 | Internal graph flag. C++ `ovExpanded` → `OV_EXPANDED`. Private (`pub(crate)` level). Doc score 2: the constant has a short doc comment. |
-| `ovChildren` ($02) | 357 | EQUIVALENT | OK | `const OV_CHILDREN: u16 = 0x02` (`src/widgets/outline.rs:67`) | 2 | Internal graph flag. Private. Documented inline. |
-| `ovLast` ($04) | 357 | EQUIVALENT | OK | `const OV_LAST: u16 = 0x04` (`src/widgets/outline.rs:68`) | 2 | Internal graph flag. Private. Documented inline. |
+| `ovExpanded` ($01) | 357 | EQUIVALENT | OK | `const OV_EXPANDED: u16 = 0x01` (`src/widgets/outline.rs:66`) | 2 | Internal graph flag. C++ `ovExpanded` → `OV_EXPANDED`. Module-private `const`. Doc score 2: the constant has a short doc comment. CORRECTED (private-symbol re-check): visibility label was `pub(crate)` — actual declaration is module-private `const` (no `pub`). |
+| `ovChildren` ($02) | 357 | EQUIVALENT | OK | `const OV_CHILDREN: u16 = 0x02` (`src/widgets/outline.rs:68`) | 2 | Internal graph flag. Module-private. Documented inline. CORRECTED (private-symbol re-check): was line 67 — actual line is 68. |
+| `ovLast` ($04) | 357 | EQUIVALENT | OK | `const OV_LAST: u16 = 0x04` (`src/widgets/outline.rs:70`) | 2 | Internal graph flag. Module-private. Documented inline. CORRECTED (private-symbol re-check): was line 68 — actual line is 70; also visibility was `pub(crate)`, corrected to module-private `const`. |
 | `ovSelected` | 357 | NOT-PORTED | — | — | — | RESOLVED (was UNSURE): not a distinct TV2 constant. The outline graph-flag family is exactly `ovExpanded`/`ovChildren`/`ovLast` (Table 19.29; rows above). Item selection is rendered via `Role::OutlineSelected` (a theme role), not a graph flag — so there is no `ovSelected` constant to port. Nothing to port. |
 
 ---

@@ -25,15 +25,15 @@ Rust module(s): `src/view/view.rs`, `src/view/group.rs`, `src/view/context.rs`,
 
 | Guide entry | Pg | Bucket | Corr | Rust symbol / mapping | Doc | Notes |
 |---|---|---|---|---|---|---|
-| `ovExpanded` ($01) | 363 | PORTED | OK | `tv::OutlineFlags::expanded` (field `bool` in `NodeState`) | 2 | Guide: node is expanded (show children). Rust stores expanded/children/last as struct-of-bools (D5). |
-| `ovChildren` ($02) | 363 | PORTED | OK | `tv::OutlineFlags::has_children` (field `bool` in `NodeState`) | 2 | Guide: node has child nodes. |
-| `ovLast` ($04) | 363 | PORTED | OK | `tv::OutlineFlags::last` (field `bool` in `NodeState`) | 2 | Guide: node is the last child of its parent. Used by the draw pass to pick the correct branch glyph. |
+| `ovExpanded` ($01) | 363 | PORTED | OK | `const OV_EXPANDED: u16 = 0x01` (`src/widgets/outline.rs:66`, private) | 2 | Guide: node is expanded (show children). Rust stores the flag as a private `u16` constant used in the draw/walk pass; no `OutlineFlags`/`NodeState` struct exists. CORRECTED (private-symbol re-check): was `tv::OutlineFlags::expanded` (field `bool` in `NodeState`). |
+| `ovChildren` ($02) | 363 | PORTED | OK | `const OV_CHILDREN: u16 = 0x02` (`src/widgets/outline.rs:68`, private) | 2 | Guide: node has child nodes. CORRECTED (private-symbol re-check): was `tv::OutlineFlags::has_children` (field `bool` in `NodeState`). |
+| `ovLast` ($04) | 363 | PORTED | OK | `const OV_LAST: u16 = 0x04` (`src/widgets/outline.rs:70`, private) | 2 | Guide: node is the last child of its parent. Used by the draw pass to pick the correct branch glyph. CORRECTED (private-symbol re-check): was `tv::OutlineFlags::last` (field `bool` in `NodeState`). |
 
 ## PositionalEvents variable (p. 364)
 
 | Guide entry | Pg | Bucket | Corr | Rust symbol / mapping | Doc | Notes |
 |---|---|---|---|---|---|---|
-| `PositionalEvents` | 364 | EQUIVALENT | OK | `tv::EventMask::positional_events()` / `Event` routing in `Group::handle_event` | 2 | C++: global `Word = evMouse` used by `TGroup::HandleEvent` to classify events. Rust: `Group` routes mouse events positionally, focused events by focus chain — the logic is inlined in `group.rs` dispatch rather than a mutable global. Functionally equivalent. |
+| `PositionalEvents` | 364 | EQUIVALENT | OK | `EventMask { mouse_move, mouse_auto }` struct (`src/event/mod.rs:190`) + mouse-event routing in `Group::handle_event` (`src/view/group.rs:1194`) | 2 | C++: global `Word = evMouse` used by `TGroup::HandleEvent` to classify events. Rust: `Group` routes mouse events positionally, focused events by focus chain — the logic is inlined in `group.rs` dispatch rather than a mutable global. Functionally equivalent. CORRECTED (private-symbol re-check): was `tv::EventMask::positional_events()` — no such method exists; `EventMask` has no `positional_events()` function. |
 
 ## PrintStr procedure (p. 364)
 
@@ -107,15 +107,15 @@ The C++ `sb*` family has two groups: (1) mouse-hit part identifiers used by `Scr
 
 | Guide entry | Pg | Bucket | Corr | Rust symbol / mapping | Doc | Notes |
 |---|---|---|---|---|---|---|
-| `sbLeftArrow` (0) | 367 | EQUIVALENT | OK | `tv::scrollbar::Part::LeftArrow` | 2 | C++: integer constant passed to `ScrollStep`. Rust: `Part` enum variant (D5 flag-word → typed enum). |
-| `sbRightArrow` (1) | 367 | EQUIVALENT | OK | `tv::scrollbar::Part::RightArrow` | 2 | Same mapping. |
-| `sbPageLeft` (2) | 367 | EQUIVALENT | OK | `tv::scrollbar::Part::PageLeft` | 2 | Same mapping. |
-| `sbPageRight` (3) | 367 | EQUIVALENT | OK | `tv::scrollbar::Part::PageRight` | 2 | Same mapping. |
-| `sbUpArrow` (4) | 367 | EQUIVALENT | OK | `tv::scrollbar::Part::UpArrow` | 2 | Same mapping. |
-| `sbDownArrow` (5) | 367 | EQUIVALENT | OK | `tv::scrollbar::Part::DownArrow` | 2 | Same mapping. |
-| `sbPageUp` (6) | 367 | EQUIVALENT | OK | `tv::scrollbar::Part::PageUp` | 2 | Same mapping. |
-| `sbPageDown` (7) | 367 | EQUIVALENT | OK | `tv::scrollbar::Part::PageDown` | 2 | Same mapping. |
-| `sbIndicator` (8) | 367 | EQUIVALENT | OK | `tv::scrollbar::Part::Indicator` | 2 | Guide: never passed to `ScrollStep` (drag). Rust: same — `Indicator` triggers thumb-drag logic, not a scroll step. |
+| `sbLeftArrow` (0) | 367 | EQUIVALENT | OK | `Part::LeftArrow` (`src/widgets/scrollbar.rs:60`, private enum) | 2 | C++: integer constant passed to `ScrollStep`. Rust: private `Part` enum variant (D5 flag-word → typed enum). CORRECTED (private-symbol re-check): was `tv::scrollbar::Part::LeftArrow` — `Part` is a private (`enum Part`) type, not a public path. |
+| `sbRightArrow` (1) | 367 | EQUIVALENT | OK | `Part::RightArrow` (`src/widgets/scrollbar.rs:62`, private enum) | 2 | Same mapping. CORRECTED (private-symbol re-check): was `tv::scrollbar::Part::RightArrow`. |
+| `sbPageLeft` (2) | 367 | EQUIVALENT | OK | `Part::PageLeft` (`src/widgets/scrollbar.rs:64`, private enum) | 2 | Same mapping. CORRECTED (private-symbol re-check): was `tv::scrollbar::Part::PageLeft`. |
+| `sbPageRight` (3) | 367 | EQUIVALENT | OK | `Part::PageRight` (`src/widgets/scrollbar.rs:66`, private enum) | 2 | Same mapping. CORRECTED (private-symbol re-check): was `tv::scrollbar::Part::PageRight`. |
+| `sbUpArrow` (4) | 367 | EQUIVALENT | OK | `Part::UpArrow` (`src/widgets/scrollbar.rs:68`, private enum) | 2 | Same mapping. CORRECTED (private-symbol re-check): was `tv::scrollbar::Part::UpArrow`. |
+| `sbDownArrow` (5) | 367 | EQUIVALENT | OK | `Part::DownArrow` (`src/widgets/scrollbar.rs:70`, private enum) | 2 | Same mapping. CORRECTED (private-symbol re-check): was `tv::scrollbar::Part::DownArrow`. |
+| `sbPageUp` (6) | 367 | EQUIVALENT | OK | `Part::PageUp` (`src/widgets/scrollbar.rs:72`, private enum) | 2 | Same mapping. CORRECTED (private-symbol re-check): was `tv::scrollbar::Part::PageUp`. |
+| `sbPageDown` (7) | 367 | EQUIVALENT | OK | `Part::PageDown` (`src/widgets/scrollbar.rs:74`, private enum) | 2 | Same mapping. CORRECTED (private-symbol re-check): was `tv::scrollbar::Part::PageDown`. |
+| `sbIndicator` (8) | 367 | EQUIVALENT | OK | `Part::Indicator` (`src/widgets/scrollbar.rs:76`, private enum) | 2 | Guide: never passed to `ScrollStep` (drag). Rust: same — `Indicator` triggers thumb-drag logic, not a scroll step. CORRECTED (private-symbol re-check): was `tv::scrollbar::Part::Indicator`. |
 | `sbHorizontal` ($0000) | 368 | EQUIVALENT | OK | `ScrollBar` orientation inferred from bounds (`size.y == 1` → horizontal) | 2 | C++: flag to `StandardScrollBar`. Rust: orientation is inferred at construction from the rect; no explicit constant needed. `with_keyboard()` builder covers `sbHandleKeyboard`. |
 | `sbVertical` ($0001) | 368 | EQUIVALENT | OK | `ScrollBar` orientation inferred from bounds (`size.x == 1` → vertical) | 2 | Same as above. |
 | `sbHandleKeyboard` ($0002) | 368 | EQUIVALENT | OK | `tv::scrollbar::ScrollBar::with_keyboard()` / `Window::standard_scroll_bar(handle_keyboard: true)` | 2 | C++: flag enabling keyboard commands. Rust: opt-in builder method sets `ofPostProcess`; test `with_keyboard_sets_post_process` verifies. |
