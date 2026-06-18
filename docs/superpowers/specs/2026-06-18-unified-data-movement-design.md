@@ -1,7 +1,7 @@
 # Unified typed data-movement substrate (design)
 
 **Date:** 2026-06-18
-**Status:** design v2 (incorporates adversarial review) — awaiting owner review → writing-plans
+**Status:** design v3 (two adversarial reviews incorporated) — awaiting owner review → writing-plans
 **Origin:** Porting the `tcv` example faithfully (its `Desktop^.ExecView(InfoBox)`)
 surfaced consumer-API gap #2 (no generic view-launched modal). Investigating
 *why* it wasn't ported revealed a deeper issue: C++'s one loose data-movement
@@ -83,8 +83,8 @@ into places it fits badly. Convert a site **only when** doing so (a) removes a r
 downcast or duplication **and** (b) the result reads as naturally as (or better
 than) what it replaces. **Do not** force-fit where it becomes a burden:
 
-- don't route a single-field control's value through `FieldValue::Map` — a plain
-  `Text`/`Int` is the natural shape;
+- don't route a single-field control's value through a record `FieldValue::List` —
+  a plain `Text`/`Int` is the natural shape;
 - don't mint a defaulted `View` method for a genuinely one-off, single-caller sync
   poke if a method makes the trait noisier than the downcast it removes — weigh
   trait-surface cost against the downcast removed;
@@ -126,17 +126,28 @@ pub enum FieldValue {
     Int(i32),
     Bool(bool),
     Bits(u32),                       // cluster controls; a packed Color
-    List(Vec<FieldValue>),
-    Map(Vec<(String, FieldValue)>),  // a named record == C++ getData(void *rec)
+    List(Vec<FieldValue>),           // an ORDERED record == C++ getData's offset walk
 }
 ```
 
+**No keyed/`Map` variant.** C++ `getData(void *rec)` is *positional and anonymous*
+— it walks children in order writing each child's `dataSize()` bytes at a running
+offset (`tgroup.cpp:303-311`); there are no field names anywhere in TV's data
+protocol, and the port already mirrors this (`Group::gather_data` →
+`Vec<Option<FieldValue>>`, `Child { id, view }` with no name). So the faithful
+record is the **ordered `List`**, not a keyed map (a `Map` would invent a naming
+dimension that exists in neither C++ nor the model, and could not be constructed
+from the positional `gather_data`). If a keyed view is ever genuinely wanted, it
+must be justified as a deliberate *deviation* (like a D-rule), not as "the image of
+`getData`."
+
 Every data-bearing view implements `value()`/`set_value()` honestly:
 `CheckBoxes`/`RadioButtons` → `Bits`, `ColorPicker` → `Bits` (packed RGB), and a
-`Dialog`/`Group` gathers its children into a `Map` via `gather_data` (and scatters
-a `Map` back via `scatter_data`). `Map` is the typed image of C++ `getData(void
-*rec)` — so a whole dialog's result is one `FieldValue::Map`, **read without
-downcasting any child**. A whole `Theme` is the one value too large/structured to
+`Dialog`/`Group` gathers its children into an ordered `List` via `gather_data` (and
+scatters a `List` back via `scatter_data`, in child order). `List` is the typed
+image of C++ `getData(void *rec)`'s offset-addressed walk — so a whole dialog's
+result is one `FieldValue::List`, **read without downcasting any child**. A whole
+`Theme` is the one value too large/structured to
 pack and is returned by the by-value path (§3.3), not via `FieldValue`.
 
 ### 3.2 Sync signals → defaulted per-capability `View` methods (no god-enum)
@@ -173,11 +184,11 @@ count, forces arm-dropping, and duplicates the `FieldValue` payload vocabulary.)
 
 **View-launched modals (cluster D)** read the finished modal's result as a
 `FieldValue` (a field via `value()`, or the whole record via `gather_data` →
-`Map`) and deliver it to the requester by id — **no multi-child downcast**.
+ordered `List`) and deliver it to the requester by id — **no multi-child downcast**.
 `set_modal_answer(Command)` stays for the command-only/decision case;
 `set_value(FieldValue)` (or a `set_modal_data(FieldValue)` sibling) delivers the
 typed result. Find/Replace stop downcasting `CheckBoxes`/`InputLine` children and
-instead `gather_data` the modal into a `Map` the editor consumes. The multi-view
+instead `gather_data` the modal into an ordered `List` the editor consumes. The multi-view
 *routing* (which editor to write) is by-id and stays; only the *reads* go
 downcast-free. `ThemeColorPick` folds into the theme-editor view recomposing its
 own style from the delivered `Color` (the "second view" it reads is itself).
@@ -224,7 +235,7 @@ modal; documented escape hatch, no framework change.)
 One currency for field data (`FieldValue`), one mechanism for sync (defaulted
 `View` methods), one by-value path for top-level results — *one way per kind*, not
 one mechanism for all (which was the v1 god-enum mistake) and not two vocabularies
-for the same kind (the v1 `FieldValue`-vs-`BrokerMsg` overlap). `FieldValue::Map`
+for the same kind (the v1 `FieldValue`-vs-`BrokerMsg` overlap). `FieldValue::List`
 genuinely removes the cluster-D multi-child read downcasts; the trait-method sync
 genuinely removes the cluster-B downcasts.
 
@@ -234,7 +245,8 @@ view *cannot* (no `&mut Program`). So the two modal-result paths stay distinct b
 necessity — closure-by-value for top-level, `FieldValue`/command for view-launched.
 
 ### 4.3 Faithful to TV
-`FieldValue::Map` is the typed image of `getData(void *rec)`; `value`/`set_value`
+`FieldValue::List` is the ordered image of `getData(void *rec)`'s offset-addressed
+child walk; `value`/`set_value`
 are `getData`/`setData`; `gather_data`/`scatter_data` are `TGroup::getData/setData`
 (child-order walk). Sync via a defaulted method is the **deferred, return-less
 successor to `message(view, …, infoPtr)`** (the D3/D9 deviation — C++ `message`
@@ -260,8 +272,9 @@ proof of value.** Each phase is subagent-driven + two-stage-reviewed, snapshot-v
   `color_dialog`/`theme_editor`; delete the two `Rc` sinks + `ColorPick`/`ThemeEdit`
   variants. Single-view result, sound borrow. Highest reduction-per-risk.
 - **Phase 2 — widen `FieldValue` + honest `value()`.** Add `Bool`/`Bits`/`List`/
-  `Map`; implement `value()`/`set_value()` on `CheckBoxes`/`RadioButtons`/
-  `ColorPicker`; make `gather_data`/`scatter_data` produce/consume `Map`. Snapshot
+  `List`; implement `value()`/`set_value()` on `CheckBoxes`/`RadioButtons`/
+  `ColorPicker`; make `gather_data`/`scatter_data` produce/consume an ordered
+  `List`. Snapshot
   dialogs unchanged.
 - **Phase 3 — sync signals → trait methods.** Widget-by-widget: add the defaulted
   `View` method (+ `specs.rs` forwarder + `delegate_view` entry), move the pump's
@@ -269,7 +282,7 @@ proof of value.** Each phase is subagent-driven + two-stage-reviewed, snapshot-v
   its widget migrates. Genuinely incremental.
 - **Phase 4 — modal-result reads via `FieldValue`.** Convert `FindPick`/
   `ReplacePick`/`ThemeColorPick` to read the modal via `value()`/`gather_data`
-  (Map) + deliver by id; drop the multi-child downcasts. Honest: the *routing*
+  (ordered `List`) + deliver by id; drop the multi-child downcasts. Honest: the *routing*
   stays; the *reads* go downcast-free. (Not a "free melt into a generic arm" — a
   real per-consumer conversion to the `FieldValue` read path.)
 - **Phase 5 — generic `ExecView`.** `request_exec_view` + `Deferred::OpenModal`;
@@ -307,9 +320,10 @@ land WITH each phase (§9), never trailing.
 - **Trait-surface growth:** ~10 new defaulted `View` methods for sync. Accepted:
   defaulted (widgets implement only what they answer), compiler-guided, and the
   honest idiomatic shape (vs a god-enum). Each needs a macro forwarder + spy entry.
-- **`Map` ordering contract:** `gather_data`/`scatter_data` are positional/ordered
-  (faithful `getData`); a keyed `Map` must preserve child order where scatter
-  relies on it. Keep order-stable.
+- **`List` ordering contract:** `gather_data`/`scatter_data` are positional/ordered
+  (faithful `getData`'s offset walk) and `List` is inherently positional, matching
+  the existing `Vec<Option<FieldValue>>` — keep child order stable across
+  gather/scatter (no keyed `Map`, deliberately; see §3.1).
 
 ---
 
@@ -317,7 +331,7 @@ land WITH each phase (§9), never trailing.
 
 | C++ | This design |
 |---|---|
-| `getData`/`setData(void *rec)` / `dataSize` | widened `FieldValue` (`Map` = the record) + `value`/`set_value`; `gather_data`/`scatter_data` |
+| `getData`/`setData(void *rec)` / `dataSize` | widened `FieldValue` (ordered `List` = the positional record) + `value`/`set_value`; `gather_data`/`scatter_data` |
 | `message(target, evBroadcast/evCommand, cmX, infoPtr)` | per-capability defaulted `View` method delivered via `Deferred::Sync*` (deferred, return-less successor — D3/D9) |
 | `infoPtr` as subject | `Event::Broadcast.source` (unchanged) |
 | `execView(p)` returns to a method caller | `exec_view_with<R>` (by value) |
@@ -342,7 +356,7 @@ Vision heritage` section); new guide ```` ```rust ```` blocks need a hidden
   home: the sync-signal-via-defaulted-`View`-method model (no pump downcasts), and
   why sync is separate from field data. (Phase 3)
 - **`apps/dialogs.md`** ("Dialogs & data") — the widened `FieldValue` as the data
-  currency, `gather`/`scatter` records (`Map`), and the consumer recipe "build a
+  currency, `gather`/`scatter` ordered records (`List`), and the consumer recipe "build a
   custom modal, exec it, read its result," with the modal-result decision rule
   (view→`FieldValue` / top-level→`exec_view_with<R>` / view-wanting-big-native→`Rc<RefCell>`). (Phases 2, 5)
 - **`port/modal.md`** ("Modal execView → one loop") — `request_exec_view` +
