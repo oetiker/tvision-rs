@@ -389,15 +389,6 @@ enum ModalCompletion {
     /// (a validator `error`, a `FileEditor` save-error popup). The box just shows;
     /// nothing happens on close.
     Informational,
-    /// [`color_dialog`](Program::color_dialog) result extraction (the
-    /// `HistoryPick`/`get_selection` shape): on [`Command::OK`], downcast the
-    /// in-tree modal `ColorPicker` and write its `color()` into the caller's
-    /// sink. NOT a `FieldValue` (the `color()` accessor is the contract; the
-    /// spec's explicit non-goal forbids `FieldValue::Color`).
-    ColorPick {
-        picker: ViewId,
-        sink: std::rc::Rc<std::cell::Cell<Option<crate::color::Color>>>,
-    },
     /// "Save as" result (the view-triggered `FileDialog` seam): on a non-cancel
     /// close, read the filename from the in-tree `FileDialog` (`value()` →
     /// `FieldValue::Text`), set it on the `FileEditor` (`editor_id`), flag
@@ -1080,10 +1071,11 @@ impl Program {
     /// Open the truecolor color-picker modal seeded with `initial`; return the
     /// chosen [`Color`](crate::color::Color) on OK, or `None` on Cancel/Esc.
     ///
-    /// An tvision-rs-original extension. The result is read by downcasting the in-tree
-    /// modal [`ColorPicker`](crate::dialog::ColorPicker) to `color()` via a
-    /// [`ModalCompletion::ColorPick`] sink — the `HistoryPick`/`get_selection`
-    /// shape. No `FieldValue::Color` (spec non-goal).
+    /// An tvision-rs-original extension. The chosen color is read out of the
+    /// modal's own [`ColorPicker`](crate::dialog::ColorPicker) and returned **by
+    /// value** via [`exec_view_with`](Self::exec_view_with)-style capture — no
+    /// shared sink. `Color` is deliberately not a `FieldValue` (a 4-variant enum,
+    /// not a packable scalar; spec non-goal).
     pub fn color_dialog(&mut self, initial: crate::color::Color) -> Option<crate::color::Color> {
         use crate::dialog::{ColorPicker, Dialog};
         use crate::widgets::{Button, ButtonFlags};
@@ -1112,13 +1104,28 @@ impl Program {
             ButtonFlags::default(),
         )));
 
-        let sink = std::rc::Rc::new(std::cell::Cell::new(None));
-        let completion = ModalCompletion::ColorPick {
-            picker: picker_id,
-            sink: sink.clone(),
-        };
-        self.exec_view_with_completion(Box::new(d), Some(completion), Some(picker_id), None, false);
-        sink.get()
+        // Read the chosen color out of the modal's own ColorPicker child by value
+        // at close (spec §6.6: a helper reaching its own known child; Color is not
+        // a FieldValue, spec C-1). No Rc sink, no ModalCompletion variant.
+        self.exec_view_capture(
+            Box::new(d),
+            None,
+            Some(picker_id),
+            None,
+            false,
+            |modal, cmd| {
+                if cmd == Command::OK {
+                    modal
+                        .find_mut(picker_id)
+                        .and_then(|v| v.as_any_mut())
+                        .and_then(|a| a.downcast_mut::<ColorPicker>())
+                        .map(|p| p.color())
+                } else {
+                    None
+                }
+            },
+        )
+        .2
     }
 
     /// Install a new theme and force a full repaint (theme editor).
@@ -3084,19 +3091,6 @@ fn apply_modal_completion(
         }
         // Informational box: nothing to route or re-post.
         ModalCompletion::Informational => None,
-        // color_dialog result extraction: downcast the in-tree modal ColorPicker,
-        // read color(), and write into the caller's sink on cmOK.
-        ModalCompletion::ColorPick { picker, sink } => {
-            if result == Command::OK {
-                let c = group
-                    .find_mut(picker)
-                    .and_then(|v| v.as_any_mut())
-                    .and_then(|a| a.downcast_mut::<crate::dialog::ColorPicker>())
-                    .map(|p| p.color());
-                sink.set(c);
-            }
-            None
-        }
         // FindPick: on non-cancel, read the find string + options from the
         // in-tree Find dialog, update the editor (clear EF_DO_REPLACE), and
         // re-inject cmSearchAgain so do_search_replace runs on the editor.
@@ -10085,7 +10079,7 @@ mod tests {
         // -- color_dialog (tvision-rs-original extension) --------------------
 
         /// OK returns `Some(color)` — the initial color is returned unchanged when
-        /// nothing is edited (the ModalCompletion::ColorPick sink is written on cmOK).
+        /// nothing is edited (exec_view_with extracts the picker's color on cmOK).
         #[test]
         fn color_dialog_ok_returns_initial_color() {
             use crate::color::Color;
