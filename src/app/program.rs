@@ -1239,6 +1239,53 @@ impl Program {
         None
     }
 
+    /// Execute `view` as a modal, applying an optional completion and gathering
+    /// an optional field — the no-result-extraction entry point. See
+    /// [`exec_view_capture`](Self::exec_view_capture) for the generic core.
+    fn exec_view_with_completion(
+        &mut self,
+        view: Box<dyn View>,
+        completion: Option<ModalCompletion>,
+        initial_focus: Option<ViewId>,
+        gather: Option<ViewId>,
+        gather_self: bool,
+    ) -> (Command, Option<crate::data::FieldValue>) {
+        let (cmd, gathered, ()) = self.exec_view_capture(
+            view,
+            completion,
+            initial_focus,
+            gather,
+            gather_self,
+            |_, _| (),
+        );
+        (cmd, gathered)
+    }
+
+    /// Execute `view` as a modal and return a caller-typed result extracted from
+    /// the finished modal **by value** — no shared `Rc` cell and no `dyn Any` in
+    /// the framework. `extract` runs once, at modal close, receiving the modal's
+    /// own `&mut dyn View` and the end [`Command`] while the view is still in the
+    /// tree; whatever it returns is handed straight back to the caller.
+    ///
+    /// `R` is named by the caller and never by the framework. A consumer that
+    /// needs a single field can read it through [`View::value`]; a consumer that
+    /// needs a richer native value (a [`Color`](crate::color::Color), a whole
+    /// [`Theme`](crate::theme::Theme)) returns it directly from `extract`.
+    ///
+    /// # Turbo Vision heritage
+    /// The value-returning twin of `TGroup::execView` (`tgroup.cpp:188`), which
+    /// returns a `ushort` end command to its method caller. Where C++ then reads
+    /// results out of the still-live dialog with `getData`, `extract` reads them
+    /// by value here.
+    pub fn exec_view_with<R>(
+        &mut self,
+        view: Box<dyn View>,
+        extract: impl FnOnce(&mut dyn View, Command) -> R,
+    ) -> R {
+        self.exec_view_capture(view, None, None, None, false, extract)
+            .2
+    }
+
     /// The unified `exec_view` body. Identical to the simple `exec_view` except
     /// for three additions the view-triggered async-modal seam needs:
     ///
@@ -1260,14 +1307,15 @@ impl Program {
     ///   (`View::value`, the typed currency) while the modal is still in the tree
     ///   by id, and returned as the second tuple element. On cancel/`None` the
     ///   result is `None` (the caller leaves its input unchanged).
-    fn exec_view_with_completion(
+    fn exec_view_capture<R>(
         &mut self,
         view: Box<dyn View>,
         completion: Option<ModalCompletion>,
         initial_focus: Option<ViewId>,
         gather: Option<ViewId>,
         gather_self: bool,
-    ) -> (Command, Option<crate::data::FieldValue>) {
+        extract: impl FnOnce(&mut dyn View, Command) -> R,
+    ) -> (Command, Option<crate::data::FieldValue>, R) {
         // 1. getCommands / save the outgoing current.
         let save_current = self.group.current();
         let save_commands = self.disabled_commands.clone();
@@ -1445,6 +1493,17 @@ impl Program {
             None
         };
 
+        // Extract the caller's typed result while the modal is STILL in the tree
+        // by `id` — the same pre-drop window as the completion + gather above.
+        // The modal is guaranteed present: inserted in step 2, removed only below.
+        let extracted = {
+            let modal = self
+                .group
+                .find_mut(id)
+                .expect("modal is in the tree by id until remove() below");
+            extract(modal, retval)
+        };
+
         // 8. Pop the frame (it is on top — drags self-pop on MouseUp, so nothing
         //    unbalanced remains when end_state is set), then remove the view.
         self.captures.pop();
@@ -1492,7 +1551,7 @@ impl Program {
 
         // TheTopView dropped (no occlusion/exposed tracking); no consumer.
 
-        (retval, gathered)
+        (retval, gathered, extracted)
     }
 
     /// The end-command validation gate for the **modal-close path** (§6 of
@@ -11051,5 +11110,36 @@ mod tests {
         program.out_events.push_back(noop_broadcast());
         // Must not panic; the pump simply skips the missing id.
         program.pump_once();
+    }
+
+    /// `exec_view_with` returns the closure's value BY VALUE, and the closure sees
+    /// the modal's end command. OK → the extracted value; Cancel → the cancel value.
+    /// Proves the by-value channel (no Rc sink, no dyn Any in the framework).
+    #[test]
+    fn exec_view_with_returns_extract_value_by_command() {
+        use crate::dialog::Dialog;
+        let (mut program, _handle, _clock) = program_with_desktop(80, 30);
+
+        // OK path.
+        let d_ok = Dialog::new(crate::view::Rect::new(0, 0, 20, 6), Some("t".to_string()));
+        program.out_events.push_back(Event::Command(Command::OK));
+        let ok: &str = program.exec_view_with(Box::new(d_ok), |_modal, cmd| {
+            if cmd == Command::OK { "ok" } else { "other" }
+        });
+        assert_eq!(
+            ok, "ok",
+            "extract must see cmOK and its return is handed back by value"
+        );
+        assert_eq!(program.capture_len(), 0, "ModalFrame popped on close");
+
+        // Cancel path.
+        let d_cancel = Dialog::new(crate::view::Rect::new(0, 0, 20, 6), Some("t".to_string()));
+        program
+            .out_events
+            .push_back(Event::Command(Command::CANCEL));
+        let cancelled: &str = program.exec_view_with(Box::new(d_cancel), |_modal, cmd| {
+            if cmd == Command::OK { "ok" } else { "other" }
+        });
+        assert_eq!(cancelled, "other", "extract must see cmCancel");
     }
 }
