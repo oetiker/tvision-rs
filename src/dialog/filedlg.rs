@@ -552,7 +552,7 @@ impl crate::view::View for DirListBox {
         crate::widgets::list_viewer::focused_cursor(self)
     }
 
-    fn apply_list_scroll(
+    fn apply_scroll_sync(
         &mut self,
         h: Option<i32>,
         v: Option<i32>,
@@ -987,7 +987,7 @@ impl crate::view::View for FileList {
         crate::widgets::list_viewer::on_bounds_changed(self, ctx);
     }
 
-    fn apply_list_scroll(
+    fn apply_scroll_sync(
         &mut self,
         h: Option<i32>,
         v: Option<i32>,
@@ -1977,7 +1977,7 @@ impl FileDialog {
 #[crate::delegate(
     to = dialog,
     skip(
-        apply_list_scroll,
+        apply_scroll_sync,
         as_any_mut,
         calc_bounds,
         grabs_focus_on_click,
@@ -2514,7 +2514,7 @@ impl ChDirDialog {
 #[crate::delegate(
     to = dialog,
     skip(
-        apply_list_scroll,
+        apply_scroll_sync,
         as_any_mut,
         calc_bounds,
         grabs_focus_on_click,

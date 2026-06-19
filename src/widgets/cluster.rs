@@ -735,7 +735,7 @@ pub struct CheckBoxes {
     pub cluster: Cluster,
 }
 
-#[crate::delegate(to = cluster, skip(apply_list_scroll, focus_descendant, grabs_focus_on_click, set_value, value))]
+#[crate::delegate(to = cluster, skip(apply_scroll_sync, focus_descendant, grabs_focus_on_click, set_value, value))]
 impl View for CheckBoxes {
     /// Downcast hook: allows `apply_modal_completion` (FindPick/ReplacePick) to
     /// read `cluster.value` directly from the in-tree CheckBoxes widget.
@@ -770,7 +770,7 @@ pub struct RadioButtons {
     pub cluster: Cluster,
 }
 
-#[crate::delegate(to = cluster, skip(apply_list_scroll, as_any_mut, focus_descendant, grabs_focus_on_click, set_value, value))]
+#[crate::delegate(to = cluster, skip(apply_scroll_sync, as_any_mut, focus_descendant, grabs_focus_on_click, set_value, value))]
 impl View for RadioButtons {
     /// This cluster's value as [`FieldValue::Bits`] (the selected index). Ports
     /// `TCluster::getData`.
@@ -798,7 +798,7 @@ pub struct MultiCheckBoxes {
     pub cluster: Cluster,
 }
 
-#[crate::delegate(to = cluster, skip(apply_list_scroll, as_any_mut, focus_descendant, grabs_focus_on_click, set_value, value))]
+#[crate::delegate(to = cluster, skip(apply_scroll_sync, as_any_mut, focus_descendant, grabs_focus_on_click, set_value, value))]
 impl View for MultiCheckBoxes {}
 
 impl CheckBoxes {

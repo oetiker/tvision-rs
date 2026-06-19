@@ -579,7 +579,7 @@ impl View for DirBox {
         Some(Point::new(base.x - 1 + end as i32, base.y))
     }
 
-    fn apply_list_scroll(&mut self, h: Option<i32>, v: Option<i32>, ctx: &mut Context) {
+    fn apply_scroll_sync(&mut self, h: Option<i32>, v: Option<i32>, ctx: &mut Context) {
         list_viewer::apply_scroll(self, h, v, ctx);
     }
 

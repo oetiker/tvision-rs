@@ -2786,7 +2786,7 @@ impl EditWindow {
 #[crate::delegate(
     to = window,
     skip(
-        apply_list_scroll,
+        apply_scroll_sync,
         as_any_mut,
         calc_bounds,
         grabs_focus_on_click,

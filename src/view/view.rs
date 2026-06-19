@@ -909,19 +909,20 @@ pub trait View {
     /// command). Base: no-op; [`Desktop`](crate::desktop::Desktop) overrides.
     fn cascade(&mut self, _r: Rect) {}
 
-    /// The list-viewer scrollbar read-sync broker hook. Defaulted no-op; concrete
-    /// list widgets override to delegate to
-    /// [`list_viewer::apply_scroll`](crate::widgets::list_viewer::apply_scroll).
-    /// The pump passes the freshly-read horizontal/vertical scrollbar values
-    /// (`None` if the bar is absent), resolved through [`View::value`].
+    /// The shared scrollbar read-sync broker hook. Defaulted no-op; scroll-aware
+    /// widgets override it to apply a freshly-read scrollbar delta to themselves.
+    /// The pump passes the horizontal/vertical scrollbar values (`None` if that bar
+    /// is absent or unresolved), each read via [`View::value`]. Overridden by the
+    /// list viewers (delegate to
+    /// [`list_viewer::apply_scroll`](crate::widgets::list_viewer::apply_scroll)),
+    /// [`Scroller`](crate::widgets::Scroller), the outline viewer, and the editor —
+    /// every sibling-scrollbar *read* sync routes through this one method instead of
+    /// a pump downcast.
     ///
-    /// This parallels the
-    /// [`Deferred::SyncScrollerDelta`](crate::view::Deferred::SyncScrollerDelta)
-    /// read-sync, but goes through a trait method instead of a hard downcast: list
-    /// viewers are a shared trait reused by several concrete widgets, so a
-    /// `dyn View →` concrete downcast is impossible. The two read-sync mechanisms
-    /// could later unify.
-    fn apply_list_scroll(&mut self, _h: Option<i32>, _v: Option<i32>, _ctx: &mut Context) {}
+    /// Each widget interprets `None` per its own semantics (a read-only scroller
+    /// treats a missing bar as delta `0`; the editor preserves `None` to skip that
+    /// axis). Driven by [`Deferred::ScrollSync`](crate::view::Deferred::ScrollSync).
+    fn apply_scroll_sync(&mut self, _h: Option<i32>, _v: Option<i32>, _ctx: &mut Context) {}
 
     /// The menu command-graying broker hook. Defaulted no-op; menu views override
     /// to re-gray their menu tree against the program's live **disabled-command

@@ -122,8 +122,8 @@ impl View for Spy {
     fn cascade(&mut self, _r: Rect) {
         self.mark("cascade");
     }
-    fn apply_list_scroll(&mut self, _h: Option<i32>, _v: Option<i32>, _ctx: &mut Context) {
-        self.mark("apply_list_scroll");
+    fn apply_scroll_sync(&mut self, _h: Option<i32>, _v: Option<i32>, _ctx: &mut Context) {
+        self.mark("apply_scroll_sync");
     }
     fn update_menu_commands(&mut self, _cs: &CommandSet) {
         self.mark("update_menu_commands");
@@ -276,13 +276,13 @@ fn delegate_forwards_every_known_view_method() {
     d.tile(Rect::new(0, 0, 80, 24));
     d.cascade(Rect::new(0, 0, 80, 24));
 
-    // -- apply_list_scroll --------------------------------------------------
+    // -- apply_scroll_sync --------------------------------------------------
     {
         let mut out = VecDeque::new();
         let mut timers = TimerQueue::new();
         let mut deferred = Vec::new();
         let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
-        d.apply_list_scroll(Some(0), Some(0), &mut ctx);
+        d.apply_scroll_sync(Some(0), Some(0), &mut ctx);
     }
 
     // -- update_menu_commands -----------------------------------------------
@@ -342,7 +342,7 @@ fn delegate_forwards_every_known_view_method() {
         "select_window_num",
         "tile",
         "cascade",
-        "apply_list_scroll",
+        "apply_scroll_sync",
         "update_menu_commands",
         "set_menu_current",
         "get_help_ctx",

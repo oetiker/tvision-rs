@@ -258,10 +258,10 @@ impl ParamText {
 //       size_limits, calc_bounds, change_bounds, cursor_request, find_mut,
 //       remove_descendant, number, select_window_num}   — all verbatim forwards.
 // DELETE = P (macro regenerates them all identically).
-// SKIP   = 21 − P = {apply_list_scroll, as_any_mut, focus_descendant,
+// SKIP   = 21 − P = {apply_scroll_sync, as_any_mut, focus_descendant,
 //          grabs_focus_on_click, set_value, value}.
 #[crate::delegate(to = inner, skip(
-    apply_list_scroll,
+    apply_scroll_sync,
     as_any_mut,
     focus_descendant,
     grabs_focus_on_click,
@@ -392,10 +392,10 @@ impl Label {
 // DELETE = P \ KEEP = {state, state_mut, set_state, valid, awaken, size_limits,
 //            calc_bounds, change_bounds, cursor_request, find_mut,
 //            remove_descendant, focus_descendant, number, select_window_num}
-// SKIP   = 21 − P = {apply_list_scroll, as_any_mut, grabs_focus_on_click,
+// SKIP   = 21 − P = {apply_scroll_sync, as_any_mut, grabs_focus_on_click,
 //            set_value, value}.
 #[crate::delegate(to = inner, skip(
-    apply_list_scroll,
+    apply_scroll_sync,
     as_any_mut,
     grabs_focus_on_click,
     set_value,

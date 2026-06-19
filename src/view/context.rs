@@ -167,13 +167,13 @@ pub enum Deferred {
     /// resolve the `h`/`v` scrollbars, read each `value`
     /// (via [`View::value`](crate::view::View::value) →
     /// [`FieldValue::Int`](crate::data::FieldValue::Int)), then call
-    /// [`View::apply_list_scroll`](crate::view::View::apply_list_scroll) on the
+    /// [`View::apply_scroll_sync`](crate::view::View::apply_scroll_sync) on the
     /// `list` view (the trait method — NOT a downcast: list viewers are a shared
     /// trait, so a `dyn View →` concrete downcast cannot work, unlike the scroller).
     ///
     /// **Termination (the centerpiece property):** unlike
     /// [`SyncScrollerDelta`](Self::SyncScrollerDelta), this read-sync **writes
-    /// back** — `apply_list_scroll`'s item-focus call requests a value update on
+    /// back** — `apply_scroll_sync`'s item-focus call requests a value update on
     /// the v-bar (another [`ScrollBarSetParams`](Self::ScrollBarSetParams)). That
     /// terminates because
     /// [`ScrollBar::set_params`](crate::widgets::ScrollBar::set_params) is
@@ -227,7 +227,7 @@ pub enum Deferred {
     /// `disabled_commands` (`&mut`); a `&CommandSet` on `Context` would alias
     /// that borrow. The view (a child) cannot read the command set inline, so
     /// it requests this by its own id and the pump calls back at apply time,
-    /// exactly like [`SyncListViewer`](Self::SyncListViewer) + `apply_list_scroll`.
+    /// exactly like [`SyncListViewer`](Self::SyncListViewer) + `apply_scroll_sync`.
     /// (For a plain *read* a view does NOT need this broker:
     /// [`Context::command_enabled`] answers from an owned per-pump **snapshot**
     /// of the disabled set — a clone, not a borrow, so the aliasing problem never
@@ -1241,7 +1241,7 @@ impl<'a> Context<'a> {
     /// its `focused`/`top_item`/`indent` — **deferred**
     /// ([`Deferred::SyncListViewer`]). The list (a leaf) cannot read its
     /// window-frame sibling bars itself; the pump brokers the read and calls back
-    /// through [`View::apply_list_scroll`](crate::view::View::apply_list_scroll).
+    /// through [`View::apply_scroll_sync`](crate::view::View::apply_scroll_sync).
     /// `h`/`v` are the bar [`ViewId`]s (`None` = no bar).
     pub fn request_sync_list_viewer(&mut self, list: ViewId, h: Option<ViewId>, v: Option<ViewId>) {
         self.deferred.push(Deferred::SyncListViewer { list, h, v });

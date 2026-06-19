@@ -2185,9 +2185,9 @@ impl Program {
                             // ListViewer` cannot be downcast. Instead we read
                             // each bar's `value` (each in its own find_mut so
                             // only one &mut is live) and call back through the
-                            // defaulted View::apply_list_scroll trait method.
+                            // defaulted View::apply_scroll_sync trait method.
                             //
-                            // This read-sync WRITES BACK (apply_list_scroll →
+                            // This read-sync WRITES BACK (apply_scroll_sync →
                             // focus_item_num → focusItem → v-bar setValue), so it
                             // could re-enter — but ScrollBar::set_params is
                             // change-guarded (re-broadcasts only on an actual
@@ -2207,7 +2207,7 @@ impl Program {
                                     .and_then(|view| view.value())
                                     .and_then(field_int);
                                 if let Some(view) = group.find_mut(list) {
-                                    view.apply_list_scroll(hv, vv, &mut ctx);
+                                    view.apply_scroll_sync(hv, vv, &mut ctx);
                                 }
                             }
                             // -- TMenuView command-graying broker --
@@ -7030,7 +7030,7 @@ mod tests {
         fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
             list_viewer::handle_event(self, ev, ctx);
         }
-        fn apply_list_scroll(&mut self, h: Option<i32>, v: Option<i32>, ctx: &mut Context) {
+        fn apply_scroll_sync(&mut self, h: Option<i32>, v: Option<i32>, ctx: &mut Context) {
             list_viewer::apply_scroll(self, h, v, ctx);
         }
         fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {

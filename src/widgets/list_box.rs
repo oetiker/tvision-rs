@@ -140,7 +140,7 @@ impl View for ListBox {
         list_viewer::focused_cursor(self)
     }
 
-    fn apply_list_scroll(&mut self, h: Option<i32>, v: Option<i32>, ctx: &mut Context) {
+    fn apply_scroll_sync(&mut self, h: Option<i32>, v: Option<i32>, ctx: &mut Context) {
         list_viewer::apply_scroll(self, h, v, ctx);
     }
 
@@ -341,7 +341,7 @@ impl View for SortedListBox {
         list_viewer::sorted_cursor(self)
     }
 
-    fn apply_list_scroll(&mut self, h: Option<i32>, v: Option<i32>, ctx: &mut Context) {
+    fn apply_scroll_sync(&mut self, h: Option<i32>, v: Option<i32>, ctx: &mut Context) {
         list_viewer::apply_scroll(self, h, v, ctx);
     }
 

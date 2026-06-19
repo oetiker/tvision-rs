@@ -340,7 +340,7 @@ impl View for HistoryViewer {
         list_viewer::focused_cursor(self)
     }
 
-    fn apply_list_scroll(&mut self, h: Option<i32>, v: Option<i32>, ctx: &mut Context) {
+    fn apply_scroll_sync(&mut self, h: Option<i32>, v: Option<i32>, ctx: &mut Context) {
         list_viewer::apply_scroll(self, h, v, ctx);
     }
 
@@ -465,7 +465,7 @@ impl HistoryWindow {
 #[crate::delegate(
     to = window,
     skip(
-        apply_list_scroll,
+        apply_scroll_sync,
         calc_bounds,
         grabs_focus_on_click,
         select_window_num,

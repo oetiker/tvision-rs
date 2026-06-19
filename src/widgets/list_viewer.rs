@@ -30,7 +30,7 @@
 //! naming one of its bars as `source`, the list requests
 //! [`Deferred::SyncListViewer`](crate::view::Deferred::SyncListViewer); the pump
 //! reads both bars' `value`s and calls back through
-//! [`View::apply_list_scroll`](crate::view::View::apply_list_scroll) →
+//! [`View::apply_scroll_sync`](crate::view::View::apply_scroll_sync) →
 //! [`apply_scroll`].
 //!
 //! ## Termination
@@ -220,10 +220,10 @@ impl ListRoles {
 /// **Wiring caveat (no compile-time enforcement):** a concrete list widget MUST
 /// delegate ALL of these `View` methods to this module's free functions:
 /// [`draw`], [`handle_event`], [`set_state`], [`View::cursor_request`](crate::view::View::cursor_request)
-/// → [`focused_cursor`], [`View::apply_list_scroll`](crate::view::View::apply_list_scroll)
+/// → [`focused_cursor`], [`View::apply_scroll_sync`](crate::view::View::apply_scroll_sync)
 /// → [`apply_scroll`], and [`View::as_any_mut`](crate::view::View::as_any_mut)
 /// (the cross-view broker downcasts through it). In particular, forgetting to
-/// override `apply_list_scroll` is **silent** — its base default is a no-op, so the
+/// override `apply_scroll_sync` is **silent** — its base default is a no-op, so the
 /// widget compiles but loses all scrollbar read-sync with no error. (See `FakeList`
 /// in this module's tests for the full delegation template.)
 ///
@@ -719,7 +719,7 @@ pub fn handle_event<L: ListViewer + ?Sized>(this: &mut L, ev: &mut Event, ctx: &
                 }
             } else if command == Command::SCROLL_BAR_CHANGED && from_own_bar {
                 // The pump brokers the read (resolve the bars, read value, call
-                // back through apply_list_scroll). Requires this view have an id.
+                // back through apply_scroll_sync). Requires this view have an id.
                 if let Some(id) = this.lv().state.id() {
                     ctx.request_sync_list_viewer(id, h, v);
                 }
@@ -1083,7 +1083,7 @@ mod tests {
         fn cursor_request(&self) -> Option<Point> {
             focused_cursor(self)
         }
-        fn apply_list_scroll(&mut self, h: Option<i32>, v: Option<i32>, ctx: &mut Context) {
+        fn apply_scroll_sync(&mut self, h: Option<i32>, v: Option<i32>, ctx: &mut Context) {
             apply_scroll(self, h, v, ctx);
         }
         fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {

@@ -212,7 +212,7 @@ impl Desktop {
     }
 }
 
-#[crate::delegate(to = group, skip(value, set_value, number, grabs_focus_on_click, apply_list_scroll))]
+#[crate::delegate(to = group, skip(value, set_value, number, grabs_focus_on_click, apply_scroll_sync))]
 impl View for Desktop {
     /// Concrete-reach hatch used by `Program::desktop_insert` to downcast
     /// `&mut dyn View` → `&mut Desktop` and call `insert_and_focus`.
