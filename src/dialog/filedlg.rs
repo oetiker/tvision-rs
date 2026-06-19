@@ -42,15 +42,30 @@ use core::cmp::Ordering;
 /// become owned `String`s.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DirEntry {
-    /// What the dir-list box draws (may carry tree-glyph prefixes added by the
-    /// populator).
+    /// The text rendered by [`DirListBox`] for this entry.
+    ///
+    /// Built by `DirListBox::build_tree`: ancestor entries carry tree-glyph
+    /// prefixes (e.g. `"  └─┬oetiker"`); the plain display name comes after
+    /// those glyphs. Typically not set by callers directly — construct via
+    /// [`DirEntry::new`] and let `build_tree` produce the decorated text.
     pub display_text: String,
-    /// The path this entry navigates to when selected.
+    /// The absolute filesystem path this entry navigates to when selected.
+    ///
+    /// Used by the change-directory dialog when the user confirms a selection:
+    /// `ChDirDialog::handle_event` calls
+    /// [`DirListBox::focused_entry`] and reads `dir()` to navigate. Must be a
+    /// valid native path (no trailing separator required — the dialog normalizes
+    /// it); for the root entry use `"/"`.
     pub directory: String,
 }
 
 impl DirEntry {
-    /// Construct from any text/path pair (`Into<String>`).
+    /// Build a `DirEntry` from any `(display_text, directory)` text pair.
+    ///
+    /// Use this when constructing entries for a custom dir-tree; in normal use
+    /// `DirListBox::new_directory` calls `build_tree` which produces decorated
+    /// entries automatically. `display_text` is what the list draws; `directory`
+    /// is the path navigated on selection.
     pub fn new(display_text: impl Into<String>, directory: impl Into<String>) -> Self {
         DirEntry {
             display_text: display_text.into(),
@@ -58,12 +73,19 @@ impl DirEntry {
         }
     }
 
-    /// The display string.
+    /// Borrow the rendered display text, including any tree-glyph prefix.
+    ///
+    /// Read by [`DirListBox::get_text`] on every draw; do not use this to
+    /// extract a bare directory name — strip the glyph prefix or read
+    /// [`dir`](DirEntry::dir) instead.
     pub fn text(&self) -> &str {
         &self.display_text
     }
 
-    /// The navigation path.
+    /// Borrow the absolute filesystem path this entry represents.
+    ///
+    /// Read by `ChDirDialog::handle_event` (via `DirListBox::focused_entry`)
+    /// when the user confirms a directory change. The path has no trailing `/`.
     pub fn dir(&self) -> &str {
         &self.directory
     }
@@ -73,13 +95,18 @@ impl DirEntry {
 // DirCollection
 // ---------------------------------------------------------------------------
 
-/// An ordered list of [`DirEntry`] items.
+/// An ordered list of [`DirEntry`] items used by [`DirListBox`].
 ///
-/// A bare `Vec` alias — [`DirListBox`] only needs `push`, index, and `len`.
+/// A bare `Vec<DirEntry>` type alias — [`DirListBox`] only needs `push`, index,
+/// and `len`. In normal use you do not need to construct a `DirCollection`
+/// directly: call [`DirListBox::new_directory`] and it builds the list internally
+/// via `build_tree`. Use this alias when you need to pre-populate or inspect the
+/// dir-tree entries without going through `DirListBox`.
 ///
 /// # Turbo Vision heritage
-/// Ports `TDirCollection` (`filedial.cpp`), a heap collection of entry pointers;
-/// it collapses to a plain `Vec`.
+/// Ports `TDirCollection` (`stddlg.h`), a heap pointer collection subclass;
+/// it collapses to a plain `Vec` because the general-purpose collection API
+/// (indexOf, remove, firstThat, …) is unused here.
 pub type DirCollection = Vec<DirEntry>;
 
 // ---------------------------------------------------------------------------
@@ -206,28 +233,46 @@ impl FileCollection {
         self.items.insert(pos, rec);
     }
 
-    /// Borrow the record at `index`, or `None` when out of bounds.
+    /// Borrow the record at `index`, or `None` when out of bounds (never panics).
+    ///
+    /// Used by `FileList` to fetch the entry at a given list position. Prefer
+    /// [`items`](FileCollection::items) and standard slice indexing when you need
+    /// to iterate; use `at` when you already have a positional index from the
+    /// list-viewer (e.g. the focused item).
     pub fn at(&self, index: usize) -> Option<&SearchRec> {
         self.items.get(index)
     }
 
-    /// Number of records in the collection.
+    /// Number of records currently in the sorted listing.
+    ///
+    /// Mirrors the list-viewer's `range` after a [`FileList::read_directory`]
+    /// call. Use [`is_empty`](FileCollection::is_empty) to gate iteration.
     pub fn len(&self) -> usize {
         self.items.len()
     }
 
-    /// Whether the collection contains no records.
+    /// `true` when the collection holds no records.
+    ///
+    /// Returned `true` before the first [`insert`](FileCollection::insert) and
+    /// after a directory with no matching files is read.
     pub fn is_empty(&self) -> bool {
         self.items.is_empty()
     }
 
-    /// Read-only slice of the sorted records.
+    /// Borrow the sorted records as a slice, in [`search_rec_compare`] order.
+    ///
+    /// Use this to iterate all entries or binary-search without consuming the
+    /// collection. `FileList::build_listing` calls this to hand the sorted slice
+    /// off to the list-viewer state.
     pub fn items(&self) -> &[SearchRec] {
         &self.items
     }
 
-    /// Consume the collection, returning its sorted records by value (avoids a
-    /// clone when the `FileCollection` is a temporary).
+    /// Consume the collection and return its sorted records by value.
+    ///
+    /// Avoids a clone when the `FileCollection` is a short-lived temporary.
+    /// `FileList::build_listing` uses this to transfer the sorted `Vec` directly
+    /// into `self.items` without an extra allocation.
     pub fn into_items(self) -> Vec<SearchRec> {
         self.items
     }
@@ -273,16 +318,20 @@ const INDENT_STEP: usize = 2;
 /// is dropped (deviation D12).
 pub struct DirListBox {
     lv: crate::widgets::list_viewer::ListViewerState,
-    /// The rendered tree of [`DirEntry`] items.
+    /// The rendered tree of [`DirEntry`] items; populated by `new_directory`.
     items: Vec<DirEntry>,
-    /// Index of the *current* directory entry (the highlighted ancestor).
-    cur: usize,
-    /// The current directory path (native `/`-separated, with trailing `/`).
+    /// Index of the current-directory ancestor entry in `items`.
     ///
-    /// Recorded when the tree is rebuilt. The directory-change flow reads the
-    /// *focused* entry's path ([`focused_entry`](DirListBox::focused_entry))
-    /// rather than this field, so it is currently kept for completeness and not
-    /// otherwise consulted.
+    /// `is_selected(item)` returns `true` iff `item == cur`, so the current
+    /// directory is always highlighted separately from the cursor. Set by
+    /// `build_tree` / `new_directory`; the C++ equivalent was `ushort cur`.
+    cur: usize,
+    /// The path used for the most recent `new_directory` call
+    /// (native `/`-separated, with trailing `/`).
+    ///
+    /// Stored so `new_directory` can refer to it after rebuilding, but the
+    /// directory-change flow reads `focused_entry().dir()` instead — so this
+    /// field is informational only and not otherwise consulted at runtime.
     dir: String,
     /// The owning change-directory dialog's change-dir button id, wired by
     /// [`set_chdir_button`](DirListBox::set_chdir_button) after assembly. On a
@@ -293,12 +342,14 @@ pub struct DirListBox {
 }
 
 impl DirListBox {
-    /// Construct an empty dir list box.
+    /// Construct an empty single-column dir list box, ready to be populated by
+    /// [`new_directory`](DirListBox::new_directory).
     ///
-    /// Single-column (`num_cols = 1`); only the vertical scrollbar `v` is used.
-    /// `h` is kept for parity with
-    /// [`ListBox::new`](crate::widgets::ListBox::new) — a dir list box only ever
-    /// wires the vertical scrollbar, so `h` is typically `None` here.
+    /// Only the vertical scrollbar `v` is used; `h` is accepted for API parity
+    /// with [`ListBox::new`](crate::widgets::ListBox::new) — pass `None` for
+    /// `h`. Wire the Chdir button after construction via
+    /// [`set_chdir_button`](DirListBox::set_chdir_button) (needed by
+    /// `ChDirDialog::new` only; `FileDialog` never wires one).
     pub fn new(
         bounds: crate::view::Rect,
         h: Option<crate::view::ViewId>,
@@ -313,7 +364,11 @@ impl DirListBox {
         }
     }
 
-    /// The current item collection.
+    /// Borrow the current directory-tree listing as a slice of [`DirEntry`] items.
+    ///
+    /// Populated by [`new_directory`](DirListBox::new_directory); empty until
+    /// the first call. Use [`focused_entry`](DirListBox::focused_entry) to
+    /// read the cursor's current entry.
     pub fn list(&self) -> &[DirEntry] {
         &self.items
     }
@@ -494,7 +549,12 @@ impl crate::widgets::list_viewer::ListViewer for DirListBox {
         &mut self.lv
     }
 
-    /// The display text for `item` — the entry's stored display string.
+    /// Return the display string for item `item` — the entry's stored
+    /// [`DirEntry::display_text`], which may carry tree-glyph prefixes.
+    ///
+    /// Called on every redraw by the shared list-viewer draw routine. Returns
+    /// an empty string for out-of-bounds indices (never panics). Callers that
+    /// need the raw path should call [`DirListBox::focused_entry`] instead.
     fn get_text(&self, item: i32) -> String {
         self.items
             .get(item as usize)
@@ -502,12 +562,13 @@ impl crate::widgets::list_viewer::ListViewer for DirListBox {
             .unwrap_or_default()
     }
 
-    /// An item is "selected" when it is the current-directory ancestor
-    /// (`item == cur`).
+    /// Return `true` when `item` is the current-directory ancestor entry.
     ///
-    /// This overrides the default (which highlights the focused item): the dir
-    /// list highlights the *current directory* entry, not just the cursor
-    /// position.
+    /// Overrides the default (which would highlight only the cursor): the dir
+    /// list keeps the cursor on the ancestor entry (`cur`) even while the user
+    /// browses subdirs, so the current directory is always visually distinct
+    /// from the item under the cursor. Set by `new_directory`; moves only on a
+    /// confirmed directory change.
     fn is_selected(&self, item: i32) -> bool {
         item as usize == self.cur
     }
@@ -537,6 +598,13 @@ impl crate::view::View for DirListBox {
         crate::widgets::list_viewer::draw(self, ctx);
     }
 
+    /// Dispatch mouse and keyboard events to the shared list-viewer handler.
+    ///
+    /// Handles arrow keys, Page Up/Down, Home/End, and mouse clicks/drags to
+    /// move the cursor through the directory tree. A double-click or Enter fires
+    /// [`select_item`](crate::widgets::list_viewer::ListViewer::select_item),
+    /// which posts `Command::CHANGE_DIR` to the owning dialog. The event loop
+    /// drives this; callers do not call it directly.
     fn handle_event(&mut self, ev: &mut crate::event::Event, ctx: &mut crate::view::Context) {
         crate::widgets::list_viewer::handle_event(self, ev, ctx);
     }
@@ -655,22 +723,32 @@ impl crate::view::View for DirListBox {
 /// (deviation D14).
 pub struct FileList {
     lv: crate::widgets::list_viewer::ListViewerState,
-    /// The sorted file listing.
+    /// Sorted listing in [`search_rec_compare`] order (plain files first, then
+    /// dirs, then `".."`). Updated by `read_directory`/`read_directory_listing`.
     items: Vec<SearchRec>,
-    /// Index of the last matched char in the focused item's text during an
-    /// incremental type-to-search; `-1` = no active search.
+    /// Position of the last successfully matched char in the focused item's
+    /// display text during an incremental type-to-search. `-1` = no active
+    /// search (next keystroke starts a fresh search). Set by `sorted_handle_event`
+    /// via the `SortedSearch` trait accessor `set_search_pos`.
     search_pos: i32,
-    /// Shift-key bits captured when a search begins (the `search_pos` -1↔0
-    /// transition); read by [`search`](FileList::search) to route the key into
-    /// the directory section of the listing (Shift held → search among
-    /// directories, [`FA_DIREC`]).
+    /// Shift-key bits captured at the `search_pos` -1→0 transition (i.e. when
+    /// the user starts typing). `sorted_handle_event` stores the live shift
+    /// state here; `search` reads it to route the typed prefix into the
+    /// directory section of the listing when Shift is held.
     shift_state: u8,
 }
 
 impl FileList {
-    /// Construct an empty file list: two columns (`num_cols = 2`), cursor shown
-    /// at column 1. `h` is kept for parity (a file list only ever wires the
-    /// vertical scrollbar `v`).
+    /// Construct an empty two-column file list, ready to be populated by
+    /// [`read_directory`](FileList::read_directory) or
+    /// [`read_directory_listing`](FileList::read_directory_listing).
+    ///
+    /// `num_cols` is fixed at 2 (files in the left column, dirs in the right);
+    /// the text cursor is shown at column 1 for the incremental type-to-search
+    /// indicator. `h` is accepted for API parity with
+    /// [`ListBox::new`](crate::widgets::ListBox::new) but ignored — a file list
+    /// only uses the vertical scrollbar `v`. Pass `None` for `h` and the
+    /// vertical scrollbar's [`ViewId`](crate::view::ViewId) for `v`.
     pub fn new(
         bounds: crate::view::Rect,
         h: Option<crate::view::ViewId>,
@@ -687,7 +765,13 @@ impl FileList {
         }
     }
 
-    /// The current item collection.
+    /// Borrow the sorted file/directory listing as a slice.
+    ///
+    /// Populated by [`read_directory`](FileList::read_directory) and
+    /// [`read_directory_listing`](FileList::read_directory_listing); empty until
+    /// the first call. The slice is in [`search_rec_compare`] order: plain files
+    /// first (alphabetically), then directories, then `".."` last. Use
+    /// [`focused_rec`](FileList::focused_rec) to get the cursor's current entry.
     pub fn list(&self) -> &[SearchRec] {
         &self.items
     }
@@ -838,6 +922,14 @@ impl FileList {
         self.lv.top_item = 0;
     }
 
+    /// Read `dir`'s contents from the filesystem, apply `wildcard` filtering,
+    /// publish the sorted listing to the list-viewer state, and broadcast a
+    /// "file focused" event so the filename input line and info pane update.
+    ///
+    /// The ctx-ful sibling of [`read_directory_listing`](FileList::read_directory_listing):
+    /// use this when a live `Context` is available (i.e. from within an event
+    /// handler or `reset_current`). The context-free variant is for construction
+    /// and deterministic tests where no event loop is running.
     pub fn read_directory(&mut self, dir: &str, wildcard: &str, ctx: &mut crate::view::Context) {
         let raw = Self::raw_from_fs(dir);
 
@@ -866,8 +958,13 @@ impl crate::widgets::list_viewer::ListViewer for FileList {
         &mut self.lv
     }
 
-    /// The file/dir name, with a trailing `/` appended to directories. Out of
-    /// bounds → empty.
+    /// Return the display text for item `item`: the bare file name for plain
+    /// files, or the name with a trailing `/` appended for directories.
+    ///
+    /// Called on every redraw by the shared list-viewer draw routine. The
+    /// trailing `/` signals a directory to the user without altering the
+    /// underlying [`SearchRec::name`]. Out-of-bounds indices return an empty
+    /// string and never panic.
     fn get_text(&self, item: i32) -> String {
         match self.items.get(item as usize) {
             Some(rec) => {
@@ -982,7 +1079,15 @@ impl crate::view::View for FileList {
         crate::widgets::list_viewer::draw(self, ctx);
     }
 
-    /// The incremental type-to-search machine (shared sorted-list handler).
+    /// Dispatch mouse, keyboard, and incremental type-to-search events.
+    ///
+    /// Delegates to the shared sorted-list handler (`sorted_handle_event`):
+    /// printable characters start or extend an incremental search that jumps
+    /// the cursor to the first matching file name (Shift → searches the
+    /// directory section); arrow keys, Page Up/Down, and mouse navigate the
+    /// two-column listing; Enter / double-click fires `select_item` which
+    /// broadcasts `Command::FILE_DOUBLE_CLICKED`. The event loop drives this;
+    /// callers do not call it directly.
     fn handle_event(&mut self, ev: &mut crate::event::Event, ctx: &mut crate::view::Context) {
         crate::widgets::list_viewer::sorted_handle_event(self, ev, ctx);
     }
@@ -1270,22 +1375,34 @@ fn pack_dos_time(t: &std::time::SystemTime) -> i32 {
 pub struct FileInfoPane {
     /// The base-view state (bounds, flags, id, …).
     state: crate::view::ViewState,
-    /// Cached copy of the dialog's directory, `/`-terminated.
+    /// Cached copy of the owning dialog's current directory (always
+    /// `/`-terminated). Set at construction and updated by `set_dir_info`.
+    /// C++ `TFileInfoPane::draw` read `owner->directory` directly; here it
+    /// must be cached because `draw` has no `Context` and a child cannot
+    /// reach back into its parent under the downward-borrow model.
     directory: String,
-    /// Cached copy of the dialog's wildcard.
+    /// Cached copy of the owning dialog's current wildcard (e.g. `"*.rs"`).
+    /// Same caching rationale as `directory`. Updated by `set_dir_info`
+    /// whenever `FileDialog::reset_current` re-reads the listing.
     wild_card: String,
-    /// The focused record; `None` = no current file → a blank name → no
-    /// size/date line.
+    /// The currently focused file record, or `None` when the listing is empty
+    /// or the `FILE_FOCUSED` broadcast has not yet fired. `None` → line 1 is
+    /// blank (no name/size/date). Updated by `on_file_focused` via the pump's
+    /// `ResolveFocusedFile` broker.
     file_block: Option<SearchRec>,
 }
 
 impl FileInfoPane {
-    /// Build the pane. `directory` / `wild_card` cache the owner fields the draw
-    /// needs; `file_block` starts `None` (blank) until the first "file focused"
-    /// broadcast.
+    /// Construct a `FileInfoPane` at `bounds`, caching `directory` and
+    /// `wild_card` from the owning [`FileDialog`].
     ///
-    /// No event mask is wired — the group delivers every broadcast
-    /// unconditionally.
+    /// The pane can't read its owner at draw time (no `Context` in `draw`, and
+    /// Rust prevents borrowing a parent through a child), so the dialog passes
+    /// its `directory` and `wild_card` at construction and refreshes them via
+    /// [`set_dir_info`](FileInfoPane::set_dir_info) on each directory change.
+    /// `file_block` starts as `None`; the pump fills it via
+    /// [`on_file_focused`](FileInfoPane::on_file_focused) after the first
+    /// `FILE_FOCUSED` broadcast.
     pub fn new(
         bounds: crate::view::Rect,
         directory: impl Into<String>,
@@ -1610,11 +1727,27 @@ pub const FD_NO_LOAD_DIR: u16 = 0x0100;
 
 // --- Change-directory dialog options ----------------------------------------
 
-/// No extra buttons; load the directory on open.
+/// Default options for [`ChDirDialog`]: no extra buttons, load the directory
+/// tree on open.
+///
+/// Pass to [`ChDirDialog::new`] as `opts` when you want the standard
+/// change-directory dialog: an input line, a scrollable directory tree, and
+/// OK / Chdir / Revert buttons. Same as passing `0`.
 pub const CD_NORMAL: u16 = 0x0000;
-/// Skip the initial directory read on open.
+
+/// Suppress the initial directory-tree read when the dialog opens.
+///
+/// Pass this flag in `opts` to [`ChDirDialog::new`] when the dialog is
+/// constructed before its owner is visible, or when you want to populate
+/// the tree yourself before showing the dialog. Without it, `reset_current`
+/// populates the tree from the process current directory on first show.
 pub const CD_NO_LOAD_DIR: u16 = 0x0001;
-/// Insert a "Help" button (help command).
+
+/// Add a "Help" button to the [`ChDirDialog`].
+///
+/// Pass this flag in `opts` to [`ChDirDialog::new`] to insert an extra Help
+/// button that posts `Command::HELP`. Omit it (or use [`CD_NORMAL`]) when
+/// context-sensitive help is not needed.
 pub const CD_HELP_BUTTON: u16 = 0x0002;
 
 // Change-directory dialog text. (There is no drive selector — no drives.)
@@ -2369,17 +2502,25 @@ impl crate::view::View for FileDialog {
 /// becomes native `/`-paths (deviation D14), and persistence is dropped
 /// (deviation D12).
 pub struct ChDirDialog {
-    /// The embedded dialog — the delegation target.
+    /// The embedded dialog — the delegation target for all un-overridden
+    /// `View` methods. `handle_event` delegates to it first, then handles
+    /// `REVERT` and `CHANGE_DIR` itself.
     dialog: Dialog,
-    /// The path [`InputLine`](crate::widgets::InputLine) child's id.
+    /// Id of the path `InputLine` child. Read by `handle_event` and `valid`
+    /// via `dialog.child_mut(dir_input_id)` to get or set the typed path.
     dir_input_id: crate::view::ViewId,
-    /// The [`DirListBox`] child's id.
+    /// Id of the `DirListBox` child. Read by `handle_event` to call
+    /// `new_directory` on the dir list, and used to wire the chdir button
+    /// during `new` (post-assembly `set_chdir_button` call).
     dir_list_id: crate::view::ViewId,
-    /// The Chdir [`Button`](crate::widgets::Button)'s id — wired into the dir list
-    /// so its focus changes (un-)default it.
+    /// Id of the Chdir `Button`. Stored only so it can be passed to
+    /// `DirListBox::set_chdir_button` during `new`; the button manages its
+    /// own default state through the `MakeButtonDefault` deferred channel.
     chdir_button_id: crate::view::ViewId,
-    /// One-time guard for the `reset_current` initial directory read (skipped when
-    /// the no-load-dir option is set).
+    /// `true` until the first `reset_current` call (set to `false` there).
+    /// When `CD_NO_LOAD_DIR` is set, `reset_current` skips the dir read and
+    /// clears this flag — so subsequent calls are also no-ops until the next
+    /// construction.
     needs_setup: bool,
 }
 
