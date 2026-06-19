@@ -249,7 +249,18 @@ impl StringLookupValidator {
         Self { strings }
     }
 
-    /// Replace the accepted-string list; the old `Vec` is dropped here.
+    /// Replace the accepted-string list at runtime, dropping the previous `Vec`.
+    ///
+    /// Call this when the set of valid entries changes after the validator is
+    /// already in use — e.g. a dependent field whose allowed values depend on
+    /// another control's selection. The new `strings` order becomes the
+    /// membership-test iteration order, exactly as in [`new`](Self::new); pass an
+    /// empty `Vec` to reject every input until the list is repopulated.
+    ///
+    /// # Turbo Vision heritage
+    /// Ports `TStringLookupValidator::newStringList`. The C++ `newStringList(nil)`
+    /// form (dispose the list without installing a replacement) has no analog —
+    /// pass an empty `Vec` instead.
     pub fn new_string_list(&mut self, strings: Vec<String>) {
         self.strings = strings;
     }

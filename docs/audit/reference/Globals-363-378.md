@@ -33,7 +33,7 @@ Rust module(s): `src/view/view.rs`, `src/view/group.rs`, `src/view/context.rs`,
 
 | Guide entry | Pg | Bucket | Corr | Rust symbol / mapping | Doc | Notes |
 |---|---|---|---|---|---|---|
-| `PositionalEvents` | 364 | EQUIVALENT | OK | `EventMask { mouse_move, mouse_auto }` struct (`src/event/mod.rs:190`) + mouse-event routing in `Group::handle_event` (`src/view/group.rs:1194`) | 2 | C++: global `Word = evMouse` used by `TGroup::HandleEvent` to classify events. Rust: `Group` routes mouse events positionally, focused events by focus chain — the logic is inlined in `group.rs` dispatch rather than a mutable global. Functionally equivalent. `EventMask` has no `positional_events()` function. |
+| `PositionalEvents` | 364 | EQUIVALENT | OK | `EventMask { mouse_move, mouse_auto }` struct (`src/event/mod.rs:190`) + mouse-event routing in `Group::handle_event` (`src/view/group.rs:1194`) | 3 | C++: global `Word = evMouse` used by `TGroup::HandleEvent` to classify events. Rust: `Group` routes mouse events positionally, focused events by focus chain — the logic is inlined in `group.rs` dispatch rather than a mutable global. Functionally equivalent. `EventMask` has no `positional_events()` function. |
 
 ## PrintStr procedure (p. 364)
 
@@ -190,7 +190,7 @@ C++ `sfXXXX` are bits in `TView.State`. Rust replaces the flag word with `tv::vi
 
 | Guide entry | Pg | Bucket | Corr | Rust symbol / mapping | Doc | Notes |
 |---|---|---|---|---|---|---|
-| `ShadowAttr` | 371 | EQUIVALENT | OK | `tv::theme::Role::Shadow` style in `Theme::classic_blue()` (dark gray on black, `0x8`/`0x0`) | 2 | C++: global `Byte = $08` (dark gray). Rust: the shadow colour is a `Theme` entry keyed by `Role::Shadow`; `classic_blue()` sets it to `0x8` on `0x0`. Mutable-global replaced by per-program `Theme`. Doc score 2 (what, not how to customize). |
+| `ShadowAttr` | 371 | EQUIVALENT | OK | `tv::theme::Role::Shadow` style in `Theme::classic_blue()` (dark gray on black, `0x8`/`0x0`) | 3 | C++: global `Byte = $08` (dark gray). Rust: the shadow colour is a `Theme` entry keyed by `Role::Shadow`; `classic_blue()` sets it to `0x8` on `0x0`. Mutable-global replaced by per-program `Theme`. Doc score 2 (what, not how to customize). |
 
 ## ShadowSize variable (p. 371–372)
 
