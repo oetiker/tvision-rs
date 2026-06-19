@@ -87,6 +87,10 @@ pub type DirCollection = Vec<DirEntry>;
 // ---------------------------------------------------------------------------
 
 /// The directory-attribute bit of [`SearchRec::attr`] (`FA_DIREC = 0x10`).
+///
+/// Test `rec.attr & FA_DIREC != 0` to distinguish a directory entry from a
+/// plain file in a listing produced by [`FileList`]. This is the only DOS
+/// attribute bit used by the port; the rest are not set or inspected.
 pub const FA_DIREC: u8 = 0x10;
 
 /// A directory-listing file-metadata record.
@@ -103,13 +107,29 @@ pub const FA_DIREC: u8 = 0x10;
 /// POD-copyable for the collection) becomes an owned `String`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SearchRec {
-    /// DOS file-attribute byte; only [`FA_DIREC`] is examined here.
+    /// DOS file-attribute byte; only [`FA_DIREC`] (`0x10`) is examined here.
+    ///
+    /// Set to [`FA_DIREC`] for directories, `0` for plain files. The remaining
+    /// DOS attribute bits (archive, hidden, system, read-only, volume) are
+    /// not populated or tested in this port.
     pub attr: u8,
-    /// Packed DOS timestamp.
+    /// Packed DOS `ftime` timestamp (`pack_dos_time` layout): high 16 bits are
+    /// the date (year-1980/month/day in bits 15–9/8–5/4–0), low 16 bits are
+    /// the time (hour/min/sec÷2 in bits 15–11/10–5/4–0). Times are UTC.
+    ///
+    /// Read by [`FileInfoPane`] to format the size/date line; synthesized by
+    /// `FileList::build_listing` via `pack_dos_time`.
     pub time: i32,
-    /// File size in bytes.
+    /// File size in bytes, saturated to `i32::MAX` for files larger than 2 GiB.
+    ///
+    /// Displayed on the info pane's size/date line. Directories always carry
+    /// `size = 0`; the `".."` entry also carries `size = 0`.
     pub size: i32,
-    /// The file or directory name (no path component).
+    /// The bare file or directory name — no path component, no trailing `/`.
+    ///
+    /// Use `rec.attr & FA_DIREC != 0` to detect directories. [`FileList`]'s
+    /// `get_text` appends `/` to directory names for display; the raw `name`
+    /// is what `FileList`'s incremental-search and the input-line broker use.
     pub name: String,
 }
 
@@ -1048,12 +1068,17 @@ pub struct FileInputLine {
 }
 
 impl FileInputLine {
-    /// Build a filename field.
+    /// Build a filename input field for use inside a [`FileDialog`].
     ///
-    /// `max_len` is the byte cap ([`LimitMode::MaxBytes`]), so the effective
-    /// maximum is `max_len - 1`. No event mask is wired — the group delivers
-    /// every broadcast unconditionally. `wild_card` caches the owning dialog's
-    /// wildcard.
+    /// - `max_len` — byte cap (`LimitMode::MaxBytes`); effective maximum is
+    ///   `max_len - 1`. Pass `MAXPATH` (255) for file dialogs.
+    /// - `wild_card` — the owning dialog's initial wildcard mask, cached here
+    ///   so `on_file_focused` can append it to directory names without reading
+    ///   the owner directly. Use [`set_wild_card`](FileInputLine::set_wild_card)
+    ///   to push an updated mask when the dialog re-reads with a new one.
+    ///
+    /// No event mask is set; the parent group delivers all broadcasts
+    /// unconditionally, which is required for the `FILE_FOCUSED` handler.
     pub fn new(bounds: crate::view::Rect, max_len: i32, wild_card: impl Into<String>) -> Self {
         FileInputLine {
             inner: crate::widgets::InputLine::new(
@@ -1087,15 +1112,23 @@ impl FileInputLine {
         self.inner.select_all(false, true);
     }
 
-    /// Update the cached wildcard ([`FileDialog::valid`]'s wildcard branch drives
-    /// this when the dialog re-reads the directory with a new mask, so the next
-    /// directory focus appends the fresh mask rather than the stale one).
+    /// Push a new wildcard mask into the field's cache.
+    ///
+    /// Called by [`FileDialog::valid`]'s wildcard branch whenever the user
+    /// navigates with a new mask (e.g. `*.txt`). Without this update, the
+    /// next directory-focus broadcast would still append the stale mask when
+    /// formatting a directory entry as `"dirname/<old_mask>"`. Call this before
+    /// re-reading the directory so the cache is current for subsequent broadcasts.
     pub fn set_wild_card(&mut self, w: impl Into<String>) {
         self.wild_card = w.into();
     }
 
-    /// The current field text — the filename the dialog resolves in
-    /// [`FileDialog::get_file_name`].
+    /// The current text in the filename field.
+    ///
+    /// Read by [`FileDialog::get_file_name`] to resolve the typed or
+    /// broadcast-filled path against the dialog's current directory. The value
+    /// may be a bare filename, a wildcard mask, a partial path, or an absolute
+    /// path — `get_file_name` normalizes all of these.
     pub fn text(&self) -> &str {
         &self.inner.data
     }
@@ -1540,17 +1573,39 @@ fn valid_file_name(s: &str) -> bool {
 const INVALID_DRIVE_TEXT: &str = "Invalid drive or directory";
 const INVALID_FILE_TEXT: &str = "Invalid file name";
 
-/// Insert an "OK" button (file-open command).
+/// Insert an "OK" button that closes the dialog with the selected filename.
+///
+/// Pass in the `options` bitmask to [`FileDialog::new`] to add this button.
+/// Both `FD_OK_BUTTON` and [`FD_OPEN_BUTTON`] trigger `Command::FILE_OPEN`
+/// (the same close command); the label is "OK" vs "Open". Use at most one.
 pub const FD_OK_BUTTON: u16 = 0x0001;
-/// Insert an "Open" button (file-open command).
+/// Insert an "Open" button that closes the dialog with the selected filename.
+///
+/// Like `FD_OK_BUTTON` but labels the button "Open". Use for a classic
+/// file-open dialog; use `FD_OK_BUTTON` when the OK label is more appropriate.
 pub const FD_OPEN_BUTTON: u16 = 0x0002;
-/// Insert a "Replace" button (file-replace command).
+/// Insert a "Replace" button that closes the dialog with the selected filename.
+///
+/// Signals the caller (via `Command::FILE_REPLACE`) that the user accepted an
+/// overwrite. Use for save-as dialogs alongside or instead of `FD_OK_BUTTON`.
 pub const FD_REPLACE_BUTTON: u16 = 0x0004;
-/// Insert a "Clear" button (file-clear command).
+/// Insert a "Clear" button that closes the dialog without a filename.
+///
+/// Signals the caller (via `Command::FILE_CLEAR`) that the associated file
+/// should be cleared/unlinked. The dialog's `valid()` always passes for this
+/// command (no path check), and [`FileDialog::value`] returns an empty string.
 pub const FD_CLEAR_BUTTON: u16 = 0x0008;
-/// Insert a "Help" button (help command).
+/// Insert a "Help" button (posts `Command::HELP`; does not close the dialog).
+///
+/// The help button is never the default and never triggers path validation.
+/// Wire a `Command::HELP` handler in the owning program to make it useful.
 pub const FD_HELP_BUTTON: u16 = 0x0010;
-/// Skip the initial directory read on open.
+/// Skip the initial directory read when the dialog opens.
+///
+/// By default [`FileDialog::reset_current`] reads the process current directory
+/// into the file list on first show. Pass `FD_NO_LOAD_DIR` to suppress that
+/// read — useful when the dialog is constructed before its owner is on screen,
+/// or when the listing is populated by other means.
 pub const FD_NO_LOAD_DIR: u16 = 0x0100;
 
 // --- Change-directory dialog options ----------------------------------------
@@ -1700,18 +1755,23 @@ fn button_specs(options: u16) -> Vec<(&'static str, crate::command::Command, boo
 pub struct FileDialog {
     /// The embedded dialog — the delegation target.
     dialog: Dialog,
-    /// The active file mask (cached; pushed to the children).
+    /// The active glob mask (e.g. `"*.rs"`); pushed to [`FileList`],
+    /// [`FileInfoPane`], and [`FileInputLine`] whenever the listing is re-read.
+    /// Updated by `valid`'s wildcard branch when the user types a new mask.
     wild_card: String,
-    /// The current directory, set by `reset_current`'s initial directory read;
-    /// `/`-terminated.
+    /// The current directory being browsed; always `/`-terminated.
+    /// Set on first show by `reset_current` (from `std::env::current_dir`) and
+    /// on each navigation step by `valid`'s wildcard/dir branches.
     directory: String,
     /// The [`FileInputLine`] child's id — read by
     /// [`get_file_name`](FileDialog::get_file_name)/[`valid`](FileDialog::valid)
     /// (the filename the dialog returns).
     file_name_id: crate::view::ViewId,
-    /// The [`FileList`] child's id.
+    /// The [`FileList`] child's id — used by `valid`/`navigate` to re-read the
+    /// directory listing and by `handle_event` to request focus on navigation.
     file_list_id: crate::view::ViewId,
-    /// The [`FileInfoPane`] child's id.
+    /// The [`FileInfoPane`] child's id — used by `reset_current`/`navigate` to
+    /// push updated directory/wildcard info when the listing changes.
     info_pane_id: crate::view::ViewId,
     /// One-time guard for the `reset_current` initial directory read.
     needs_read_directory: bool,
@@ -1736,6 +1796,15 @@ pub struct FileDialog {
 impl FileDialog {
     /// Build a file dialog with the given mask, title, prompt label, options, and
     /// history id.
+    ///
+    /// - `wild_card` — initial glob mask (e.g. `"*.rs"`); shown in the filename
+    ///   field and used to filter the file list.
+    /// - `title` — the dialog window title (e.g. `"Open File"`).
+    /// - `input_name` — the label above the filename field (e.g. `"~F~ile name"`).
+    /// - `options` — bitwise OR of `FD_*` constants controlling which action
+    ///   buttons appear and whether the listing loads immediately.
+    /// - `history_id` — identifies the history bucket for the filename field; use a
+    ///   unique constant per dialog type across the application.
     ///
     /// Assembles the children in a fixed insertion order (so the labels/history
     /// can link to the already-created input-line / file-list ids, and
@@ -2075,9 +2144,16 @@ impl crate::view::View for FileDialog {
         }
     }
 
-    /// Minimum size `{49, 19}` (the base dialog size); maximum from the embedded
-    /// dialog. `calc_bounds` is in the skip list so an owner-driven resize routes
-    /// through this floor (the `EditWindow` pattern).
+    /// Returns the allowed size range for this dialog: minimum `{49, 19}` (wide
+    /// and tall enough to fit all sub-panes legibly), maximum from the embedded
+    /// `Dialog`.
+    ///
+    /// The 49×19 floor is enforced because the file-list, info pane, and button
+    /// column have hard-coded relative positions; a smaller window would clip or
+    /// overlap them. `calc_bounds` is in the `#[delegate]` skip list so that
+    /// owner-driven resizes route back through this floor rather than bypassing it.
+    /// You normally do not call this directly; the framework queries it when the
+    /// dialog is resized by its owner.
     fn size_limits(
         &self,
         owner_size: crate::view::Point,
@@ -2086,13 +2162,15 @@ impl crate::view::View for FileDialog {
         (crate::view::Point::new(49, 19), max)
     }
 
-    /// The ctx-bearing init hook (the constructor has no `Context`, so the initial
-    /// directory read lands here). Establishes the dialog's internal currency first
-    /// (focuses the input line), then, once, performs the initial directory read:
-    /// the current dir (`/`-terminated) is read into the [`FileList`] (ctx-ful —
-    /// scrollbar sync + focused-file broadcast) and the [`FileInfoPane`]'s cached
-    /// dir/wildcard are refreshed (direct child mutation, not a cross-view broker —
-    /// the dialog owns the group).
+    /// Framework init hook: called by the modal loop when the dialog first becomes
+    /// the current view (i.e., when `Program::run_modal` activates it).
+    ///
+    /// Focuses the filename input line, then — once, unless `FD_NO_LOAD_DIR` was
+    /// passed to [`FileDialog::new`] — reads `std::env::current_dir` into the
+    /// [`FileList`] (with scrollbar sync and focused-file broadcast) and refreshes
+    /// the [`FileInfoPane`]'s cached directory and wildcard. You do not call this
+    /// directly; use `FD_NO_LOAD_DIR` to suppress the initial directory read if the
+    /// dialog is shown before the working directory is set.
     fn reset_current(&mut self, ctx: &mut crate::view::Context) {
         self.dialog.reset_current(ctx);
 
@@ -2229,22 +2307,25 @@ impl crate::view::View for FileDialog {
         }
     }
 
-    /// The dialog's value is the resolved filename. Reads the
-    /// [`resolved_name`](FileDialog::resolved_name) cache, which any non-VALID
-    /// `valid()` call refreshes unconditionally (it runs `get_file_name` before
-    /// any early-return), so the cache is current after the modal gather's
-    /// `valid(end_state)` — including the cancel / file-clear paths.
+    /// Returns the resolved filename as `FieldValue::Text(path)`.
+    ///
+    /// The modal gather reads this immediately after `valid(end_state)` returns
+    /// `true`, so you typically access it indirectly: run the dialog modally, then
+    /// call `dialog.value()` (or let the gather scatter it). On a cancel or
+    /// file-clear close the value is still valid — `valid()` resolves the field text
+    /// unconditionally on every non-VALID command, so the cache is always current.
     fn value(&self) -> Option<crate::data::FieldValue> {
         Some(crate::data::FieldValue::Text(self.resolved_name.clone()))
     }
 
-    /// Load the field text from a [`FieldValue::Text`](crate::data::FieldValue).
+    /// Pre-fill the filename field from a [`FieldValue::Text`].
     ///
-    /// It does not also navigate-on-wild-mask or pre-select the field, because
-    /// `set_value` has **no `&mut Context`**, so it cannot drive the navigate
-    /// (which needs `read_directory(…, ctx)`) nor request focus. This is not
-    /// needed in practice — the dialog opens with the constructor's wildcard and
-    /// `reset_current` does the initial read.
+    /// Use this before the dialog opens to seed the field with a default path (the
+    /// scatter half of dialog data transfer). Note that `set_value` cannot also
+    /// trigger a directory navigation or focus request, because it has no
+    /// `&mut Context` — if you need the listing to reflect the pre-filled path,
+    /// let `reset_current` handle it (which reads the process cwd on first show)
+    /// or open the dialog without `FD_NO_LOAD_DIR`.
     fn set_value(&mut self, v: crate::data::FieldValue) {
         // Forward to the FileInputLine, whose View::set_value delegates to the
         // embedded InputLine::set_value (copy text + select-all). We resolve by id
