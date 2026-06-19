@@ -428,6 +428,15 @@ enum ModalCompletion {
     /// On [`Command::OK`], read the `ColorPicker`'s color() and update the
     /// `ThemeEditorBody`'s working theme for the given role/fg. On cancel,
     /// nothing.
+    ///
+    /// **Deliberate cluster-D exception (spec §3.3/§2.1):** unlike `FindPick`/
+    /// `ReplacePick` (which deliver their result downcast-free via
+    /// [`View::set_modal_data`]), this completion stays downcasting because its
+    /// payload is a [`Color`](crate::color::Color), which is deliberately **not** a
+    /// [`FieldValue`](crate::data::FieldValue) (`FieldValue::Color` is an explicit
+    /// non-goal). The result never crosses a `FieldValue` boundary, so the
+    /// `set_modal_data` path does not apply — recorded, not a downcast we claim to
+    /// delete.
     ThemeColorPick {
         /// `ViewId` of the `ThemeEditorBody` to update.
         editor_id: ViewId,
@@ -2554,6 +2563,14 @@ impl Program {
                                     THistory,
                                 };
 
+                                // NOTE (Phase 4, spec §4.4): this is a dialog-OPEN
+                                // pre-fill read — the pump reads the editor's current
+                                // search state to seed the freshly-built dialog. That
+                                // is "build UI from a known widget's state," the kept
+                                // structural-read category (like FileDialog readback),
+                                // NOT a cluster-D modal-result read. It stays a
+                                // downcast deliberately; only the completion reads
+                                // (FindPick/ReplacePick) went downcast-free.
                                 // Read current editor search state.
                                 let (find_str, editor_flags) = group
                                     .find_mut(editor_id)
@@ -2641,6 +2658,14 @@ impl Program {
                                     THistory,
                                 };
 
+                                // NOTE (Phase 4, spec §4.4): this is a dialog-OPEN
+                                // pre-fill read — the pump reads the editor's current
+                                // search state to seed the freshly-built dialog. That
+                                // is "build UI from a known widget's state," the kept
+                                // structural-read category (like FileDialog readback),
+                                // NOT a cluster-D modal-result read. It stays a
+                                // downcast deliberately; only the completion reads
+                                // (FindPick/ReplacePick) went downcast-free.
                                 let (find_str, replace_str, editor_flags) = group
                                     .find_mut(editor_id)
                                     .and_then(|v| v.as_any_mut())
