@@ -149,10 +149,13 @@ impl View for Spy {
     fn apply_page_sync(&mut self, _idx: usize, _ctx: &mut Context) {
         self.mark("apply_page_sync");
     }
+    fn set_modal_data(&mut self, _data: FieldValue) {
+        self.mark("set_modal_data");
+    }
 }
 
 // ---------------------------------------------------------------------------
-// D — pure delegator: empty impl, macro injects ALL 29 forwarders.
+// D — pure delegator: empty impl, macro injects ALL 30 forwarders.
 // ---------------------------------------------------------------------------
 
 struct D {
@@ -318,6 +321,9 @@ fn delegate_forwards_every_known_view_method() {
         d.apply_page_sync(0, &mut ctx);
     }
 
+    // -- set_modal_data -----------------------------------------------------
+    d.set_modal_data(FieldValue::Int(0));
+
     // -- draw (needs a DrawCtx; use the HeadlessBackend pattern) -----------
     {
         let theme = Theme::classic_blue();
@@ -335,7 +341,7 @@ fn delegate_forwards_every_known_view_method() {
     let seen = d.inner.seen.borrow();
     // MAINTENANCE: keep in sync with trait View's methods and
     // tvision-rs-macros/src/specs.rs (`view()`). See the note in view.rs.
-    // Method count: 29 (28 after Task 5; +1 apply_page_sync from Task 6).
+    // Method count: 30 (29 after Task 6; +1 set_modal_data from Phase 4).
     let expected: &[&str] = &[
         "state",
         "state_mut",
@@ -369,6 +375,7 @@ fn delegate_forwards_every_known_view_method() {
         "descendant_global_bounds",
         "set_indicator_value",
         "apply_page_sync",
+        "set_modal_data",
     ];
     for m in expected {
         assert!(

@@ -2213,6 +2213,36 @@ impl View for Editor {
     fn set_modal_answer(&mut self, cmd: crate::command::Command) {
         self.pending_replace_answer = Some(cmd);
     }
+
+    /// Load a finished Find/Replace dialog's search record (the pump packs the
+    /// dialog fields, read via [`View::value`], into an ordered
+    /// [`FieldValue::List`](crate::data::FieldValue::List)). A 2-element
+    /// `[Text(find), Bits(flags)]` is the Find shape (leaves `replace_str`
+    /// untouched); a 3-element `[Text(find), Text(replace), Bits(flags)]` is the
+    /// Replace shape. `flags` is pre-masked by the completion (and already carries
+    /// or clears `EF_DO_REPLACE`); stored as the low 16 bits. Other shapes are
+    /// ignored (typed-model drop, like [`set_value`](View::set_value)).
+    fn set_modal_data(&mut self, data: crate::data::FieldValue) {
+        use crate::data::FieldValue;
+        if let FieldValue::List(items) = data {
+            match items.as_slice() {
+                [FieldValue::Text(find), FieldValue::Bits(flags)] => {
+                    self.find_str = find.clone();
+                    self.editor_flags = *flags as u16;
+                }
+                [
+                    FieldValue::Text(find),
+                    FieldValue::Text(replace),
+                    FieldValue::Bits(flags),
+                ] => {
+                    self.find_str = find.clone();
+                    self.replace_str = replace.clone();
+                    self.editor_flags = *flags as u16;
+                }
+                _ => {}
+            }
+        }
+    }
 }
 
 impl Editor {
@@ -5096,5 +5126,34 @@ mod tests {
             )),
             "CLEAR should be enabled for active clipboard editor with selection"
         );
+    }
+
+    #[test]
+    fn set_modal_data_loads_find_shape() {
+        use crate::data::FieldValue;
+        let mut e = Editor::new(crate::view::Rect::new(0, 0, 20, 10), None, None, None, 0);
+        e.replace_str = "keep".to_string();
+        e.set_modal_data(FieldValue::List(vec![
+            FieldValue::Text("needle".into()),
+            FieldValue::Bits(0x0003),
+        ]));
+        assert_eq!(e.find_str(), "needle");
+        assert_eq!(e.editor_flags(), 0x0003);
+        // Find shape must NOT touch replace_str.
+        assert_eq!(e.replace_str(), "keep");
+    }
+
+    #[test]
+    fn set_modal_data_loads_replace_shape() {
+        use crate::data::FieldValue;
+        let mut e = Editor::new(crate::view::Rect::new(0, 0, 20, 10), None, None, None, 0);
+        e.set_modal_data(FieldValue::List(vec![
+            FieldValue::Text("needle".into()),
+            FieldValue::Text("thread".into()),
+            FieldValue::Bits(0x000F | EF_DO_REPLACE as u32),
+        ]));
+        assert_eq!(e.find_str(), "needle");
+        assert_eq!(e.replace_str(), "thread");
+        assert_eq!(e.editor_flags(), 0x000F | EF_DO_REPLACE);
     }
 }

@@ -41,6 +41,8 @@ fn view(f: &Ident, k: &TokenStream) -> Vec<(&'static str, TokenStream)> {
          quote! { fn value(&self) -> ::core::option::Option<#k::FieldValue> { self.#f.value() } }),
         ("set_value",
          quote! { fn set_value(&mut self, v: #k::FieldValue) { self.#f.set_value(v) } }),
+        ("set_modal_data",
+         quote! { fn set_modal_data(&mut self, data: #k::data::FieldValue) { self.#f.set_modal_data(data) } }),
         ("set_value_ctx",
          quote! { fn set_value_ctx(&mut self, v: #k::FieldValue, ctx: &mut #k::Context) { self.#f.set_value_ctx(v, ctx) } }),
         ("awaken",

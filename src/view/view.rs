@@ -720,6 +720,24 @@ pub trait View {
     /// `FieldValue` variant it does not understand.
     fn set_value(&mut self, _v: FieldValue) {}
 
+    /// Deliver a finished modal's **typed result record** to the view that
+    /// launched it. Defaulted no-op; a launcher view overrides it to load the
+    /// result the pump read out of the modal's fields (each via [`View::value`])
+    /// and packed into an ordered [`FieldValue::List`](crate::data::FieldValue::List).
+    ///
+    /// Distinct from [`set_value`](View::set_value): `set_value` carries a view's
+    /// **own** field/document data (e.g. the editor's text), whereas
+    /// `set_modal_data` carries a **separate modal-result record** addressed to the
+    /// launcher by id — the two channels must not collide. Driven from
+    /// `apply_modal_completion` (the cluster-D modal-result path); the pump resolves
+    /// the launcher with `group.find_mut(id)` and calls this method by **virtual
+    /// dispatch**, never a downcast.
+    ///
+    /// # Turbo Vision heritage
+    /// The return-less successor to delivering a dialog's gathered record back to
+    /// the requester (`getData` read at the modal's close, handed to the owner).
+    fn set_modal_data(&mut self, _data: crate::data::FieldValue) {}
+
     /// Scatter a typed [`FieldValue`] into this control with a `Context`. Default:
     /// calls [`set_value`](Self::set_value) (the context-free setter). Override
     /// when scatter needs deferred publishing (e.g.

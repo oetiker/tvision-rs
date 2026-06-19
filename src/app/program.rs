@@ -2885,6 +2885,18 @@ fn field_text(v: crate::data::FieldValue) -> Option<String> {
     }
 }
 
+/// Extract the `u32` bit word out of a [`FieldValue::Bits`](crate::data::FieldValue::Bits),
+/// or `None` for any other variant. The `Bits` sibling of [`field_int`]/[`field_text`],
+/// used by the Find/Replace modal-result reads to pull a `CheckBoxes` options word
+/// through [`View::value`].
+#[allow(dead_code)] // used by FindPick/ReplacePick in the next tasks
+fn field_bits(v: crate::data::FieldValue) -> Option<u32> {
+    match v {
+        crate::data::FieldValue::Bits(b) => Some(b),
+        _ => None,
+    }
+}
+
 /// Record a history entry for a history-list link: resolve `link`, read the
 /// linked input line's text via [`View::value`], and `history_add` it to the
 /// channel. A free fn so it composes with the pump's destructured `group` borrow
