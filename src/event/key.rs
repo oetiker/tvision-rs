@@ -230,6 +230,13 @@ pub fn hot_key(s: &str) -> Option<char> {
 /// returned). Any key that does not match — including literal arrow keys,
 /// non-Char keys, or Char keys without `ctrl` — is returned unchanged.
 ///
+/// **When to call:** pass an incoming `KeyDown` event through this function
+/// *before* dispatching it for navigation — e.g. in `InputLine::handle_event`
+/// and `Editor::handle_event` — so that applications supporting WordStar-style
+/// navigation can use either arrow keys or the traditional Ctrl-letter chords.
+/// Widgets that do **not** want WordStar mode (e.g. plain text fields that use
+/// Ctrl letters for cut/copy/paste) should skip this call.
+///
 /// # Turbo Vision heritage
 /// Ports `ctrlToArrow` (`drivers2.cpp`).
 pub fn ctrl_to_arrow(ke: KeyEvent) -> KeyEvent {

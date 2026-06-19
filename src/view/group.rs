@@ -60,21 +60,34 @@ use crate::view::id::ViewId;
 use crate::view::view::{Phase, StateFlag, View, ViewState};
 
 /// Which select/deselect side effects [`Group::set_current`] applies when
-/// changing the current view. `Enter`/`Leave` are used by the modal
-/// [`exec_view`](crate::app::Program::exec_view) path when entering and leaving a
-/// modal dialog, so the underlying current view keeps its selected state across
-/// the modal session.
+/// changing the current view.
+///
+/// Pass this to [`Group::set_current`] to control focus transitions:
+///
+/// * [`Normal`](SelectMode::Normal) — the ordinary case: deselect the old current
+///   view, then select the new one. Use this for all normal focus changes.
+/// * [`Enter`](SelectMode::Enter) and [`Leave`](SelectMode::Leave) — used
+///   internally by [`Program::exec_view`](crate::Program::exec_view) when starting
+///   and ending a modal dialog. `Enter` avoids deselecting the view that was
+///   selected before the modal opened; `Leave` avoids re-selecting it on close.
+///   Together they ensure the view underneath a modal dialog keeps its
+///   `selected` state visually intact across the modal session.
+///
+/// Widget implementors almost always pass `SelectMode::Normal`; the
+/// `Enter`/`Leave` variants are the modal-loop plumbing in `Program`.
 ///
 /// # Turbo Vision heritage
 /// Ports the `selectMode` enum (`views.h`):
 /// `normalSelect`/`enterSelect`/`leaveSelect`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SelectMode {
-    /// Deselect the old current, select the new one.
+    /// Deselect the old current, select the new one — the ordinary focus change.
     Normal,
-    /// Entering a modal: do **not** deselect the old current.
+    /// Entering a modal: push focus onto the modal without deselecting the
+    /// underlying current view.
     Enter,
-    /// Leaving a modal: do **not** select the new current.
+    /// Leaving a modal: pop focus back without re-selecting the underlying view
+    /// (its `selected` flag was preserved during the modal session).
     Leave,
 }
 

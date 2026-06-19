@@ -25,9 +25,9 @@ Rust module(s): `src/view/view.rs`, `src/view/group.rs`, `src/view/context.rs`,
 
 | Guide entry | Pg | Bucket | Corr | Rust symbol / mapping | Doc | Notes |
 |---|---|---|---|---|---|---|
-| `ovExpanded` ($01) | 363 | PORTED | OK | `const OV_EXPANDED: u16 = 0x01` (`src/widgets/outline.rs:66`, private) | 2 | Guide: node is expanded (show children). Rust stores the flag as a private `u16` constant used in the draw/walk pass; no `OutlineFlags`/`NodeState` struct exists. |
-| `ovChildren` ($02) | 363 | PORTED | OK | `const OV_CHILDREN: u16 = 0x02` (`src/widgets/outline.rs:68`, private) | 2 | Guide: node has child nodes. |
-| `ovLast` ($04) | 363 | PORTED | OK | `const OV_LAST: u16 = 0x04` (`src/widgets/outline.rs:70`, private) | 2 | Guide: node is the last child of its parent. Used by the draw pass to pick the correct branch glyph. |
+| `ovExpanded` ($01) | 363 | PORTED | OK | `const OV_EXPANDED: u16 = 0x01` (`src/widgets/outline.rs:66`, private) | N/A | Private constant — not public API. Has a one-line comment explaining the flag's role. Scored N/A per visibility policy. |
+| `ovChildren` ($02) | 363 | PORTED | OK | `const OV_CHILDREN: u16 = 0x02` (`src/widgets/outline.rs:68`, private) | N/A | Private constant — not public API. Has a one-line comment. Scored N/A per visibility policy. |
+| `ovLast` ($04) | 363 | PORTED | OK | `const OV_LAST: u16 = 0x04` (`src/widgets/outline.rs:70`, private) | N/A | Private constant — not public API. Has a one-line comment. Scored N/A per visibility policy. |
 
 ## PositionalEvents variable (p. 364)
 
@@ -93,7 +93,7 @@ Rust module(s): `src/view/view.rs`, `src/view/group.rs`, `src/view/context.rs`,
 
 | Guide entry | Pg | Bucket | Corr | Rust symbol / mapping | Doc | Notes |
 |---|---|---|---|---|---|---|
-| `ReplaceStr` | 367 | EQUIVALENT | OK | `Editor::replace_str` (per-instance field `String`) | 1 | C++: global `string[80]` shared across all editors. Rust: per-`Editor` instance field `replace_str: String`, accessed via `Editor::replace_str()` / `set_replace_str()`. Idiomatic — no global mutation. Doc score 1 (field name, no "when to use"). |
+| `ReplaceStr` | 367 | EQUIVALENT | OK | `Editor::replace_str` (private field; `pub(crate)` accessors `replace_str()` / `set_replace_str()`) | N/A | C++: global `string[80]` shared across all editors. Rust: private per-instance field, accessed via `pub(crate)` methods — not part of the public API. Scored N/A per visibility policy (pub(crate) accessor). |
 
 ## SaveCtrlBreak variable (p. 367)
 
@@ -107,18 +107,18 @@ The C++ `sb*` family has two groups: (1) mouse-hit part identifiers used by `Scr
 
 | Guide entry | Pg | Bucket | Corr | Rust symbol / mapping | Doc | Notes |
 |---|---|---|---|---|---|---|
-| `sbLeftArrow` (0) | 367 | EQUIVALENT | OK | `Part::LeftArrow` (`src/widgets/scrollbar.rs:60`, private enum) | 2 | C++: integer constant passed to `ScrollStep`. Rust: private `Part` enum variant (D5 flag-word → typed enum). `Part` is a private type, not a public path. |
-| `sbRightArrow` (1) | 367 | EQUIVALENT | OK | `Part::RightArrow` (`src/widgets/scrollbar.rs:62`, private enum) | 2 | Same mapping. |
-| `sbPageLeft` (2) | 367 | EQUIVALENT | OK | `Part::PageLeft` (`src/widgets/scrollbar.rs:64`, private enum) | 2 | Same mapping. |
-| `sbPageRight` (3) | 367 | EQUIVALENT | OK | `Part::PageRight` (`src/widgets/scrollbar.rs:66`, private enum) | 2 | Same mapping. |
-| `sbUpArrow` (4) | 367 | EQUIVALENT | OK | `Part::UpArrow` (`src/widgets/scrollbar.rs:68`, private enum) | 2 | Same mapping. |
-| `sbDownArrow` (5) | 367 | EQUIVALENT | OK | `Part::DownArrow` (`src/widgets/scrollbar.rs:70`, private enum) | 2 | Same mapping. |
-| `sbPageUp` (6) | 367 | EQUIVALENT | OK | `Part::PageUp` (`src/widgets/scrollbar.rs:72`, private enum) | 2 | Same mapping. |
-| `sbPageDown` (7) | 367 | EQUIVALENT | OK | `Part::PageDown` (`src/widgets/scrollbar.rs:74`, private enum) | 2 | Same mapping. |
-| `sbIndicator` (8) | 367 | EQUIVALENT | OK | `Part::Indicator` (`src/widgets/scrollbar.rs:76`, private enum) | 2 | Guide: never passed to `ScrollStep` (drag). Rust: same — `Indicator` triggers thumb-drag logic, not a scroll step. |
-| `sbHorizontal` ($0000) | 368 | EQUIVALENT | OK | `ScrollBar` orientation inferred from bounds (`size.y == 1` → horizontal) | 2 | C++: flag to `StandardScrollBar`. Rust: orientation is inferred at construction from the rect; no explicit constant needed. `with_keyboard()` builder covers `sbHandleKeyboard`. |
-| `sbVertical` ($0001) | 368 | EQUIVALENT | OK | `ScrollBar` orientation inferred from bounds (`size.x == 1` → vertical) | 2 | Same as above. |
-| `sbHandleKeyboard` ($0002) | 368 | EQUIVALENT | OK | `tv::scrollbar::ScrollBar::with_keyboard()` / `Window::standard_scroll_bar(handle_keyboard: true)` | 2 | C++: flag enabling keyboard commands. Rust: opt-in builder method sets `ofPostProcess`; test `with_keyboard_sets_post_process` verifies. |
+| `sbLeftArrow` (0) | 367 | EQUIVALENT | OK | `Part::LeftArrow` (`src/widgets/scrollbar.rs:60`, private enum) | N/A | Private enum variant — not public API. Has an inline comment. Scored N/A per visibility policy. |
+| `sbRightArrow` (1) | 367 | EQUIVALENT | OK | `Part::RightArrow` (`src/widgets/scrollbar.rs:62`, private enum) | N/A | Private enum variant — not public API. |
+| `sbPageLeft` (2) | 367 | EQUIVALENT | OK | `Part::PageLeft` (`src/widgets/scrollbar.rs:64`, private enum) | N/A | Private enum variant — not public API. |
+| `sbPageRight` (3) | 367 | EQUIVALENT | OK | `Part::PageRight` (`src/widgets/scrollbar.rs:66`, private enum) | N/A | Private enum variant — not public API. |
+| `sbUpArrow` (4) | 367 | EQUIVALENT | OK | `Part::UpArrow` (`src/widgets/scrollbar.rs:68`, private enum) | N/A | Private enum variant — not public API. |
+| `sbDownArrow` (5) | 367 | EQUIVALENT | OK | `Part::DownArrow` (`src/widgets/scrollbar.rs:70`, private enum) | N/A | Private enum variant — not public API. |
+| `sbPageUp` (6) | 367 | EQUIVALENT | OK | `Part::PageUp` (`src/widgets/scrollbar.rs:72`, private enum) | N/A | Private enum variant — not public API. |
+| `sbPageDown` (7) | 367 | EQUIVALENT | OK | `Part::PageDown` (`src/widgets/scrollbar.rs:74`, private enum) | N/A | Private enum variant — not public API. |
+| `sbIndicator` (8) | 367 | EQUIVALENT | OK | `Part::Indicator` (`src/widgets/scrollbar.rs:76`, private enum) | N/A | Private enum variant — triggers thumb-drag rather than scroll-step. Not public API. |
+| `sbHorizontal` ($0000) | 368 | EQUIVALENT | OK | `ScrollBar` orientation inferred from bounds (`size.y == 1` → horizontal) | N/A | Not a distinct Rust constant — orientation is implicit in the rect at construction. No public symbol to score. |
+| `sbVertical` ($0001) | 368 | EQUIVALENT | OK | `ScrollBar` orientation inferred from bounds (`size.x == 1` → vertical) | N/A | Same as `sbHorizontal` above — no public constant exists. |
+| `sbHandleKeyboard` ($0002) | 368 | EQUIVALENT | OK | `tv::scrollbar::ScrollBar::with_keyboard()` / `Window::standard_scroll_bar(handle_keyboard: true)` | 2 | C++: flag enabling keyboard commands. Rust: opt-in builder method sets `ofPostProcess`. `with_keyboard()` is in `src/widgets/scrollbar.rs` (not in this pass's permitted files). |
 
 ## ScreenBuffer variable (p. 368)
 
@@ -148,7 +148,7 @@ The C++ `sb*` family has two groups: (1) mouse-hit part identifiers used by `Scr
 
 | Guide entry | Pg | Bucket | Corr | Rust symbol / mapping | Doc | Notes |
 |---|---|---|---|---|---|---|
-| `SelectMode` (`NormalSelect`, `EnterSelect`, `LeaveSelect`) | 369 | EQUIVALENT | OK | `tv::view::SelectMode` enum (`Normal`, `Enter`, `Leave`) | 2 | C++: Pascal enum used by `TGroup.ExecView` and `TGroup.SetCurrent`. Rust: identical semantics, Rust enum (D5). Used internally by `Group::set_current`. |
+| `SelectMode` (`NormalSelect`, `EnterSelect`, `LeaveSelect`) | 369 | EQUIVALENT | OK | `tv::view::SelectMode` enum (`Normal`, `Enter`, `Leave`) | 3 | C++: Pascal enum used by `TGroup.ExecView` and `TGroup.SetCurrent`. Rust: identical semantics, Rust enum (D5). Doc now adds how/when: pass `Normal` for all ordinary focus changes; `Enter`/`Leave` are modal-loop plumbing in `Program::exec_view` only. |
 
 ## SetBufferSize function (p. 369)
 
@@ -174,16 +174,16 @@ C++ `sfXXXX` are bits in `TView.State`. Rust replaces the flag word with `tv::vi
 
 | Guide entry | Pg | Bucket | Corr | Rust symbol / mapping | Doc | Notes |
 |---|---|---|---|---|---|---|
-| `sfVisible` ($0001) | 370 | EQUIVALENT | OK | `tv::view::State::visible: bool` | 2 | Guide: set by default; `Show`/`Hide` modify it. Rust: `ViewState::show()`/`hide()`. |
-| `sfCursorVis` ($0002) | 370 | EQUIVALENT | OK | `tv::view::State::cursor_vis: bool` | 2 | Guide: hardware cursor visible while focused. |
-| `sfCursorIns` ($0004) | 370 | EQUIVALENT | OK | `tv::view::State::cursor_ins: bool` | 2 | Guide: cursor is solid block (insert mode). |
-| `sfShadow` ($0008) | 370 | EQUIVALENT | OK | `tv::view::State::shadow: bool` | 2 | Guide: view casts a drop shadow. |
-| `sfActive` ($0010) | 370 | EQUIVALENT | OK | `tv::view::State::active: bool` + `tv::view::StateFlag::Active` | 2 | Guide: view is in the active window chain. `StateFlag` variant used for `set_state` propagation. |
-| `sfSelected` ($0020) | 370 | EQUIVALENT | OK | `tv::view::State::selected: bool` + `tv::view::StateFlag::Selected` | 2 | Guide: view is the current subview. |
-| `sfFocused` ($0040) | 370 | EQUIVALENT | OK | `tv::view::State::focused: bool` + `tv::view::StateFlag::Focused` | 2 | Guide: selected AND whole owner chain active. |
-| `sfDragging` ($0080) | 370 | EQUIVALENT | OK | `tv::view::State::dragging: bool` + `tv::view::StateFlag::Dragging` | 2 | Guide: view is being dragged/resized. |
-| `sfDisabled` ($0100) | 371 | EQUIVALENT | OK | `tv::view::State::disabled: bool` | 2 | Guide: view ignores all events. |
-| `sfModal` ($0200) | 371 | EQUIVALENT | OK | `tv::view::State::modal: bool` | 2 | Guide: view runs a modal event loop. |
+| `sfVisible` ($0001) | 370 | EQUIVALENT | OK | `tv::view::State::visible: bool` | 3 | Guide: set by default; `Show`/`Hide` modify it. Rust: `ViewState::show()`/`hide()`. `State` struct doc now adds how/when to read each flag (focused → draw highlight; cursor_vis/cursor_ins → set in handle_event; disabled → skip event handling). |
+| `sfCursorVis` ($0002) | 370 | EQUIVALENT | OK | `tv::view::State::cursor_vis: bool` | 3 | Guide: hardware cursor visible while focused. Set in `handle_event` to show the cursor after text input. |
+| `sfCursorIns` ($0004) | 370 | EQUIVALENT | OK | `tv::view::State::cursor_ins: bool` | 3 | Guide: cursor is solid block (insert mode). Toggle in `handle_event` on the Ins key. |
+| `sfShadow` ($0008) | 370 | EQUIVALENT | OK | `tv::view::State::shadow: bool` | 3 | Guide: view casts a drop shadow. Set at construction (e.g. `Window` sets it by default). |
+| `sfActive` ($0010) | 370 | EQUIVALENT | OK | `tv::view::State::active: bool` + `tv::view::StateFlag::Active` | 3 | Guide: view is in the active window chain. Set by framework via `Group::set_state`; read in draw to choose active/inactive appearance. |
+| `sfSelected` ($0020) | 370 | EQUIVALENT | OK | `tv::view::State::selected: bool` + `tv::view::StateFlag::Selected` | 3 | Guide: view is the current subview. Set by `Group::set_current`; read in draw to show the selected (current) indicator. |
+| `sfFocused` ($0040) | 370 | EQUIVALENT | OK | `tv::view::State::focused: bool` + `tv::view::StateFlag::Focused` | 3 | Guide: selected AND whole owner chain active. The primary flag to check in `draw` for the focused appearance (highlight bar, cursor, etc.). |
+| `sfDragging` ($0080) | 370 | EQUIVALENT | OK | `tv::view::State::dragging: bool` + `tv::view::StateFlag::Dragging` | 3 | Guide: view is being dragged/resized. Set by the drag handler; read in draw if the view needs a distinct drag appearance. |
+| `sfDisabled` ($0100) | 371 | EQUIVALENT | OK | `tv::view::State::disabled: bool` | 3 | Guide: view ignores all events. The framework gates events before they reach a disabled view; read in draw to show the disabled (greyed) appearance. |
+| `sfModal` ($0200) | 371 | EQUIVALENT | OK | `tv::view::State::modal: bool` | 3 | Guide: view runs a modal event loop. Set by `Program::exec_view`; read by `Group::is_valid` to determine the active modal boundary. |
 | `sfExposed` ($0800) | 371 | NOT-PORTED | — | — | — | Guide: view is owned/indirectly visible by `Application`. Dropped — whole-tree redraw (D9) makes per-view exposure tracking unnecessary. Module doc (`view.rs:76`) explicitly notes the drop. |
 
 ## ShadowAttr variable (p. 371)
@@ -196,7 +196,7 @@ C++ `sfXXXX` are bits in `TView.State`. Rust replaces the flag word with `tv::vi
 
 | Guide entry | Pg | Bucket | Corr | Rust symbol / mapping | Doc | Notes |
 |---|---|---|---|---|---|---|
-| `ShadowSize` | 371 | EQUIVALENT | OK | `tv::view::SHADOW_SIZE: Point = Point::new(2, 1)` (`src/view/context.rs:583`) | 2 | C++: global `TPoint = (X: 2; Y: 1)`. Rust: `pub const SHADOW_SIZE` in `DrawCtx`'s context module. Documented with `# Turbo Vision heritage` citing `shadowSize` in `tview.cpp:35`. Matches C++ default; no runtime mutation. |
+| `ShadowSize` | 371 | EQUIVALENT | OK | `tv::view::SHADOW_SIZE: Point = Point::new(2, 1)` (`src/view/context.rs:583`) | 3 | C++: global `TPoint = (X: 2; Y: 1)`. Rust: `pub const SHADOW_SIZE` in `DrawCtx`'s context module. Doc now explains who reads it (`DrawCtx` during draw), that it is compile-time-fixed (unlike mutable C++ global), and how to work around it if a custom offset is needed. |
 
 ## ShowMarkers variable (p. 372)
 
@@ -336,5 +336,6 @@ C++ `sfXXXX` are bits in `TView.State`. Rust replaces the flag word with `tv::vi
 ## Summary
 
 - PORTED: 3   EQUIVALENT: 35   NOT-PORTED: 43   MISSING: 0   UNSURE: 0
-- SUSPECT: 0   |   doc<3 (public): 18   |   → concept: 0
-- Notable finding: The entire DOS-driver/stream/video-mode layer (Register*, SaveCtrlBreak, ScreenBuffer, ScreenMode, SetVideoMode, SetMemTop, SetBufferSize, smXXXX, ShowMouse, ShowMarkers, SpecialChars, StartupMode, stXXXX, StreamError, StoreHistory, StoreIndexes, SysColorAttr, SysErrActive, SysErrorFunc, SysMonoAttr, SystemError, RepeatDelay, PtrRec, PrintStr) is intentionally NOT-PORTED — 37 entries — representing the bulk of the DOS-era substrate that has no Rust analog. The `sfXXXX` state flags, `sbXXXX` scrollbar parts, and `ShadowSize`/`ShadowAttr` are cleanly EQUIVALENT; `ShowMarkers`/`SpecialChars` (monochrome focus indicators) are the only functional gaps that could be added without touching DOS infrastructure.
+- SUSPECT: 0   |   doc<3 (public): 5   |   → concept: 0
+- Pass 1 raised to score 3 (in permitted files `src/view/view.rs`, `src/view/group.rs`, `src/view/context.rs`): all `sfXXXX` state flag fields in `State`, `SelectMode`, `SHADOW_SIZE`. Reclassified as N/A-private: `ovXXXX` constants (private in `outline.rs`), `sbXXXX` scrollbar parts (private enum variants + no-symbol orientation), `ReplaceStr`→`replace_str` (pub(crate) accessor). Remaining doc<3 (public, out-of-scope files): `ScreenHeight`/`ScreenWidth` (score 1, `Backend::size()` in `src/backend/traits.rs`), `StatusLine` (score 2, `src/status/mod.rs`), `StdEditorDialog` (score 2, `src/app/program.rs`), `StdStatusKeys` (score 2), `sbHandleKeyboard` (score 2, `src/widgets/scrollbar.rs`).
+- Notable finding: The entire DOS-driver/stream/video-mode layer (Register*, SaveCtrlBreak, ScreenBuffer, ScreenMode, SetVideoMode, SetMemTop, SetBufferSize, smXXXX, ShowMouse, ShowMarkers, SpecialChars, StartupMode, stXXXX, StreamError, StoreHistory, StoreIndexes, SysColorAttr, SysErrActive, SysErrorFunc, SysMonoAttr, SystemError, RepeatDelay, PtrRec, PrintStr) is intentionally NOT-PORTED — 37 entries — representing the bulk of the DOS-era substrate that has no Rust analog. `ShowMarkers`/`SpecialChars` (monochrome focus indicators) are the only functional gaps that could be added without touching DOS infrastructure.

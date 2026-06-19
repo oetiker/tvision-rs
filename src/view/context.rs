@@ -576,7 +576,16 @@ pub enum Deferred {
 // DrawCtx — the downward draw context
 // ---------------------------------------------------------------------------
 
-/// The drop-shadow offset: 2 columns right, 1 row down.
+/// The drop-shadow offset applied to every window with `State::shadow = true`:
+/// **2 columns right, 1 row down**.
+///
+/// [`DrawCtx`] reads this constant when rendering a view's shadow during the
+/// whole-tree draw pass. The value matches the C++ default and is fixed at
+/// compile time — the C++ `shadowSize` global was mutable, but tvision-rs
+/// does not expose a runtime override. If you need a different shadow size,
+/// the constant can be shadowed (pun intended) per-project by re-exporting a
+/// custom value and patching the draw context; but the standard shadow looks
+/// best at `(2, 1)`.
 ///
 /// # Turbo Vision heritage
 /// Ports `shadowSize` (`tview.cpp:35`).

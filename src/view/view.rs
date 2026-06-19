@@ -68,6 +68,17 @@ use crate::view::id::ViewId;
 /// The per-view state flags — visibility, focus, selection, drag, and the rest
 /// of the activation/interaction bits a parent flips on its children.
 ///
+/// Most flags are **set by the framework** (not by widget code directly):
+/// `visible` via `show()`/`hide()`; `active`/`selected`/`focused`/`dragging`
+/// via `Group::set_state`; `modal` by `Program::exec_view`. The flags you
+/// commonly **read** in draw/handle code are:
+///
+/// * `focused` — draw the focused appearance (e.g. highlight the active item).
+/// * `disabled` — skip event handling; the framework gates events before the
+///   view sees them, so this is mainly useful for conditional drawing.
+/// * `cursor_vis` / `cursor_ins` — set these in `handle_event` to show or shape
+///   the hardware cursor after editing operations.
+///
 /// **Dropped:** the occlusion/visibility cache flag — under whole-tree redraw +
 /// diff there is nothing to cache.
 ///
@@ -209,12 +220,23 @@ impl GrowMode {
     }
 }
 
-/// Drag-mode flags — control whether a view can be dragged/resized and the limits
-/// a dragged view is clamped to (consumed by the drag handler).
+/// Drag-mode flags — control whether a view can be moved or resized interactively
+/// and the owner-boundary limits applied during the drag.
+///
+/// Set `DragMode` on a [`ViewState`] (via `state_mut().drag_mode = …`) during
+/// construction. [`Window`](crate::Window) sets both `drag_move` and `drag_grow`
+/// with `limit_lo_y = true` by default so windows can be moved and resized within
+/// the desktop. A plain embedded widget typically leaves all fields `false`.
+///
+/// The `limit_*` fields are combined with the drag rectangle at each mouse-move
+/// step: a true `limit_lo_x` means the view's left edge cannot move past the
+/// owner's left edge, and so on. Use [`DragMode::limit_all`] for the common case
+/// of clamping all four edges.
 ///
 /// # Turbo Vision heritage
 /// Ports the `dm*` flag family (`views.h`) as a struct-of-bools (deviation D5);
-/// each field names its `dm*` source.
+/// each field names its `dm*` source. `dmDragGrowLeft` is a tvision-rs extension
+/// (no C++ equivalent).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct DragMode {
     /// `dmDragMove` — the view can be moved by dragging.

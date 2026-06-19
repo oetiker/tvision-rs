@@ -42,11 +42,11 @@ Rust module(s): src/widgets/outline.rs   |   magiblot: include/tvision/outline.h
 | `ovExpanded` constant | — | PORTED | OK | `OV_EXPANDED: u16 = 0x01` (`src/widgets/outline.rs:66`) | N/A | Private `const`; not public API. Already has a one-line comment. |
 | `ovChildren` constant | — | PORTED | OK | `OV_CHILDREN: u16 = 0x02` (`src/widgets/outline.rs:68`) | N/A | Private `const`; not public API. Already has a one-line comment. |
 | `ovLast` constant | — | PORTED | OK | `OV_LAST: u16 = 0x04` (`src/widgets/outline.rs:70`) | N/A | Private `const`; not public API. Already has a one-line comment. |
-| `cmOutlineItemSelected` constant | — | PORTED | OK | `tv::command::Command::OUTLINE_ITEM_SELECTED` (= 301) | 1 | In `src/command.rs` — outside the permitted file set for this pass. Deferred to a command.rs sweep. |
+| `cmOutlineItemSelected` constant | — | PORTED | OK | `tv::command::Command::OUTLINE_ITEM_SELECTED` | 3 | Raised: rustdoc now explains that this is broadcast by `Outline` on Enter/double-click; `source` is the outline's `ViewId`; callers resolve the outline to read `OutlineViewerState::foc` for the selected node. Heritage section cites `cmOutlineItemSelected` (`outline.h`). |
 | `TStreamable` / stream (read/write) | — | NOT-PORTED | — | — | — | TStreamable / DOS stream machinery dropped project-wide (serde-if-revived). |
 
 ## Summary
 
 - PORTED: 25   EQUIVALENT: 5   NOT-PORTED: 3   MISSING: 0   UNSURE: 0
-- SUSPECT: 0   |   doc<3 (public): 1   |   → concept: 0
-- Notable findings: 19 previously below-bar public symbols raised to score 3. One symbol left below bar: `Command::OUTLINE_ITEM_SELECTED` (score 1) lives in `src/command.rs`, outside the permitted file set for this pass — deferred to a command.rs sweep. The three private consts (`OV_EXPANDED`, `OV_CHILDREN`, `OV_LAST`) are not public API and marked N/A. The `getPalette` row raised to 3 in the theme.rs Role pass (all four `Outline*` roles already score-3 in `src/theme.rs`).
+- SUSPECT: 0   |   doc<3 (public): 0   |   → concept: 0
+- Notable findings: All public symbols now at score 3. `Command::OUTLINE_ITEM_SELECTED` raised from score 1 to 3 in the Globals pass (this session): rustdoc now explains the broadcast contract, when it fires (Enter/double-click on an `Outline` node), what `source` carries, and how to resolve the focused node. The three private consts (`OV_EXPANDED`, `OV_CHILDREN`, `OV_LAST`) are not public API and remain N/A. The `getPalette` row was raised to 3 in the theme.rs Role pass.

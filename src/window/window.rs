@@ -144,8 +144,16 @@ pub struct Window {
 }
 
 impl Window {
-    /// Construct the window over `bounds` with an optional `title` and a window
+    /// Construct a window over `bounds` with an optional `title` and a window
     /// `number`.
+    ///
+    /// **`number`:** pass a positive value (`1`–`9`) to make the window reachable
+    /// via the Alt-*N* keyboard shortcut; [`Program`](crate::Program) broadcasts
+    /// [`Command::SELECT_WINDOW_NUM`](crate::Command::SELECT_WINDOW_NUM) and the
+    /// desktop finds the matching window by its number. Pass `0` (the
+    /// `wnNoNumber` sentinel from Turbo Vision) for an unnumbered window that is
+    /// never a select-by-number target — this is the common case for document
+    /// windows that are cycled with `NEXT`/`PREV` instead of by number.
     ///
     /// Defaults set at construction: all four decoration flags enabled
     /// (move/grow/close/zoom); the un-zoom rect set to the current bounds; the
