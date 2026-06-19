@@ -2057,34 +2057,25 @@ impl Program {
                             }
                             // -- TScroller cross-view broker --------
                             //
-                            // The pump is the broker: a scroller (a leaf view)
-                            // can neither read nor mutate its window-frame
-                            // sibling scrollbars, so the read/write happens here
-                            // where the whole tree is reachable via `group`.
-                            //
-                            // Read direction (TScroller::scrollDraw): resolve
-                            // each bar and read its `value` (via View::value →
-                            // FieldValue::Int) in its OWN find_mut so only one
-                            // `&mut` is live at a time, then find_mut the
-                            // scroller and push the delta in.
-                            Deferred::SyncScrollerDelta { scroller, h, v } => {
-                                use crate::widgets::Scroller;
-                                let dx = h
+                            // Unified sibling-scrollbar read-sync (replaces the
+                            // four separate per-type pump arms that each did a
+                            // concrete downcast): read each bar's `value` (each
+                            // in its own find_mut so only one &mut is live) and call
+                            // back through the defaulted View::apply_scroll_sync —
+                            // virtual dispatch, never a downcast. The list-viewer
+                            // override writes back (v-bar setValue); it terminates
+                            // because ScrollBar::set_params is change-guarded.
+                            Deferred::ScrollSync { target, h, v } => {
+                                let hv = h
                                     .and_then(|id| group.find_mut(id))
                                     .and_then(|view| view.value())
-                                    .and_then(field_int)
-                                    .unwrap_or(0);
-                                let dy = v
+                                    .and_then(field_int);
+                                let vv = v
                                     .and_then(|id| group.find_mut(id))
                                     .and_then(|view| view.value())
-                                    .and_then(field_int)
-                                    .unwrap_or(0);
-                                if let Some(s) = group
-                                    .find_mut(scroller)
-                                    .and_then(|view| view.as_any_mut())
-                                    .and_then(|a| a.downcast_mut::<Scroller>())
-                                {
-                                    s.apply_delta(Point::new(dx, dy));
+                                    .and_then(field_int);
+                                if let Some(view) = group.find_mut(target) {
+                                    view.apply_scroll_sync(hv, vv, &mut ctx);
                                 }
                             }
                             // -- Splitter keyboard-resize broker (D3) -------
@@ -2114,7 +2105,7 @@ impl Program {
                                 }
                             }
                             // Outline viewer read-sync: like
-                            // SyncScrollerDelta — read both bars' `value`s,
+                            // ScrollSync — read both bars' `value`s,
                             // write the delta into the viewer's `OutlineViewerState`
                             // (downcast to `Outline`). Read-only, no write-back.
                             Deferred::SyncOutlineViewerDelta { viewer, h, v } => {
@@ -2176,39 +2167,6 @@ impl Program {
                             // non-selectable, so the tail is a no-op for them.
                             Deferred::SetVisible(id, visible) => {
                                 group.set_visible_descendant(id, visible, &mut ctx);
-                            }
-                            // -- TListViewer read-sync broker -------
-                            //
-                            // Like SyncScrollerDelta, but the list base is a
-                            // TRAIT (subclasses reuse its draw + override
-                            // get_text/is_selected), so `dyn View → dyn
-                            // ListViewer` cannot be downcast. Instead we read
-                            // each bar's `value` (each in its own find_mut so
-                            // only one &mut is live) and call back through the
-                            // defaulted View::apply_scroll_sync trait method.
-                            //
-                            // This read-sync WRITES BACK (apply_scroll_sync →
-                            // focus_item_num → focusItem → v-bar setValue), so it
-                            // could re-enter — but ScrollBar::set_params is
-                            // change-guarded (re-broadcasts only on an actual
-                            // value change), so the write-back of the already-
-                            // current value is a silent no-op and the cycle goes
-                            // quiet. `ctx` is live here (same as the
-                            // ScrollBarSetParams arm), so the write-back's
-                            // request_scroll_bar_params lands in `deferred` for
-                            // the NEXT pump.
-                            Deferred::SyncListViewer { list, h, v } => {
-                                let hv = h
-                                    .and_then(|id| group.find_mut(id))
-                                    .and_then(|view| view.value())
-                                    .and_then(field_int);
-                                let vv = v
-                                    .and_then(|id| group.find_mut(id))
-                                    .and_then(|view| view.value())
-                                    .and_then(field_int);
-                                if let Some(view) = group.find_mut(list) {
-                                    view.apply_scroll_sync(hv, vv, &mut ctx);
-                                }
                             }
                             // -- TMenuView command-graying broker --
                             //
@@ -2308,7 +2266,7 @@ impl Program {
                             // Read direction (TEditor::checkScrollBar):
                             // resolve each bar, read its `value`, then
                             // downcast the editor and call apply_scroll_delta
-                            // (its checkScrollBar body). Like SyncScrollerDelta
+                            // (its checkScrollBar body). Like ScrollSync
                             // but the editor is NOT a Scroller, so it is its own
                             // concrete downcast target.
                             Deferred::SyncEditorDelta { editor, h, v } => {
@@ -2460,7 +2418,7 @@ impl Program {
                             // from the source FileList in its OWN find_mut and
                             // drop the borrow, THEN find_mut the subscriber and
                             // write it — only one &mut is live at a time, like
-                            // SyncScrollerDelta's read-then-write.
+                            // ScrollSync's read-then-write.
                             Deferred::ResolveFocusedFile { subscriber, source } => {
                                 use crate::dialog::{FileInfoPane, FileInputLine, FileList};
                                 let rec = group
@@ -2530,7 +2488,7 @@ impl Program {
                             // `value()` (FieldValue::Int index), downcasts
                             // `page_stack` to `PageStack`, and calls
                             // `set_active(idx, &mut ctx)`. Mirrors
-                            // SyncScrollerDelta but reads one bar into one index.
+                            // ScrollSync but reads one bar into one index.
                             Deferred::PageStackSync {
                                 page_stack,
                                 tab_bar,
@@ -2547,7 +2505,7 @@ impl Program {
                                     .and_then(|a| a.downcast_mut::<PageStack>())
                                 {
                                     // TabBar::value() is always non-negative, so a
-                                    // plain `as usize` matches the SyncScrollerDelta
+                                    // plain `as usize` matches the ScrollSync
                                     // reference (no defensive max(0)).
                                     ps.set_active(idx as usize, &mut ctx);
                                 }
@@ -6451,7 +6409,7 @@ mod tests {
     //
     // These drive the broker end-to-end through `pump_once`: the scroller and its
     // two bars are inserted into the ROOT group (so the pump's `group.find_mut`
-    // resolves all three), and the deferred `SyncScrollerDelta` /
+    // resolves all three), and the deferred `ScrollSync` /
     // `ScrollBarSetParams` / `SetVisible` ops are applied by the real apply loop.
 
     use crate::widgets::{ScrollBar, Scroller};
@@ -6525,7 +6483,7 @@ mod tests {
 
         // Inject the CHANGED broadcast sourced by the H bar and pump once: the
         // broadcast phase delivers it to the scroller (which queues
-        // SyncScrollerDelta), then the apply loop reads the bars and pushes the
+        // ScrollSync), then the apply loop reads the bars and pushes the
         // delta into the scroller.
         program.out_events.push_back(Event::Broadcast {
             command: Command::SCROLL_BAR_CHANGED,
@@ -6993,7 +6951,7 @@ mod tests {
     //
     // The list-viewer read-sync WRITES BACK (focus_item_num -> focusItem -> a
     // deferred v-bar setValue(focused)), unlike the scroller. The cycle
-    // (cmScrollBarChanged -> SyncListViewer -> apply_scroll -> setValue ->
+    // (cmScrollBarChanged -> ScrollSync -> apply_scroll -> setValue ->
     // possible re-broadcast) terminates ONLY because ScrollBar::set_params is
     // change-guarded (re-broadcasts SCROLL_BAR_CHANGED solely on an actual value
     // change). These tests drive it through real pump_once drains and assert the
@@ -7106,7 +7064,7 @@ mod tests {
     /// A benign broadcast that drives a dispatch (so the pump reaches its
     /// deferred-apply loop) without itself triggering any list/bar reaction — the
     /// faithful stand-in for "the next event after a scroll". Each pass we re-inject
-    /// one and then assert nothing of OURS (SCROLL_BAR_CHANGED / SyncListViewer)
+    /// one and then assert nothing of OURS (SCROLL_BAR_CHANGED / ScrollSync)
     /// re-appears: that is the cycle being QUIET.
     fn noop_broadcast() -> Event {
         Event::Broadcast {
@@ -7125,12 +7083,12 @@ mod tests {
     /// deferred-apply loop only runs on an event-dispatch — a deferred write-back
     /// is applied by the *next* dispatch, exactly as in production). We assert that
     /// across many such dispatches NO `SCROLL_BAR_CHANGED` is ever produced by the
-    /// write-back and NO `SyncListViewer` is re-queued, while focused/top_item
+    /// write-back and NO `ScrollSync` is re-queued, while focused/top_item
     /// settle to the v-bar's value.
     ///
     /// Bite-check: were `ScrollBar::set_params` NOT change-guarded, applying the
     /// write-back `setValue(8)` would re-broadcast SCROLL_BAR_CHANGED (even with an
-    /// unchanged value), the broadcast phase would re-queue SyncListViewer, whose
+    /// unchanged value), the broadcast phase would re-queue ScrollSync, whose
     /// apply would write back again — forever. The quiet-pump assertions below
     /// would then fire on the first re-broadcast. The guard is the fixed point.
     #[test]
@@ -7154,7 +7112,7 @@ mod tests {
             source: Some(v),
         });
 
-        // Pump #1: broadcast phase delivers CHANGED -> list queues SyncListViewer;
+        // Pump #1: broadcast phase delivers CHANGED -> list queues ScrollSync;
         // apply loop reads the bars and runs apply_scroll -> focus_item_num(8) ->
         // focus_item -> deferred v-bar setValue(8). That setValue lands in
         // `deferred` for the NEXT dispatch.
@@ -7173,7 +7131,7 @@ mod tests {
             program.out_events.push_back(noop_broadcast());
             program.pump_once();
             // After the dispatch, the only things in the queues must be unrelated:
-            // no SCROLL_BAR_CHANGED re-broadcast, no SyncListViewer re-queue.
+            // no SCROLL_BAR_CHANGED re-broadcast, no ScrollSync re-queue.
             assert!(
                 !program.out_events.iter().any(|e| matches!(
                     e,
@@ -7185,8 +7143,8 @@ mod tests {
                 !program
                     .deferred
                     .iter()
-                    .any(|d| matches!(d, Deferred::SyncListViewer { .. })),
-                "pass {pass}: no SyncListViewer re-queued (cycle terminated)"
+                    .any(|d| matches!(d, Deferred::ScrollSync { .. })),
+                "pass {pass}: no ScrollSync re-queued (cycle terminated)"
             );
             assert_eq!(bar_value(&mut program, v), 8, "pass {pass}: v-bar value 8");
             let (f, t) = list_focus_top(&mut program, list);
@@ -7234,7 +7192,7 @@ mod tests {
             19,
             "v-bar value corrected to 19 (the clamp written back)"
         );
-        // Quiet now: more dispatches produce no further SyncListViewer.
+        // Quiet now: more dispatches produce no further ScrollSync.
         for pass in 0..4 {
             program.out_events.push_back(noop_broadcast());
             program.pump_once();
@@ -7242,7 +7200,7 @@ mod tests {
                 !program
                     .deferred
                     .iter()
-                    .any(|d| matches!(d, Deferred::SyncListViewer { .. })),
+                    .any(|d| matches!(d, Deferred::ScrollSync { .. })),
                 "pass {pass}: quiescent after the corrective round"
             );
             assert_eq!(
@@ -7299,7 +7257,7 @@ mod tests {
             !program
                 .deferred
                 .iter()
-                .any(|d| matches!(d, Deferred::SyncListViewer { .. })),
+                .any(|d| matches!(d, Deferred::ScrollSync { .. })),
             "foreign-source broadcast ignored (source filter bites)"
         );
     }

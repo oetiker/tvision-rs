@@ -38,7 +38,7 @@ use unicode_width::UnicodeWidthChar;
 ///
 /// Used as the payload of [`Deferred::SplitterDivider`] (the D3 sibling-broker
 /// for the splitter resize path, exactly like
-/// [`Deferred::SyncScrollerDelta`](Deferred::SyncScrollerDelta) for the scroller).
+/// [`Deferred::ScrollSync`](Deferred::ScrollSync) for the scroller).
 #[derive(Debug, Clone)]
 pub enum DividerOp {
     /// Set (or clear) the active-target divider highlight.
@@ -97,9 +97,9 @@ pub enum Deferred {
     /// affects the result.
     EndModal(Command),
 
-    // -- the scroller cross-view scrollbar broker ---------------
+    // -- unified sibling-scrollbar read-sync broker -------------
     //
-    // All three touch the **view tree** family (same as `ChangeBounds`/`SetState`/
+    // All these touch the **view tree** family (same as `ChangeBounds`/`SetState`/
     // `Close`/`FocusById`), so the insertion-order drain stays order-equivalent:
     // no single dispatch co-queues two ops on the *same* scrollbar/scroller in a
     // conflicting order. They exist because a leaf view (the scroller) holds only
@@ -107,19 +107,29 @@ pub enum Deferred {
     // **mutate** its window-frame sibling scrollbars; the pump — which owns the
     // whole tree — is the cross-view broker, performing every read/write at
     // deferred-apply time via `group.find_mut(id)`.
-    /// **Read direction**: resolve the `h`/`v` scrollbars, read each `value` (via
-    /// [`View::value`](crate::view::View::value) →
-    /// [`FieldValue::Int`](crate::data::FieldValue::Int)), and push the resulting
-    /// delta into `scroller` (the pump downcasts it to `Scroller` and calls
-    /// `apply_delta`, which adjusts the cursor and stores the new delta). The
-    /// scroller requests this from its event handler when a scrollbar-changed
-    /// broadcast names one of its bars as `source`.
-    SyncScrollerDelta {
-        /// The scroller whose `delta`/`cursor` to update.
-        scroller: ViewId,
-        /// The horizontal scrollbar to read `value` from (`None` = no h bar → 0).
+    /// **Unified sibling-scrollbar read-sync.** On a scrollbar-changed broadcast a
+    /// scroll-aware view (a leaf that can neither read nor mutate its window-frame
+    /// scrollbar siblings) requests this. The pump resolves the `h`/`v` scrollbars,
+    /// reads each `value` (via [`View::value`](crate::view::View::value) →
+    /// [`FieldValue::Int`](crate::data::FieldValue::Int)) into an
+    /// `Option<i32>` (`None` = bar absent/unresolved), then calls
+    /// [`View::apply_scroll_sync`](crate::view::View::apply_scroll_sync) on `target` —
+    /// **virtual dispatch to the concrete widget, never a downcast**. Serves the
+    /// scroller, the list viewers, the outline viewer, and the editor; each
+    /// interprets `None` per its own semantics.
+    ///
+    /// **Termination:** read-only consumers (scroller/outline/editor) write nothing
+    /// back. The list viewers write back (item-focus → v-bar value), which
+    /// terminates because [`ScrollBar::set_params`](crate::widgets::ScrollBar::set_params)
+    /// is change-guarded (re-broadcasts only on an actual change, so writing the
+    /// already-current value is a silent no-op). Touches the view-tree deferred
+    /// family, so the insertion-order drain stays order-equivalent.
+    ScrollSync {
+        /// The scroll-aware view to apply the delta to (scroller / list / outline / editor).
+        target: ViewId,
+        /// The horizontal scrollbar to read `value` from (`None` = no h bar).
         h: Option<ViewId>,
-        /// The vertical scrollbar to read `value` from (`None` = no v bar → 0).
+        /// The vertical scrollbar to read `value` from (`None` = no v bar).
         v: Option<ViewId>,
     },
     /// **Write direction**: update a scrollbar's value and/or range/step. The pump
@@ -162,45 +172,15 @@ pub enum Deferred {
         op: DividerOp,
     },
 
-    // -- the list-viewer cross-view scrollbar read-sync ----------
-    /// **Read direction for a list viewer**: on a scrollbar-changed broadcast,
-    /// resolve the `h`/`v` scrollbars, read each `value`
-    /// (via [`View::value`](crate::view::View::value) →
-    /// [`FieldValue::Int`](crate::data::FieldValue::Int)), then call
-    /// [`View::apply_scroll_sync`](crate::view::View::apply_scroll_sync) on the
-    /// `list` view (the trait method — NOT a downcast: list viewers are a shared
-    /// trait, so a `dyn View →` concrete downcast cannot work, unlike the scroller).
-    ///
-    /// **Termination (the centerpiece property):** unlike
-    /// [`SyncScrollerDelta`](Self::SyncScrollerDelta), this read-sync **writes
-    /// back** — `apply_scroll_sync`'s item-focus call requests a value update on
-    /// the v-bar (another [`ScrollBarSetParams`](Self::ScrollBarSetParams)). That
-    /// terminates because
-    /// [`ScrollBar::set_params`](crate::widgets::ScrollBar::set_params) is
-    /// **change-guarded**: it re-broadcasts only on an actual value change, so
-    /// writing back the already-current value is a silent no-op (steady state:
-    /// quiescent; after a clamp: one extra round then quiescent).
-    ///
-    /// Touches the **view-tree** family (same as the scroller broker ops), so the
-    /// insertion-order drain stays order-equivalent.
-    SyncListViewer {
-        /// The list view whose `focused`/`top_item`/`indent` to update.
-        list: ViewId,
-        /// The horizontal scrollbar to read `value` from (`None` = no h bar).
-        h: Option<ViewId>,
-        /// The vertical scrollbar to read `value` from (`None` = no v bar).
-        v: Option<ViewId>,
-    },
-
     // -- the outline-viewer scrollbar read-sync ------------------
     /// **Read-direction sync for an outline viewer** (on a scrollbar-changed
     /// broadcast). The pump resolves both bars, reads each `value` (via
     /// [`View::value`] → [`FieldValue::Int`](crate::data::FieldValue::Int)), and
     /// writes the resulting `(dx, dy)` into `viewer`'s `delta` (the pump downcasts
-    /// it to `Outline` and calls `apply_delta`). Like
-    /// [`SyncScrollerDelta`](Self::SyncScrollerDelta) this is **read-only** — it
-    /// writes nothing back to the bars, so it terminates with no change-guard
-    /// needed (unlike [`SyncListViewer`](Self::SyncListViewer)).
+    /// it to `Outline` and calls `apply_delta`). Like [`ScrollSync`](Self::ScrollSync)
+    /// with a read-only scroller target, this is **read-only** — it writes nothing
+    /// back to the bars, so it terminates with no change-guard needed (unlike a
+    /// list-viewer target of `ScrollSync`, which writes back but is change-guarded).
     ///
     /// Touches the **view-tree** family (same as the scroller/list broker ops), so
     /// the insertion-order drain stays order-equivalent.
@@ -227,7 +207,7 @@ pub enum Deferred {
     /// `disabled_commands` (`&mut`); a `&CommandSet` on `Context` would alias
     /// that borrow. The view (a child) cannot read the command set inline, so
     /// it requests this by its own id and the pump calls back at apply time,
-    /// exactly like [`SyncListViewer`](Self::SyncListViewer) + `apply_scroll_sync`.
+    /// exactly like [`ScrollSync`](Self::ScrollSync) + `apply_scroll_sync`.
     /// (For a plain *read* a view does NOT need this broker:
     /// [`Context::command_enabled`] answers from an owned per-pump **snapshot**
     /// of the disabled set — a clone, not a borrow, so the aliasing problem never
@@ -349,7 +329,7 @@ pub enum Deferred {
     /// [`Editor`](crate::widgets::Editor) and call `apply_scroll_delta(dx, dy)`
     /// (which updates the delta and redraws only on a change). The editor is **not**
     /// a `Scroller`, so it cannot reuse
-    /// [`SyncScrollerDelta`](Self::SyncScrollerDelta). Touches the **view-tree**
+    /// [`ScrollSync`](Self::ScrollSync). Touches the **view-tree**
     /// family, so the insertion-order drain stays order-equivalent.
     SyncEditorDelta {
         /// The editor whose `delta` to update.
@@ -395,7 +375,7 @@ pub enum Deferred {
     /// [`Event::Broadcast`](crate::event::Event::Broadcast) is payload-less
     /// (`source` is the resolvable subject, NOT a value carrier), so this is the
     /// resolve-by-source broker — the same shape as
-    /// [`SyncListViewer`](Self::SyncListViewer)'s read+write, but reading a
+    /// [`ScrollSync`](Self::ScrollSync)'s read+write, but reading a
     /// directory entry rather than a scrollbar value.
     ///
     /// The producer ([`FileList`](crate::dialog::FileList)) broadcasts
@@ -406,7 +386,7 @@ pub enum Deferred {
     /// the record into `subscriber` (downcast
     /// [`FileInputLine`](crate::dialog::FileInputLine), call `on_file_focused`).
     /// Two separate `find_mut` calls keep only one `&mut` live at a time (exactly
-    /// like [`SyncScrollerDelta`](Self::SyncScrollerDelta)'s read-then-write).
+    /// like [`ScrollSync`](Self::ScrollSync)'s read-then-write).
     ///
     /// Touches the **view-tree** family (same as the scroller/list broker ops), so
     /// the insertion-order drain stays order-equivalent.
@@ -560,7 +540,7 @@ pub enum Deferred {
     /// `TAB_BAR_CHANGED` broadcast, the pump resolves `tab_bar`, reads its
     /// `value()` (→ `FieldValue::Int` index), downcasts `page_stack` to
     /// `PageStack`, and calls `set_active(index, &mut ctx)`. Mirrors
-    /// [`SyncScrollerDelta`](Deferred::SyncScrollerDelta).
+    /// [`ScrollSync`](Deferred::ScrollSync).
     ///
     /// Touches the **view-tree** family (same as the scroller broker ops), so
     /// the insertion-order drain stays order-equivalent.
@@ -1184,18 +1164,11 @@ impl<'a> Context<'a> {
         self.deferred.push(Deferred::EndModal(cmd));
     }
 
-    /// Request the scroller `scroller` re-read its scrollbars' values and update
-    /// its `delta`/`cursor` — **deferred** ([`Deferred::SyncScrollerDelta`]). The
-    /// scroller (a leaf) cannot read its window-frame sibling bars itself; the
-    /// pump brokers the read. `h`/`v` are the bar [`ViewId`]s (`None` = no bar).
-    pub fn request_sync_scroller_delta(
-        &mut self,
-        scroller: ViewId,
-        h: Option<ViewId>,
-        v: Option<ViewId>,
-    ) {
-        self.deferred
-            .push(Deferred::SyncScrollerDelta { scroller, h, v });
+    /// Request the unified sibling-scrollbar read-sync ([`Deferred::ScrollSync`]):
+    /// the pump reads `h`/`v` bar values and calls [`View::apply_scroll_sync`](crate::view::View::apply_scroll_sync) on
+    /// `target`. Used by the scroller, list viewers, outline viewer, and editor.
+    pub fn request_scroll_sync(&mut self, target: ViewId, h: Option<ViewId>, v: Option<ViewId>) {
+        self.deferred.push(Deferred::ScrollSync { target, h, v });
     }
 
     /// Request the scrollbar `id` have its parameters set — **deferred**
@@ -1237,22 +1210,12 @@ impl<'a> Context<'a> {
             .push(Deferred::SplitterDivider { splitter, op });
     }
 
-    /// Request the list viewer `list` re-read its scrollbars' values and update
-    /// its `focused`/`top_item`/`indent` — **deferred**
-    /// ([`Deferred::SyncListViewer`]). The list (a leaf) cannot read its
-    /// window-frame sibling bars itself; the pump brokers the read and calls back
-    /// through [`View::apply_scroll_sync`](crate::view::View::apply_scroll_sync).
-    /// `h`/`v` are the bar [`ViewId`]s (`None` = no bar).
-    pub fn request_sync_list_viewer(&mut self, list: ViewId, h: Option<ViewId>, v: Option<ViewId>) {
-        self.deferred.push(Deferred::SyncListViewer { list, h, v });
-    }
-
     /// Request an outline viewer's `delta` be refreshed from its sibling
     /// scrollbars' live `value`s — **deferred**
     /// ([`Deferred::SyncOutlineViewerDelta`]). The viewer (a leaf) cannot read
     /// its window-frame sibling bars itself; the pump brokers the read and writes
     /// the resulting `(dx, dy)` into the viewer's `delta` (a downcast to `Outline`,
-    /// like [`SyncScrollerDelta`](Deferred::SyncScrollerDelta)). `h`/`v` are the bar
+    /// like [`ScrollSync`](Deferred::ScrollSync)). `h`/`v` are the bar
     /// [`ViewId`]s (`None` = no bar → 0). Unlike the list-viewer sync this writes
     /// nothing back (the outline viewer has no editor cursor / focus write-back), so
     /// it terminates like the scroller's read-only sync.

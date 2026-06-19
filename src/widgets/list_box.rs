@@ -627,7 +627,7 @@ mod tests {
         let mut timers = crate::timer::TimerQueue::new();
         let mut deferred: Vec<Deferred> = vec![];
 
-        // cmScrollBarChanged from own v-bar → SyncListViewer queued.
+        // cmScrollBarChanged from own v-bar → ScrollSync queued.
         let mut ev = Event::Broadcast {
             command: crate::command::Command::SCROLL_BAR_CHANGED,
             source: Some(v_id),
@@ -639,17 +639,17 @@ mod tests {
                 .unwrap()
                 .handle_event(&mut ev, &mut ctx);
         }
-        assert_eq!(deferred.len(), 1, "one SyncListViewer op queued");
+        assert_eq!(deferred.len(), 1, "one ScrollSync op queued");
         assert!(
             matches!(
                 deferred[0],
-                Deferred::SyncListViewer {
-                    list,
+                Deferred::ScrollSync {
+                    target,
                     h: None,
                     v: Some(vid),
-                } if list == lb_id && vid == v_id
+                } if target == lb_id && vid == v_id
             ),
-            "SyncListViewer carries correct list and v-bar ids"
+            "ScrollSync carries correct target and v-bar ids"
         );
     }
 

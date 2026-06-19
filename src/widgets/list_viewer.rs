@@ -28,7 +28,7 @@
 //! needs, refreshed by the read-sync). On a
 //! [`SCROLL_BAR_CHANGED`](crate::command::Command::SCROLL_BAR_CHANGED) broadcast
 //! naming one of its bars as `source`, the list requests
-//! [`Deferred::SyncListViewer`](crate::view::Deferred::SyncListViewer); the pump
+//! [`Deferred::ScrollSync`](crate::view::Deferred::ScrollSync); the pump
 //! reads both bars' `value`s and calls back through
 //! [`View::apply_scroll_sync`](crate::view::View::apply_scroll_sync) →
 //! [`apply_scroll`].
@@ -721,7 +721,7 @@ pub fn handle_event<L: ListViewer + ?Sized>(this: &mut L, ev: &mut Event, ctx: &
                 // The pump brokers the read (resolve the bars, read value, call
                 // back through apply_scroll_sync). Requires this view have an id.
                 if let Some(id) = this.lv().state.id() {
-                    ctx.request_sync_list_viewer(id, h, v);
+                    ctx.request_scroll_sync(id, h, v);
                 }
             }
         }
@@ -1591,7 +1591,7 @@ mod tests {
         let mut timers = crate::timer::TimerQueue::new();
         let mut deferred: Vec<Deferred> = vec![];
 
-        // (a) CHANGED from own h-bar -> SyncListViewer queued.
+        // (a) CHANGED from own h-bar -> ScrollSync queued.
         let mut ev = Event::Broadcast {
             command: Command::SCROLL_BAR_CHANGED,
             source: Some(h),
@@ -1603,8 +1603,8 @@ mod tests {
         assert_eq!(deferred.len(), 1);
         assert!(matches!(
             deferred[0],
-            Deferred::SyncListViewer { list, h: rh, v: rv }
-                if list == id && rh == Some(h) && rv == Some(v)
+            Deferred::ScrollSync { target, h: rh, v: rv }
+                if target == id && rh == Some(h) && rv == Some(v)
         ));
 
         // (b) CHANGED from a foreign source -> nothing.

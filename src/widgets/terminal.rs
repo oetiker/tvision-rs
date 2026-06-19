@@ -434,8 +434,8 @@ impl View for Terminal {
     }
 
     /// Returns `Some(&mut self.scroller)` via the inner `Scroller::as_any_mut`.
-    /// This lets the `Deferred::SyncScrollerDelta` apply arm downcast to
-    /// `Scroller` and call `apply_delta` without a new Deferred variant.
+    /// This lets the `Deferred::ScrollSync` apply arm dispatch `apply_scroll_sync`
+    /// to the inner `Scroller` without a separate concrete downcast.
     fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
         self.scroller.as_any_mut()
     }
@@ -688,7 +688,7 @@ mod tests {
     #[test]
     fn as_any_mut_returns_scroller() {
         // Verify that as_any_mut() on Terminal downcasts to Scroller (not Terminal),
-        // so the existing SyncScrollerDelta pump arm can call apply_delta on it.
+        // so the ScrollSync pump arm can dispatch apply_scroll_sync to it.
         let mut group = Group::new(Rect::new(0, 0, 20, 5));
         let t = Terminal::new(Rect::new(0, 0, 20, 5), None, None, 256);
         let id = group.insert(Box::new(t));

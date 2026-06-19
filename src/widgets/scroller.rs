@@ -216,9 +216,16 @@ impl View for Scroller {
         {
             // The scroller must itself be inserted (have an id) to be addressable.
             if let Some(scroller) = self.state.id() {
-                ctx.request_sync_scroller_delta(scroller, self.h_scroll_bar, self.v_scroll_bar);
+                ctx.request_scroll_sync(scroller, self.h_scroll_bar, self.v_scroll_bar);
             }
         }
+    }
+
+    /// Called by the pump after it reads the sibling scrollbar values. Applies the
+    /// resulting delta to this scroller. A missing bar (`None`) is treated as
+    /// delta 0 — faithful to the previous `.unwrap_or(0)` read in the old pump arm.
+    fn apply_scroll_sync(&mut self, h: Option<i32>, v: Option<i32>, _ctx: &mut Context) {
+        self.apply_delta(Point::new(h.unwrap_or(0), v.unwrap_or(0)));
     }
 
     /// After flipping the flag, when `flag` is `Active` or `Selected`, show/hide
@@ -252,9 +259,10 @@ impl View for Scroller {
         self.set_limit(x, y, ctx);
     }
 
-    /// Concrete-reach hatch (the sanctioned downcast): the pump downcasts to
-    /// `&mut Scroller` to call [`apply_delta`](Self::apply_delta) when applying a
-    /// `Deferred::SyncScrollerDelta`.
+    /// Concrete-reach hatch (the sanctioned downcast): retained so `Terminal`
+    /// can delegate `as_any_mut` to its inner `Scroller`, which lets the
+    /// `Deferred::ScrollSync` arm dispatch `apply_scroll_sync` to the
+    /// `Scroller` override via the `View` trait (no per-arm downcast needed).
     fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
         Some(self)
     }
@@ -264,7 +272,7 @@ impl View for Scroller {
 // Tests
 // ---------------------------------------------------------------------------
 //
-// The cross-view *broker* (pump-side apply of SyncScrollerDelta /
+// The cross-view *broker* (pump-side apply of ScrollSync /
 // ScrollBarSetParams / SetVisible) is tested end-to-end through `Program::pump_once`
 // in `src/app/program.rs` (it needs the pump's `group.find_mut`). Here we test the
 // scroller-side pieces directly: the ctor, `apply_delta` (the cursor-adjust order),
@@ -545,7 +553,7 @@ mod tests {
         let mut timers = crate::timer::TimerQueue::new();
         let mut deferred: Vec<Deferred> = vec![];
 
-        // (a) Broadcast sourced by the H bar → SyncScrollerDelta queued.
+        // (a) Broadcast sourced by the H bar → ScrollSync queued.
         {
             let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
             let mut ev = Event::Broadcast {
@@ -560,8 +568,8 @@ mod tests {
         assert_eq!(deferred.len(), 1, "own-bar broadcast → one sync request");
         assert!(matches!(
             deferred[0],
-            Deferred::SyncScrollerDelta { scroller, h: rh, v: rv }
-                if scroller == scroller_id && rh == Some(h) && rv == Some(v)
+            Deferred::ScrollSync { target, h: rh, v: rv }
+                if target == scroller_id && rh == Some(h) && rv == Some(v)
         ));
 
         // (b) Broadcast sourced by an UNRELATED view (the scroller itself — a real
