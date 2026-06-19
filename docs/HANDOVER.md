@@ -7,6 +7,12 @@
 > Read this, then [CLAUDE.md](file:///home/oetiker/checkouts/tvision-rs/CLAUDE.md)
 > (orientation / locked decisions / cross-cutting seams), then start.
 >
+> **⚠️ LIVE DATA-MOVEMENT WORK IS IN A WORKTREE** — branch
+> **`consumer-api-coverage`** at
+> **`/scratch/oetiker/claude-worktrees/tvision-rs-consumer-api-coverage`**, NOT on
+> `main`. If you opened `/home/oetiker/checkouts/rstv`, go to the worktree first
+> (see the 2026-06-19 section).
+>
 > **Direction:** the 92-class port is ✅ complete, the post-port backlog
 > (`docs/BACKLOG.md`, Phases A/B/C) is exhausted, and the developer docs (Docs
 > Phases 1–3) are ✅ done. The work now is **post-port UI polish + targeted
@@ -14,6 +20,77 @@
 > dialog design guide + a `TabBar`/`PageStack` widget pair + a color-picker
 > rebuild). When something lands: add an IMPLEMENTATION-LOG section and update
 > this file.
+
+## Current state (2026-06-19) — ⚠️ LIVE WORK IS IN A WORKTREE
+
+**The work below lives on branch `consumer-api-coverage` in a git worktree — NOT on
+`main`, NOT in the `/home/oetiker/checkouts/rstv` checkout.** (This same section is
+committed on the branch, so it reads correctly whether you start here or in the
+worktree.)
+
+- **Worktree path:** `/scratch/oetiker/claude-worktrees/tvision-rs-consumer-api-coverage`
+- **Branch:** `consumer-api-coverage`  **HEAD:** `789d25b`  **branched from `main` at** `8caa0a4`
+- **To continue:** use the native `EnterWorktree` tool with that path (or `cd` there).
+  Do ALL git/build/test there. Canonical `CARGO_TARGET_DIR=/home/oetiker/scratch/cargo-target`,
+  `-j2 --test-threads=2`. **Never `git merge` inside the worktree** (merges the
+  branch into itself — see "Non-obvious gotchas"); merge from this checkout.
+- **The spec + plans + the subagent-driven ledger live ON the branch** (in the
+  worktree's `docs/superpowers/` and `.git/.../sdd/progress.md`), not here.
+
+**What is stacked on the branch (all two-stage + final-reviewed clean, un-merged;
+integrated-tree gate green: 1275 lib tests, `clippy --all-targets`, `fmt`):**
+- **Axis A + C.1** (`45d5f04`, `f9d611e`) — the original `tcv` consumer-api gaps:
+  window decoration flags made public + builders; `get_help_ctx` bubbles to the
+  focused child (idle status-line path, faithful to `TView::TopView`).
+- **Phase 1 — `exec_view_with<R>`** — by-value modal results via a generic
+  `exec_view_capture<R>` core; migrated `color_dialog`/`theme_editor`; deleted the
+  `ColorPick`/`ThemeEdit` `ModalCompletion` variants + both `Rc<Cell>`/`Rc<RefCell>`
+  sinks. `pub fn exec_view_with<R>` at `src/app/program.rs:1288`.
+- **Phase 2 — widen `FieldValue` + the `Custom` open seam** — added
+  `Bool`/`Bits`/`List` + `Custom(Rc<dyn CustomValue>)` (the typed-at-the-edges
+  escape for third-party components) with `custom`/`as_custom`/loud
+  `value_as::<T>() -> Result<_, FieldTypeError>`; manual `PartialEq` (Custom =
+  `Rc::ptr_eq`); cluster `value()`/`set_value()` as `Bits`;
+  `Group`/`Window`/`Dialog` `gather_list`/`scatter_list` (whole record as ordered
+  `FieldValue::List`). `Color`/`Theme` stay by-value, deliberately NOT `FieldValue`.
+
+**The driving design — spec v5 (read before Phase 3):**
+`docs/superpowers/specs/2026-06-18-unified-data-movement-design.md` — unify the
+port's fragmented data-movement into one typed currency + one mechanism per kind,
+open to third-party components. Read **§3.5** (the `Custom` extensibility story:
+runtime-checked / fail-loud / typed-at-the-edges; `value_as`; `TypeId`-version
+caveat; the `inventory`-`self_check` follow-on rejected-for-now in §6.7) and **§2.1**
+(the apply-with-judgment guard). Plans:
+`docs/superpowers/plans/2026-06-18-data-movement-phase1-exec-view-with.md`,
+`docs/superpowers/plans/2026-06-19-data-movement-phase2-fieldvalue-widen.md`.
+
+**Next: Phase 3 — sync signals → trait methods (spec §3.2/§5).** Retire the
+cluster-B pump `as_any` downcasts widget-by-widget by delivering each sync through a
+defaulted `View` method instead. **Key v5 refinement: collapse the five
+scroll-family brokers (Scroller / Editor / Outline / Indicator / PageStack deltas)
+into ONE shared `apply_scroll_sync` hook** (joining the existing `apply_list_scroll`),
+NOT five parallel methods. Touches the pump, the `View` trait, the delegate macro
+(add a `tvision-rs-macros/src/specs.rs` forwarder + a `tests/delegate_view.rs` spy
+entry per new `View` method), and several widgets. **Write a v5-aware plan first**
+(writing-plans) → user review → subagent-drive. Then **Phase 4** (modal-result reads
+`FindPick`/`ReplacePick`/`ThemeColorPick` via `value()`/`gather_list`) and **Phase 5**
+(generic `ExecView`: `Context::request_exec_view` + `Deferred::OpenModal`, make
+`tcv`'s Info box a real custom dialog).
+
+**Deferred follow-ons (recorded, not dropped):** `inventory`-collected
+`Program::self_check()` + per-component `data_self_check` (needs a dependency
+decision — spec §3.5/§6.7); `MultiCheckBoxes::value()` → `Bits` for coherence; the
+ship-as-is Minors in the SDD ledger.
+
+**Disposition (user):** KEEP STACKING phases on `consumer-api-coverage` — do NOT
+merge yet (even though Phase 1 and Phase 2 are each "Ready to merge = YES"). The
+whole stack lands together later.
+
+**Method note:** this work is run **subagent-driven** (CLAUDE.md "How to run the
+port" / `superpowers:subagent-driven-development`): fresh implementer per task →
+two-stage review (spec then quality, fresh agents) → fix → integrate, with a broad
+final whole-phase review. The `sdd/progress.md` ledger in the worktree is the
+recovery map (commits + per-task review verdicts + deferred Minors).
 
 ## Current state (2026-06-17, going-public prep)
 
