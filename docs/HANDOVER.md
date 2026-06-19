@@ -7,12 +7,6 @@
 > Read this, then [CLAUDE.md](file:///home/oetiker/checkouts/tvision-rs/CLAUDE.md)
 > (orientation / locked decisions / cross-cutting seams), then start.
 >
-> **⚠️ LIVE DATA-MOVEMENT WORK IS IN A WORKTREE** — branch
-> **`consumer-api-coverage`** at
-> **`/scratch/oetiker/claude-worktrees/tvision-rs-consumer-api-coverage`**, NOT on
-> `main`. If you opened `/home/oetiker/checkouts/rstv`, go to the worktree first
-> (see the 2026-06-19 section).
->
 > **Direction:** the 92-class port is ✅ complete, the post-port backlog
 > (`docs/BACKLOG.md`, Phases A/B/C) is exhausted, and the developer docs (Docs
 > Phases 1–3) are ✅ done. The work now is **post-port UI polish + targeted
@@ -21,24 +15,16 @@
 > rebuild). When something lands: add an IMPLEMENTATION-LOG section and update
 > this file.
 
-## Current state (2026-06-19) — ⚠️ LIVE WORK IS IN A WORKTREE
+## Current state (2026-06-20) — ✅ DATA-MOVEMENT EFFORT MERGED TO MAIN
 
-**The work below lives on branch `consumer-api-coverage` in a git worktree — NOT on
-`main`, NOT in the `/home/oetiker/checkouts/rstv` checkout.** (This same section is
-committed on the branch, so it reads correctly whether you start here or in the
-worktree.)
+**The data-movement effort (Phases 1–5) + tcv polish is now MERGED to `main`**
+(merge commit integrating `consumer-api-coverage` alongside the parallel
+TV2-audit documentation sweep). The `consumer-api-coverage` worktree has served
+its purpose. The spec + plans live under `docs/superpowers/`; the per-commit
+narrative is in `docs/IMPLEMENTATION-LOG.md`.
 
-- **Worktree path:** `/scratch/oetiker/claude-worktrees/tvision-rs-consumer-api-coverage`
-- **Branch:** `consumer-api-coverage`  **HEAD:** `0cea466`  **branched from `main` at** `8caa0a4`
-- **To continue:** use the native `EnterWorktree` tool with that path (or `cd` there).
-  Do ALL git/build/test there. Canonical `CARGO_TARGET_DIR=/home/oetiker/scratch/cargo-target`,
-  `-j2 --test-threads=2`. **Never `git merge` inside the worktree** (merges the
-  branch into itself — see "Non-obvious gotchas"); merge from this checkout.
-- **The spec + plans + the subagent-driven ledger live ON the branch** (in the
-  worktree's `docs/superpowers/` and `.git/.../sdd/progress.md`), not here.
-
-**What is stacked on the branch (all two-stage + final-reviewed clean, un-merged;
-integrated-tree gate green: 1279 lib tests, `clippy --all-targets`, `fmt`):**
+**What landed (all two-stage + final-reviewed clean; integrated-tree gate green:
+1292 lib tests, `clippy --all-targets`, `fmt`, `xtask test`/`docs`):**
 - **Axis A + C.1** (`45d5f04`, `f9d611e`) — the original `tcv` consumer-api gaps:
   window decoration flags made public + builders; `get_help_ctx` bubbles to the
   focused child (idle status-line path, faithful to `TView::TopView`).
@@ -125,9 +111,9 @@ decision — spec §3.5/§6.7); `MultiCheckBoxes::value()` → `Bits` for cohere
 the ExecView data-back `FieldValue` path (see `request_exec_view` doc, §3.4/§2.1);
 the ship-as-is Minors in the SDD ledger.
 
-**Disposition (user):** KEEP STACKING — disposition has been to land the whole
-stack together. The branch is now **feature-complete** and awaiting the merge call.
-Do NOT merge yet without an explicit user decision.
+**Disposition (user):** MERGED to `main` on 2026-06-20 per explicit user call
+("merge with main"). The whole stack landed together, integrated with the
+parallel TV2-audit documentation sweep that had advanced `main` independently.
 
 **Method note:** this work is run **subagent-driven** (CLAUDE.md "How to run the
 port" / `superpowers:subagent-driven-development`): fresh implementer per task →
