@@ -2,7 +2,14 @@
 
 Every public `PORTED`/`EQUIVALENT` symbol scoring < 3 on Axis 2 (docs). See [`README.md`](README.md) for the rubric. Back to [coverage-matrix](coverage-matrix.md).
 
-**Total below bar:** 644 (1 undocumented · 36 signature-only · 607 what-but-not-how). The score-2 bulk is the dominant doc debt: the symbol says *what* it does but not *how/when to use it*.
+**Total below bar:** ~~644 (1 undocumented · 36 signature-only · 607 what-but-not-how)~~ → **3** after the 2026-06-19 rustdoc score-3 sweep (branch `docs/audit-backlog-closure`). Every public `PORTED`/`EQUIVALENT` symbol was raised to score-3 ("what + how/when") or honestly reclassified `N/A` (private/`pub(crate)`); the `Role` palette chain was documented in a consolidated `src/theme.rs` pass; and the per-symbol-uncarryable concepts (event phase, modal loop, coordinate translation, idle, whole-tree redraw, validator-error dialogs) were filled in the mdBook concept chapters.
+
+**The 3 remaining below-bar rows are structurally blocked (no rustdoc-only fix):**
+- `TIndicator` **SetState** — no `set_state` override exists on `Indicator`; a doc would require adding the method (code change).
+- `TWindow` **Close** — no public `close()`; the logic lives in `handle_event` (already score-3). Adding a standalone method is a code change.
+- `TTextDevice` **GetPalette** — a `→ concept` row with no public Rust symbol (`Role::ScrollerNormal` is inlined in `Terminal::draw`); the palette-chain concept is covered in the theme docs + guide.
+
+The tables below are the historical *pre-sweep* inventory (retained for provenance); the per-section closure is recorded in each `reference/<Section>.md`'s `doc<3` rollup.
 
 ## Priority queue — score 0 (undocumented) & 1 (signature-only)
 
