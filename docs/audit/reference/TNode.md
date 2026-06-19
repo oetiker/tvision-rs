@@ -8,16 +8,16 @@ Rust module(s): src/widgets/outline.rs   |   magiblot: include/tvision/outline.h
 
 | Guide entry | Pg | Bucket | Corr | Rust symbol / mapping | Doc | Notes |
 |---|---|---|---|---|---|---|
-| `next` (field) | 488 | PORTED | OK | `tv::Node::next: Option<Box<Node>>` | 2 | C++ raw pointer; Rust uses `Option<Box<Node>>` — owned next-sibling. The `Box` drop recursively frees the sibling chain; behavior is identical. Doc says what it is, not when to use builder vs. direct assign. |
-| `text` (field) | 488 | PORTED | OK | `tv::Node::text: String` | 2 | C++ `const char*` (heap-allocated via `newStr`); Rust `String` owns the text. Same semantics; the destructor difference is automatic. |
-| `childList` (field) | 488 | PORTED | OK | `tv::Node::child_list: Option<Box<Node>>` | 2 | C++ raw pointer to first child; Rust `Option<Box<Node>>`. Same singly-linked structure, ownership automatic. |
-| `expanded` (field) | 488 | PORTED | OK | `tv::Node::expanded: bool` | 2 | C++ `Boolean`; Rust `bool`. New nodes default to `true` (expanded) in both. Doc says what it is; "how it interacts with `adjust`/`isExpanded`" is not mentioned. |
-| Constructor `TNode(aText)` | 488 | PORTED | OK | `tv::Node::new(text: impl Into<String>) -> Node` | 2 | Single-arg constructor: null `next`/`childList`, `expanded = True`. Rust default: same. |
-| Constructor `TNode(aText, aChildren, aNext, initialState)` | 488 | PORTED | OK | `tv::Node::with_next` / `tv::Node::with_children` / `tv::Node::with_expanded` (builder chain) | 2 | C++ 4-arg constructor sets all fields. Rust uses a builder pattern — `Node::new(text).with_children(…).with_next(…).with_expanded(…)`. Known idiomatic mapping. Doc explains each builder method individually (what), but not the builder-chain idiom vs. the C++ constructor. |
-| Destructor `~TNode` | 488 | EQUIVALENT | OK | Automatic `Box<Node>` / `Drop` | N/A | C++ destructor frees `text`; the recursive delete of `next`/`childList` is done by `TOutlineViewer::disposeNode`. Rust: `Box` drop is recursive — the entire owned subtree is freed when the root box drops. No explicit destructor; equivalent by construction. Private/internal. |
+| `next` (field) | 488 | PORTED | OK | `tv::Node::next: Option<Box<Node>>` | 3 | Raised: rustdoc now explains that `next` is the next sibling, when to use `with_next` vs. direct assignment, and that the `Box` drop frees the sibling chain automatically. |
+| `text` (field) | 488 | PORTED | OK | `tv::Node::text: String` | 3 | Raised: rustdoc explains that `text` is displayed verbatim and that reassigning it requires calling `ov_update` to refresh column widths. |
+| `childList` (field) | 488 | PORTED | OK | `tv::Node::child_list: Option<Box<Node>>` | 3 | Raised: rustdoc explains the singly-linked structure, when to use `with_children`, and that the drop frees the whole subtree. |
+| `expanded` (field) | 488 | PORTED | OK | `tv::Node::expanded: bool` | 3 | Raised: rustdoc explains default-true, how the user changes it interactively (- key / graph click) or programmatically via `with_expanded`, and the relationship to `is_expanded`/`adjust`. |
+| Constructor `TNode(aText)` | 488 | PORTED | OK | `tv::Node::new(text: impl Into<String>) -> Node` | 3 | Raised: rustdoc says it creates a leaf node and directs readers to the builder chain before boxing and passing to `Outline::new`. |
+| Constructor `TNode(aText, aChildren, aNext, initialState)` | 488 | PORTED | OK | `tv::Node::with_next` / `tv::Node::with_children` / `tv::Node::with_expanded` (builder chain) | 3 | Raised: each builder method now has a "how/when" sentence plus a doctest on `with_next` showing the sibling-list idiom. |
+| Destructor `~TNode` | 488 | EQUIVALENT | OK | Automatic `Box<Node>` / `Drop` | N/A | Private/internal. No public symbol. |
 
 ## Summary
 
 - PORTED: 6   EQUIVALENT: 1   NOT-PORTED: 0   MISSING: 0   UNSURE: 0
-- SUSPECT: 0   |   doc<3 (public): 6   |   → concept: 0
-- Notable findings: No gaps or correctness issues. All four fields and both constructors are ported faithfully. The main doc gap is that none of the public items score 3 — the builder-chain pattern and its relationship to the C++ 4-arg constructor, plus the ownership/drop semantics, would each benefit from a short "how/when" sentence.
+- SUSPECT: 0   |   doc<3 (public): 0   |   → concept: 0
+- Notable findings: All six public items raised to score 3. Destructor row is N/A (no public symbol). Two doctests added (`Node` struct example, `with_next` sibling-list example); both pass `cargo test --doc`.
