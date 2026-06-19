@@ -82,7 +82,12 @@ algorithm, and shadows are cast during the draw. → [The draw model](../port/dr
 
 *forced.* Nested blocking modal loops (`execView`, `dragView`) become **one**
 non-recursive event loop plus a LIFO capture stack; modality, drag, and
-press-tracking are handlers, not loops. → [Modal execView](../port/modal.md)
+press-tracking are handlers, not loops. `execView` from a `Program` method
+becomes [`Program::exec_view_with`](../api/tvision-rs/app/struct.Program.html#method.exec_view_with)
+(result by value); `execView` from within a view becomes `Context::request_exec_view`
+(queues `Deferred::OpenModal`; reuses the existing `pending_modal` +
+`RouteModalAnswer` machinery; close command routed back via `set_modal_answer`).
+→ [Modal execView](../port/modal.md)
 
 ### D10 · Data transfer → typed value protocol {#d10}
 

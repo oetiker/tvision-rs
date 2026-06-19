@@ -47,7 +47,7 @@ inline. Conceptually they fall into four disjoint families by *what they touch*:
 | ------------- | ------------------------------------------------- | ---------------------------------- |
 | Capture stack | push a capture handler (drives modal input)       | `TGroup` mouse capture             |
 | Command set   | enable / disable a command                        | `enableCommand` / `disableCommand` |
-| View tree     | change bounds, set a state flag, close, focus, sync scrollbars | `setState`, `close`, sibling pointers |
+| View tree     | change bounds, set a state flag, close, focus, sync scrollbars, launch a view-triggered modal (`OpenModal`) | `setState`, `close`, sibling pointers, `execView` from a view |
 | Loop state    | end the (modal) loop with a command               | `endModal`                         |
 
 Because the families are disjoint, the order in which the loop applies effects

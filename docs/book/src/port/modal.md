@@ -39,6 +39,23 @@ capture](capture.md) for the mechanism modality shares with drag/resize and
 press-and-hold, and [the event loop in depth](../internals/event-loop.md) for
 what each `pump_once` turn does.
 
+## Choosing the right launch path
+
+How you launch a modal depends on **what calls it**:
+
+| Caller | Launch method | Result delivery |
+|--------|---------------|-----------------|
+| A `Program` / `Application` method | [`Program::exec_view_with`](../api/tvision-rs/app/struct.Program.html#method.exec_view_with) | returned by value from the `extract` closure |
+| A `View` (inside `handle_event`) | `Context::request_exec_view` | close command routed to `requester` via `View::set_modal_answer`; optional `then_command` re-injected |
+
+A view holds only `&mut Context`, never `&mut Program`, so it cannot call
+`exec_view_with` inline. Calling `ctx.request_exec_view(view, requester,
+then_command)` instead queues a `Deferred::OpenModal`
+and returns immediately; the pump moves the boxed view into the existing
+`pending_modal` slot, runs it via the same single-loop machinery, and on close
+delivers the result to `requester` and re-injects `then_command`. No new loop
+is spun, and no new `ModalCompletion` variant is needed.
+
 ## Getting a result back: `exec_view_with`
 
 C++ `execView` returns a `ushort` end command; the caller then reads results out
@@ -63,3 +80,48 @@ successor to the old per-dialog `ModalCompletion` "sink" variants. A single fiel
 crosses as a [`FieldValue`](../api/tvision-rs/data/enum.FieldValue.html) via
 `View::value`; a richer native value (a `Color`, a whole `Theme`) is returned
 directly from `extract` — `Color`/`Theme` are deliberately not `FieldValue`s.
+
+## Launching a modal from a view: `Context::request_exec_view`
+
+Use `request_exec_view` when the modal is triggered from inside a `handle_event`
+implementation (i.e., from any `View`). The worked example is `tcv`'s Info box:
+the `DirBox` list view builds a custom read-only `Dialog` and launches it when
+the user presses Enter or double-clicks an entry.
+
+### Building the dialog
+
+{{#rustdoc_include ../../../../examples/tcv.rs:info_dialog}}
+
+### Launching it
+
+Inside `DirBox::handle_event` (which receives `&mut Context`, not `&mut Program`):
+
+```rust,ignore
+// Illustrative sketch — the real code lives in examples/tcv.rs (DirBox::open_info).
+fn open_info(&mut self, ctx: &mut Context) {
+    if let Some(e) = CATALOG.get(self.lv.focused as usize) {
+        let dialog = build_info_dialog(e);
+        if let Some(id) = self.state().id() {
+            ctx.request_exec_view(Box::new(dialog), id, None);
+        }
+    }
+}
+```
+
+`request_exec_view` queues `Deferred::OpenModal`. The pump picks it up at the
+bottom of the same turn, stashes the boxed `Dialog` into `pending_modal` with a
+`RouteModalAnswer { answer_to: id, then_command: None }` completion, and runs it
+via the existing single-loop machinery. When the user presses OK (which posts
+`Command::CANCEL` — the read-only-info convention: dismiss = `cmCancel`) the
+pump delivers that command to `DirBox` via `set_modal_answer`. The base default
+for `set_modal_answer` silently discards the command, which is correct here —
+the Info box is read-only and `then_command` is `None`, so no follow-up action
+is needed.
+
+### Data-back path
+
+The result is the close command only. A future input dialog that needs the
+modal's typed `FieldValue` result back would override `set_modal_answer` on the
+requester to cache the command, then read `modal_id.value()` (or call
+`requester.set_modal_data(...)`) on the `then_command` re-injection. That path
+is not built today because no current consumer needs it.

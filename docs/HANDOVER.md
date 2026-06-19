@@ -29,7 +29,7 @@ committed on the branch, so it reads correctly whether you start here or in the
 worktree.)
 
 - **Worktree path:** `/scratch/oetiker/claude-worktrees/tvision-rs-consumer-api-coverage`
-- **Branch:** `consumer-api-coverage`  **HEAD:** `789d25b`  **branched from `main` at** `8caa0a4`
+- **Branch:** `consumer-api-coverage`  **HEAD:** `8c64e98`  **branched from `main` at** `8caa0a4`
 - **To continue:** use the native `EnterWorktree` tool with that path (or `cd` there).
   Do ALL git/build/test there. Canonical `CARGO_TARGET_DIR=/home/oetiker/scratch/cargo-target`,
   `-j2 --test-threads=2`. **Never `git merge` inside the worktree** (merges the
@@ -38,7 +38,7 @@ worktree.)
   worktree's `docs/superpowers/` and `.git/.../sdd/progress.md`), not here.
 
 **What is stacked on the branch (all two-stage + final-reviewed clean, un-merged;
-integrated-tree gate green: 1277 lib tests, `clippy --all-targets`, `fmt`):**
+integrated-tree gate green: 1279 lib tests, `clippy --all-targets`, `fmt`):**
 - **Axis A + C.1** (`45d5f04`, `f9d611e`) — the original `tcv` consumer-api gaps:
   window decoration flags made public + builders; `get_help_ctx` bubbles to the
   focused child (idle status-line path, faithful to `TView::TopView`).
@@ -76,6 +76,17 @@ integrated-tree gate green: 1277 lib tests, `clippy --all-targets`, `fmt`):**
   + dialog-OPEN pre-fill reads (structural "build UI from known widget state").
   Docs updated (`apps/dialogs.md`, `internals/custom-view.md`, IMPLEMENTATION-LOG).
   Gate: 1277 lib tests, clippy, fmt, examples green; no snapshot changes.
+- **Phase 5 — generic ExecView from a view** (`efb1f2d`..`8c64e98`) — closed
+  consumer-API gap #2. New `Deferred::OpenModal { view, requester, then_command }`
+  + `Context::request_exec_view(view, requester, then_command)` — the view-launched
+  counterpart of `Program::exec_view_with<R>` (a view holds only `&mut Context`,
+  never `&mut Program`). The pump stashes the boxed modal into `pending_modal` with
+  the existing `RouteModalAnswer` completion; no new `ModalCompletion` variant, no
+  downcast. `tcv`'s Info box is now a real custom `Dialog` built by `build_info_dialog`
+  and launched via `request_exec_view`. Data-back `FieldValue` path deliberately
+  deferred (result is the close command only; reason recorded on `request_exec_view`
+  doc, §3.4/§2.1). Gate: 1279 lib tests, clippy, fmt, examples green.
+  **This completes the data-movement effort (Phases 1–5).**
 
 **The driving design — spec v5 (read before Phase 3):**
 `docs/superpowers/specs/2026-06-18-unified-data-movement-design.md` — unify the
@@ -97,19 +108,18 @@ recorded on the variant docs). Plan:
 
 **Phase 4 DONE.** See the "stacked on the branch" entry above and `docs/IMPLEMENTATION-LOG.md`.
 
-**Next: Phase 5 — generic `ExecView` (`Context::request_exec_view` +
-`Deferred::OpenModal`; make `tcv`'s Info box a real custom dialog launched from
-the list; spec §3.4/§5 Phase 5).** Write a plan first (writing-plans) → user
-review → subagent-drive.
+**Phase 5 DONE.** See the "stacked on the branch" entry above and `docs/IMPLEMENTATION-LOG.md`.
+The **data-movement stack (Phases 1–5) is now feature-complete on the branch.**
 
 **Deferred follow-ons (recorded, not dropped):** `inventory`-collected
 `Program::self_check()` + per-component `data_self_check` (needs a dependency
-decision — spec §3.5/§6.7); `MultiCheckBoxes::value()` → `Bits` for coherence; the
-ship-as-is Minors in the SDD ledger.
+decision — spec §3.5/§6.7); `MultiCheckBoxes::value()` → `Bits` for coherence;
+the ExecView data-back `FieldValue` path (see `request_exec_view` doc, §3.4/§2.1);
+the ship-as-is Minors in the SDD ledger.
 
-**Disposition (user):** KEEP STACKING phases on `consumer-api-coverage` — do NOT
-merge yet (even though Phase 1 and Phase 2 are each "Ready to merge = YES"). The
-whole stack lands together later.
+**Disposition (user):** KEEP STACKING — disposition has been to land the whole
+stack together. The branch is now **feature-complete** and awaiting the merge call.
+Do NOT merge yet without an explicit user decision.
 
 **Method note:** this work is run **subagent-driven** (CLAUDE.md "How to run the
 port" / `superpowers:subagent-driven-development`): fresh implementer per task →

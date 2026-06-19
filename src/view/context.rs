@@ -1326,6 +1326,13 @@ impl<'a> Context<'a> {
     /// dialog). To act on the result, the `requester` overrides
     /// [`View::set_modal_answer`](crate::view::View::set_modal_answer) to cache the close command and acts on
     /// `then_command` when it is re-posted.
+    ///
+    /// **Data-back path deliberately not built:** the result is the close command
+    /// only (via `RouteModalAnswer` → `set_modal_answer`). A future input-dialog
+    /// consumer that needs the modal's typed `value()` back would add a generic data
+    /// arm (read `modal_id.value()` → `requester.set_modal_data(…)`); no current
+    /// consumer needs it (the tcv Info box is read-only), so it is not shipped
+    /// untested (spec §3.4/§2.1).
     pub fn request_exec_view(
         &mut self,
         view: Box<dyn crate::view::View>,

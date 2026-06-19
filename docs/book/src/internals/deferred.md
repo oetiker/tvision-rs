@@ -51,6 +51,13 @@ for effect in effects {
         Deferred::ChangeBounds(id, r) => { if let Some(v) = group.find_mut(id) { v.change_bounds(r); } }
         Deferred::Close(id)           => { /* remove from the owning group */ }
         Deferred::EndModal(cmd)       => { /* set Program::end_state */ }
+        Deferred::OpenModal { view, requester, then_command } => {
+            // View-launched modal: stash into pending_modal with RouteModalAnswer
+            // completion; pump_and_drive runs it via the existing exec_view machinery.
+            // On close the pump delivers the close command to `requester` via
+            // View::set_modal_answer and re-injects `then_command`.
+            /* program.pending_modal = Some((view, RouteModalAnswer { answer_to: requester, then_command })) */
+        }
         // … one arm per variant
     }
 }
@@ -66,10 +73,12 @@ handler sees the *next* event, never the one that pushed it.
 
 This drain is what lets a button request `end_modal(Command::OK)` from deep
 inside a dialog, a window request its own `Close`, a dragged frame request new
-`ChangeBounds`, and a scroller stay in sync with a sibling scrollbar it can never
-touch directly. The cross-view (`ViewId`-addressed) cases are the subject of
-[Cross-view brokering & `ViewId`](brokering.md); the drain's place in the loop is
-in [The event loop in depth](event-loop.md).
+`ChangeBounds`, a scroller stay in sync with a sibling scrollbar it can never
+touch directly, and a list view launch a custom modal via `OpenModal` (reusing
+the existing `pending_modal` slot + `RouteModalAnswer` completion — no new
+`ModalCompletion` variant needed). The cross-view (`ViewId`-addressed) cases are
+the subject of [Cross-view brokering & `ViewId`](brokering.md); the drain's place
+in the loop is in [The event loop in depth](event-loop.md).
 
 ## Adding a new deferred effect
 

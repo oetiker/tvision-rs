@@ -5,6 +5,51 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## Phase 5 — generic ExecView from a view (`Context::request_exec_view`; consumer-API coverage, 2026-06-19)
+
+Closed consumer-API gap #2: a custom view can now launch its own modal dialog
+without holding a `&mut Program`. Implemented on branch `consumer-api-coverage`,
+base `a383495`.
+
+**New seam — `Deferred::OpenModal`** (`src/view/context.rs`): a new variant
+`OpenModal { view: Box<dyn View>, requester: ViewId, then_command: Option<Command> }`
+added to the `Deferred` queue. The pump arm (in `src/app/program.rs`) stashes the
+boxed view into the existing `pending_modal` slot with the existing
+`ModalCompletion::RouteModalAnswer { answer_to: requester, then_command }` completion.
+`pump_and_drive` runs it via the existing single-loop `exec_view` machinery (no new
+loop, no new `ModalCompletion` variant, no downcast). On close the pump delivers
+the modal's close command to `requester` via `View::set_modal_answer` and
+re-injects `then_command`.
+
+The view-facing entry point is
+`Context::request_exec_view(view, requester, then_command)`, which pushes the
+variant. It is the **view-launched sibling of `Program::exec_view_with<R>`** —
+the two are the complete D9 ExecView story:
+- `Program::exec_view_with<R>` (Phase 1): called from a `Program` / `Application`
+  method; result returned by value from a closure.
+- `Context::request_exec_view` (Phase 5): called from any `View::handle_event`;
+  close command routed back to `requester` via `set_modal_answer`.
+
+**`tcv` Info box — gap #2 closed** (`examples/tcv.rs`): `build_info_dialog` builds
+a real custom `Dialog` (titled "Information", 52 × 10, six `StaticText` fields +
+an OK button whose command is `Command::CANCEL`). `DirBox::open_info` calls
+`ctx.request_exec_view(Box::new(dialog), id, None)` from `handle_event`. The
+dialog is now a first-class modal launched through the framework, not a workaround.
+Verified by a round-trip integration test (Enter → `OpenModal` queued → dialog
+modal loop runs → OK/CANCEL closes → `set_modal_answer` routed back).
+
+**Data-back `FieldValue` path deliberately deferred and recorded**: the result
+is delivered as the close *command* only (via `RouteModalAnswer` → `set_modal_answer`);
+the `FieldValue` data-back arm (reading `modal_id.value()` → `requester.set_modal_data(…)`)
+is not built because no current consumer needs it (the tcv Info box is read-only).
+A future input-dialog consumer adds that arm. Reason recorded on the
+`request_exec_view` doc in `src/view/context.rs` (spec §3.4/§2.1).
+
+**This completes the data-movement effort (Phases 1–5)** — the full typed currency
++ mechanism-per-kind unification is now feature-complete on the branch. Deferred
+follow-ons recorded: `inventory`-collected `Program::self_check()`,
+`MultiCheckBoxes::value()` → `Bits`, the ExecView `FieldValue` data-back path.
+
 ## Phase 4 — modal-result reads via `FieldValue` (consumer-API coverage, 2026-06-19)
 
 Eliminated the multi-child downcasts from the `FindPick`/`ReplacePick`
