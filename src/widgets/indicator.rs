@@ -49,20 +49,44 @@ use crate::view::{DrawCtx, GrowMode, Point, Rect, View, ViewState};
 pub struct Indicator {
     /// View state (geometry, flags, etc.) — the composition target.
     pub state: ViewState,
-    /// Current cursor position. `(0, 0)` when constructed.
+    /// Current cursor position displayed as `row:col`.
     ///
-    /// `y` = zero-based row, `x` = zero-based column; displayed 1-based.
+    /// `y` is the zero-based row; `x` is the zero-based column. Both are
+    /// displayed one-based (so `(0, 0)` renders as `"1:1"`). Read this
+    /// field to inspect the editor's last-reported position; write it only
+    /// through [`set_value`](Self::set_value), which the pump calls when it
+    /// applies a `Deferred::IndicatorSetValue` queued by the editor.
+    ///
+    /// Initialized to `(0, 0)` on construction.
     pub location: Point,
-    /// Whether the buffer has unsaved changes.
+    /// Whether the editor buffer has unsaved changes.
+    ///
+    /// When `true` the indicator renders a `☼` marker at column 0. Updated
+    /// alongside [`location`](Self::location) through
+    /// [`set_value`](Self::set_value); do not write directly.
+    ///
+    /// Initialized to `false` on construction.
     pub modified: bool,
 }
 
 impl Indicator {
-    /// Construct an indicator from `bounds`.
+    /// Create a display-only indicator sized to `bounds`.
     ///
-    /// Starts at position `(0, 0)`, unmodified, and grows with the bottom edge
-    /// of its owner (`grow_mode.lo_y`/`hi_y`). It is not selectable — indicators
-    /// are display-only and never take focus.
+    /// Embed the returned `Indicator` in an editor group, then let the pump
+    /// keep it current: whenever the editor's cursor moves it queues a
+    /// `Deferred::IndicatorSetValue`; the pump resolves that into a call to
+    /// [`set_value`](Self::set_value) and the next whole-tree redraw picks up
+    /// the new values.
+    ///
+    /// The indicator starts at position `(0, 0)` and unmodified. Its
+    /// `grow_mode` is set to `lo_y | hi_y` so that it follows the bottom edge
+    /// of the enclosing window when the window is resized. It is never
+    /// selectable — the indicator is display-only and cannot receive focus.
+    ///
+    /// # Turbo Vision heritage
+    ///
+    /// Mirrors `TIndicator::TIndicator(bounds)`: sets
+    /// `growMode = gfGrowLoY | gfGrowHiY` and does not set `ofSelectable`.
     pub fn new(bounds: Rect) -> Self {
         let mut state = ViewState::new(bounds);
         state.grow_mode = GrowMode {
@@ -77,11 +101,23 @@ impl Indicator {
         }
     }
 
-    /// Update the displayed position and modified flag.
+    /// Update the cursor position and modified flag displayed by the indicator.
     ///
-    /// Only updates fields (no broadcast). The whole-tree redraw reads the new
-    /// values automatically on the next render pass, so there is no immediate
-    /// draw.
+    /// Do not call this directly from application code. The intended call path
+    /// is: editor queues `Deferred::IndicatorSetValue` → pump resolves the
+    /// deferred by downcasting via `as_any_mut` to `&mut Indicator` and
+    /// calling this method. The next whole-tree redraw then picks up the new
+    /// values without any explicit `drawView` call.
+    ///
+    /// This differs from the C++ `TIndicator::setValue`, which calls `drawView`
+    /// immediately and skips the update entirely when neither value changes. The
+    /// Rust port omits the no-op guard (the unconditional whole-tree redraw
+    /// makes it unnecessary) and defers the redraw to the pump cycle.
+    ///
+    /// # Turbo Vision heritage
+    ///
+    /// Ports `TIndicator::setValue(loc, mod)` (`tindictr.cpp`), minus the
+    /// early-return guard for unchanged values.
     pub fn set_value(&mut self, location: Point, modified: bool) {
         self.location = location;
         self.modified = modified;
