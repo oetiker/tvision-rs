@@ -742,6 +742,20 @@ impl View for CheckBoxes {
     fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
         Some(self)
     }
+
+    /// This cluster's packed bit word as [`FieldValue::Bits`] (a bitmask). Ports
+    /// `TCluster::getData` (copies `value`).
+    fn value(&self) -> Option<crate::data::FieldValue> {
+        Some(crate::data::FieldValue::Bits(self.cluster.value))
+    }
+
+    /// Load a [`FieldValue::Bits`] bit word; other variants are ignored. Ports
+    /// `TCluster::setData`.
+    fn set_value(&mut self, v: crate::data::FieldValue) {
+        if let crate::data::FieldValue::Bits(bits) = v {
+            self.cluster.value = bits;
+        }
+    }
 }
 
 /// A column of mutually-exclusive buttons; `value` is the selected index. An
@@ -757,7 +771,20 @@ pub struct RadioButtons {
 }
 
 #[crate::delegate(to = cluster, skip(apply_list_scroll, as_any_mut, focus_descendant, grabs_focus_on_click, set_value, value))]
-impl View for RadioButtons {}
+impl View for RadioButtons {
+    /// This cluster's value as [`FieldValue::Bits`] (the selected index). Ports
+    /// `TCluster::getData`.
+    fn value(&self) -> Option<crate::data::FieldValue> {
+        Some(crate::data::FieldValue::Bits(self.cluster.value))
+    }
+
+    /// Load a [`FieldValue::Bits`] (the selected index); other variants ignored.
+    fn set_value(&mut self, v: crate::data::FieldValue) {
+        if let crate::data::FieldValue::Bits(bits) = v {
+            self.cluster.value = bits;
+        }
+    }
+}
 
 /// Checkboxes with multi-state items; `value` packs an n-bit state per item. An
 /// embed-and-delegate wrapper over [`Cluster`] with
@@ -1457,6 +1484,33 @@ mod tests {
         assert_eq!(c.cluster.find_sel(Point::new(0, 0)), -1);
         // draw on a zero-height buffer is a no-op (no panic).
         let _ = snapshot_cluster(&mut c, 20, 1);
+    }
+
+    // -- Value round-trips (Task 2: FieldValue::Bits) -----------------------
+
+    #[test]
+    fn checkboxes_value_round_trips_as_bits() {
+        use crate::data::FieldValue;
+        use crate::view::View;
+        let mut c = CheckBoxes::new(Rect::new(0, 0, 20, 4), strs(&["a", "b", "c"]));
+        c.cluster.value = 0b101;
+        assert_eq!(c.value(), Some(FieldValue::Bits(0b101)));
+        c.set_value(FieldValue::Bits(0b010));
+        assert_eq!(c.cluster.value, 0b010, "set_value(Bits) writes the bit word");
+        // A variant the control does not understand is ignored.
+        c.set_value(FieldValue::Text("x".into()));
+        assert_eq!(c.cluster.value, 0b010, "non-Bits value is ignored");
+    }
+
+    #[test]
+    fn radiobuttons_value_round_trips_as_bits() {
+        use crate::data::FieldValue;
+        use crate::view::View;
+        let mut r = RadioButtons::new(Rect::new(0, 0, 20, 4), strs(&["a", "b", "c"]));
+        r.cluster.value = 2; // selected index
+        assert_eq!(r.value(), Some(FieldValue::Bits(2)));
+        r.set_value(FieldValue::Bits(1));
+        assert_eq!(r.cluster.value, 1, "set_value(Bits) sets the selected index");
     }
 
     // -- Snapshots: one per kind --------------------------------------------
