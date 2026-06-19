@@ -7,19 +7,20 @@ review verdict, the merge to `main`, and deleting this file remain. This is a
 
 ---
 
-## 0. TL;DR — what's left (≈3 steps)
-1. **Get the final-branch-review verdict** (a Sonnet honesty/quality reviewer was
-   dispatched at session end; see §3). If clean → proceed. If it has Important
-   findings → fix them (orchestrator one-line fixes or a fix subagent), re-verify
-   the affected gate, then proceed.
-2. **Merge** `docs/audit-backlog-closure` → `main` (**fast-forward is possible** —
+## 0. TL;DR — what's left (≈2 steps — the review is DONE)
+1. **Merge** `docs/audit-backlog-closure` → `main` (**fast-forward is possible** —
    main is still at `bc15704`, the branch point). Use
    `superpowers:finishing-a-development-branch`.
-3. **Delete `HANDOVER-doc.md`** (this file) and commit, as the last step.
+2. **Delete `HANDOVER-doc.md`** (this file) and commit, as the last step.
+
+The final whole-branch review is **complete** — see §3. Verdict
+**APPROVE-WITH-MINORS**; all findings were fixed in commit `5d29db1`. Nothing else
+is pending; the branch is merge-ready.
 
 ## 1. Branch & state
-- **Branch:** `docs/audit-backlog-closure`. **HEAD:** `383dfb1`. **55 commits** since
-  `main` (@ `bc15704`). **`main` untouched — FF-mergeable.**
+- **Branch:** `docs/audit-backlog-closure`. **~58 commits** since `main` (@ `bc15704`);
+  HEAD is the final-review-fix `5d29db1` + this handover commit on top. **`main`
+  untouched — FF-mergeable** (verify: `git merge-base main HEAD` == `git rev-parse main`).
 - **Durable ledger:** `cat "$(git rev-parse --git-path sdd)/progress.md"` — every
   landed section + lessons. Trust ledger + `git log` over recollection.
 - **Outcome:** below-bar public symbols **644 → 3**. The 3 remaining are
@@ -40,22 +41,27 @@ The later commits after the last full run are doc/md only — if you want belt-a
 braces, re-run `cargo test --workspace` + `cargo xtask docs` once on a FRESH target
 dir before merging.
 
-## 3. The final review (the one pending item)
-A Sonnet "final branch honesty review" agent (id `afee19025dd5a83cf`) was dispatched
-right before this handover. It does a sampled honesty+quality+link+no-code-change
-audit of `git diff main..HEAD`. **It does not survive into a new session.** Options:
-- Read its transcript if present:
-  `/home/oetiker/.claude/projects/-home-oetiker-checkouts-rstv/4acbf6d2-*/subagents/agent-afee19025dd5a83cf.jsonl`
-  (look for the final VERDICT message), **or**
-- **Just re-dispatch it** (cheap, ~3-5 min). Prompt: independent honesty audit of
-  `git diff main..HEAD` — sample ~8 sections' `score 3` rows and confirm the cited
-  src/ rustdoc genuinely has what+how/when (not one-liners); confirm `N/A` rows are
-  genuinely `pub(crate)`/private; spot-check ~15 intra-doc links are pub+exist;
-  confirm the ONLY non-doc code in `src/**/*.rs` is the C-gate (`set_on_idle`/
-  `pump_and_drive`/`IdleHook` in program.rs, `set_validator` in input_line.rs);
-  confirm the 3 remaining below-bar rows are code-change/concept-blocked.
-- Everything else this reviewer would check has ALREADY been verified by the
-  orchestrator per-section + the gates above; this is the final independent pass.
+## 3. The final review — DONE (verdict APPROVE-WITH-MINORS, all fixed)
+A Sonnet "final branch honesty review" audited ~120 rows across 10 sections, 6
+concept anchors, ~15 intra-doc links, and scanned all 42 changed `.rs` files for
+non-doc code changes. Verdict **APPROVE-WITH-MINORS**. All findings fixed in
+`5d29db1`:
+- **Important (fixed):** `StringLookupValidator::new_string_list` (pub,
+  `src/validate.rs`) was genuinely score-2 while its section summary/scorecard
+  counted it as 0 — the true below-bar was 4. Documented to score-3 (runtime re-list
+  use case + nil-arg heritage note); audit row + count now honest.
+- **Minor (fixed):** 5 stale score-2 audit *table cells* (TMenuView GetHelpCtx,
+  TValidator is_status_ok, TLabel CLabel, Globals-363-378 PositionalEvents +
+  ShadowAttr) whose cited symbols are genuinely score-3 in code (summaries already
+  said 0) — cells bumped to match.
+- **Confirmed safe:** the `Program::pump_once` `()`→`bool` change is the intended
+  C-gate (callers discard the bool; `Application::pump_once` still returns `()`).
+  The only non-doc code in the branch is the C-gate (set_on_idle / pump_and_drive /
+  IdleHook in program.rs; set_validator in input_line.rs). All 6 `→concept` anchors
+  exist with substantive content; sampled intra-doc links all resolve to public
+  symbols; the 3 remaining below-bar rows are correctly code-change/concept-blocked.
+
+Below-bar is now a **genuine 3**. Nothing else to verify — proceed to merge.
 
 ## 4. What was done (so you don't redo it)
 - **C gate (code):** `InputLine::set_validator` + `Program::set_on_idle` (idle seam,
