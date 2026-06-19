@@ -335,6 +335,12 @@ fn prev_grapheme_byte_len(chunk: &[u8]) -> usize {
 
 /// The gap-buffer text editor.
 ///
+/// Search/replace state — the find string, the replacement string, and the
+/// `EF_*` option flags — is **per-editor**: each editor independently
+/// remembers its own last search. (C++ Turbo Vision kept these in class-static
+/// globals shared across every editor; per-instance is the intentional
+/// deviation, and is usually what a user wants.)
+///
 /// # Turbo Vision heritage
 ///
 /// Ports `TEditor` (`teditor1.cpp`, `teditor2.cpp`, `edits.cpp`).

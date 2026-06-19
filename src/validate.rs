@@ -200,11 +200,20 @@ impl Validator for LookupValidator {}
 /// Valid iff the input exactly matches one entry in an owned list of strings.
 /// On an invalid final value, `error` pops up an OK-only error message box.
 ///
+/// Validation is a linear scan (`O(n)`) over the list, which preserves the
+/// caller's order (UI pickers may rely on it). [`StringLookupValidator::new_string_list`] replaces
+/// the whole list.
+///
 /// # Turbo Vision heritage
 ///
 /// Ports `TStringLookupValidator` (`tvalidator.cpp`). The lookup folds into
 /// `is_valid` (deviation D2), the string collection becomes an owned
 /// `Vec<String>`, and the streaming machinery is dropped (deviation D12).
+///
+/// C++ `TStringLookupValidator` held a *sorted* collection and binary-searched
+/// (`O(log n)`). For the small fixed lists these validators carry, the linear
+/// scan is simpler and fast enough; order preservation is the deliberate
+/// trade-off.
 pub struct StringLookupValidator {
     strings: Vec<String>,
 }

@@ -314,6 +314,12 @@ impl View for ParamText {}
 /// [`Option<ViewId>`] with focusing routed through the event loop (deviations D3,
 /// D4); the palette AttrPairs become explicit (lo, hi) [`Role`] pairs
 /// (`(LabelNormal, LabelNormalShortcut)` / `(LabelLight, LabelLightShortcut)`).
+///
+/// C++ `TLabel` paints an optional monochrome focus marker in column 0 when
+/// `showMarkers` (`SpecialChars`) is set. tvision-rs does not model marker
+/// decoration — a label always draws the plain form and the column-0 slot is
+/// filler. Focus is shown by color (the label's highlight role), which reads
+/// correctly under both color and monochrome themes.
 pub struct Label {
     /// The delegated [`StaticText`] — its `state: ViewState` is the one true home
     /// for all view metadata.

@@ -1289,6 +1289,16 @@ impl Program {
     ///
     /// Returns the new view's [`ViewId`] on success, or `None` if no desktop exists
     /// or the downcast fails.
+    ///
+    /// # Turbo Vision heritage
+    ///
+    /// C++ `TGroup::insertView` disposes a window being inserted when the active
+    /// window cannot release focus (`validView` / `canMoveFocus`). tvision-rs does
+    /// **not** gate a programmatic insert: the focus-release check
+    /// (`valid(RELEASED_FOCUS)`) is applied where it matters interactively — Alt-N
+    /// window selection and modal close — not on insert. An app that inserts a
+    /// window expects it to appear; refusing the insert (DOS-era behavior) would
+    /// surprise more than it protects.
     pub fn desktop_insert(&mut self, view: Box<dyn View>) -> Option<ViewId> {
         let desk_id = self.desktop?;
         let now = self.clock.now_ms();

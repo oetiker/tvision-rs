@@ -180,6 +180,11 @@ impl MenuBuilder {
     }
 
     /// Append a command item with no accelerator and no shortcut text.
+    ///
+    /// These convenience builders use [`HelpCtx::NO_CONTEXT`]. To attach a help
+    /// context — or set any other non-default field — build the item explicitly
+    /// with [`MenuBuilder::item`] and a [`MenuItem`] literal (e.g.
+    /// `.item(MenuItem::Command { help_ctx: HelpCtx::custom("app.save"), .. })`).
     pub fn command(self, name: impl Into<String>, command: Command) -> Self {
         self.item(MenuItem::Command {
             name: name.into(),
@@ -194,6 +199,8 @@ impl MenuBuilder {
     /// Append a command item with an accelerator and shortcut display text.
     ///
     /// An empty `param` string is stored as `None` (no shortcut text).
+    ///
+    /// See [`MenuBuilder::command`] for the `HelpCtx` escape hatch.
     pub fn command_key(
         self,
         name: impl Into<String>,
@@ -213,6 +220,8 @@ impl MenuBuilder {
     }
 
     /// Append a submenu whose contents are built by the closure.
+    ///
+    /// See [`MenuBuilder::command`] for the `HelpCtx` escape hatch.
     pub fn submenu(
         self,
         name: impl Into<String>,

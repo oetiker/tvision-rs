@@ -50,6 +50,13 @@ pub trait Backend {
     /// `None` immediately, ignoring the timeout value.  This is the headless
     /// determinism contract: test code injects events and drives the loop
     /// synchronously without wall-clock waits.
+    ///
+    /// # Turbo Vision heritage
+    ///
+    /// There is deliberately no app-level `getEvent` override / event-source
+    /// injection seam (C++ `TProgram::getEvent`). For periodic work use the timer
+    /// queue ([`Event::Timer`]) or [`crate::app::Program::set_on_idle`]; to feed synthetic
+    /// input in tests, push onto the headless backend's event queue.
     fn poll_event(&mut self, timeout: Option<Duration>) -> Option<Event>;
 
     /// Write `text` to the system clipboard.

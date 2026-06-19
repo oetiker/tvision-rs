@@ -16,14 +16,14 @@ No diverging (suspect) items.
 
 These were noted by auditors in passing — undocumented idiomatic deviations or latent enhancements, not confirmed bugs. Listed for the follow-up fix pass to triage.
 
-- **TProgram** — window-insert `CanMoveFocus`/`ValidView` guard not applied at `desktop_insert` (C++ disposes a window if the active one can't release focus on insert; Rust enforces the gate only on Alt-N selection / modal close).
-- **idle-time / background processing** (Part 2 sweep) — no user-facing `Idle`/`on_idle` seam; an app cannot run periodic work each idle pass (guide clock/heap-display pattern). Closely related: no `override getEvent` seam to inject an event source.
-- **TLabel / ShowMarkers / SpecialChars** — the monochrome column-0 focus marker glyph is never rendered (also surfaced in Globals-363-378).
-- **Editor find/replace + flags** — per-instance in Rust vs C++ class-static (shared across editors); deliberate but undocumented.
-- **TInputLine** — no post-construction `set_validator` (validator is constructor-only); deliberate ownership choice, undocumented.
-- **TMenu/MenuBuilder** — `submenu()`/`command()` hardcode `HelpCtx::NO_CONTEXT` with no escape hatch.
-- **TStringLookupValidator** — `lookup` is linear scan over an unsorted `Vec` vs C++ binary search over a sorted collection (O(n) vs O(log n)); `new_string_list(nil)` free-vs-replace semantics differ.
-- **TMonoSelector** — no user-facing picker for the mono attributes (only mattered inside the superseded `TColorDialog`).
+- **TProgram** — window-insert `CanMoveFocus`/`ValidView` guard not applied at `desktop_insert` (C++ disposes a window if the active one can't release focus on insert; Rust enforces the gate only on Alt-N selection / modal close). — **Resolved (C):** doc-only, deliberate divergence noted on `Program::desktop_insert`.
+- **idle-time / background processing** (Part 2 sweep) — no user-facing `Idle`/`on_idle` seam; an app cannot run periodic work each idle pass (guide clock/heap-display pattern). Closely related: no `override getEvent` seam to inject an event source. — **Resolved (C):** extension — `Program::set_on_idle` landed (Task 2). Doc-only note for the `getEvent` injection seam added on `Backend::poll_event`.
+- **TLabel / ShowMarkers / SpecialChars** — the monochrome column-0 focus marker glyph is never rendered (also surfaced in Globals-363-378). — **Resolved (C):** doc-only, deliberate divergence noted on `Label`.
+- **Editor find/replace + flags** — per-instance in Rust vs C++ class-static (shared across editors); deliberate but undocumented. — **Resolved (C):** doc-only, deliberate divergence noted on `Editor`.
+- **TInputLine** — no post-construction `set_validator` (validator is constructor-only); deliberate ownership choice, undocumented. — **Resolved (C):** extension — `InputLine::set_validator` landed (Task 1).
+- **TMenu/MenuBuilder** — `submenu()`/`command()` hardcode `HelpCtx::NO_CONTEXT` with no escape hatch. — **Resolved (C):** doc-only, deliberate divergence noted on `MenuBuilder::command` (with pointer from `command_key`/`submenu`).
+- **TStringLookupValidator** — `lookup` is linear scan over an unsorted `Vec` vs C++ binary search over a sorted collection (O(n) vs O(log n)); `new_string_list(nil)` free-vs-replace semantics differ. — **Resolved (C):** doc-only, deliberate divergence noted on `StringLookupValidator`.
+- **TMonoSelector** — no user-facing picker for the mono attributes (only mattered inside the superseded `TColorDialog`). — **Resolved (C):** doc-only, deliberate omission noted in the widgets module doc.
 
 ## 3. NOT-PORTED register — intentional omissions (do not re-flag)
 
