@@ -219,6 +219,135 @@ let split = Splitter::cols()
 A live example showing `.joined()` on a nested three-pane layout is in the
 [Widget gallery](../gallery.md).
 
+## Limiting move and resize
+
+Every view carries a [`DragMode`](../api/tvision-rs/view/struct.DragMode.html) — a
+struct of bools controlling whether a window can be moved or resized, and which
+edges constrain the drag. `Window` sets `drag_move` and `drag_grow` by default
+(the user can drag the title bar to move and the bottom corners to resize).
+
+```rust
+# use tvision_rs as tv;
+# use tv::{DragMode, View};
+# fn _demo(win: &mut tv::Window) {
+// Make the window movable but not resizable:
+win.state_mut().drag_mode = DragMode {
+    drag_move: true,
+    drag_grow: false,
+    drag_grow_left: false,
+    limit_lo_x: true,
+    limit_lo_y: true,
+    limit_hi_x: true,
+    limit_hi_y: true,
+};
+# }
+```
+
+The `limit_*` bits clamp the drag to the owner's extent — without them the
+user could drag the window partially off-screen. `DragMode::limit_all()` is a
+convenience that sets all four limit bits at once; it is the standard setting
+for a window that must remain fully on the desktop.
+
+The `drag_grow_left` bit adds the left edge as a resize target. By default only
+the **bottom-right corner** is draggable — `drag_grow_left: true` extends resize
+to the left edge as well (useful for left-aligned panels).
+
+Source: `src/view/view.rs` (`DragMode`), `src/window/window.rs` (window default drag setup).
+
+> **Turbo Vision heritage:** `dmDragMove`/`dmDragGrow`/`dmLimitXxx` were bit-field
+> constants combined with `|`. tvision-rs replaces them with a struct of bools (deviation
+> D5) — the individual fields replace the bit-shift arithmetic.
+
+## Grow modes: anchoring edges
+
+[`GrowMode`](../api/tvision-rs/view/struct.GrowMode.html) controls how a child view
+reacts when its **owner group is resized**. Each `gf*` bit anchors one edge of
+the child to the *corresponding edge* of the owner. When the owner grows, the
+anchored edge moves with it.
+
+| Field | Meaning when `true` |
+| --- | --- |
+| `lo_x` (left edge) | tracks the owner's **right** edge — child slides right |
+| `lo_y` (top edge) | tracks the owner's **bottom** edge — child slides down |
+| `hi_x` (right edge) | tracks the owner's **right** edge — child widens |
+| `hi_y` (bottom edge) | tracks the owner's **bottom** edge — child grows taller |
+| `fixed` | override — child size is fixed; none of the above apply |
+| `rel` | proportional scale instead of absolute anchoring |
+
+A child whose *right* and *bottom* edges track the owner's — `hi_x: true, hi_y:
+true` — fills the owner and grows with it. A child whose *left* and *right* edges
+both track the owner's right — `lo_x: true, hi_x: true` — keeps a fixed width
+but slides to maintain its right-edge distance.
+
+```rust
+# use tvision_rs as tv;
+# use tv::{GrowMode, View};
+# fn _demo(child: &mut tv::widgets::StaticText) {
+// Child fills its owner (grows on both axes):
+child.state_mut().grow_mode = GrowMode {
+    hi_x: true,
+    hi_y: true,
+    ..Default::default()
+};
+# }
+```
+
+`GrowMode::grow_all()` sets `lo_x | lo_y | hi_x | hi_y` — every edge tracks
+the owner, so the child maintains its margins on all four sides.
+
+Grow mode is applied by [`View::change_bounds`](../api/tvision-rs/view/trait.View.html#method.change_bounds)
+(`src/view/view.rs`): when a group is resized, it calls `calc_bounds` on each
+child (which applies the grow formula) and then `change_bounds` to commit the new
+rectangle.
+
+Source: `src/view/view.rs` (`GrowMode`, `ViewState::calc_bounds`).
+
+> **Turbo Vision heritage:** the `gf*` constants (`gfGrowLoX`, `gfGrowHiX`, …)
+> were individual bits in a `ushort`. tvision-rs maps each to a named bool field
+> in `GrowMode` (deviation D5).
+
+## Bringing a window to the front
+
+Z-order in a group is reverse insertion order: the most recently inserted child
+sits on top. When the user clicks a window or presses `Alt`-*N*, the framework
+calls [`Group::focus_child`](../api/tvision-rs/view/struct.Group.html#method.focus_child)
+on the desktop. `focus_child` checks whether the outgoing current view wants to
+keep focus (the `ofValidate` path), then, because windows opt into **raise-on-select**
+(`Options::top_select = true`), calls
+[`Group::make_first`](../api/tvision-rs/view/struct.Group.html#method.make_first):
+the window is moved to the last slot of the `children` Vec (the top slot in
+paint order).
+
+There is no general "reorder to arbitrary Z position" primitive. Only two
+operations exist:
+
+- **`make_first(id, ctx)`** — raises one view to the very top.
+- **`put_in_front_of(id, target, ctx)`** — places `id` immediately in front of
+  `target` (one slot above it in paint order).
+
+`make_first` is the primitive; `put_in_front_of(id, None, ctx)` is its
+definition. Both are no-ops when the child is already in the target position.
+
+The resulting effect is familiar: clicking any window brings it to the top of the
+stack and makes it active. The previous front window becomes passive (its frame
+changes color) and receives the `StateFlag::Active` clear cascade.
+
+```rust
+# use tvision_rs as tv;
+# use tv::View;
+# fn _demo(desktop: &mut tv::Group, win_id: tv::ViewId, ctx: &mut tv::Context) {
+// Raise a window to the front programmatically:
+desktop.make_first(win_id, ctx);
+# }
+```
+
+Source: `src/view/group.rs` (`Group::focus_child`, `Group::make_first`,
+`Group::put_in_front_of`, and the `top_select` option check).
+
+> **Turbo Vision heritage:** `TGroup::makeFirst` / `putInFrontOf` performed the same
+> move in the circular doubly-linked sibling ring. tvision-rs stores children in a
+> `Vec` and implements raise-to-top as a `swap` to the last slot (deviation D3).
+
 ## See also
 
 - [Dialogs & data](dialogs.md) — modal windows with gather/scatter
