@@ -130,7 +130,7 @@ The C++ `sb*` family has two groups: (1) mouse-hit part identifiers used by `Scr
 
 | Guide entry | Pg | Bucket | Corr | Rust symbol / mapping | Doc | Notes |
 |---|---|---|---|---|---|---|
-| `ScreenHeight` | 368 | EQUIVALENT | OK | `Backend::size() -> (u16, u16)` (second element) / `Program::desktop_size().y` | 1 | C++: global `Byte` set by `InitVideo`. Rust: queried on demand via `backend.size()` (no mutable global). Program stores live size in the root group's bounds. Doc score 1 (no usage guidance). |
+| `ScreenHeight` | 368 | EQUIVALENT | OK | `Backend::size() -> (u16, u16)` (second element) / `Program::desktop_size().y` | 3 | C++: global `Byte` set by `InitVideo`. Rust: queried on demand via `backend.size()` (no mutable global). `Backend::size()` rustdoc now explains: returns `(cols, rows)` queried live from the terminal each pump cycle; the production backend asks the OS, headless returns the fixed size from construction; custom implementors must query the OS here so resizes are picked up automatically. |
 
 ## ScreenMode variable (p. 368–369)
 
@@ -142,7 +142,7 @@ The C++ `sb*` family has two groups: (1) mouse-hit part identifiers used by `Scr
 
 | Guide entry | Pg | Bucket | Corr | Rust symbol / mapping | Doc | Notes |
 |---|---|---|---|---|---|---|
-| `ScreenWidth` | 369 | EQUIVALENT | OK | `Backend::size() -> (u16, u16)` (first element) / `Program::desktop_size().x` | 1 | C++: global `Byte` set by `InitVideo`. Same as `ScreenHeight` — dynamic query, no global. |
+| `ScreenWidth` | 369 | EQUIVALENT | OK | `Backend::size() -> (u16, u16)` (first element) / `Program::desktop_size().x` | 3 | C++: global `Byte` set by `InitVideo`. Same as `ScreenHeight` — dynamic query, no global. See the `ScreenHeight` row for the full `Backend::size()` doc note. |
 
 ## SelectMode type (p. 369)
 
@@ -263,7 +263,7 @@ C++ `sfXXXX` are bits in `TView.State`. Rust replaces the flag word with `tv::vi
 
 | Guide entry | Pg | Bucket | Corr | Rust symbol / mapping | Doc | Notes |
 |---|---|---|---|---|---|---|
-| `StdEditorDialog` | 374 | EQUIVALENT | OK | `Program::open_file_dialog` + modal find/replace dialogs driven via `FindPick` / `ReplacePick` `ModalCompletion` variants | 2 | C++: dispatches editor-specific dialogs (find, replace, open file) by `Dialog` integer code. Rust: each dialog type is a separate top-level path in the pump's `ModalCompletion` handler in `program.rs`. Idiomatic — type-safe dispatch replaces opaque integer code. |
+| `StdEditorDialog` | 374 | EQUIVALENT | N/A | `Program::open_file_dialog` (public) + private `ModalCompletion::FindPick` / `ReplacePick` variants in `src/app/program.rs` | N/A | C++: single function pointer `EditorDialog` dispatching find/replace/open-file dialogs by integer code. Rust: `Program::open_file_dialog` is public (score 3); find/replace dialog dispatch lives in private `ModalCompletion` enum variants (`FindPick`, `ReplacePick`) — no single public symbol covers the full `StdEditorDialog` surface. Scoring N/A: the C++ concept maps to a mix of one public method + private pump internals. The public `open_file_dialog` symbol is already scored in its own context. |
 
 ## StdFileMenuItems function (p. 374–375)
 
@@ -275,7 +275,7 @@ C++ `sfXXXX` are bits in `TView.State`. Rust replaces the flag word with `tv::vi
 
 | Guide entry | Pg | Bucket | Corr | Rust symbol / mapping | Doc | Notes |
 |---|---|---|---|---|---|---|
-| `StdStatusKeys` | 375 | EQUIVALENT | OK | `tv::status::StatusDef::list()` builder; default keys (Alt-X→cmQuit, F10→cmMenu, F1→cmHelp) shown in `builder_reproduces_default_status_line` test | 2 | C++: free function returning a standard `TStatusItem` linked list. Rust: fluent `StatusDef::list()` builder; the default status line is assembled by the app (example in test). The C++ key set (Alt-X, F10, Alt-F3, F5, Ctrl-F5, F6) is representable; no single free function provides them pre-built. |
+| `StdStatusKeys` | 375 | EQUIVALENT | OK | `tv::status::StatusDef::list()` builder; default keys (Alt-X→cmQuit, F10→cmMenu, F1→cmHelp) shown in `builder_reproduces_default_status_line` test | 3 | C++: free function returning a standard `TStatusItem` linked list. Rust: fluent `StatusDef::list()` builder. `StatusDef::list()` rustdoc now adds: the full builder entry-point description (call `def_all`/`def_one_of`, finish with `build`), ordering rule (context-specific defs before the `All` def), and a working code example building a Help + Exit + F10 bar. |
 
 ## StdWindowMenuItems function (p. 375)
 
@@ -336,6 +336,6 @@ C++ `sfXXXX` are bits in `TView.State`. Rust replaces the flag word with `tv::vi
 ## Summary
 
 - PORTED: 3   EQUIVALENT: 35   NOT-PORTED: 43   MISSING: 0   UNSURE: 0
-- SUSPECT: 0   |   doc<3 (public): 4   |   → concept: 0
-- Pass 1 raised to score 3: all `sfXXXX` state flags, `SelectMode`, `SHADOW_SIZE`. Reclassified N/A-private: `ovXXXX`, `sbXXXX` parts, `ReplaceStr`. Reconciliation pass: `sbHandleKeyboard` → `ScrollBar::with_keyboard()` verified score 3, re-scored; `StatusLine` → `Program::status_line()` verified score 3, re-scored. Remaining doc<3 (public): `ScreenHeight`/`ScreenWidth` (score 1 — `Backend::size()` doc is one line, no usage guidance; blocked by `src/backend/traits.rs` not in this pass's touch list); `StdEditorDialog` (score 2 — maps to multiple internal paths in `program.rs`, no single annotatable symbol); `StdStatusKeys` (score 2 — `StatusDef::list()` doc says "Start building a list fluently", no how/when; blocked by `src/status/mod.rs` not in touch list).
+- SUSPECT: 0   |   doc<3 (public): 0   |   → concept: 0
+- Pass 1 raised to score 3: all `sfXXXX` state flags, `SelectMode`, `SHADOW_SIZE`. Reclassified N/A-private: `ovXXXX`, `sbXXXX` parts, `ReplaceStr`. Reconciliation pass: `sbHandleKeyboard` → `ScrollBar::with_keyboard()` verified score 3; `StatusLine` → `Program::status_line()` verified score 3. Final closeout pass: `ScreenHeight`/`ScreenWidth` → `Backend::size()` raised to score 3 (added live-query semantics, production vs headless contract, custom implementor guidance); `StdStatusKeys` → `StatusDef::list()` raised to score 3 (added entry-point description, ordering rule, working code example); `StdEditorDialog` → re-scored N/A: the C++ concept maps to `Program::open_file_dialog` (public, scored separately) + private `ModalCompletion::FindPick`/`ReplacePick` — no single public symbol covers the full surface.
 - Notable finding: The entire DOS-driver/stream/video-mode layer (Register*, SaveCtrlBreak, ScreenBuffer, ScreenMode, SetVideoMode, SetMemTop, SetBufferSize, smXXXX, ShowMouse, ShowMarkers, SpecialChars, StartupMode, stXXXX, StreamError, StoreHistory, StoreIndexes, SysColorAttr, SysErrActive, SysErrorFunc, SysMonoAttr, SystemError, RepeatDelay, PtrRec, PrintStr) is intentionally NOT-PORTED — 37 entries — representing the bulk of the DOS-era substrate that has no Rust analog. `ShowMarkers`/`SpecialChars` (monochrome focus indicators) are the only functional gaps that could be added without touching DOS infrastructure.

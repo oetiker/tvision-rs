@@ -151,7 +151,38 @@ pub struct StatusDef {
 }
 
 impl StatusDef {
-    /// Start building a list of [`StatusDef`]s fluently.
+    /// Start a fluent builder chain for the `Vec<StatusDef>` that
+    /// [`StatusLine::new`](status_line::StatusLine::new) expects.
+    ///
+    /// Call [`def_all`](StatusDefListBuilder::def_all) (the universal
+    /// context-independent bar used by most apps) or
+    /// [`def_one_of`](StatusDefListBuilder::def_one_of) (context-specific
+    /// bar) to append defs, then finish with
+    /// [`build`](StatusDefListBuilder::build). The status line walks the
+    /// list in order and activates the first def whose
+    /// [`range`](StatusDef::range) matches the current help context, so place
+    /// context-specific defs *before* the `All` def.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use tvision_rs::status::{StatusDef, StatusLine};
+    /// use tvision_rs::command::Command;
+    /// use tvision_rs::event::{Key, KeyEvent};
+    ///
+    /// let defs = StatusDef::list()
+    ///     .def_all(|d| {
+    ///         d.item("~F1~ Help", KeyEvent::from(Key::F(1)), Command::HELP)
+    ///          .item("~Alt-X~ Exit", tvision_rs::menu::alt('x'), Command::QUIT)
+    ///          .key_item(KeyEvent::from(Key::F(10)), Command::MENU)
+    ///     })
+    ///     .build();
+    ///
+    /// let _status_line = StatusLine::new(
+    ///     tvision_rs::view::Rect::new(0, 24, 80, 25),
+    ///     defs,
+    /// );
+    /// ```
     pub fn list() -> StatusDefListBuilder {
         StatusDefListBuilder::default()
     }

@@ -169,7 +169,27 @@ pub fn history_str(id: u8, index: usize) -> Option<String> {
     })
 }
 
-/// Remove all history entries for all ids.
+/// Remove every stored history entry across all channel ids.
+///
+/// Typical call sites:
+///
+/// - **Dialog reset** — call before opening a dialog if you want the
+///   recall list to start empty for this session (e.g. a fresh search).
+/// - **Session end / new project** — call when the user's context changes
+///   completely and old recall entries would be confusing or confidential.
+/// - **Tests** — call at the top of each test to ensure a clean store;
+///   the history is `thread_local`, so each `#[test]` thread starts
+///   fresh automatically, but explicit clearing is clearer than relying
+///   on thread isolation.
+///
+/// To remove entries for only one channel, keep the entries you want
+/// (there is no per-channel clear function).
+///
+/// # Turbo Vision heritage
+///
+/// Ports `ClearHistory` (`histlist.cpp`), which freed the raw memory block
+/// backing the history store. Here the store is a `thread_local Vec`, so
+/// clearing is a plain `Vec::clear`.
 pub fn clear_history() {
     HISTORY.with(|h| h.borrow_mut().clear());
 }

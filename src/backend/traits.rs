@@ -24,7 +24,28 @@ use crate::screen::Cell;
 /// object so the view tree carries no backend type parameter, and tests can swap
 /// in an in-memory fake (deviation D11).
 pub trait Backend {
-    /// Terminal size in cells `(cols, rows)`.
+    /// Live terminal dimensions in cells, returned as `(cols, rows)`.
+    ///
+    /// Called on each pump cycle to size the root group and therefore the
+    /// desktop. Because the query is on-demand there is no mutable global to
+    /// keep in sync: the program resizes the desktop whenever the value
+    /// changes between cycles.
+    ///
+    /// The production [`CrosstermBackend`](crate::backend::CrosstermBackend)
+    /// asks the terminal at every call; the
+    /// [`HeadlessBackend`](crate::backend::HeadlessBackend) returns the fixed
+    /// size passed to [`HeadlessBackend::new`](crate::backend::HeadlessBackend::new).
+    ///
+    /// Custom backend implementors should query the OS terminal size here —
+    /// the result is used directly for desktop layout, so a stale value will
+    /// leave the view tree sized incorrectly after a terminal resize.
+    ///
+    /// # Turbo Vision heritage
+    ///
+    /// Replaces the `ScreenWidth` and `ScreenHeight` mutable globals
+    /// (`Byte` each, set once by `InitVideo` in `drivers.cpp`). The Rust port
+    /// queries on demand instead of caching a stale global, so terminal
+    /// resizes are picked up automatically on the next pump cycle.
     fn size(&self) -> (u16, u16);
 
     /// Apply changed cells to the screen.
@@ -74,11 +95,49 @@ pub trait Backend {
     /// else `None`.
     fn get_clipboard(&mut self) -> Option<String>;
 
-    /// Suspend the terminal: leave alt-screen, restore normal terminal mode.
-    /// Called before raising SIGTSTP. No-op for non-terminal backends.
+    /// Suspend the terminal: leave alt-screen and restore normal terminal mode.
+    ///
+    /// Called by the event loop immediately before the process is suspended
+    /// (e.g. `SIGTSTP` on Unix, or the DOS-shell command on any platform).
+    /// A correct implementation tears down raw mode and the alternate screen
+    /// so the shell that takes over sees a clean terminal.
+    ///
+    /// The production
+    /// [`CrosstermBackend`](crate::backend::CrosstermBackend) executes
+    /// crossterm's `LeaveAlternateScreen` + `DisableMouseCapture` + `disable_raw_mode`
+    /// sequence. The
+    /// [`HeadlessBackend`](crate::backend::HeadlessBackend) is a no-op by
+    /// design (no real terminal to tear down).
+    ///
+    /// Custom backend implementors **must** pair this with [`resume`](Self::resume):
+    /// every `suspend` call will be followed by exactly one `resume` call when
+    /// the process is brought back to the foreground.
+    ///
+    /// # Turbo Vision heritage
+    ///
+    /// Stands in for `TApplication::suspend` (`tapplica.cpp`), which called
+    /// `TSystemError::suspend`, `TEventQueue::suspend`, and `TScreen::suspend`
+    /// in sequence. The Rust port collapses all three subsystem calls into this
+    /// single trait method on the `Backend`.
     fn suspend(&mut self) {}
 
     /// Resume the terminal: re-enter alt-screen, raw mode, and mouse capture.
-    /// Called after the process is foregrounded. No-op for non-terminal backends.
+    ///
+    /// Called by the event loop immediately after the process returns to the
+    /// foreground following a [`suspend`](Self::suspend). A correct
+    /// implementation restores the full terminal state so the next draw cycle
+    /// re-paints the TUI correctly.
+    ///
+    /// The production
+    /// [`CrosstermBackend`](crate::backend::CrosstermBackend) executes
+    /// crossterm's `enable_raw_mode` + `EnterAlternateScreen` + `EnableMouseCapture`
+    /// sequence, followed by a full redraw. The
+    /// [`HeadlessBackend`](crate::backend::HeadlessBackend) is a no-op.
+    ///
+    /// # Turbo Vision heritage
+    ///
+    /// Stands in for `TApplication::resume` (`tapplica.cpp`), which called
+    /// `TScreen::resume`, `TEventQueue::resume`, and `TSystemError::resume`
+    /// in sequence.
     fn resume(&mut self) {}
 }
