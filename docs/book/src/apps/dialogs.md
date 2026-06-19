@@ -144,12 +144,13 @@ time, use the ordered-record pair on
 [`Group`](../api/tvision-rs/view/struct.Group.html):
 
 ```rust,ignore
-// Seed before exec_view — positional, same child order as insert_child:
+// Seed before exec_view — positional, same child order as insert_child.
+// scatter_list takes a &mut Context (available inside a handle_event / the pump):
 let initial = FieldValue::List(vec![
     FieldValue::Text("Alice".into()),
     FieldValue::Bits(0b01),  // first checkbox ticked
 ]);
-dialog.scatter_list(&initial);
+dialog.scatter_list(&initial, ctx);
 
 // Read after exec_view returns Command::OK:
 let record = dialog.gather_list();
