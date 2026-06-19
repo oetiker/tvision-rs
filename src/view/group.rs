@@ -249,6 +249,41 @@ impl Group {
         }
     }
 
+    /// Gather the whole record as a single ordered [`FieldValue::List`] — the
+    /// typed image of C++ `getData(void *rec)`'s offset-addressed walk. Only
+    /// **data-bearing** children (those whose [`value`](View::value) is `Some`)
+    /// contribute, in child order; a child with no value is the `dataSize == 0`
+    /// case and is absent. Built on [`gather_data`](Self::gather_data).
+    ///
+    /// # Turbo Vision heritage
+    /// `TGroup::getData` viewed as producing one record value.
+    pub fn gather_list(&self) -> FieldValue {
+        FieldValue::List(self.gather_data().into_iter().flatten().collect())
+    }
+
+    /// Scatter an ordered [`FieldValue::List`] record back to the data-bearing
+    /// children, in child order (the inverse of [`gather_list`](Self::gather_list)).
+    /// Children with no value are skipped (they consume no record slot — the
+    /// `dataSize == 0` walk). A non-`List` argument is ignored.
+    ///
+    /// # Turbo Vision heritage
+    /// `TGroup::setData` viewed as consuming one record value.
+    pub fn scatter_list(&mut self, record: &FieldValue, ctx: &mut Context) {
+        let FieldValue::List(items) = record else {
+            return;
+        };
+        let mut next = items.iter();
+        for child in self.children.iter_mut() {
+            // Only children that carry a value take a slot (faithful to the
+            // offset walk: a dataSize==0 control is skipped).
+            if child.view.value().is_some()
+                && let Some(v) = next.next()
+            {
+                child.view.set_value_ctx(v.clone(), ctx);
+            }
+        }
+    }
+
     // -- insert / remove ----------------------------------------------------
 
     /// Insert `view` on **top** of the group (it becomes the frontmost child),
@@ -3023,6 +3058,64 @@ mod tests {
         let gathered = group.gather_data();
         assert_eq!(gathered[0], Some(FieldValue::Text("first".to_string())));
         assert_eq!(gathered[1], Some(FieldValue::Text("updated".to_string())));
+    }
+
+    // -- gather_list / scatter_list ------------------------------------------
+
+    #[test]
+    fn gather_list_packs_data_bearing_children_in_order() {
+        use crate::data::FieldValue;
+        use crate::widgets::InputLine;
+
+        let mut group = Group::new(Rect::new(0, 0, 40, 10));
+        group.insert(Box::new(InputLine::new(
+            Rect::new(0, 0, 10, 1), 20, None, crate::widgets::LimitMode::MaxBytes,
+        )));
+        // A non-data child (a bare Group) contributes nothing to the record.
+        group.insert(Box::new(Group::new(Rect::new(0, 5, 5, 6))));
+        group.insert(Box::new(InputLine::new(
+            Rect::new(0, 2, 10, 3), 20, None, crate::widgets::LimitMode::MaxBytes,
+        )));
+
+        let mut out = VecDeque::new();
+        let mut timers = TimerQueue::new();
+        with_ctx(&mut out, &mut timers, |ctx| {
+            group.scatter_list(
+                &FieldValue::List(vec![
+                    FieldValue::Text("alpha".into()),
+                    FieldValue::Text("beta".into()),
+                ]),
+                ctx,
+            );
+        });
+
+        // Two data-bearing children, in order; the bare Group is skipped.
+        assert_eq!(
+            group.gather_list(),
+            FieldValue::List(vec![
+                FieldValue::Text("alpha".into()),
+                FieldValue::Text("beta".into()),
+            ]),
+        );
+    }
+
+    #[test]
+    fn scatter_list_ignores_non_list() {
+        use crate::data::FieldValue;
+        use crate::widgets::InputLine;
+
+        let mut group = Group::new(Rect::new(0, 0, 40, 10));
+        group.insert(Box::new(InputLine::new(
+            Rect::new(0, 0, 10, 1), 20, None, crate::widgets::LimitMode::MaxBytes,
+        )));
+        let before = group.gather_list();
+
+        let mut out = VecDeque::new();
+        let mut timers = TimerQueue::new();
+        with_ctx(&mut out, &mut timers, |ctx| {
+            group.scatter_list(&FieldValue::Int(7), ctx); // not a List → no-op
+        });
+        assert_eq!(group.gather_list(), before, "a non-List record changes nothing");
     }
 
     #[test]
