@@ -37,23 +37,37 @@ use crate::event::Event;
 use crate::view::{Context, DrawCtx, Point, StateFlag, View, ViewId, ViewState};
 use crate::widgets::list_viewer::{self, ListViewer, ListViewerState};
 
-/// A concrete list viewer over a `Vec<String>`.
+/// A concrete list viewer that owns a `Vec<String>` as its item source.
 ///
-/// Reuses all of the shared list-viewer draw/event/nav logic via the
-/// [`ListViewer`] trait and overrides only [`get_text`](ListViewer::get_text).
-/// See the module doc for population wiring notes.
+/// `ListBox` is the standard list widget: embed it in a dialog or group,
+/// call [`new_list`](Self::new_list) after insertion to populate and wire
+/// the scroll bar, then read the user's selection back via
+/// [`value`](View::value). It reuses all shared draw/event/navigation logic
+/// from the [`ListViewer`] trait; only [`get_text`](ListViewer::get_text) is
+/// overridden — every other hook (selection highlight, keyboard scroll,
+/// mouse drag) is handled by the trait's default implementations.
+///
+/// See the module doc for the two-step population wiring protocol.
 pub struct ListBox {
     lv: ListViewerState,
     items: Vec<String>,
 }
 
 impl ListBox {
-    /// Construct a new, empty list box.
+    /// Create a new, empty list box wired to optional scroll bars.
     ///
-    /// Builds the shared list-viewer state and an empty item list; the top item,
-    /// focus, and range all start at 0. No `Context` here — publish the vertical
-    /// bar's range + steps with [`new_list`](Self::new_list) +
-    /// [`list_viewer::update_steps`](list_viewer::update_steps) after insertion.
+    /// Pass the `ViewId` of a [`ScrollBar`](crate::widgets::ScrollBar) for `h`
+    /// and/or `v` to connect the horizontal and vertical bars; pass `None` if
+    /// no bar is needed.  The item list starts empty and the range is 0 —
+    /// nothing is drawn until you call [`new_list`](Self::new_list) after
+    /// inserting this widget into its parent group.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// let lb = ListBox::new(bounds, 1, None, Some(vbar_id));
+    /// // insert lb into its group, then:
+    /// lb.new_list(vec!["Item A".into(), "Item B".into()], ctx);
+    /// ```
     pub fn new(
         bounds: crate::view::Rect,
         num_cols: i32,
@@ -66,16 +80,18 @@ impl ListBox {
         }
     }
 
-    /// Replace the item collection and (re)publish the vertical bar's range.
+    /// Replace the item collection, update the scroll-bar range, and focus item 0.
     ///
-    /// Replaces `self.items`; calls `set_range(len)` (publishes the vertical-bar
-    /// params); calls `focus_item(0)` iff `range > 0`. The old items drop on
-    /// assignment.
+    /// This is the primary way to populate (or repopulate) a `ListBox`.  Call
+    /// it **after** the widget has been inserted into its parent group so that
+    /// the scroll-bar `ViewId`s are resolvable.  After this call, also invoke
+    /// [`list_viewer::update_steps`](list_viewer::update_steps) to publish the
+    /// page and arrow step sizes to the bars.
     ///
-    /// Call this **post-insert**, with a `Context`, so the v-bar `ViewId`s are
-    /// resolvable and the deferred ops land correctly. Also call
-    /// [`list_viewer::update_steps`](list_viewer::update_steps) after this to
-    /// publish the page/arrow step sizes.
+    /// On an empty `items` vec the range is set to 0 and focus stays at 0;
+    /// `focus_item(0)` is skipped.  On a non-empty vec focus always resets to
+    /// item 0 — to restore a prior selection scatter the index back afterwards
+    /// with [`set_value_ctx`](View::set_value_ctx).
     pub fn new_list(&mut self, items: Vec<String>, ctx: &mut Context) {
         self.items = items;
         let len = self.items.len() as i32;
@@ -85,7 +101,12 @@ impl ListBox {
         }
     }
 
-    /// The current item collection.
+    /// The current item collection as a read-only slice.
+    ///
+    /// Use this to inspect or copy the items without modifying them.  To
+    /// replace the collection, call [`new_list`](Self::new_list) — that
+    /// method also republishes the scroll-bar range, which a direct
+    /// `Vec` write would miss.
     pub fn list(&self) -> &[String] {
         &self.items
     }
@@ -148,19 +169,30 @@ impl View for ListBox {
         Some(self)
     }
 
-    /// The focused item index as a typed `FieldValue::Int`. The collection is
-    /// configuration ([`new_list`](Self::new_list) manages it), not part of the
-    /// transferable value.
+    /// The focused item's **index** as a `FieldValue::Int`.
+    ///
+    /// This is the dialog-gather value: it captures *which* item the user
+    /// chose, not the item text.  Call this after the user closes the dialog
+    /// (or at any point) to read the current selection.
+    ///
+    /// The item collection itself is **not** part of this value — it is
+    /// configuration set once via [`new_list`](Self::new_list) and does not
+    /// travel through the gather/scatter cycle.
     fn value(&self) -> Option<FieldValue> {
         Some(FieldValue::Int(self.lv.focused))
     }
 
-    /// Set the focused item and republish the vertical bar. The item list is
-    /// **not** transferred (it is configuration, managed via
-    /// [`new_list`](Self::new_list), not dialog data).
+    /// Focus the item at `index` and republish the vertical scroll bar.
     ///
-    /// Uses `focus_item_num` (the range-clamped variant) in case the range
-    /// changed between gather and scatter.
+    /// Use this to restore a previously gathered selection (dialog scatter):
+    /// pass back the `FieldValue::Int` that `value()` returned.  The item
+    /// list is **not** replaced — only the focused index changes.  If you also
+    /// need to repopulate the list, call [`new_list`](Self::new_list) first,
+    /// then scatter the index with this method.
+    ///
+    /// An out-of-range index is clamped to `0..range` (so scatter after a
+    /// shorter re-population is safe).  Non-`Int` variants are silently
+    /// ignored.
     fn set_value_ctx(&mut self, v: FieldValue, ctx: &mut Context) {
         if let FieldValue::Int(idx) = v {
             list_viewer::focus_item_num(self, idx, ctx);
@@ -210,7 +242,15 @@ pub struct SortedListBox {
 }
 
 impl SortedListBox {
-    /// Construct a sorted list box, showing the cursor at column 1.
+    /// Create a new, empty sorted list box wired to optional scroll bars.
+    ///
+    /// Like [`ListBox::new`], but additionally enables the visible cursor and
+    /// positions it at column 1 — the cursor advances past the matched prefix
+    /// during type-to-search.  The item list starts empty; call
+    /// [`new_list`](Self::new_list) after insertion to populate it.
+    ///
+    /// Pass `None` for `h` or `v` when no horizontal or vertical scroll bar
+    /// is needed.
     pub fn new(
         bounds: crate::view::Rect,
         num_cols: i32,
@@ -228,8 +268,16 @@ impl SortedListBox {
         }
     }
 
-    /// Sort the items CASE-INSENSITIVELY, (re)publish the vertical bar's range +
-    /// focus, and reset the search. Mirrors [`ListBox::new_list`].
+    /// Replace the item collection, sort it case-insensitively, and reset the search state.
+    ///
+    /// The items are sorted in-place (ASCII case-fold) so that the binary
+    /// search used by type-to-search produces correct results.  After sorting,
+    /// the scroll-bar range is republished and focus is reset to item 0.  Any
+    /// active type-to-search state (`search_pos`) is cleared.
+    ///
+    /// Call this **after** the widget has been inserted into its parent group
+    /// (same requirement as [`ListBox::new_list`]).  Pass items in any order —
+    /// `new_list` sorts them for you.
     pub fn new_list(&mut self, mut items: Vec<String>, ctx: &mut Context) {
         items.sort_by(|a, b| ci_cmp(a, b));
         self.items = items;
@@ -241,7 +289,11 @@ impl SortedListBox {
         self.search_pos = -1;
     }
 
-    /// The current item collection.
+    /// The current item collection as a read-only, case-insensitively sorted slice.
+    ///
+    /// The slice is always in the order established by the last
+    /// [`new_list`](Self::new_list) call (ASCII case-folded lexicographic).
+    /// Use it to read the items; to replace them call `new_list`.
     pub fn list(&self) -> &[String] {
         &self.items
     }
@@ -287,9 +339,16 @@ impl list_viewer::SortedSearch for SortedListBox {
         self.shift_state = s;
     }
 
-    /// The search key IS the typed prefix `cur`. Returns the first index `i` in
-    /// `0..range` whose item is `>= key` case-insensitively (the insertion
-    /// point), or `range` if none. Binary search over `get_text(i)`.
+    /// Map the typed prefix to the best matching item index.
+    ///
+    /// The key IS the typed prefix itself: `cur` is joined into a string and
+    /// compared case-insensitively against the sorted items.  Returns the first
+    /// index `i` in `0..range` such that `items[i] >= key` (case-insensitive
+    /// insertion point), or `range` when every item sorts before the prefix.
+    ///
+    /// Subclasses (e.g. a file-list box) can override `search` to derive a
+    /// different key or use a different ordering; this base implementation
+    /// covers the generic string case.
     fn search(&self, cur: &[char]) -> i32 {
         let key: String = cur.iter().collect();
         let range = self.lv.range;
@@ -349,8 +408,28 @@ impl View for SortedListBox {
         Some(self)
     }
 
+    /// The focused item's **index** in the (sorted) item Vec as a `FieldValue::Int`.
+    ///
+    /// Gather this value after the user closes the dialog to find out which
+    /// item was selected.  Because the list is sorted by `new_list`, the index
+    /// refers to the sorted position — use [`list`](Self::list) to map it back
+    /// to the item text if needed.  The item collection itself is not part of
+    /// this value (same contract as [`ListBox::value`]).
     fn value(&self) -> Option<FieldValue> {
         Some(FieldValue::Int(self.lv.focused))
+    }
+
+    /// Focus the item at `index` and republish the vertical scroll bar.
+    ///
+    /// Scatter a previously gathered `FieldValue::Int` back here to restore the
+    /// user's prior selection.  The index refers to the sorted position; an
+    /// out-of-range value is clamped.  Non-`Int` variants are silently ignored.
+    /// The item list is not replaced — call [`new_list`](Self::new_list) first
+    /// if you need to repopulate.
+    fn set_value_ctx(&mut self, v: FieldValue, ctx: &mut Context) {
+        if let FieldValue::Int(idx) = v {
+            list_viewer::focus_item_num(self, idx, ctx);
+        }
     }
 }
 
@@ -908,6 +987,56 @@ mod tests {
             slb.handle_event(&mut ev, &mut ctx);
         }
         assert_eq!(slb.search_pos(), -1, "cmReleasedFocus resets search_pos");
+    }
+
+    // -- SLB 0. set_value_ctx scatter ------------------------------------------
+
+    #[test]
+    fn sorted_lb_set_value_ctx_focuses_the_item() {
+        // Build a SortedListBox with a v-bar sentinel so scroll-bar deferrals
+        // land correctly (mirrors the ListBox harness in new_list_sets_range…).
+        let mut mint_group = Group::new(Rect::new(0, 0, 4, 4));
+        let sentinel =
+            mint_group.insert(Box::new(ListBox::new(Rect::new(0, 0, 1, 1), 1, None, None)));
+
+        let mut slb = SortedListBox::new(Rect::new(0, 0, 20, 8), 1, None, Some(sentinel));
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            // "alpha","beta","charlie" are already in case-insensitive order.
+            slb.new_list(
+                vec!["alpha".into(), "beta".into(), "charlie".into()],
+                &mut ctx,
+            );
+        }
+        // Gather: initial focus is 0.
+        assert_eq!(slb.value(), Some(FieldValue::Int(0)), "initial gather == 0");
+
+        deferred.clear();
+
+        // Scatter index 2 ("charlie").
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            slb.set_value_ctx(FieldValue::Int(2), &mut ctx);
+        }
+
+        // Round-trip: gather must return the scattered index.
+        assert_eq!(
+            slb.value(),
+            Some(FieldValue::Int(2)),
+            "after scatter(2) gather returns 2"
+        );
+
+        // A scroll-bar param deferral for the v-bar must have been queued.
+        assert!(
+            deferred.iter().any(|d| matches!(
+                d,
+                Deferred::ScrollBarSetParams { id, value: Some(_), .. } if *id == sentinel
+            )),
+            "scatter queued a ScrollBarSetParams deferral for the v-bar"
+        );
     }
 
     // -- SLB 8. new_list sorts case-insensitively and resets search ------------

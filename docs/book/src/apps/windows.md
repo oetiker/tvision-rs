@@ -1,11 +1,11 @@
 # Windows & the desktop
 
-[`Desktop`](../api/tvision-rs/desktop/struct.Desktop.html) and
-[`Window`](../api/tvision-rs/window/struct.Window.html) are the two core structural
+[`Desktop`](../api/tvision_rs/desktop/struct.Desktop.html) and
+[`Window`](../api/tvision_rs/window/struct.Window.html) are the two core structural
 views of every tvision-rs program: a full-screen container that holds a patterned
 background and any number of overlapping windows. Both *embed a*
-[`Group`](../api/tvision-rs/view/struct.Group.html) and delegate the
-[`View`](../api/tvision-rs/view/trait.View.html) trait to it (the embed-and-delegate
+[`Group`](../api/tvision_rs/view/struct.Group.html) and delegate the
+[`View`](../api/tvision_rs/view/trait.View.html) trait to it (the embed-and-delegate
 pattern — see [Inheritance → trait + composition](../port/inheritance.md)), so a
 desktop *is* a view and a window *is* a view: you insert windows into a desktop,
 and child controls into a window *(these are the tvision-rs equivalents of the C++
@@ -13,15 +13,15 @@ and child controls into a window *(these are the tvision-rs equivalents of the C
 
 ## The desktop
 
-You rarely build a [`Desktop`](../api/tvision-rs/desktop/struct.Desktop.html) by hand
+You rarely build a [`Desktop`](../api/tvision_rs/desktop/struct.Desktop.html) by hand
 at runtime — the application skeleton's `init_desktop` factory does it for you. In
 the `hello` example that factory insets the bounds one row below the menu bar and
 one above the status line, then calls
-[`Desktop::new`](../api/tvision-rs/desktop/struct.Desktop.html#method.new) with a
+[`Desktop::new`](../api/tvision_rs/desktop/struct.Desktop.html#method.new) with a
 *background factory*. Pass
-[`Desktop::init_background`](../api/tvision-rs/desktop/struct.Desktop.html#method.init_background)
+[`Desktop::init_background`](../api/tvision_rs/desktop/struct.Desktop.html#method.init_background)
 for the classic light-shade (`░`) fill, which builds a
-[`Background`](../api/tvision-rs/desktop/struct.Background.html). The skeleton wires
+[`Background`](../api/tvision_rs/desktop/struct.Background.html). The skeleton wires
 all three factories into the program at construction:
 
 ```rust,ignore
@@ -30,11 +30,11 @@ all three factories into the program at construction:
 
 ## Opening windows
 
-A [`Window`](../api/tvision-rs/window/struct.Window.html) is constructed with its
+A [`Window`](../api/tvision_rs/window/struct.Window.html) is constructed with its
 bounds, an optional title, and a *window number* (`1`–`9` become the
 `Alt-1`…`Alt-9` selectors; `0` means "no number"). By default it is movable,
 resizable, closable and zoomable — all four
-[`WindowFlags`](../api/tvision-rs/window/struct.WindowFlags.html) start true
+[`WindowFlags`](../api/tvision_rs/window/struct.WindowFlags.html) start true
 *(corresponding to the C++ `wfMove | wfGrow | wfClose | wfZoom` flags)*.
 
 To put a window on screen at construction time, insert it into the desktop. At
@@ -53,12 +53,12 @@ prog.desktop_insert(Box::new(win));
 ```
 
 To give a window scroll bars, call
-[`Window::standard_scroll_bar`](../api/tvision-rs/window/struct.Window.html#method.standard_scroll_bar)
-with [`ScrollBarOptions`](../api/tvision-rs/window/struct.ScrollBarOptions.html) — its
+[`Window::standard_scroll_bar`](../api/tvision_rs/window/struct.Window.html#method.standard_scroll_bar)
+with [`ScrollBarOptions`](../api/tvision_rs/window/struct.ScrollBarOptions.html) — its
 `vertical` flag selects the right edge (else the bottom), and `handle_keyboard`
 opts the bar into post-processing of the focused chain's arrow keys. It inserts
 the bar on the correct edge and returns its `ViewId`. For child controls, use
-[`Window::insert_child`](../api/tvision-rs/window/struct.Window.html#method.insert_child).
+[`Window::insert_child`](../api/tvision_rs/window/struct.Window.html#method.insert_child).
 
 ## Z-order, focus and window commands
 
@@ -87,9 +87,9 @@ dedicated `dragView` nested-mouse-loop for this)*.
 ## Tiling and cascading
 
 The desktop can auto-arrange its **tileable** windows.
-[`Desktop::tile`](../api/tvision-rs/desktop/struct.Desktop.html#method.tile) packs
+[`Desktop::tile`](../api/tvision_rs/desktop/struct.Desktop.html#method.tile) packs
 them into a most-equal grid;
-[`Desktop::cascade`](../api/tvision-rs/desktop/struct.Desktop.html#method.cascade)
+[`Desktop::cascade`](../api/tvision_rs/desktop/struct.Desktop.html#method.cascade)
 stacks them stepped down and to the right. Both skip windows that are not visible
 or not marked tileable, and both leave a window's bounds unchanged when it will
 not fit — a safe no-op. Note that `Window` does **not** set the tileable option
@@ -108,7 +108,7 @@ route to these calls, so its three demo windows rearrange on command.
 
 ## Splitter — resizable panes
 
-A [`Splitter`](../api/tvision-rs/widgets/splitter/struct.Splitter.html) divides a
+A [`Splitter`](../api/tvision_rs/widgets/splitter/struct.Splitter.html) divides a
 rectangle into N panes along one axis, separated by 1-cell divider seams that the
 user can drag to resize. It is the idiomatic way to build IDE-style or
 file-manager-style layouts inside a window.
@@ -134,7 +134,7 @@ y (stacked). Each `.pane(view, constraints)` call appends a pane.
 
 ### Constraints
 
-[`Constraints`](../api/tvision-rs/widgets/splitter/layout/struct.Constraints.html) control how
+[`Constraints`](../api/tvision_rs/widgets/splitter/layout/struct.Constraints.html) control how
 much space a pane claims along the axis:
 
 | Constructor | Meaning |
@@ -146,7 +146,7 @@ much space a pane claims along the axis:
 
 ### Divider styles
 
-[`DividerStyle`](../api/tvision-rs/widgets/splitter/enum.DividerStyle.html) controls
+[`DividerStyle`](../api/tvision_rs/widgets/splitter/enum.DividerStyle.html) controls
 how a seam looks and behaves:
 
 | Variant | Look | Draggable? |
@@ -218,6 +218,135 @@ let split = Splitter::cols()
 
 A live example showing `.joined()` on a nested three-pane layout is in the
 [Widget gallery](../gallery.md).
+
+## Limiting move and resize
+
+Every view carries a [`DragMode`](../api/tvision_rs/view/struct.DragMode.html) — a
+struct of bools controlling whether a window can be moved or resized, and which
+edges constrain the drag. `Window` sets `drag_move` and `drag_grow` by default
+(the user can drag the title bar to move and the bottom corners to resize).
+
+```rust
+# use tvision_rs as tv;
+# use tv::{DragMode, View};
+# fn _demo(win: &mut tv::Window) {
+// Make the window movable but not resizable:
+win.state_mut().drag_mode = DragMode {
+    drag_move: true,
+    drag_grow: false,
+    drag_grow_left: false,
+    limit_lo_x: true,
+    limit_lo_y: true,
+    limit_hi_x: true,
+    limit_hi_y: true,
+};
+# }
+```
+
+The `limit_*` bits clamp the drag to the owner's extent — without them the
+user could drag the window partially off-screen. `DragMode::limit_all()` is a
+convenience that sets all four limit bits at once; it is the standard setting
+for a window that must remain fully on the desktop.
+
+The `drag_grow_left` bit adds the left edge as a resize target. By default only
+the **bottom-right corner** is draggable — `drag_grow_left: true` extends resize
+to the left edge as well (useful for left-aligned panels).
+
+Source: `src/view/view.rs` (`DragMode`), `src/window/window.rs` (window default drag setup).
+
+> **Turbo Vision heritage:** `dmDragMove`/`dmDragGrow`/`dmLimitXxx` were bit-field
+> constants combined with `|`. tvision-rs replaces them with a struct of bools (deviation
+> D5) — the individual fields replace the bit-shift arithmetic.
+
+## Grow modes: anchoring edges
+
+[`GrowMode`](../api/tvision_rs/view/struct.GrowMode.html) controls how a child view
+reacts when its **owner group is resized**. Each `gf*` bit anchors one edge of
+the child to the *corresponding edge* of the owner. When the owner grows, the
+anchored edge moves with it.
+
+| Field | Meaning when `true` |
+| --- | --- |
+| `lo_x` (left edge) | tracks the owner's **right** edge — child slides right |
+| `lo_y` (top edge) | tracks the owner's **bottom** edge — child slides down |
+| `hi_x` (right edge) | tracks the owner's **right** edge — child widens |
+| `hi_y` (bottom edge) | tracks the owner's **bottom** edge — child grows taller |
+| `fixed` | override — child size is fixed; none of the above apply |
+| `rel` | proportional scale instead of absolute anchoring |
+
+A child whose *right* and *bottom* edges track the owner's — `hi_x: true, hi_y:
+true` — fills the owner and grows with it. A child whose *left* and *right* edges
+both track the owner's right — `lo_x: true, hi_x: true` — keeps a fixed width
+but slides to maintain its right-edge distance.
+
+```rust
+# use tvision_rs as tv;
+# use tv::{GrowMode, View};
+# fn _demo(child: &mut tv::widgets::StaticText) {
+// Child fills its owner (grows on both axes):
+child.state_mut().grow_mode = GrowMode {
+    hi_x: true,
+    hi_y: true,
+    ..Default::default()
+};
+# }
+```
+
+`GrowMode::grow_all()` sets `lo_x | lo_y | hi_x | hi_y` — every edge tracks
+the owner, so the child maintains its margins on all four sides.
+
+Grow mode is applied by [`View::change_bounds`](../api/tvision_rs/view/trait.View.html#method.change_bounds)
+(`src/view/view.rs`): when a group is resized, it calls `calc_bounds` on each
+child (which applies the grow formula) and then `change_bounds` to commit the new
+rectangle.
+
+Source: `src/view/view.rs` (`GrowMode`, `ViewState::calc_bounds`).
+
+> **Turbo Vision heritage:** the `gf*` constants (`gfGrowLoX`, `gfGrowHiX`, …)
+> were individual bits in a `ushort`. tvision-rs maps each to a named bool field
+> in `GrowMode` (deviation D5).
+
+## Bringing a window to the front
+
+Z-order in a group is reverse insertion order: the most recently inserted child
+sits on top. When the user clicks a window or presses `Alt`-*N*, the framework
+calls [`Group::focus_child`](../api/tvision_rs/view/struct.Group.html#method.focus_child)
+on the desktop. `focus_child` checks whether the outgoing current view wants to
+keep focus (the `ofValidate` path), then, because windows opt into **raise-on-select**
+(`Options::top_select = true`), calls
+[`Group::make_first`](../api/tvision_rs/view/struct.Group.html#method.make_first):
+the window is moved to the last slot of the `children` Vec (the top slot in
+paint order).
+
+There is no general "reorder to arbitrary Z position" primitive. Only two
+operations exist:
+
+- **`make_first(id, ctx)`** — raises one view to the very top.
+- **`put_in_front_of(id, target, ctx)`** — places `id` immediately in front of
+  `target` (one slot above it in paint order).
+
+`make_first` is the primitive; `put_in_front_of(id, None, ctx)` is its
+definition. Both are no-ops when the child is already in the target position.
+
+The resulting effect is familiar: clicking any window brings it to the top of the
+stack and makes it active. The previous front window becomes passive (its frame
+changes color) and receives the `StateFlag::Active` clear cascade.
+
+```rust
+# use tvision_rs as tv;
+# use tv::View;
+# fn _demo(desktop: &mut tv::Group, win_id: tv::ViewId, ctx: &mut tv::Context) {
+// Raise a window to the front programmatically:
+desktop.make_first(win_id, ctx);
+# }
+```
+
+Source: `src/view/group.rs` (`Group::focus_child`, `Group::make_first`,
+`Group::put_in_front_of`, and the `top_select` option check).
+
+> **Turbo Vision heritage:** `TGroup::makeFirst` / `putInFrontOf` performed the same
+> move in the circular doubly-linked sibling ring. tvision-rs stores children in a
+> `Vec` and implements raise-to-top as a `swap` to the last slot (deviation D3).
 
 ## See also
 

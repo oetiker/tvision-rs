@@ -91,14 +91,32 @@ impl Color {
 /// Text-style modifiers — bold, italic, underline, and so on — as a
 /// struct-of-bools.
 ///
+/// Set these on a [`Style`] to control per-cell terminal attributes. Most
+/// terminals support at least `bold`, `underline`, and `reverse`; `italic`,
+/// `blink`, and `strike` are honored on terminals that declare support for
+/// them. All default to `false` (normal text).
+///
+/// ```rust
+/// use tvision_rs::color::{Color, Modifiers, Style};
+///
+/// // Underlined text on the default background.
+/// let s = Style::with_modifiers(
+///     Color::Default,
+///     Color::Default,
+///     Modifiers { underline: true, ..Default::default() },
+/// );
+/// ```
+///
 /// `no_shadow` is a per-cell marker that window shadows must not be cast over
-/// this cell (used by the window shadow pass).
+/// this cell (used internally by the window shadow pass; leave it `false` in
+/// normal use).
 ///
 /// # Turbo Vision heritage
 ///
 /// Faithful to the `sl*` masks of `TColorAttr`'s 10-bit style word
-/// (`colors.h`), unpacked into a struct-of-bools (deviation D5). `no_shadow`
-/// is the private `slNoShadow`.
+/// (`colors.h`), unpacked into a struct-of-bools. The four
+/// `TMonoSelector` attributes (Normal, Highlight=bold, Underline, Inverse=reverse)
+/// all have counterparts in this struct. `no_shadow` is the private `slNoShadow`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Modifiers {
     pub bold: bool,      // slBold

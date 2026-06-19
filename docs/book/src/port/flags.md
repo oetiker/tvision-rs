@@ -26,10 +26,10 @@ old `0x0001`-style constant left to a comment:
 
 | C++ word   | tvision-rs type                                                | Example                        |
 | ---------- | -------------------------------------------------------- | ------------------------------ |
-| `state`    | [`State`](../api/tvision-rs/view/struct.State.html)         | `sfFocused` → `focused`        |
-| `options`  | [`Options`](../api/tvision-rs/view/struct.Options.html)     | `ofSelectable` → `selectable`  |
-| `growMode` | [`GrowMode`](../api/tvision-rs/view/struct.GrowMode.html)   | `gfGrowAll` → `grow_all()`     |
-| `dragMode` | [`DragMode`](../api/tvision-rs/view/struct.DragMode.html)   | `dmLimitLoY` → `limit_lo_y`    |
+| `state`    | [`State`](../api/tvision_rs/view/struct.State.html)         | `sfFocused` → `focused`        |
+| `options`  | [`Options`](../api/tvision_rs/view/struct.Options.html)     | `ofSelectable` → `selectable`  |
+| `growMode` | [`GrowMode`](../api/tvision_rs/view/struct.GrowMode.html)   | `gfGrowAll` → `grow_all()`     |
+| `dragMode` | [`DragMode`](../api/tvision_rs/view/struct.DragMode.html)   | `dmLimitLoY` → `limit_lo_y`    |
 
 A combined constant such as `gfGrowAll` (four `gf*` bits OR'd together) becomes
 a constructor — `GrowMode::grow_all()` — rather than a single field, since it
@@ -47,8 +47,8 @@ A bare read is just field access on the snapshot returned by `state()` /
 mattered: it didn't only toggle a bit, it fired side effects — redrawing,
 broadcasting a focus change, cascading into children. tvision-rs keeps that verb
 where the side effects live, as
-[`View::set_state`](../api/tvision-rs/view/trait.View.html#method.set_state) over a
-small [`StateFlag`](../api/tvision-rs/view/enum.StateFlag.html) enum — the named
+[`View::set_state`](../api/tvision_rs/view/trait.View.html#method.set_state) over a
+small [`StateFlag`](../api/tvision_rs/view/enum.StateFlag.html) enum — the named
 subset of `sf*` (`Active`, `Selected`, `Focused`, `Dragging`) that the focus and
 activation machinery propagates. Flags with no propagation (visibility, cursor
 shape) are set directly on the struct, never through this hook.
@@ -61,7 +61,7 @@ which the menus and status line mirror) rather than poking a bit.
 ## Beyond the view: `WindowFlags`
 
 The same treatment reaches the `wf*` decoration word. A window's
-[`WindowFlags`](../api/tvision-rs/window/struct.WindowFlags.html) carries `r#move`
+[`WindowFlags`](../api/tvision_rs/window/struct.WindowFlags.html) carries `r#move`
 (can be dragged — `wfMove`, spelled with a raw identifier because `move` is a
 Rust keyword), `grow`, `close` and `zoom`. A default window sets all four, just
 as the C++ ctor does `flags = wfMove | wfGrow | wfClose | wfZoom`. Those bools

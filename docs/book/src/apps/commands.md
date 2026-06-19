@@ -9,14 +9,14 @@ exactly one place.
 
 ## Commands
 
-A [`Command`](../api/tvision-rs/command/struct.Command.html) is an opaque token
+A [`Command`](../api/tvision_rs/command/struct.Command.html) is an opaque token
 naming an intent. The framework ships a standard vocabulary as associated
 constants — `Command::OK`, `Command::CANCEL`, `Command::QUIT`, `Command::CLOSE`,
 and so on. A command is not an integer: its identity is a namespaced
 `&'static str` (so `Command::OK` is `"tv.ok"`), making app- and view-defined
 commands collision-safe by construction *(the standard names map one-to-one onto
 the C++ `cm*` constants)*. Mint your own with
-[`Command::custom`](../api/tvision-rs/command/struct.Command.html#method.custom),
+[`Command::custom`](../api/tvision_rs/command/struct.Command.html#method.custom),
 under a dotted prefix of your own:
 
 ```rust
@@ -25,7 +25,7 @@ const REFRESH: tv::Command = tv::Command::custom("myapp.refresh");
 ```
 
 Commands reach the tree as events. A view emits one through its
-[`Context`](../api/tvision-rs/view/struct.Context.html):
+[`Context`](../api/tvision_rs/view/struct.Context.html):
 
 ```rust
 # use tvision_rs as tv;
@@ -37,7 +37,7 @@ ctx.post(REFRESH);
 ```
 
 The command then rides the event loop as an
-[`Event::Command`](../api/tvision-rs/event/enum.Event.html), is offered to views in
+[`Event::Command`](../api/tvision_rs/event/enum.Event.html), is offered to views in
 turn, and the first one to recognise it consumes it. (How the loop walks the
 tree is the subject of [The event loop in depth](../internals/event-loop.md).)
 
@@ -46,7 +46,7 @@ tree is the subject of [The event loop in depth](../internals/event-loop.md).)
 Every command is **enabled by default**. To make a command unavailable —
 graying out the menu items and buttons that emit it — disable it. When you hold
 the top-level handle (an app `main`, startup, a test), call
-[`Program::disable_command`](../api/tvision-rs/app/struct.Program.html#method.disable_command)
+[`Program::disable_command`](../api/tvision_rs/app/struct.Program.html#method.disable_command)
 / `enable_command`; from inside a view, where you only have a downward-borrowed
 `Context`, request it deferred via `ctx.disable_command(cmd)` /
 `ctx.enable_command(cmd)`. A view can ask whether a command is currently live
@@ -65,7 +65,7 @@ Internally `Program` stores the *disabled* set (a denylist), so a brand-new
 custom command is enabled the moment it exists — there is no registration step.
 Five window commands (`ZOOM`, `CLOSE`, `RESIZE`, `NEXT`, `PREV`) start disabled
 and are granted only while a window is selected. The disabled command set is a
-[`CommandSet`](../api/tvision-rs/command/struct.CommandSet.html) — a set of commands
+[`CommandSet`](../api/tvision_rs/command/struct.CommandSet.html) — a set of commands
 with `+=` / `-=` / union / intersection operators *(the successor to C++
 `TCommandSet`)*.
 
@@ -89,8 +89,8 @@ ctx.broadcast(tv::Command::SCROLL_BAR_CHANGED, Some(my_id));
 ```
 
 A broadcast is an
-[`Event::Broadcast { command, source }`](../api/tvision-rs/event/enum.Event.html).
-The `source` is an optional [`ViewId`](../api/tvision-rs/view/struct.ViewId.html)
+[`Event::Broadcast { command, source }`](../api/tvision_rs/event/enum.Event.html).
+The `source` is an optional [`ViewId`](../api/tvision_rs/view/struct.ViewId.html)
 naming *which view the broadcast is about* — the resolvable successor to C++'s
 `infoPtr` void-pointer. It is a filter, not a payload: a receiver checks "is this
 broadcast from the scrollbar I care about?" and ignores the rest. `None` means

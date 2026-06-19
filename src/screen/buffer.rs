@@ -20,16 +20,24 @@
 
 use crate::screen::Cell;
 
-/// In-memory screen grid. Adapted from the ratatui `Buffer` for tvision-rs's
-/// whole-tree repaint model.
+/// In-memory screen grid; the render target for one complete frame.
+///
+/// Call [`Buffer::new`] to create a blank grid sized to the terminal, paint the
+/// full view tree into it via the renderer, then call [`Buffer::diff`] against
+/// the previous frame's buffer to obtain only the changed cells to flush to the
+/// terminal. The `Program` root owns two buffers (current and previous) and
+/// swaps them each iteration of the event loop.
 ///
 /// Unlike ratatui, `Buffer` stores only `width` × `height` rather than an
 /// `area: Rect`, because the back buffer is always screen-origin (`(0, 0)` to
 /// `(width-1, height-1)`). There is no offset to carry.
 ///
-/// Each frame the renderer paints the full view tree into a [`Buffer`], then
-/// calls [`Buffer::diff`] against the previous frame's buffer to obtain only
-/// the changed cells, which are flushed to the terminal.
+/// # Turbo Vision heritage
+///
+/// Replaces `TVideoBuf` (a fixed 80×25 word array of `char+attr` cells) and
+/// the per-view incremental `writeView` calls. The dynamic-size grid and
+/// double-buffered whole-tree repaint follow magiblot/tvision's modernised
+/// screen model rather than the original fixed-buffer approach.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Buffer {
     width: u16,

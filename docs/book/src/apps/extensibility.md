@@ -14,7 +14,7 @@ result type is yours; the framework never names it.
 ## 2. Field data — `FieldValue`, including `Custom`
 
 A control exposes its value as a
-[`FieldValue`](../api/tvision-rs/data/enum.FieldValue.html). The well-known shapes
+[`FieldValue`](../api/tvision_rs/data/enum.FieldValue.html). The well-known shapes
 (`Text`/`Int`/`Bool`/`Bits`/`List`) interoperate with framework widgets and generic
 consumers. For a payload your component invents, use `FieldValue::Custom`:
 

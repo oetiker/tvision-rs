@@ -84,13 +84,37 @@ pub enum LimitMode {
 pub struct InputLine {
     /// View state (geometry, flags, cursor) — the composition target.
     pub state: ViewState,
-    /// The field contents.
+    /// The UTF-8 text currently in the field.
+    ///
+    /// Direct reads are fine; to replace the whole content programmatically,
+    /// prefer [`View::set_value`] so the cursor and scroll position are
+    /// updated consistently. Slicing this string at a non-`char` boundary
+    /// panics, so all internal traversals go through [`text::next`] /
+    /// [`text::prev`] rather than raw byte arithmetic.
     pub data: String,
-    /// The maximum byte length of `data`.
+    /// Hard cap on `data.len()` in **bytes**.
+    ///
+    /// Set at construction time by the `limit` argument when [`LimitMode::MaxBytes`]
+    /// is active (`max_len = limit - 1`); otherwise fixed at 255. Insertions
+    /// that would push `data.len()` past this value are silently dropped.
+    /// See also [`max_width`](InputLine::max_width) and
+    /// [`max_chars`](InputLine::max_chars) for the display-width and
+    /// grapheme-count caps that the other two limit modes control.
     pub max_len: i32,
-    /// The maximum display width (`i32::MAX` ≈ unbounded otherwise).
+    /// Hard cap on the **display width** of `data` (in terminal columns).
+    ///
+    /// Active only when the field is constructed with [`LimitMode::MaxWidth`],
+    /// in which case `max_width = limit` and `max_len` is fixed at 255.
+    /// Defaults to `i32::MAX` (effectively unbounded) for the other two modes.
+    /// Wide characters such as CJK ideographs count as 2 columns each.
     pub max_width: i32,
-    /// The maximum grapheme count (`i32::MAX` ≈ unbounded otherwise).
+    /// Hard cap on the **grapheme count** of `data`.
+    ///
+    /// Active only when the field is constructed with [`LimitMode::MaxChars`],
+    /// in which case `max_chars = limit` and `max_len` is fixed at 255.
+    /// Defaults to `i32::MAX` (effectively unbounded) for the other two modes.
+    /// A grapheme cluster (e.g. a base letter plus combining diacritic) counts
+    /// as one regardless of its byte or column size.
     pub max_chars: i32,
     /// Cursor position, a **byte** offset into `data`.
     pub cur_pos: i32,
@@ -103,7 +127,18 @@ pub struct InputLine {
     pub sel_end: i32,
     /// The fixed end of a keyboard/mouse block extension, a **byte** offset.
     pub anchor: i32,
-    /// The optional input validator (a trait object).
+    /// The optional input validator, or `None` when the field is unconstrained.
+    ///
+    /// A [`Validator`] can filter individual keystrokes (`is_valid_input`),
+    /// check the whole value on focus loss (`validate`), and carry typed
+    /// non-text values via the `transfer_get`/`transfer_set` hooks so that
+    /// [`View::value`]/[`View::set_value`] round-trip an integer rather than a
+    /// string.
+    ///
+    /// You can read the validator (e.g. to call `is_status_ok`), but to
+    /// swap it out after construction use [`set_validator`](InputLine::set_validator)
+    /// rather than assigning to this field directly — that keeps the
+    /// ownership contract explicit.
     pub validator: Option<Box<dyn Validator>>,
     // -- validator save-state (oldData/oldCurPos/…) ------------------------
     old_data: String,
@@ -134,6 +169,11 @@ impl InputLine {
     /// else 255; `max_width` is `limit` only in width mode, else unbounded;
     /// `max_chars` is `limit` only in char mode, else unbounded. The field is
     /// selectable, takes focus on first click, shows a cursor, and starts empty.
+    ///
+    /// Pass `None` for `validator` to create an unconstrained field. To attach
+    /// or replace the validator after construction, use
+    /// [`set_validator`](InputLine::set_validator). For the common case of a
+    /// byte-limited field with no validator, prefer [`with_limit`](InputLine::with_limit).
     pub fn new(
         bounds: Rect,
         limit: i32,
@@ -194,6 +234,24 @@ impl InputLine {
     /// Convenience constructor with no validator and the default byte-limit mode.
     pub fn with_limit(bounds: Rect, limit: i32) -> Self {
         Self::new(bounds, limit, None, LimitMode::MaxBytes)
+    }
+
+    /// Replace this field's validator after construction.
+    ///
+    /// Pass `Some(validator)` to attach a [`Validator`](crate::validate::Validator)
+    /// that filters keystrokes and checks the field on focus-change/close, or
+    /// `None` to remove any constraint. The previous validator (if any) is dropped.
+    ///
+    /// Most fields set their validator once via [`InputLine::new`]; use this when
+    /// the constraint is only known later (e.g. it depends on another control's
+    /// value gathered at dialog-open time).
+    ///
+    /// # Turbo Vision heritage
+    ///
+    /// Mirrors `TInputLine::setValidator`, which disposed the old validator and
+    /// assigned the new one.
+    pub fn set_validator(&mut self, validator: Option<Box<dyn crate::validate::Validator>>) {
+        self.validator = validator;
     }
 
     // -- geometry helpers (byte ↔ column) ----------------------------------
@@ -260,10 +318,21 @@ impl InputLine {
         }
     }
 
-    /// Select all (or none) and optionally scroll the end into view. **Does
-    /// not** draw (the whole tree is redrawn) but does sync the cursor. Callers
-    /// that hold a `ctx` and where command state may need refreshing
-    /// (`set_state`, `handle_event`) call `update_commands` themselves afterward.
+    /// Select the whole field (`enable = true`) or deselect it (`enable =
+    /// false`), and optionally scroll the cursor into view (`scroll = true`).
+    ///
+    /// When `enable` is true the cursor moves to the end of `data` and the
+    /// selection covers `[0, data.len()]`. When false both the cursor and
+    /// the selection are collapsed to position 0.
+    ///
+    /// Pass `scroll = true` when the field is gaining focus (so the end of a
+    /// long value scrolls into view). Pass `scroll = false` from [`set_state`]
+    /// where the viewport position should be left as-is.
+    ///
+    /// This method does **not** trigger a redraw on its own — the event loop
+    /// redraws the whole tree. It does update the screen cursor via
+    /// [`sync_cursor`](InputLine::sync_cursor). Callers that also need to
+    /// refresh cut/copy/paste command graying call `update_commands` separately.
     pub fn select_all(&mut self, enable: bool, scroll: bool) {
         self.sel_start = 0;
         if enable {
@@ -613,9 +682,20 @@ impl View for InputLine {
         Some(self)
     }
 
-    /// Fill with the normal colour, draw the scrolled text, the scroll arrows,
-    /// and the selection highlight. The cursor is **not** set here (see
-    /// [`sync_cursor`](InputLine::sync_cursor)).
+    /// Render the field: background fill, scrolled text, scroll arrows at the
+    /// edges when the content overflows, and the selection highlight.
+    ///
+    /// Colors come from three theme roles: [`Role::InputNormal`] for the
+    /// background and unselected text (both focused and unfocused use the same
+    /// normal style), [`Role::InputArrow`] for the `◄`/`►` overflow indicators,
+    /// and [`Role::InputSelected`] for highlighted text. Because tvision-rs has
+    /// no attribute-only paint, the selected substring is **redrawn** (not just
+    /// re-attributed) in the selected style at the correct scroll offset — the
+    /// visible glyphs of the scrolled window, not the raw head of the selection.
+    ///
+    /// The screen cursor position is **not** set here; it is computed separately
+    /// by [`sync_cursor`](InputLine::sync_cursor) before each redraw so the event
+    /// loop can place the cursor without going through the draw path.
     fn draw(&mut self, ctx: &mut DrawCtx) {
         // Cache absolute origin for the mouse-tracking capture: the
         // MouseTrackCapture converts absolute mouse coords to field-local via
@@ -672,9 +752,28 @@ impl View for InputLine {
         }
     }
 
-    /// The `selected` keyboard/mouse block. Clipboard ([`do_cut`](Self::do_cut) /
-    /// [`do_copy`](Self::do_copy) / [`do_paste`](Self::do_paste)) and command
-    /// graying ([`update_commands`](Self::update_commands)) are handled here.
+    /// Process keyboard, mouse, and command events while the field is selected.
+    ///
+    /// **Keyboard:** printable characters are inserted at the cursor (replacing
+    /// any active selection, with validator filtering and all three caps checked).
+    /// Navigation keys (arrows, Home, End, Ctrl-arrows, Ins, Delete, Backspace,
+    /// Ctrl-Y) are dispatched through the global keymap and applied by
+    /// [`apply_input_command`](InputLine::apply_input_command). Shift-held
+    /// movement extends the selection block. Unhandled keys (Tab, Enter, Escape,
+    /// modified characters outside the repertoire) are left live so the enclosing
+    /// dialog can route them.
+    ///
+    /// **Mouse:** a single click positions the cursor; a double-click selects
+    /// all. Click-and-drag or a click on a scroll-arrow arms a press-and-hold
+    /// tracking capture that continues updating selection or scroll position on
+    /// each [`Event::MouseAuto`] / [`Event::MouseMove`] tick until mouse-up.
+    ///
+    /// **Commands:** [`Command::CUT`], [`Command::COPY`], and [`Command::PASTE`]
+    /// are consumed here; other commands fall through.
+    ///
+    /// After each handled event, cut/copy/paste command graying is refreshed via
+    /// [`update_commands`](InputLine::update_commands) (only while both active
+    /// and selected).
     fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
         // Mouse-down auto-select is the group's job; nothing to do while unselected.
         if !self.state.state.selected {
@@ -943,10 +1042,18 @@ impl View for InputLine {
         }
     }
 
-    /// Base flag flip then, on [`Selected`](StateFlag::Selected) (or
-    /// [`Active`](StateFlag::Active) while selected), `select_all(enable,
-    /// false)`. Also refreshes the cut/copy/paste command enable state when the
-    /// active+selected condition changes.
+    /// Apply a state-flag change and react to focus transitions.
+    ///
+    /// Flips the requested flag on [`ViewState`], then:
+    ///
+    /// - On [`StateFlag::Selected`] (or [`StateFlag::Active`] while the field is
+    ///   already selected): calls [`select_all(enable, false)`](InputLine::select_all)
+    ///   so the field is fully selected when it gains focus and deselected when it
+    ///   loses it.
+    /// - When the active-and-selected condition changes (e.g. the field gains or
+    ///   loses focus): pushes cut/copy/paste command enable/disable updates via
+    ///   [`update_commands`](InputLine::update_commands). This is what grays the
+    ///   Edit menu items when focus leaves the field.
     fn set_state(&mut self, flag: StateFlag, enable: bool, ctx: &mut Context) {
         // Command graying: sample the enable condition BEFORE the flag flip so
         // we can detect the transition.
@@ -996,7 +1103,18 @@ impl View for InputLine {
         true
     }
 
-    /// The field's text (or a validator-typed value) as a [`FieldValue`].
+    /// Return the field's current value as a [`FieldValue`].
+    ///
+    /// If the attached validator supports typed transfer (`transfer_get`
+    /// returns `Some`), that typed value is returned — for example, a
+    /// [`RangeValidator`](crate::validate::RangeValidator) with transfer
+    /// enabled yields `FieldValue::Int(n)` rather than `FieldValue::Text`.
+    /// Otherwise (no validator, or transfer disabled) the raw field text is
+    /// returned as `FieldValue::Text`.
+    ///
+    /// Call this from a dialog's gather pass (or directly) to read the field's
+    /// value in a type-safe way. For a plain text field with no validator the
+    /// result is always `Some(FieldValue::Text(…))`.
     fn value(&self) -> Option<FieldValue> {
         // A transfer-enabled validator (a range validator, say) produces a typed
         // value; otherwise the result is the field's text.
@@ -1010,7 +1128,18 @@ impl View for InputLine {
         Some(FieldValue::Text(self.data.clone()))
     }
 
-    /// Load text into the field and select all of it.
+    /// Load a value into the field, replacing the current contents, and select all.
+    ///
+    /// If the attached validator supports typed transfer (`transfer_set` returns
+    /// `Some`), the validator formats the value into the display text (e.g.
+    /// `FieldValue::Int(42)` becomes `"42"`) and [`select_all(true, true)`](InputLine::select_all)
+    /// is called. Otherwise, a `FieldValue::Text` value is loaded directly,
+    /// **truncated to `max_len` bytes** at the nearest `char` boundary if it
+    /// is too long, and the field is selected. A `FieldValue::Int` into a field
+    /// with no transfer-enabled validator is silently ignored (type mismatch).
+    ///
+    /// Use this from a dialog's scatter pass or any time you need to populate
+    /// the field programmatically and want the cursor/scroll state reset.
     fn set_value(&mut self, v: FieldValue) {
         // A transfer-enabled validator formats the typed value into the field
         // text; otherwise the Text path is used. Select-all runs either way.
@@ -2254,5 +2383,36 @@ mod tests {
                 "Enter must remain live (bubble) under the active preset"
             );
         }
+    }
+
+    #[test]
+    fn set_validator_replaces_constructor_validator() {
+        use crate::validate::FilterValidator;
+        // Build with no validator, then attach one that only allows digits.
+        let mut line = InputLine::new(Rect::new(0, 0, 10, 1), 9, None, LimitMode::default());
+        assert!(line.validator.is_none());
+
+        line.set_validator(Some(Box::new(FilterValidator::new("0123456789"))));
+        assert!(line.validator.is_some());
+        // The freshly-attached validator rejects a non-digit keystroke.
+        let mut non_digit = String::from("a");
+        let mut digit = String::from("7");
+        assert!(
+            !line
+                .validator
+                .as_ref()
+                .unwrap()
+                .is_valid_input(&mut non_digit, false)
+        );
+        assert!(
+            line.validator
+                .as_ref()
+                .unwrap()
+                .is_valid_input(&mut digit, false)
+        );
+
+        // Clearing it removes the constraint.
+        line.set_validator(None);
+        assert!(line.validator.is_none());
     }
 }

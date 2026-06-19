@@ -60,21 +60,34 @@ use crate::view::id::ViewId;
 use crate::view::view::{Phase, StateFlag, View, ViewState};
 
 /// Which select/deselect side effects [`Group::set_current`] applies when
-/// changing the current view. `Enter`/`Leave` are used by the modal
-/// [`exec_view`](crate::app::Program::exec_view) path when entering and leaving a
-/// modal dialog, so the underlying current view keeps its selected state across
-/// the modal session.
+/// changing the current view.
+///
+/// Pass this to [`Group::set_current`] to control focus transitions:
+///
+/// * [`Normal`](SelectMode::Normal) — the ordinary case: deselect the old current
+///   view, then select the new one. Use this for all normal focus changes.
+/// * [`Enter`](SelectMode::Enter) and [`Leave`](SelectMode::Leave) — used
+///   internally by [`Program::exec_view`](crate::Program::exec_view) when starting
+///   and ending a modal dialog. `Enter` avoids deselecting the view that was
+///   selected before the modal opened; `Leave` avoids re-selecting it on close.
+///   Together they ensure the view underneath a modal dialog keeps its
+///   `selected` state visually intact across the modal session.
+///
+/// Widget implementors almost always pass `SelectMode::Normal`; the
+/// `Enter`/`Leave` variants are the modal-loop plumbing in `Program`.
 ///
 /// # Turbo Vision heritage
 /// Ports the `selectMode` enum (`views.h`):
 /// `normalSelect`/`enterSelect`/`leaveSelect`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SelectMode {
-    /// Deselect the old current, select the new one.
+    /// Deselect the old current, select the new one — the ordinary focus change.
     Normal,
-    /// Entering a modal: do **not** deselect the old current.
+    /// Entering a modal: push focus onto the modal without deselecting the
+    /// underlying current view.
     Enter,
-    /// Leaving a modal: do **not** select the new current.
+    /// Leaving a modal: pop focus back without re-selecting the underlying view
+    /// (its `selected` flag was preserved during the modal session).
     Leave,
 }
 
@@ -110,15 +123,25 @@ pub struct Group {
 }
 
 impl Group {
-    /// Construct a group covering `bounds`. The group is itself selectable and
-    /// opts into the two tracking event classes ([`crate::event::EventMask`]'s
-    /// mouse-move and mouse-auto), since it must *receive* those in order to
-    /// route them to its children.
+    /// Create a [`Group`] covering `bounds`, ready to receive children via
+    /// [`insert`](Self::insert).
+    ///
+    /// The constructed group is selectable (so it participates in focus routing)
+    /// and opts into both mouse-tracking event classes (move and auto-repeat) so
+    /// it receives them and can route them to its children. No children are
+    /// added; add them with [`insert`](Self::insert) after construction.
+    ///
+    /// Most applications do not call `Group::new` directly — the standard
+    /// container types ([`crate::desktop::Desktop`], [`crate::dialog::Dialog`])
+    /// build on it internally. Call `Group::new` only when you need a bare,
+    /// unstyled container that routes events and draws its children without any
+    /// frame or background fill.
     ///
     /// # Turbo Vision heritage
     /// Ports `TGroup::TGroup` (`options |= ofSelectable`, `eventMask = 0xFFFF`).
     /// tvision-rs's event mask exposes only those two opt-in tracking classes; the
-    /// dropped constructor bits were buffering/clipping.
+    /// dropped constructor bits were buffering/clipping flags that do not apply
+    /// under whole-tree redraw + diff.
     pub fn new(bounds: Rect) -> Self {
         let mut st = ViewState::new(bounds);
         st.options.selectable = true;
@@ -217,30 +240,60 @@ impl Group {
 
     // -- gather / scatter ---------------------------------------------
 
-    /// Gather: collect each child's typed value, in bottom-to-top order
-    /// (`children` forward — the opposite of the top-to-bottom order used in
-    /// event delivery). Returns one `Option<FieldValue>` per child; `None` means
-    /// that child carries no transferable value.
+    /// Collect the current typed value of every child into a snapshot vector.
+    ///
+    /// Returns one `Option<`[`FieldValue`]`>` per child in insertion
+    /// (bottom-to-top) order — the same order [`scatter_data`](Self::scatter_data)
+    /// expects. A `None` entry means that child carries no transferable value
+    /// (e.g. a label or a decorative frame).
+    ///
+    /// Use this to read a dialog's current field values before closing it, or
+    /// to checkpoint the dialog state for undo. Pair with
+    /// [`scatter_data`](Self::scatter_data) to restore:
+    ///
+    /// ```rust,ignore
+    /// let snapshot = dialog_group.gather_data();
+    /// // … later …
+    /// dialog_group.scatter_data(&snapshot, ctx);
+    /// ```
     ///
     /// # Turbo Vision heritage
-    /// Ports `TGroup::getData` (the data-walk that collects each control's value
-    /// into a record).
+    /// Ports `TGroup::getData` (the data-walk that collects each control's
+    /// value into a flat byte record). The typed [`FieldValue`] vector replaces
+    /// the opaque byte record of the original `getData`/`setData` value protocol.
     pub fn gather_data(&self) -> Vec<Option<FieldValue>> {
         self.children.iter().map(|c| c.view.value()).collect()
     }
 
-    /// Scatter: distribute typed values back to children, in the same
-    /// bottom-to-top order as [`gather_data`](Self::gather_data). Calls
-    /// [`set_value_ctx`](View::set_value_ctx) so views that need deferred bar
-    /// updates (e.g. [`ListBox`](crate::widgets::ListBox)) receive the `Context`.
+    /// Distribute typed values back to children in the same bottom-to-top
+    /// order as [`gather_data`](Self::gather_data).
     ///
-    /// `values` shorter than the children list: remaining children are left
-    /// untouched. Extra values beyond the children count are silently ignored.
-    /// `None` entries skip the corresponding child.
+    /// Use this to initialize or reset a dialog's fields from application data
+    /// before showing it, or to restore a snapshot previously taken with
+    /// [`gather_data`](Self::gather_data). A typical dialog open sequence:
+    ///
+    /// ```rust,ignore
+    /// let initial = vec![
+    ///     Some(FieldValue::String("default".into())),
+    ///     None, // label — no value
+    ///     Some(FieldValue::Bool(true)),
+    /// ];
+    /// dialog_group.scatter_data(&initial, ctx);
+    /// ```
+    ///
+    /// `values` shorter than `children`: remaining children are left untouched.
+    /// Extra values beyond the children count are silently ignored. `None`
+    /// entries skip the corresponding child without writing it.
+    ///
+    /// Uses [`set_value_ctx`](View::set_value_ctx) rather than
+    /// [`set_value`](View::set_value) so widgets that need a `Context` for
+    /// side effects (e.g. [`ListBox`](crate::widgets::ListBox) updating its
+    /// scroll bar) receive it correctly.
     ///
     /// # Turbo Vision heritage
     /// Ports `TGroup::setData` (the data-walk that writes each control's value
-    /// back from a record).
+    /// back from a flat byte record). The typed [`FieldValue`] slice replaces
+    /// the opaque byte record of the original `getData`/`setData` value protocol.
     pub fn scatter_data(&mut self, values: &[Option<FieldValue>], ctx: &mut Context) {
         for (child, val) in self.children.iter_mut().zip(values.iter()) {
             if let Some(v) = val.clone() {
@@ -396,18 +449,29 @@ impl Group {
         }
     }
 
-    /// Remove the child named by `id` (no-op if it is not a child).
+    /// Remove the child named by `id` from this group, dropping it, and
+    /// re-establish focus if needed (no-op if `id` is not a direct child).
+    ///
+    /// Use `remove` when you hold a `&mut Context` — typically inside a
+    /// `handle_event` override or a deferred-effect callback. For closes
+    /// triggered inside event dispatch (the common "close window" path) prefer
+    /// [`Context::request_close`](crate::view::Context::request_close), which
+    /// defers the removal to after the dispatch unwinds; `Group::remove` is
+    /// available for the rare case where you already hold `&mut Group` directly
+    /// outside the dispatch stack.
     ///
     /// Removing a visible+selectable child re-establishes currency
-    /// ([`reset_current`](Self::reset_current)) whether or not that child was the
-    /// current one. A removed current additionally vacates the `current` slot
-    /// first.
+    /// ([`reset_current`](Self::reset_current)) whether or not that child was
+    /// the current one. A removed current additionally vacates the `current`
+    /// slot first. The removed child is **dropped** (Rust ownership): unlike
+    /// the C++ `Delete` there is no returned detached pointer.
     ///
     /// # Turbo Vision heritage
-    /// Ports `TGroup::remove` (`tgroup.cpp`): hiding the view before unlinking it
-    /// runs the visibility-change currency tail, which is why any
-    /// visible+selectable removal resets currency, not just removal of the current
-    /// view.
+    /// Ports `TGroup::Delete` and `TGroup::remove` (`tgroup.cpp`): hiding the
+    /// view before unlinking it runs the visibility-change currency tail, which
+    /// is why any visible+selectable removal resets currency, not just removal
+    /// of the current view. The Rust port drops the child (owned `Box`) rather
+    /// than handing it back as a raw pointer.
     pub fn remove(&mut self, id: ViewId, ctx: &mut Context) {
         let Some(i) = self.index_of(id) else {
             return;
@@ -427,14 +491,40 @@ impl Group {
 
     // -- focus machinery (faithful ports of setCurrent / focus / findNext) ---
 
-    /// Change the current view to `p` (or `None`), applying the focus/select
-    /// side effects chosen by `mode` ([`SelectMode`]): deselect the outgoing
-    /// current, select the incoming one, and (when the group itself is focused)
-    /// move the focused flag between them.
+    /// Select child `p` as the current view (or clear the current to `None`),
+    /// applying focus/select side effects without validating the outgoing view.
+    ///
+    /// This is the **unvalidated** current-change path — it does not call
+    /// `valid(RELEASED_FOCUS)` on the outgoing child. For the validated
+    /// Tab/Shift-Tab navigation path use [`focus_next`](Self::focus_next) or
+    /// [`focus_child`](Self::focus_child), both of which gate on the outgoing
+    /// view's consent before switching.
+    ///
+    /// `mode` controls which selection side effects fire:
+    /// - [`SelectMode::Normal`]: deselect the old current, select the new one.
+    /// - [`SelectMode::Enter`]: entering a modal — do **not** deselect the old
+    ///   current (it keeps its selected state underneath the modal).
+    /// - [`SelectMode::Leave`]: leaving a modal — do **not** select the new
+    ///   current (restores the pre-modal current without re-selecting it).
+    ///
+    /// When the group itself is focused the focused flag is moved between the
+    /// outgoing and incoming children as well.
+    ///
+    /// **Unvalidated `SelectNext` equivalent:** to advance focus without
+    /// validation (the C++ `SelectNext` behavior), compose
+    /// [`find_next`](Self::find_next) + `set_current`:
+    ///
+    /// ```rust,ignore
+    /// if let Some(next) = group.find_next(forwards) {
+    ///     group.set_current(Some(next), SelectMode::Normal, ctx);
+    /// }
+    /// ```
     ///
     /// # Turbo Vision heritage
     /// Ports `TGroup::setCurrent` plus its focus/select helpers (`tgroup.cpp`),
     /// with the redraw-locking bracket dropped (whole-tree redraw + diff).
+    /// `SelectNext` (guide p. 453, unvalidated sibling ring walk) is realized
+    /// by composing `find_next` + `set_current` rather than a dedicated method.
     pub fn set_current(&mut self, p: Option<ViewId>, mode: SelectMode, ctx: &mut Context) {
         // CURRENCY KEYSTONE — DO NOT MOVE BELOW THE EARLY RETURN. Any explicit currency
         // op supersedes the pending insert-time reset: clearing `currency_dirty`
@@ -667,22 +757,28 @@ impl Group {
 
     // -- Z-reorder (putInFrontOf / makeFirst, realized in the owner) ------
 
-    /// Move child `id` so it sits immediately **in front of** `target` in
-    /// Z-order. `target == None` moves `id` to the very front (top). Unknown ids
-    /// are ignored. A child cannot reorder itself; the owning group does it.
+    /// Reposition child `id` to sit immediately **in front of** (above in
+    /// Z-order) `target`, or at the very top if `target` is `None`.
     ///
-    /// Concretely, "in front of `target`" means `id` lands at index
-    /// `index_of(target) + 1` in the back-to-front `children` `Vec` (one slot above
-    /// `target`); `target == None` lands it at `children.last()` (the top).
+    /// Use this to control the stacking order of child views — for example,
+    /// to ensure a newly opened panel appears behind an existing top-level
+    /// dialog, or to implement a "send to back of peers" layout. A child
+    /// cannot reorder itself (it holds no owner pointer); the owning group is
+    /// always the actor.
     ///
-    /// **`target == None` is a to-top sentinel** used exclusively by
-    /// [`make_first`](Self::make_first). There is intentionally no send-to-bottom
-    /// path — no caller needs one.
+    /// Concretely, "in front of `target`" means `id` lands one slot above
+    /// `target` in the back-to-front `children` Vec (painted later, therefore
+    /// on top). `target == None` is a sentinel meaning "the top" (used
+    /// internally by [`make_first`](Self::make_first)).
     ///
-    /// **Guards:** no-op if `id == target`, if `id` is already immediately in front
-    /// of `target`, or (for `target == None`) if `id` is already the top. If the
-    /// moved view is selectable, currency is re-established
+    /// **Guards:** this is a no-op if `id == target`, if `id` is already
+    /// immediately in front of `target`, or (for `target == None`) if `id`
+    /// is already the topmost child. Unknown or foreign ids are silently
+    /// ignored. If the moved view is selectable, currency is re-established
     /// ([`reset_current`](Self::reset_current)) afterwards.
+    ///
+    /// **No send-to-bottom:** there is intentionally no send-to-bottom path —
+    /// no current consumer needs it.
     ///
     /// # Turbo Vision heritage
     /// Realizes `TView::putInFrontOf` in the owner. The original send-to-bottom
@@ -905,7 +1001,8 @@ impl View for Group {
                         .set_state(StateFlag::Focused, enable, ctx);
                 }
             }
-            StateFlag::Selected => {}
+            // Selected and Visible do not fan out to children; Visible is targeted per-child via set_visible_descendant.
+            StateFlag::Selected | StateFlag::Visible => {}
         }
     }
 
@@ -1056,12 +1153,21 @@ impl View for Group {
     /// ([`reset_current`](Self::reset_current)) — in **both** directions (show and
     /// hide). A no-change write runs no tail (an idempotent toggle has no cascade).
     /// Recurses like [`find_mut`](Self::find_mut) when `id` is not a direct child.
+    ///
+    /// Delivers [`StateFlag::Visible`](crate::view::StateFlag::Visible) via
+    /// `child.set_state` so that widgets that own sibling scroll bars (e.g.
+    /// `ListViewer`) can show/hide them in sync — mirroring C++ `setState(sfVisible)`.
     fn set_visible_descendant(&mut self, id: ViewId, visible: bool, ctx: &mut Context) -> bool {
         if let Some(i) = self.index_of(id) {
-            let st = self.children[i].view.state_mut();
-            if st.state.visible != visible {
-                st.state.visible = visible;
-                if st.options.selectable {
+            let was_visible = self.children[i].view.state().state.visible;
+            if was_visible != visible {
+                // Deliver via set_state so overriding widgets (e.g. list viewers
+                // with scroll bars) can react.  set_state flips the flag through
+                // set_flag and runs any widget-specific side effects.
+                self.children[i]
+                    .view
+                    .set_state(StateFlag::Visible, visible, ctx);
+                if self.children[i].view.state().options.selectable {
                     // The visibility-change tail: re-establish the owning
                     // group's own currency.
                     Group::reset_current(self, ctx);
@@ -1133,11 +1239,25 @@ impl View for Group {
         }
     }
 
-    /// Awaken every child (order irrelevant) — the post-construction hook a view
-    /// uses to finish initialization once it is wired into the tree.
+    /// Finish initialization for every child after the group (or the dialog
+    /// that owns it) is fully wired into the view tree.
+    ///
+    /// `awaken` is called once by the framework — after all siblings and the
+    /// group itself have been inserted — so each child can safely inspect the
+    /// tree topology or its siblings at this point. The call order across
+    /// children is intentionally unspecified; do not rely on one child's
+    /// `awaken` completing before another's.
+    ///
+    /// **When to override** (in a type that embeds a `Group`): if your
+    /// container widget needs a one-time startup action that requires a live
+    /// `Context` (e.g. triggering a data scatter), override
+    /// [`View::awaken`] and call `self.group.awaken()` first so children
+    /// are ready before your own logic runs.
     ///
     /// # Turbo Vision heritage
-    /// Ports `TGroup::awaken`.
+    /// Ports `TGroup::awaken`, which iterates each subview calling
+    /// `subview->awaken()` before the group's own `TView::awaken`. The
+    /// children-first ordering is preserved.
     fn awaken(&mut self) {
         for child in self.children.iter_mut() {
             child.view.awaken();

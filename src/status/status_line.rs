@@ -92,7 +92,13 @@ pub struct StatusColors {
 }
 
 impl StatusColors {
-    /// Resolve the four `Status*` role pairs from the draw context's theme.
+    /// Build a `StatusColors` by reading all four `Status*` role pairs from the
+    /// draw context's theme in one pass.
+    ///
+    /// Call this once at the top of a `draw` implementation and pass the result to
+    /// [`item`](Self::item) for each status item. This is how [`StatusLine::draw`]
+    /// uses it — the C++ equivalent resolved palette indices for each item
+    /// individually; this batches them all up front.
     pub fn resolve(ctx: &DrawCtx) -> Self {
         let d = ctx.style(Role::StatusDisabled);
         let sd = ctx.style(Role::StatusSelDisabled);
@@ -207,8 +213,13 @@ impl StatusLine {
         self
     }
 
-    /// Select the first def whose `range` matches the current help context; if
-    /// none match, leave [`items_def`](Self::items_def) `None`.
+    /// Scan `defs` and cache the index of the first def whose range matches the
+    /// current help context, or `None` if no def matches.
+    ///
+    /// Called automatically by [`new`](Self::new) and by
+    /// [`set_help_ctx`](Self::set_help_ctx) whenever the context changes.
+    /// You only need to call it directly if you modify [`defs`](StatusLine) in
+    /// place after construction.
     pub fn find_items(&mut self) {
         self.items_def = self
             .defs
@@ -216,12 +227,18 @@ impl StatusLine {
             .position(|d| d.range.matches(self.help_ctx));
     }
 
-    /// Set the view's help context and re-run [`find_items`](Self::find_items).
-    /// [`Program`](crate::app::Program) calls this on idle with the topmost
-    /// view's help context (see the module docs).
+    /// Update the active help context and refresh the selected def.
     ///
-    /// Idempotent guard: if the context hasn't changed we skip the
-    /// [`find_items`](Self::find_items) rescan entirely.
+    /// [`Program`](crate::app::Program) calls this on idle with the topmost
+    /// view's help context so the displayed items follow the focused view.
+    /// Idempotent: if `ctx` equals the current context the rescan is skipped.
+    ///
+    /// # Turbo Vision heritage
+    ///
+    /// Replaces `TStatusLine::update()`, which walked the view tree itself
+    /// (`TopView()`) to obtain the help context and then called `findItems` +
+    /// `drawView`. Here the `Program` idle loop resolves the context and passes
+    /// it in; the draw is handled by the framework's whole-tree redraw cycle.
     pub fn set_help_ctx(&mut self, ctx: HelpCtx) {
         if self.help_ctx == ctx {
             return;

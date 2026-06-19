@@ -23,7 +23,7 @@ copy-pasteable, scalable, tiny, diffable in git, and it supports **interactive**
 shots — send keystrokes to open a menu or dialog, then capture the result.
 
 The ANSI→HTML converter is repo-owned (no external `aha` dependency). It resolves
-the base SGR colors through [`Color::BIOS_RGB`](../api/tvision-rs/color/enum.Color.html),
+the base SGR colors through [`Color::BIOS_RGB`](../api/tvision_rs/color/enum.Color.html),
 so an embedded screenshot uses exactly the palette the running crate uses. It
 also handles the bright colors, bold/underline/reverse, the xterm 256-color cube,
 and 24-bit truecolor.

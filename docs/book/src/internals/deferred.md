@@ -11,7 +11,7 @@ unsafely.
 
 So any action a view wants that touches **loop-owned state it cannot borrow
 inline** is *deferred*. The view does not perform the effect — it **requests** it
-through its [`Context`](../api/tvision-rs/view/struct.Context.html), and the event
+through its [`Context`](../api/tvision_rs/view/struct.Context.html), and the event
 loop **applies** it after dispatch unwinds and the root is free again.
 
 ## What "loop-owned state" means
@@ -20,7 +20,7 @@ These are the things a downward-borrowed view literally cannot reach:
 
 - the program's **capture stack** (modal frames, drag handlers, menu sessions),
 - the **command set** (enable/disable, which the menus and status line mirror),
-- **any other view** addressed by [`ViewId`](../api/tvision-rs/view/struct.ViewId.html)
+- **any other view** addressed by [`ViewId`](../api/tvision_rs/view/struct.ViewId.html)
   — a parent, a sibling scrollbar, the clipboard editor in another window,
 - the **modal loop** itself (ending it with a result command).
 
@@ -29,13 +29,13 @@ dialog asks the loop to do it.
 
 ## The `Deferred` queue
 
-[`Context`](../api/tvision-rs/view/struct.Context.html) carries a single
+[`Context`](../api/tvision_rs/view/struct.Context.html) carries a single
 `&mut Vec<Deferred>`. The request methods on `Context` (`request_close`,
 `request_bounds`, `request_focus`, `end_modal`, `enable_command`, the scrollbar
-brokers, …) each push one [`Deferred`](../api/tvision-rs/view/enum.Deferred.html)
+brokers, …) each push one [`Deferred`](../api/tvision_rs/view/enum.Deferred.html)
 variant onto it. The view never sees the apply step.
 
-After the dispatch returns, [`pump_once`](../api/tvision-rs/app/struct.Program.html)
+After the dispatch returns, [`pump_once`](../api/tvision_rs/app/struct.Program.html)
 takes the queue (`std::mem::take`, so any effect that itself queues a follow-up
 lands on the *next* pump, not this drain) and walks it **once, in insertion
 order**. Each variant matches to an arm that now holds the loop-owned state the
@@ -85,7 +85,7 @@ in the loop is in [The event loop in depth](event-loop.md).
 The whole point of the single-enum design is that a new capability is **additive
 and local** — it never churns a signature or every call site. To add one:
 
-1. **Add a variant** to [`Deferred`](../api/tvision-rs/view/enum.Deferred.html),
+1. **Add a variant** to [`Deferred`](../api/tvision_rs/view/enum.Deferred.html),
    carrying whatever data the apply step needs (typically a `ViewId` plus
    parameters). Note which state family it touches.
 2. **Add a request method** to `Context` that pushes that variant — the view-side

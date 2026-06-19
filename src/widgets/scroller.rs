@@ -41,7 +41,7 @@
 //! # Turbo Vision heritage
 //!
 //! Ports `TScroller` (`tscrolle.cpp`). Owner back-pointers to the sibling scroll
-//! bars become [`ViewId`] handles brokered by the event loop (D3), and the
+//! bars become [`ViewId`] handles brokered by the event loop, and the
 //! palette becomes [`Role`]s. The original draw-re-entrancy guard is unneeded
 //! under whole-tree redraw and is dropped.
 
@@ -50,10 +50,16 @@ use crate::view::{Context, DrawCtx, Options, Point, Rect, StateFlag, View, ViewI
 
 /// The base scrollable-content view.
 ///
-/// The base draws only a fill; subclasses such as the editor override `draw` and
-/// consume [`delta`](Self::delta). It references two sibling scroll bars by
-/// [`ViewId`] and brokers all reads/writes through the event loop (see the module
-/// docs).
+/// Manages scroll state and keeps two sibling scroll bars in sync with its
+/// content offset. The base draws only a uniform fill; subclasses (e.g. the
+/// editor) override [`draw`](View::draw) and use [`delta`](Self::delta) to
+/// shift their content. Wire a `Scroller` into a window by passing the scroll
+/// bar [`ViewId`]s at construction time; call [`set_limit`](Self::set_limit)
+/// whenever the content size changes, and [`scroll_to`](Self::scroll_to) to
+/// jump to a position programmatically.
+///
+/// Cross-view scroll-bar reads and writes are brokered by the event loop — see
+/// the module-level docs for the broker pattern.
 ///
 /// # Turbo Vision heritage
 ///
@@ -61,10 +67,16 @@ use crate::view::{Context, DrawCtx, Options, Point, Rect, StateFlag, View, ViewI
 pub struct Scroller {
     /// View state (geometry, flags, etc.) — the composition target.
     state: ViewState,
-    /// Scroll offset — the value mirrored from the scrollbars. Subclasses (the
-    /// editor) draw their content shifted by this. Public so subclasses read it.
+    /// The current scroll offset, mirrored from the scroll bars.
+    ///
+    /// Updated by the event loop (via [`apply_delta`](Self::apply_delta))
+    /// whenever a scroll bar's value changes. Subclasses read this in their
+    /// [`draw`](View::draw) override to shift content: a line at logical row
+    /// `r` is rendered at screen row `r - delta.y`, and similarly for `x`.
+    /// Do not write `delta` directly; use [`scroll_to`](Self::scroll_to) to
+    /// request a position change.
     pub delta: Point,
-    /// Content extent `(x, y)`. Set via [`set_limit`](Self::set_limit).
+    /// Content extent `(x, y)`. Private; set via [`set_limit`](Self::set_limit).
     limit: Point,
     /// The horizontal scrollbar, by id (`None` if absent).
     h_scroll_bar: Option<ViewId>,
@@ -73,13 +85,18 @@ pub struct Scroller {
 }
 
 impl Scroller {
-    /// Construct a scroller from `bounds` and its two scrollbars (by id, `None` if
-    /// absent).
+    /// Create a scroller with the given bounds and optional scroll bar handles.
     ///
-    /// Starts at a zero offset and empty extent and is selectable. Opting into
-    /// the broadcast class has no analogue here — broadcasts are delivered
-    /// unconditionally (there is no `broadcast` bit in
-    /// [`EventMask`](crate::event::EventMask)), so the scroller already receives them.
+    /// Pass the [`ViewId`]s of the horizontal and vertical scroll bars, or
+    /// `None` for either axis you don't need. The scroller starts at offset
+    /// `(0, 0)` with an empty content extent; call
+    /// [`set_limit`](Self::set_limit) after construction to publish the initial
+    /// range to the bars. The view is marked selectable so it can receive
+    /// keyboard focus.
+    ///
+    /// Broadcasts are delivered unconditionally — there is no `broadcast` event
+    /// mask bit — so no extra setup is needed to receive
+    /// [`SCROLL_BAR_CHANGED`](crate::command::Command::SCROLL_BAR_CHANGED).
     pub fn new(bounds: Rect, h_scroll_bar: Option<ViewId>, v_scroll_bar: Option<ViewId>) -> Self {
         let mut state = ViewState::new(bounds);
         state.options = Options {
@@ -95,27 +112,65 @@ impl Scroller {
         }
     }
 
-    /// The content extent (`limit`), as set by [`set_limit`](Self::set_limit).
+    /// Return the current content extent as set by [`set_limit`](Self::set_limit).
+    ///
+    /// The returned point `(x, y)` is the logical width and height of the
+    /// scrollable content. Use this in a subclass `draw` implementation if you
+    /// need to know the total content size independently of [`delta`](Self::delta).
+    /// To change the extent, call [`set_limit`](Self::set_limit) — it both
+    /// stores the value and re-publishes the range to the scroll bars.
     pub fn limit(&self) -> Point {
         self.limit
     }
 
-    /// The horizontal scrollbar id (test/subclass hook).
+    /// Return the [`ViewId`] of the horizontal scroll bar, if one was supplied.
+    ///
+    /// Use this in a subclass when you need to address the scroll bar directly
+    /// (e.g. to call [`scroll_to`](Self::scroll_to) or query the bar's
+    /// [`ViewId`] for a broker operation). Returns `None` if the scroller was
+    /// created without a horizontal bar.
+    ///
+    /// # Turbo Vision heritage
+    ///
+    /// Corresponds to the public `TScroller::hScrollBar` pointer. In Rust the
+    /// raw pointer becomes a [`ViewId`] handle; the event loop brokers all
+    /// cross-view reads and writes through it rather than allowing direct
+    /// pointer access.
     pub fn h_scroll_bar(&self) -> Option<ViewId> {
         self.h_scroll_bar
     }
 
-    /// The vertical scrollbar id (test/subclass hook).
+    /// Return the [`ViewId`] of the vertical scroll bar, if one was supplied.
+    ///
+    /// Use this in a subclass when you need to address the scroll bar directly.
+    /// Returns `None` if the scroller was created without a vertical bar.
+    ///
+    /// # Turbo Vision heritage
+    ///
+    /// Corresponds to the public `TScroller::vScrollBar` pointer. See
+    /// [`h_scroll_bar`](Self::h_scroll_bar) for the broker rationale.
     pub fn v_scroll_bar(&self) -> Option<ViewId> {
         self.v_scroll_bar
     }
 
-    /// Apply a freshly-read scrollbar delta.
+    /// Apply a freshly-resolved scroll offset from the event loop's read broker.
     ///
-    /// Called by the event loop (the read broker) after it resolves the bars and
-    /// reads their `value`s. If `d != delta`, shift the cursor by the **old**
-    /// `delta - d`, then overwrite `delta = d`. The order matters — the cursor
-    /// adjust must use the old `delta`.
+    /// This is the Rust analog of C++ `TScroller::scrollDraw`. It is called
+    /// by the pump after it resolves both scroll bars and reads their current
+    /// `value`s, assembling them into `d`. If `d` differs from the stored
+    /// [`delta`](Self::delta), the cursor is shifted by `old_delta - d` (using
+    /// the **old** value — order matters) and then `delta` is overwritten.
+    /// The whole-tree redraw that follows the pump tick replaces the C++
+    /// `drawView` call.
+    ///
+    /// **Do not call this directly.** It is public so the pump can reach it via
+    /// the `as_any_mut` downcast; call [`scroll_to`](Self::scroll_to) to
+    /// request a position change from user code.
+    ///
+    /// # Turbo Vision heritage
+    ///
+    /// Ports `TScroller::scrollDraw`. The original read the bar values directly
+    /// via raw pointers; here the pump reads them and passes the result in `d`.
     pub fn apply_delta(&mut self, d: Point) {
         if d != self.delta {
             // Shift the cursor using the OLD delta, before overwriting.
@@ -125,12 +180,20 @@ impl Scroller {
         }
     }
 
-    /// Set the content extent and (re)publish each bar's range/page params.
+    /// Set the content extent to `(x, y)` and re-publish each bar's range and
+    /// page parameters.
     ///
-    /// `limit = (x, y)`; for the horizontal bar, preserve `value` and arrow step,
-    /// set `min = 0`, `max = x - size.x`, `page_step = size.x - 1`. The vertical
-    /// bar mirrors on `y`/`size.y`. The cross-view writes go through
-    /// [`Context::request_scroll_bar_params`].
+    /// Call this after construction and after any resize to tell the scroll bars
+    /// the total content dimensions. For the horizontal bar: `min = 0`,
+    /// `max = x - view_width`, `page_step = view_width - 1`; the vertical bar
+    /// mirrors on `y` and `view_height`. The current bar `value` and arrow step
+    /// are preserved. Cross-view writes are queued as deferred
+    /// [`ScrollBarSetParams`](crate::view::Deferred::ScrollBarSetParams) ops
+    /// executed by the pump — no direct bar access occurs.
+    ///
+    /// [`on_bounds_changed`](Self::on_bounds_changed) calls `set_limit` automatically
+    /// after a resize with the previously stored extent, so you only need to call
+    /// it explicitly when the *content* size changes.
     pub fn set_limit(&mut self, x: i32, y: i32, ctx: &mut Context) {
         self.limit = Point::new(x, y);
         let size = self.state.size;
@@ -156,12 +219,21 @@ impl Scroller {
         }
     }
 
-    /// Set each bar's value, preserving range and steps.
+    /// Request that the scroll bars move to position `(x, y)`, preserving range
+    /// and steps.
     ///
-    /// Horizontal bar → value `x`, vertical bar → value `y`, realized as a
-    /// [`ScrollBarSetParams`](crate::view::Deferred::ScrollBarSetParams) op with
-    /// only `value` set (the rest preserved). `set_params` clamps to the live
-    /// range.
+    /// Queues a deferred
+    /// [`ScrollBarSetParams`](crate::view::Deferred::ScrollBarSetParams) op for
+    /// each present bar with only `value` updated (the range, page step, and
+    /// arrow step are left unchanged). The bar clamps the value to its live
+    /// range at apply time. The resulting
+    /// [`SCROLL_BAR_CHANGED`](crate::command::Command::SCROLL_BAR_CHANGED)
+    /// broadcast will then trigger the read broker, which calls
+    /// [`apply_delta`](Self::apply_delta) to update [`delta`](Self::delta).
+    ///
+    /// Call this to programmatically jump to a position, e.g. "go to line N" in
+    /// an editor. If you only need to update the bar's range (e.g. after loading
+    /// new content), use [`set_limit`](Self::set_limit) instead.
     pub fn scroll_to(&mut self, x: i32, y: i32, ctx: &mut Context) {
         if let Some(h) = self.h_scroll_bar {
             ctx.request_scroll_bar_params(h, Some(x), None, None, None, None);
@@ -228,9 +300,20 @@ impl View for Scroller {
         self.apply_delta(Point::new(h.unwrap_or(0), v.unwrap_or(0)));
     }
 
-    /// After flipping the flag, when `flag` is `Active` or `Selected`, show/hide
-    /// both bars per the new active/selected state. Reads the **post-update** bits
-    /// from `self`.
+    /// Flip a state flag and show or hide the scroll bars when focus changes.
+    ///
+    /// After updating the flag, if `flag` is [`Active`](StateFlag::Active) or
+    /// [`Selected`](StateFlag::Selected), each scroll bar is shown when
+    /// *either* flag is set and hidden when both are clear. This matches the
+    /// C++ behaviour: bars are visible whenever the scroller (or one of its
+    /// ancestors) has input focus. Visibility is applied via a deferred
+    /// [`SetVisible`](crate::view::Deferred::SetVisible) op brokered by the pump,
+    /// not by a direct call into the bar.
+    ///
+    /// When `flag` is [`Focused`](StateFlag::Focused), the standard
+    /// [`RECEIVED_FOCUS`](crate::command::Command::RECEIVED_FOCUS) /
+    /// [`RELEASED_FOCUS`](crate::command::Command::RELEASED_FOCUS) broadcast is
+    /// emitted; no bar visibility change occurs.
     fn set_state(&mut self, flag: StateFlag, enable: bool, ctx: &mut Context) {
         // Base: flip the flag (+ the Focused broadcast).
         self.state_mut().set_flag(flag, enable);
@@ -251,9 +334,15 @@ impl View for Scroller {
         }
     }
 
-    /// After the pump applies new bounds via `Deferred::ChangeBounds`, re-publish
-    /// the scrollbar range/page params with the stored `limit` and the **new**
-    /// `size` by calling [`set_limit`](Self::set_limit).
+    /// Re-publish scroll bar range parameters after a bounds change.
+    ///
+    /// Called by the pump after it has applied a `Deferred::ChangeBounds` op,
+    /// so `self.size` already reflects the new dimensions. Calls
+    /// [`set_limit`](Self::set_limit) with the previously stored `limit` values
+    /// so the bars' `max` and `page_step` are recomputed for the new view size.
+    ///
+    /// Subclasses that override this should call `super.on_bounds_changed(ctx)`
+    /// (or call `set_limit` themselves) to keep the bars consistent.
     fn on_bounds_changed(&mut self, ctx: &mut Context) {
         let (x, y) = (self.limit.x, self.limit.y);
         self.set_limit(x, y, ctx);

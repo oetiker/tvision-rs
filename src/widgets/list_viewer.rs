@@ -112,20 +112,48 @@ pub struct ListViewerState {
     /// View state (geometry, flags, …) — the `View` composition target.
     pub state: ViewState,
     /// The number of columns (`>= 1`) the items are laid out in.
+    ///
+    /// Controls the column-major item layout: relative to the first visible
+    /// row [`top_item`](Self::top_item), column `j` holds items
+    /// `top_item + j * size.y .. top_item + (j + 1) * size.y`. Must be `>= 1`; the constructor clamps
+    /// smaller values to `1` and fires a `debug_assert`.
     pub num_cols: i32,
-    /// The item index drawn at the top-left cell.
+    /// The item index drawn at the top-left cell (the scroll offset).
+    ///
+    /// Adjusted by [`focus_item`] to keep `focused` visible. Read it to find
+    /// out which item is at the top of the current view; set it directly only
+    /// when constructing a pre-scrolled list before insertion.
     pub top_item: i32,
-    /// The currently focused (cursor) item index.
+    /// The index of the item that holds the keyboard cursor.
+    ///
+    /// Changed by keyboard nav, mouse clicks, and the scrollbar read-sync.
+    /// Read it to find the current selection; move it by calling
+    /// [`focus_item`] or [`focus_item_num`] (both keep `top_item` in sync).
     pub focused: i32,
-    /// The number of items (the list length).
+    /// The total number of items in the list.
+    ///
+    /// Set this by calling [`set_range`], which also resets `focused` if it
+    /// now falls past the end and (re)publishes the vertical bar's range.
+    /// Reading it directly is fine; writing it directly is not (the bar and
+    /// `focused` would be left inconsistent).
     pub range: i32,
     /// **Cached** horizontal-bar `value` — `draw` cannot reach the sibling bar,
     /// so the value is cached here and refreshed by the read-sync
     /// ([`apply_scroll`]).
     pub indent: i32,
-    /// The horizontal scrollbar, by id (`None` if absent).
+    /// The horizontal scrollbar, identified by [`ViewId`] (`None` if absent).
+    ///
+    /// Pass the bar's id when constructing via [`ListViewerState::new`].
+    /// After insertion call [`update_steps`] to publish the initial step sizes.
+    /// The pump then brokers all subsequent reads and writes through the
+    /// [`apply_scroll`] / `Deferred::SyncListViewer` seam — do NOT read or
+    /// write the bar directly from event handlers.
     pub h_scroll_bar: Option<ViewId>,
-    /// The vertical scrollbar, by id (`None` if absent).
+    /// The vertical scrollbar, identified by [`ViewId`] (`None` if absent).
+    ///
+    /// Same wiring rules as [`h_scroll_bar`](Self::h_scroll_bar): pass the id
+    /// at construction, call [`update_steps`] after insertion, and let the pump
+    /// broker all bar ↔ list synchronization.
     pub v_scroll_bar: Option<ViewId>,
     /// Absolute screen position of this view's `(0, 0)`, cached by the last
     /// `draw` call — feeds the [`MouseTrackCapture`] origin for localizing
@@ -138,11 +166,17 @@ pub struct ListViewerState {
 }
 
 impl ListViewerState {
-    /// Construct list-viewer state.
+    /// Create list-viewer state for `bounds`, with `num_cols` columns and
+    /// optional scroll bar ids.
     ///
-    /// The bar step sizes cannot be published here without a `Context`; the
-    /// consumer calls [`update_steps`] after insertion. Sets `first_click` and
-    /// `selectable`; starts at the top with an empty range.
+    /// Call this before inserting the widget into its parent group. Because
+    /// there is no `Context` at construction time, bar step sizes cannot be
+    /// published yet — call [`update_steps`] immediately after the widget is
+    /// inserted (the same two-step pattern the scroller uses). The state starts
+    /// at the top of an empty list (`top_item = 0`, `focused = 0`, `range = 0`).
+    ///
+    /// Sets `ofFirstClick` and `ofSelectable` on the embedded `ViewState`.
+    /// `num_cols < 1` is clamped to `1` with a `debug_assert`.
     pub fn new(
         bounds: crate::view::Rect,
         num_cols: i32,
@@ -177,9 +211,13 @@ impl ListViewerState {
 // ListRoles — the per-class color quintet
 // ---------------------------------------------------------------------------
 
-/// The role quintet [`draw`] resolves its color matrix through. A subclass can
-/// recolor the whole list by returning a different quintet from
-/// [`ListViewer::list_roles`] (a history viewer does exactly this).
+/// The five [`Role`]s that [`draw`] maps its color matrix through.
+///
+/// To recolor a list widget, override [`ListViewer::list_roles`] and return a
+/// custom `ListRoles` with different role values. The fields map directly to
+/// the five drawing cases: a normal item in an active / inactive list, the
+/// focused cursor item, a selected (multi-select) item, and the inter-column
+/// divider. The constant [`ListRoles::LIST_VIEWER`] holds the base quintet.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ListRoles {
     /// A normal item of an active list (also the `<empty>` fill).
@@ -244,21 +282,31 @@ pub trait ListViewer: View {
         String::new()
     }
 
-    /// The role quintet [`draw`] colors items with. Default: the base list-viewer
-    /// family; a history viewer overrides with its recolored quintet.
+    /// The five color roles [`draw`] uses for this list's color matrix.
+    ///
+    /// Override to recolor the whole list. Return a [`ListRoles`] struct with
+    /// different [`Role`] values for any of the five slots; the base
+    /// implementation returns [`ListRoles::LIST_VIEWER`]. A history viewer, for
+    /// example, overrides this to use its own lighter palette.
     fn list_roles(&self) -> ListRoles {
         ListRoles::LIST_VIEWER
     }
 
-    /// Whether `item` is "selected" (drawn in the selected color). Default:
-    /// `item == focused`; multi-select subclasses override.
+    /// Whether `item` should be drawn in the selected color.
+    ///
+    /// The default returns `item == focused` (single-selection behavior).
+    /// Override in a multi-select widget to mark additional items as selected.
     fn is_selected(&self, item: i32) -> bool {
         item == self.lv().focused
     }
 
-    /// The user committed to `item` (double-click / Space / Enter). The default
-    /// broadcasts [`Command::LIST_ITEM_SELECTED`] with this view as the subject;
-    /// subclasses override to act.
+    /// Called when the user commits to `item` (double-click, Space, or Enter).
+    ///
+    /// The default broadcasts [`Command::LIST_ITEM_SELECTED`] with this view's
+    /// [`ViewId`] as `source`, so an owner dialog can catch it with
+    /// `Event::Broadcast { command: Command::LIST_ITEM_SELECTED, source }` and
+    /// filter on `source` to distinguish which list fired. Override to perform
+    /// a direct action instead (e.g. close a dialog or load a file).
     fn select_item(&mut self, _item: i32, ctx: &mut Context) {
         let source = self.lv().state.id();
         ctx.broadcast(Command::LIST_ITEM_SELECTED, source);
@@ -435,11 +483,14 @@ pub fn on_bounds_changed<L: ListViewer + ?Sized>(this: &L, ctx: &mut Context) {
     }
 }
 
-/// Flip the flag (plus the focus broadcast), then on `Active`/`Selected`
-/// show/hide BOTH bars.
+/// Update a state flag and propagate scrollbar visibility.
 ///
-/// Visibility is `active && visible` — **both** (NOT the scroller's
-/// `active || selected`).
+/// Applies `flag`/`enable` to the embedded `ViewState`. On a `Focused` change
+/// it also broadcasts [`Command::RECEIVED_FOCUS`] or [`Command::RELEASED_FOCUS`].
+/// On `Active`, `Selected`, or `Visible` changes it shows or hides both scroll
+/// bars: bars are **visible iff `active && visible`** (unlike the scroller,
+/// which uses `active || selected`). Concrete list widgets call this from their
+/// `View::set_state` implementation.
 pub fn set_state<L: ListViewer + ?Sized>(
     this: &mut L,
     flag: StateFlag,
@@ -458,7 +509,7 @@ pub fn set_state<L: ListViewer + ?Sized>(
             source,
         );
     }
-    if flag == StateFlag::Active || flag == StateFlag::Selected {
+    if flag == StateFlag::Active || flag == StateFlag::Selected || flag == StateFlag::Visible {
         // Show iff active && visible — BOTH, not the scroller's active||selected.
         let visible = this.lv().state.state.active && this.lv().state.state.visible;
         if let Some(h) = this.lv().h_scroll_bar {
@@ -471,8 +522,13 @@ pub fn set_state<L: ListViewer + ?Sized>(
 }
 
 /// Mouse + keyboard nav + the scrollbar broadcast filter. Reused verbatim by
-/// concrete list widgets. The mouse-down auto-select lives in `Group`, so it is
-/// omitted here.
+/// concrete list widgets.
+///
+/// **Intentional omission:** C++ `TListViewer::handleEvent` calls
+/// `TView::handleEvent(event)` first (line 221 of `tlstview.cpp`). That base
+/// call only performs mouse-down auto-select (focus the view on click), which
+/// tvision-rs relocates to `Group::route_event`. `TView::handleEvent` is a
+/// no-op for every other event class, so there is no base behavior to inherit.
 pub fn handle_event<L: ListViewer + ?Sized>(this: &mut L, ev: &mut Event, ctx: &mut Context) {
     match *ev {
         // -------------------------------------------------------------------
@@ -2150,5 +2206,49 @@ mod tests {
             l.handle_event(&mut ev, &mut ctx);
         }
         assert_eq!(l.lv.focused, 12, "4th tick: +size.y = +4 (right of view)");
+    }
+
+    // -- set_state sfVisible hides scroll bars ---------------------------------
+
+    /// Clearing `sfVisible` on an active+visible list viewer enqueues
+    /// `SetVisible(_, false)` for both scroll bars.
+    #[test]
+    fn set_state_visible_false_hides_both_scroll_bars() {
+        let (_gh, h) = mint_id();
+        let (_gv, v) = mint_id();
+
+        // Construct active+visible so bars would normally be shown.
+        let mut l = FakeList::new(Rect::new(0, 0, 10, 5), 1, items(5), Some(h), Some(v));
+        // Manually set active+visible in the state flags so the inner body sees
+        // them.  We set the bits directly on the ViewState to avoid needing a
+        // full Group context for set_state(Active/Selected).
+        l.lv.state.state.active = true;
+        l.lv.state.state.visible = true;
+
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+
+        // Now hide the view via sfVisible — bars should be enqueued for hiding.
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            l.set_state(StateFlag::Visible, false, &mut ctx);
+        }
+
+        // Exactly two SetVisible(_, false) ops, one per bar.
+        assert_eq!(
+            deferred.len(),
+            2,
+            "expected 2 SetVisible ops, got {}",
+            deferred.len()
+        );
+        assert!(
+            matches!(deferred[0], Deferred::SetVisible(id, false) if id == h),
+            "first op must be SetVisible(h_scroll_bar, false)"
+        );
+        assert!(
+            matches!(deferred[1], Deferred::SetVisible(id, false) if id == v),
+            "second op must be SetVisible(v_scroll_bar, false)"
+        );
     }
 }

@@ -102,7 +102,15 @@ wrapper view is the idiomatic deferred-init pattern.
 ### Outline
 
 A collapsible tree viewer built from a `Node` tree, with horizontal and vertical
-scroll bars.
+scroll bars. Build the tree with `Node::new` and the builder methods, then pass
+the root to `Outline::new`. Each node can be expanded or collapsed with a mouse
+click on the `+`/`-` icon or the `Enter` key. The underlying `OutlineViewer`
+trait lets you swap in a custom data source (your own `get_root`/`get_next`/
+`get_child`/`get_text`/`is_expanded` implementation) without reimplementing draw
+or navigation logic.
+
+Call `ov_update(outline, ctx)` once after insertion (needs a `Context`) to
+publish the scroll range and initial cursor position to the sibling scroll bars.
 
 {{#include screens/outline.html}}
 
@@ -136,8 +144,13 @@ content.
 
 ### Terminal
 
-A scrolling output view you *write into*. `init` and `write_bytes` need a
-`Context`, so the wrapper seeds it on the first event tick.
+A scrolling output view you *write into*. `Terminal` embeds a `Scroller` and
+stores incoming bytes in a fixed-size ring buffer; the most recent lines that fit
+the view height are drawn. Write to it via the `TextDevice::write_bytes` method —
+there is no stream wrapper. Call `Terminal::init` once after insertion (needs a
+`Context`) to set the scroll limit, cursor position, and visibility. The gallery
+wrapper view seeds both calls on the first event tick because a `Context` is not
+available at construction time.
 
 {{#include screens/terminal.html}}
 

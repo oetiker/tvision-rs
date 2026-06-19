@@ -280,6 +280,9 @@ impl CaptureHandler for ModalFrame {
 /// [`Program::pump_once`] in tests.
 ///
 /// # Turbo Vision heritage
+/// Boxed per-idle-pass callback registered via [`Program::set_on_idle`].
+type IdleHook = Box<dyn FnMut(&mut Program)>;
+
 /// Ports `TProgram` (`tprogram.cpp`). The original derived an application class
 /// from this root by inheritance; here [`Application`] embeds a `Program` and
 /// forwards to it (deviation D2), and the single event loop replaces the nested
@@ -362,6 +365,17 @@ pub struct Program {
     /// after `ClipboardEditorReceive` and passed to the `Context` clipboard snapshot
     /// so `update_commands` can gate paste correctly without a live tree borrow.
     clipboard_has_selection: bool,
+    /// Optional hook that produces the shell-suspend message printed before the
+    /// terminal is yielded to the shell (`Command::DOS_SHELL`). When `None` the
+    /// platform default is used — see [`default_shell_msg`].
+    ///
+    /// Successor to `TApplication::writeShellMsg` (virtual in C++); set via
+    /// [`Program::set_shell_msg_hook`].
+    shell_msg_hook: Option<Box<dyn Fn() -> String>>,
+    /// Optional per-idle-pass callback (see [`Program::set_on_idle`]). Fired from
+    /// the run loop — never inside [`pump_once`](Self::pump_once)'s destructured
+    /// borrow — on every event-less pass.
+    on_idle: Option<IdleHook>,
 }
 
 /// What to do with a view-triggered modal's result, run AFTER the modal loop ends
@@ -579,33 +593,135 @@ impl Program {
             app_commands: VecDeque::new(),
             clipboard_editor_id: None,
             clipboard_has_selection: false,
+            shell_msg_hook: None,
+            on_idle: None,
         }
     }
 
-    /// The desktop child's id, if a desktop was created.
+    /// The desktop child's [`ViewId`], or `None` if the `create_desktop` factory
+    /// returned `None` at construction.
+    ///
+    /// The id is stable for the application lifetime. Use it when you need to
+    /// reach the desktop view directly (e.g. to call a method on a custom desktop
+    /// subtype via `as_any_mut`). To open new windows in the desktop at runtime,
+    /// prefer [`Program::desktop_insert`] — it handles the `Context` and focus
+    /// bookkeeping for you.
+    ///
+    /// # Turbo Vision heritage
+    /// Ports the C++ `TProgram::deskTop` global static pointer
+    /// (`include/tvision/app.h`), reshaped into an owned `ViewId` handle (global
+    /// raw pointer → handle, resolved via `find_mut`).
     pub fn desktop(&self) -> Option<ViewId> {
         self.desktop
     }
 
-    /// The menu-bar child's id, if a menu bar was created.
+    /// The menu-bar child's [`ViewId`], or `None` if the `create_menu_bar` factory
+    /// returned `None` at construction.
+    ///
+    /// The handle is stable for the application lifetime. Use it to resolve the
+    /// menu bar view when you need to update its items at runtime (e.g. to rebuild
+    /// the menu on locale change). For command-enablement, prefer
+    /// [`Program::enable_command`] / [`Program::disable_command`] — the menu bar
+    /// observes the `cmCommandSetChanged` broadcast automatically.
+    ///
+    /// # Turbo Vision heritage
+    /// Ports the C++ `TProgram::menuBar` global static pointer
+    /// (`include/tvision/app.h`), reshaped into an owned `ViewId` handle.
     pub fn menu_bar(&self) -> Option<ViewId> {
         self.menu_bar
     }
 
-    /// The status-line child's id, if a status line was created.
+    /// The status-line child's [`ViewId`], or `None` if the `create_status_line`
+    /// factory returned `None` at construction.
+    ///
+    /// The pump pre-routes `KeyDown` events to the status line first (so status-bar
+    /// hot keys fire regardless of focus), and over-the-line `MouseDown` events are
+    /// also pre-routed to it. Use the id when you need to reach the status-line view
+    /// directly (e.g. to call a custom method after downcasting via `as_any_mut`).
+    ///
+    /// # Turbo Vision heritage
+    /// Ports the C++ `TProgram::statusLine` global static pointer
+    /// (`include/tvision/app.h`), reshaped into an owned `ViewId` handle. The
+    /// pre-routing behavior mirrors `TProgram::getEvent` (`tprogram.cpp:153`).
     pub fn status_line(&self) -> Option<ViewId> {
         self.status_line
     }
 
-    /// Request the (modal) loop end with `cmd`: store it as the end state;
-    /// [`run`](Self::run) returns it once the tree validates it.
+    /// Register a closure that produces the shell-suspend message printed to the
+    /// terminal before the application yields to the shell (`Command::DOS_SHELL`,
+    /// typically wired to a "Shell" menu item or Ctrl-Z).
     ///
-    /// **Owner-side, immediate.** This is the top-level path — call it when you
-    /// hold `&mut Program` (an app `main`, startup, or a test). A *view* has no
-    /// up-pointer to the program and must instead defer via
-    /// [`Context::end_modal`](crate::view::Context::end_modal) (→
-    /// [`Deferred::EndModal`], applied by the pump). Rule of thumb: view →
-    /// `ctx.end_modal`; owner / top-level → `Program::end_modal`.
+    /// Call this once during setup when the default platform message is not
+    /// appropriate — for example, to include your app name or instructions specific
+    /// to your shell environment:
+    ///
+    /// ```rust,ignore
+    /// program.set_shell_msg_hook(Box::new(|| {
+    ///     "MyApp is suspended. Type `fg` to return.".to_string()
+    /// }));
+    /// ```
+    ///
+    /// When not set, the built-in platform default is used (Windows: "Type EXIT to
+    /// return..."; Unix: the `fg` return instruction).
+    ///
+    /// # Turbo Vision heritage
+    /// Replaces the virtual `TApplication::writeShellMsg` override point
+    /// (`tapplica.cpp`). The C++ default printed `"Type EXIT to return..."` on
+    /// Windows/DOS and the `fg`-instruction on unix; that same branching logic
+    /// lives in the crate-private `default_shell_msg` helper.
+    pub fn set_shell_msg_hook(&mut self, hook: Box<dyn Fn() -> String>) {
+        self.shell_msg_hook = Some(hook);
+    }
+
+    /// Register a callback run once on every **idle** pass of the event loop —
+    /// each iteration where no input event was waiting.
+    ///
+    /// Use it for background work that should advance whenever the app is not
+    /// busy: a clock, an animation frame, a periodic refresh. The callback gets
+    /// `&mut Program`, so it can insert/close windows, post commands, or read
+    /// state. Keep it cheap — it runs on the loop's idle cadence (the 20 ms frame
+    /// tick), not a real-time scheduler. For exact timing, prefer a timer
+    /// ([`Event::Timer`]).
+    ///
+    /// Only one idle callback is held; a second call replaces the first.
+    ///
+    /// The hook fires on the idle passes of **any** loop level, including while a
+    /// modal dialog, message box, or other `exec_view` is open — so a clock keeps
+    /// ticking during a dialog rather than freezing. It does **not** re-enter
+    /// itself: while the hook runs, it is taken out, so a modal it opens will not
+    /// fire the hook recursively.
+    ///
+    /// # Turbo Vision heritage
+    ///
+    /// The successor to overriding `TProgram::idle`, which Turbo Vision called
+    /// once per event-less loop pass (the guide's clock / heap-display pattern),
+    /// including during modal `execute()` loops.
+    pub fn set_on_idle(&mut self, f: impl FnMut(&mut Program) + 'static) {
+        self.on_idle = Some(Box::new(f));
+    }
+
+    /// Thin test accessor over [`resolve_shell_msg`]: returns the same string
+    /// the production `DOS_SHELL` branch prints, without triggering the actual
+    /// suspend/SIGTSTP/resume sequence.
+    #[cfg(test)]
+    pub(crate) fn shell_msg(&self) -> String {
+        resolve_shell_msg(&self.shell_msg_hook)
+    }
+
+    /// Signal that the event loop should stop, returning `cmd` as the result
+    /// of [`run`](Self::run) once the tree validates it.
+    ///
+    /// **Owner-side, immediate.** Call this when you already hold
+    /// `&mut Program` — for example from an application `main`, a test
+    /// harness, or a startup sequence. For the far more common case where a
+    /// *view* closes a dialog from inside `handle_event`, use
+    /// [`Context::end_modal`](crate::view::Context::end_modal) instead (which
+    /// pushes a deferred effect that the pump applies after dispatch unwinds).
+    /// Rule of thumb: view → `ctx.end_modal`; owner / top-level →
+    /// `Program::end_modal`.
+    ///
+    /// See also: [ending a modal](../../../port/modal.html#endmodal) in the
+    /// tvision-rs guide.
     ///
     /// # Turbo Vision heritage
     /// Ports `TGroup::endModal` (`tgroup.cpp`).
@@ -656,13 +772,16 @@ impl Program {
         !self.disabled_commands.has(cmd)
     }
 
-    /// The rectangle that tile/cascade lay windows into: the **desktop child's
-    /// extent** (`(0,0,w,h)` in desktop-local coords), so it stays correct when
-    /// the desktop is inset under a menu/status bar. Returns `None` if no desktop
-    /// was created. Backs the tile/cascade command handlers and the
-    /// `Application::get_tile_rect` forwarding method.
+    /// The rectangle that the desktop's tile and cascade layout operations lay
+    /// windows into: the desktop child's local-origin extent `(0, 0, w, h)`.
     ///
-    /// Note: requires `&mut self` because `Group::find_mut` requires `&mut`.
+    /// Returns `None` if no desktop was created. The `TILE` and `CASCADE` command
+    /// handlers read this rect so window layout stays within the desktop area even
+    /// when the desktop is inset below a menu bar or above a status line. If you
+    /// want to restrict tiling to a sub-region, size the desktop accordingly rather
+    /// than overriding this method.
+    ///
+    /// Requires `&mut self` because `Group::find_mut` requires `&mut`.
     ///
     /// # Turbo Vision heritage
     /// Ports `TApplication::getTileRect` (`tapplica.cpp`).
@@ -673,8 +792,11 @@ impl Program {
 
     // -- the run loop --------------------------------------------------------
 
-    /// The production entry point: run the event loop until an end state both is
-    /// set and validates, then return it.
+    /// Drive the event loop until the application posts a quit command that
+    /// passes validation, then return it.
+    ///
+    /// This is the outer loop of a tvision-rs application. Call it once from
+    /// `main` after building the [`Program`] and inserting startup views:
     ///
     /// ```text
     /// loop {
@@ -685,13 +807,28 @@ impl Program {
     /// }
     /// ```
     ///
+    /// Each iteration of [`pump_once`](Self::pump_once) picks one event,
+    /// routes it through the view tree, applies deferred effects, then
+    /// redraws and diffs. The outer loop re-runs the entire validate/pump
+    /// cycle if a view refuses the end state (e.g. an unsaved-file guard
+    /// that cancels the quit).
+    ///
+    /// For app-level command handling use
+    /// [`run_app`](Self::run_app) instead; for a single pump step (tests,
+    /// headless drivers) use [`pump_once`](Self::pump_once).
+    ///
     /// With a production `SystemClock` + a real backend, polling for an event
-    /// blocks, so this does not spin. **Do not call on a headless backend without
-    /// a QUIT path** — headless never blocks, so it would busy-loop; tests step
-    /// [`pump_once`](Self::pump_once) instead.
+    /// blocks, so this does not spin. **Do not call on a headless backend
+    /// without a QUIT path** — headless never blocks, so it would busy-loop;
+    /// tests step [`pump_once`](Self::pump_once) instead.
+    ///
+    /// See also: [the single modal loop](../../../port/modal.html#the-modal-loop-execute)
+    /// in the tvision-rs guide.
     ///
     /// # Turbo Vision heritage
     /// Ports `TProgram::run` → `TGroup::execute` (`tprogram.cpp` / `tgroup.cpp`).
+    /// The per-group nested loop of the original is replaced by a single top-level
+    /// loop plus a [`ModalFrame`] capture handler for modality.
     pub fn run(&mut self) -> Command {
         loop {
             self.end_state = None;
@@ -761,11 +898,30 @@ impl Program {
     /// **Quit-from-popup note:** the inner `exec_view`'s result is discarded here
     /// and `end_state` restored, so a quit command ending the *inner* history modal
     /// is swallowed (no app quit from inside the popup). The popup is dismiss-only.
-    fn pump_and_drive(&mut self) {
-        self.pump_once();
+    ///
+    /// On an **idle** pass (no input event — [`pump_once`](Self::pump_once)
+    /// returned `true`) it fires the user idle hook
+    /// ([`set_on_idle`](Self::set_on_idle)). The hook runs **outside** any
+    /// `pump_once` destructured borrow: this method holds a whole `&mut self`, so
+    /// it takes the boxed `FnMut` out (calling it then holds the only `&mut self`)
+    /// and restores it — unless the callback replaced it via `set_on_idle`, in
+    /// which case the new box is kept. Returns the `was_idle` bool.
+    fn pump_and_drive(&mut self) -> bool {
+        let was_idle = self.pump_once();
         if let Some((view, completion, initial_focus)) = self.pending_modal.take() {
             self.exec_view_with_completion(view, Some(completion), initial_focus, None, false);
         }
+        if was_idle {
+            let mut h = self.on_idle.take();
+            if let Some(f) = h.as_mut() {
+                f(self);
+            }
+            // Restore unless the callback replaced it via set_on_idle.
+            if self.on_idle.is_none() {
+                self.on_idle = h;
+            }
+        }
+        was_idle
     }
 
     /// The end-command validation gate for the **app run loop**
@@ -857,8 +1013,15 @@ impl Program {
 
     // -- exec_view: the blocking modal wrapper --------------------------------
 
-    /// Insert a view modally, drive the loop until it validates an end command,
-    /// and return that command.
+    /// Run `view` as a modal dialog: insert it into the root group, pump the event
+    /// loop until the view (or the user) posts an end command, then remove it and
+    /// return that command.
+    ///
+    /// Call this from an app `main` or test harness when you need a blocking
+    /// modal — e.g. an open-file dialog at startup, a settings panel, or a
+    /// confirm-quit box triggered by app-level code. For the common built-in dialogs
+    /// prefer the typed wrappers: [`message_box`](Self::message_box),
+    /// [`input_box`](Self::input_box), [`open_file_dialog`](Self::open_file_dialog).
     ///
     /// **Top-level only — the type system enforces it:** a [`View`] holds only
     /// `&mut Context`, never `&mut Program`, so a view *cannot* call this from
@@ -900,6 +1063,9 @@ impl Program {
     ///    view's own `valid`, NOT the root group's.
     /// 8. Pop the frame, remove the view, restore the saved focus.
     /// 9. Restore the command set.
+    ///
+    /// See also: [the modal chapter](../../../port/modal.html#ending-a-modal-execview)
+    /// in the tvision-rs guide.
     ///
     /// # Turbo Vision heritage
     /// Ports `TGroup::execView` + `TGroup::execute` (`tgroup.cpp`), run on the
@@ -1045,14 +1211,27 @@ impl Program {
         (cmd, text)
     }
 
-    /// Build and exec a single-line input dialog auto-centered on the desktop
-    /// (base rect `(0, 0, 60, 8)`, centered within the desktop).
+    /// Build and exec a single-line input dialog auto-centered on the desktop.
     ///
-    /// **Coordinate note:** like [`message_box`](Self::message_box), centering uses
-    /// the desktop's SIZE; when the desktop is inset by a menu/status bar, the box
-    /// can sit off by the menu-bar offset.
+    /// Convenience wrapper around [`input_box_rect`](Self::input_box_rect) that
+    /// computes the position automatically (base rect `60 × 8`, centered within
+    /// the desktop). Use this when you don't need precise placement; use
+    /// `input_box_rect` when you need an explicit position.
+    ///
+    /// `title` is the dialog frame label. `label` is the prompt drawn left of the
+    /// field. `initial` seeds the input line (the entire text is pre-selected so
+    /// the user can immediately type a replacement). `limit` caps the field byte
+    /// length (max length = `limit - 1`).
+    ///
+    /// Returns `(cmd, text)`. If the user presses OK, `cmd = Command::OK` and
+    /// `text` holds what they typed. If the user presses Cancel or Esc,
+    /// `cmd = Command::CANCEL` and `text` is the unchanged `initial`.
+    ///
+    /// **Coordinate note:** centering uses the desktop's SIZE; when the desktop is
+    /// inset by a menu/status bar, the box can sit off by the menu-bar offset.
     ///
     /// # Turbo Vision heritage
+    ///
     /// Ports `inputBox` (`msgbox.cpp`); the size offset is `deskTop->size.x/y`.
     pub fn input_box(
         &mut self,
@@ -1071,11 +1250,30 @@ impl Program {
     /// Open the truecolor color-picker modal seeded with `initial`; return the
     /// chosen [`Color`](crate::color::Color) on OK, or `None` on Cancel/Esc.
     ///
-    /// An tvision-rs-original extension. The chosen color is read out of the
-    /// modal's own [`ColorPicker`](crate::dialog::ColorPicker) and returned **by
-    /// value** via [`exec_view_with`](Self::exec_view_with)-style capture — no
-    /// shared sink. `Color` is deliberately not a `FieldValue` (a 4-variant enum,
-    /// not a packable scalar; spec non-goal).
+    /// The picker presents four surface tabs (Presets, RGB, Plane, Xterm-256),
+    /// an Info column showing old and new swatches, and OK/Cancel buttons. Call
+    /// this from your application's event handler when the user selects a
+    /// "Pick Color" menu item or similar:
+    ///
+    /// ```rust,ignore
+    /// let new_color = program.color_dialog(current_color);
+    /// if let Some(c) = new_color {
+    ///     // apply c
+    /// }
+    /// ```
+    ///
+    /// An tvision-rs-original extension (no direct Borland/magiblot counterpart).
+    /// The chosen color is read out of the modal's own
+    /// [`ColorPicker`](crate::dialog::ColorPicker) and returned **by value** via
+    /// [`exec_view_with`](Self::exec_view_with)-style capture — no shared sink,
+    /// no `ModalCompletion` variant. `Color` is deliberately not a `FieldValue`
+    /// (a 4-variant enum, not a packable scalar; spec non-goal).
+    ///
+    /// # Turbo Vision heritage
+    /// Supersedes `TColorDialog` (guide pp. 406–409), which was an interactive
+    /// editor for the 16-entry BIOS palette. tvision-rs replaces it with a
+    /// truecolor picker that returns an `Option<Color>` directly instead of
+    /// mutating an in-memory `TPalette` blob.
     pub fn color_dialog(&mut self, initial: crate::color::Color) -> Option<crate::color::Color> {
         use crate::dialog::{ColorPicker, Dialog};
         use crate::widgets::{Button, ButtonFlags};
@@ -1216,11 +1414,23 @@ impl Program {
         Rect::new(0, 0, size.x, size.y)
     }
 
-    /// Insert `view` into the desktop and focus it — the runtime window-open seam
-    /// (insert into the desktop, then select the newly inserted child).
+    /// Insert `view` into the desktop and make it the current (focused) window.
+    /// This is the standard way to open a new window at runtime: call it from your
+    /// `run_app` command handler (e.g. on `CMD_NEW`) with a freshly constructed
+    /// [`Window`](crate::window::Window) or `Dialog`.
     ///
-    /// Returns the new view's [`ViewId`] on success, or `None` if no desktop exists
-    /// or the downcast fails.
+    /// Returns the new view's [`ViewId`] on success, or `None` if no desktop was
+    /// created or the desktop downcast fails.
+    ///
+    /// # Turbo Vision heritage
+    ///
+    /// C++ `TProgram::insertWindow` (`tprogram.cpp`) disposes a window being
+    /// inserted when the active window cannot release focus (`validView` /
+    /// `canMoveFocus`). tvision-rs does **not** gate a programmatic insert: the
+    /// focus-release check (`valid(RELEASED_FOCUS)`) is applied where it matters
+    /// interactively — Alt-N window selection and modal close — not on insert. An
+    /// app that inserts a window expects it to appear; refusing the insert
+    /// (DOS-era behavior) would surprise more than it protects.
     pub fn desktop_insert(&mut self, view: Box<dyn View>) -> Option<ViewId> {
         let desk_id = self.desktop?;
         let now = self.clock.now_ms();
@@ -1714,7 +1924,12 @@ impl Program {
     /// (`out_events` / `timers` / `deferred`) can be borrowed alongside
     /// `group` / `captures`. The dispatch is a free function with explicit field
     /// borrows; there are no `&mut self` helpers with overlapping field sets.
-    pub fn pump_once(&mut self) {
+    ///
+    /// Returns `true` when this pass was **idle** — the `None =>` arm ran because
+    /// no input event (real, queued, or synthesized mouse-auto) was waiting. The
+    /// run loop uses this to fire the user idle hook ([`set_on_idle`](Self::set_on_idle))
+    /// outside this destructured borrow.
+    pub fn pump_once(&mut self) -> bool {
         let Program {
             group,
             renderer,
@@ -1738,6 +1953,11 @@ impl Program {
             app_commands,
             clipboard_editor_id,
             clipboard_has_selection,
+            shell_msg_hook,
+            // The idle hook is fired from the run loop (outside this destructured
+            // borrow), never here; bind it `_` to satisfy the exhaustive
+            // destructure under `-D warnings`.
+            on_idle: _,
         } = self;
 
         // 1. Resize check — the realization of setScreenMode/cmScreenChanged.
@@ -1792,6 +2012,11 @@ impl Program {
             None => mouse_auto.synthesize(now),
         };
 
+        // A pass is "idle" iff the final event (after the mouse-auto synthesizer)
+        // is None — i.e. the `None =>` arm below runs. The run loop fires the user
+        // idle hook on these passes.
+        let was_idle = ev.is_none();
+
         match ev {
             // 4. No event -> idle (ports TProgram::idle), then fall through to
             //    the redraw (do NOT early-return).
@@ -1830,19 +2055,26 @@ impl Program {
                 // pump cycle after this arm, so set_help_ctx's internal state
                 // update is picked up on the next render.
                 if let Some(sl_id) = *status_line {
-                    // Step 1: read top view's help ctx (immutable borrow via find_mut).
-                    let top_ctx = match captures.top_modal_view() {
-                        Some(modal_id) => group
-                            .find_mut(modal_id)
-                            .map(|v| v.get_help_ctx())
-                            .unwrap_or(crate::help::HelpCtx::NO_CONTEXT),
-                        // No execView modal: faithful to C++ TView::TopView() (tview.cpp:879) —
-                        // when TheTopView == 0 it walks UP to the first sfModal view, the
-                        // application root, whose TGroup::getHelpCtx (group.rs) recurses DOWN
-                        // the current chain to the focused leaf. Our root `group` IS that modal
-                        // app root, so read its (now-recursive, Task 4) help context.
-                        None => group.get_help_ctx(),
-                    };
+                    // Step 1: read the effective help ctx.
+                    // Priority: an open MenuSession on the capture stack wins —
+                    // it is the topmost handler and its `menu_help_ctx` yields
+                    // `Some` even for NO_CONTEXT, matching C++ `TopView()->
+                    // getHelpCtx()` where `TopView()` is the active `TMenuView`.
+                    // Otherwise fall to the modal/non-modal view chain below.
+                    let top_ctx = captures.active_menu_help_ctx().unwrap_or_else(|| {
+                        match captures.top_modal_view() {
+                            Some(modal_id) => group
+                                .find_mut(modal_id)
+                                .map(|v| v.get_help_ctx())
+                                .unwrap_or(crate::help::HelpCtx::NO_CONTEXT),
+                            // No execView modal: faithful to C++ TView::TopView() (tview.cpp:879) —
+                            // when TheTopView == 0 it walks UP to the first sfModal view, the
+                            // application root, whose TGroup::getHelpCtx (group.rs) recurses DOWN
+                            // the current chain to the focused leaf. Our root `group` IS that modal
+                            // app root, so read its (now-recursive, Task 4) help context.
+                            None => group.get_help_ctx(),
+                        }
+                    });
                     // Step 2: update status line (separate find_mut borrow).
                     use crate::status::StatusLine;
                     if let Some(sl) = group
@@ -1980,6 +2212,7 @@ impl Program {
                                     end_state,
                                     app_commands,
                                     renderer,
+                                    shell_msg_hook,
                                 );
                             }
                         }
@@ -2141,15 +2374,15 @@ impl Program {
                                     sb.set_params(v, lo, hi, pg, ar, &mut ctx);
                                 }
                             }
-                            // Visibility direction (TScroller::showSBar →
-                            // show/hide): write the flag in the OWNING group
-                            // (no propagating StateFlag::Visible; the painter
-                            // skips !visible) and run the C++
-                            // setState(sfVisible) currency tail — if the flag
-                            // really changed and the child is selectable, the
-                            // owning group resetCurrents, BOTH directions.
-                            // Today's consumers (scrollbars / indicators) are
-                            // non-selectable, so the tail is a no-op for them.
+                            // Visibility direction: routes via
+                            // set_visible_descendant, which delivers
+                            // StateFlag::Visible via child.set_state so widgets
+                            // with scroll bars (e.g. ListViewer) can react.
+                            // StateFlag::Visible does NOT propagate to children.
+                            // If the flag changed and the child is selectable,
+                            // the owning group resetCurrents (both directions).
+                            // Today's scroll bar consumers are non-selectable,
+                            // so the currency tail is a no-op for them.
                             Deferred::SetVisible(id, visible) => {
                                 group.set_visible_descendant(id, visible, &mut ctx);
                             }
@@ -2876,6 +3109,8 @@ impl Program {
             let mut dc = DrawCtx::new(buf, theme, bounds, bounds.a);
             group.draw(&mut dc);
         });
+
+        was_idle
     }
 
     // -- test/inspection accessors ------------------------------------------
@@ -3221,6 +3456,33 @@ fn event_wait_timeout(timers: &TimerQueue, now: u64) -> Option<Duration> {
     }
 }
 
+/// The platform-default shell-suspend message: the text printed before the
+/// terminal is yielded to the shell (`Command::DOS_SHELL`).
+///
+/// Mirrors the two branches of `TApplication::writeShellMsg` (`tapplica.cpp`):
+/// - Windows/DOS: `"Type EXIT to return..."`
+/// - Unix: the SIGTSTP return instruction.
+///
+/// Users may replace this with a custom message via
+/// [`Program::set_shell_msg_hook`].
+fn default_shell_msg() -> String {
+    #[cfg(not(unix))]
+    {
+        "Type EXIT to return...".to_string()
+    }
+    #[cfg(unix)]
+    {
+        "The application has been stopped. You can return by entering 'fg'.".to_string()
+    }
+}
+
+/// Resolve the shell-suspend message: the registered hook if set, else the
+/// platform default. The single source of truth for both the DOS_SHELL
+/// handler and the tests.
+fn resolve_shell_msg(hook: &Option<Box<dyn Fn() -> String>>) -> String {
+    hook.as_ref().map(|h| h()).unwrap_or_else(default_shell_msg)
+}
+
 /// The program's own event handling (Alt-N window selection, quit, tile/cascade,
 /// DOS-shell), then delegation to the embedded group's three-phase router.
 ///
@@ -3229,6 +3491,7 @@ fn event_wait_timeout(timers: &TimerQueue, now: u64) -> Option<Duration> {
 ///
 /// # Turbo Vision heritage
 /// Ports `TProgram::handleEvent` (`tprogram.cpp`).
+#[allow(clippy::too_many_arguments)]
 fn program_handle_event(
     group: &mut Group,
     desktop: Option<ViewId>,
@@ -3237,6 +3500,7 @@ fn program_handle_event(
     end_state: &mut Option<Command>,
     app_commands: &mut VecDeque<Command>,
     renderer: &mut Renderer,
+    shell_msg_hook: &Option<Box<dyn Fn() -> String>>,
 ) {
     // Modal-isolation note: program-level interception (this Alt-N block + the
     // cmQuit catch below) is NOT suppressed while a modal is active. C++'s nested
@@ -3319,7 +3583,7 @@ fn program_handle_event(
         && cmd == Command::DOS_SHELL
     {
         renderer.backend_mut().suspend();
-        println!("The application has been stopped. You can return by entering 'fg'.");
+        println!("{}", resolve_shell_msg(shell_msg_hook));
         #[cfg(all(unix, not(test)))]
         {
             extern crate libc;
@@ -11268,5 +11532,78 @@ mod tests {
             if cmd == Command::OK { "ok" } else { "other" }
         });
         assert_eq!(cancelled, "other", "extract must see cmCancel");
+    }
+
+    // ---------------------------------------------------------------------------
+    // shell_msg hook tests
+    // ---------------------------------------------------------------------------
+
+    /// With no hook set, `shell_msg()` returns the platform default message.
+    #[test]
+    fn shell_msg_default_returns_platform_string() {
+        let (program, _handle, _clock) = program_with_desktop(80, 25);
+        let msg = program.shell_msg();
+        assert_eq!(
+            msg,
+            default_shell_msg(),
+            "no-hook path must equal default_shell_msg()"
+        );
+        // Spot-check the unix text on unix targets so the actual string is exercised.
+        #[cfg(unix)]
+        assert!(
+            msg.contains("fg"),
+            "unix default must mention 'fg': {msg:?}"
+        );
+    }
+
+    /// With a hook registered, `shell_msg()` returns the hook's string.
+    #[test]
+    fn shell_msg_hook_overrides_default() {
+        let (mut program, _handle, _clock) = program_with_desktop(80, 25);
+        program.set_shell_msg_hook(Box::new(|| "custom message".to_string()));
+        assert_eq!(program.shell_msg(), "custom message");
+    }
+
+    /// The hook is called each time (not just once); replacing it again works.
+    #[test]
+    fn shell_msg_hook_replaceable() {
+        let (mut program, _handle, _clock) = program_with_desktop(80, 25);
+        program.set_shell_msg_hook(Box::new(|| "first".to_string()));
+        assert_eq!(program.shell_msg(), "first");
+        program.set_shell_msg_hook(Box::new(|| "second".to_string()));
+        assert_eq!(program.shell_msg(), "second");
+    }
+
+    #[test]
+    fn on_idle_fires_each_idle_pass() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        let (mut program, _handle, _clock) = program_with_desktop(80, 25);
+
+        // Settle startup: the first idle pass queues a COMMAND_SET_CHANGED
+        // broadcast (command_set_changed == true at construction), and the next
+        // pass dispatches it — a non-idle pass. Drain both so the loop below sees
+        // only genuinely event-less passes.
+        program.pump_and_drive(); // idle: emits the startup broadcast
+        program.pump_and_drive(); // non-idle: dispatches it
+
+        let ticks = Rc::new(Cell::new(0u32));
+        let ticks_in = ticks.clone();
+        program.set_on_idle(move |_p| {
+            ticks_in.set(ticks_in.get() + 1);
+        });
+
+        // No events queued -> every pump pass is now idle. Drive a few passes.
+        for _ in 0..3 {
+            program.pump_and_drive();
+        }
+
+        assert_eq!(
+            ticks.get(),
+            3,
+            "idle hook should fire once on each event-less pass, got {}",
+            ticks.get()
+        );
     }
 }

@@ -107,6 +107,25 @@ pub struct ColorPicker {
 const INFO_COL_W: i32 = 18;
 
 impl ColorPicker {
+    /// Build a `ColorPicker` occupying `bounds`, seeded with `initial` as the
+    /// starting color.
+    ///
+    /// The picker is a [`Group`](crate::view::Group) containing a `TabBar`,
+    /// a `PageStack` of four surface pages (Presets, RGB, Plane, Xterm-256),
+    /// and an always-visible `InfoColumn`. All surfaces share one `ColorModel`.
+    ///
+    /// `bounds` sets the picker's absolute position within its owner (non-zero
+    /// origin is supported — embed it inside a dialog with an inset, e.g.
+    /// `Rect::new(2, 2, 58, 20)`). The picker handles OK/Cancel buttons
+    /// externally; embed it inside a [`Dialog`](crate::dialog::Dialog) and add
+    /// buttons separately, or use the convenience wrapper
+    /// [`Program::color_dialog`](crate::Program::color_dialog).
+    ///
+    /// # Turbo Vision heritage
+    /// tvision-rs-original extension. Supersedes `TColorDialog::Init` (guide
+    /// p. 407–408), which built a fixed 62×19 dialog editing a 16-entry BIOS
+    /// palette. This constructor builds only the picker body; the caller owns
+    /// the dialog chrome.
     pub fn new(bounds: Rect, initial: Color) -> Self {
         let w = bounds.b.x - bounds.a.x;
         let h = bounds.b.y - bounds.a.y;

@@ -23,54 +23,54 @@ Porting contributors: see the project repository.
 *chosen.* The `T` prefix is dropped and every type lives under the `tv::`
 namespace (`TButton` → `tv::Button`); methods become `snake_case`. The
 `cm*`/`hc*` constant families become type-scoped associated constants on open
-newtypes ([`Command`](../api/tvision-rs/command/struct.Command.html),
-[`HelpCtx`](../api/tvision-rs/help/struct.HelpCtx.html)) so apps can mint their own
+newtypes ([`Command`](../api/tvision_rs/command/struct.Command.html),
+[`HelpCtx`](../api/tvision_rs/help/struct.HelpCtx.html)) so apps can mint their own
 values. → [Constant families](../port/constants.md)
 
 ### D2 · Inheritance → trait + composition {#d2}
 
 *forced.* The class tree becomes a
-[`View`](../api/tvision-rs/view/trait.View.html) trait with default methods plus a
-[`ViewState`](../api/tvision-rs/view/struct.ViewState.html) struct held by
+[`View`](../api/tvision_rs/view/trait.View.html) trait with default methods plus a
+[`ViewState`](../api/tvision_rs/view/struct.ViewState.html) struct held by
 composition; "subclass `TWindow`" becomes embed-and-delegate — hold a
-[`Window`](../api/tvision-rs/window/struct.Window.html), forward the methods you
+[`Window`](../api/tvision_rs/window/struct.Window.html), forward the methods you
 don't change. → [Inheritance](../port/inheritance.md)
 
 ### D3 · Pointers → handles + downward context {#d3}
 
 *forced.* Raw `TView*` pointers become process-global
-[`ViewId`](../api/tvision-rs/view/struct.ViewId.html) handles plus a downward-passed
-[`Context`](../api/tvision-rs/view/struct.Context.html); up/sideways links resolve
+[`ViewId`](../api/tvision_rs/view/struct.ViewId.html) handles plus a downward-passed
+[`Context`](../api/tvision_rs/view/struct.Context.html); up/sideways links resolve
 by tree-walk, never by reference. → [Pointers & infoPtr → handles](../port/handles.md)
 
 ### D4 · Events → enum + match {#d4}
 
 *chosen.* `TEvent`'s tagged union and bitmasks become an
-[`Event`](../api/tvision-rs/event/enum.Event.html) enum that is matched, not masked;
+[`Event`](../api/tvision_rs/event/enum.Event.html) enum that is matched, not masked;
 `message()` splits into a targeted query and an `Event::Broadcast`. `TKey`/`kb*`
-become a closed [`Key`](../api/tvision-rs/event/enum.Key.html) enum plus
-[`KeyModifiers`](../api/tvision-rs/event/struct.KeyModifiers.html). → [Events](../port/events.md)
+become a closed [`Key`](../api/tvision_rs/event/enum.Key.html) enum plus
+[`KeyModifiers`](../api/tvision_rs/event/struct.KeyModifiers.html). → [Events](../port/events.md)
 
 ### D5 · Flag words → struct-of-bools {#d5}
 
 *chosen.* The `ushort` flag words (`state`, `options`, `growMode`, `dragMode`)
 become `#[derive(Default)]` structs of bools, with a verb-enum `set_state` over
-them ([`StateFlag`](../api/tvision-rs/view/enum.StateFlag.html),
-[`Options`](../api/tvision-rs/view/struct.Options.html)). → [Flag words](../port/flags.md)
+them ([`StateFlag`](../api/tvision_rs/view/enum.StateFlag.html),
+[`Options`](../api/tvision_rs/view/struct.Options.html)). → [Flag words](../port/flags.md)
 
 ### D6 · Attribute bytes → typed Color/Style {#d6}
 
 *chosen.* Packed `TColorAttr`/`TColorDesired` bytes become a typed four-variant
-[`Color`](../api/tvision-rs/color/enum.Color.html) enum plus
-[`Style`](../api/tvision-rs/color/struct.Style.html); the per-cell retain-`0`
+[`Color`](../api/tvision_rs/color/enum.Color.html) enum plus
+[`Style`](../api/tvision_rs/color/struct.Style.html); the per-cell retain-`0`
 overloads are dropped. → [The draw model](../port/draw.md)
 
 ### D7 · Palettes & glyphs → Theme {#d7}
 
 *chosen.* Palette chains and scattered glyph literals become a
-[`Theme`](../api/tvision-rs/theme/struct.Theme.html) owning a state→`Role` style map
+[`Theme`](../api/tvision_rs/theme/struct.Theme.html) owning a state→`Role` style map
 and a `Glyphs` set; `getColor`/`getPalette` become
-`ctx.theme.style(`[`Role`](../api/tvision-rs/theme/enum.Role.html)`::…)`. → [Palettes & glyphs → Theme](../port/theme.md)
+`ctx.theme.style(`[`Role`](../api/tvision_rs/theme/enum.Role.html)`::…)`. → [Palettes & glyphs → Theme](../port/theme.md)
 
 ### D8 · Whole-tree redraw + diff {#d8}
 
@@ -83,7 +83,7 @@ algorithm, and shadows are cast during the draw. → [The draw model](../port/dr
 *forced.* Nested blocking modal loops (`execView`, `dragView`) become **one**
 non-recursive event loop plus a LIFO capture stack; modality, drag, and
 press-tracking are handlers, not loops. `execView` from a `Program` method
-becomes [`Program::exec_view_with`](../api/tvision-rs/app/struct.Program.html#method.exec_view_with)
+becomes [`Program::exec_view_with`](../api/tvision_rs/app/struct.Program.html#method.exec_view_with)
 (result by value); `execView` from within a view becomes `Context::request_exec_view`
 (queues `Deferred::OpenModal`; reuses the existing `pending_modal` +
 `RouteModalAnswer` machinery; close command routed back via `set_modal_answer`).
@@ -93,15 +93,15 @@ becomes [`Program::exec_view_with`](../api/tvision-rs/app/struct.Program.html#me
 
 *forced.* Flat-record `memcpy` data transfer (`getData`/`setData`/`dataSize`)
 becomes a typed `value()`/`set_value()` protocol over a
-[`FieldValue`](../api/tvision-rs/data/enum.FieldValue.html). → [Dialogs & data](../apps/dialogs.md)
+[`FieldValue`](../api/tvision_rs/data/enum.FieldValue.html). → [Dialogs & data](../apps/dialogs.md)
 
 ### D11 · Platform layer → Backend trait {#d11}
 
 *chosen.* The platform layer (`THardwareInfo`, ncurses/win32 strategies) becomes
-a small object-safe [`Backend`](../api/tvision-rs/backend/trait.Backend.html) trait,
+a small object-safe [`Backend`](../api/tvision_rs/backend/trait.Backend.html) trait,
 with a production
-[`CrosstermBackend`](../api/tvision-rs/backend/struct.CrosstermBackend.html) and a
-test [`HeadlessBackend`](../api/tvision-rs/backend/struct.HeadlessBackend.html) that
+[`CrosstermBackend`](../api/tvision_rs/backend/struct.CrosstermBackend.html) and a
+test [`HeadlessBackend`](../api/tvision_rs/backend/struct.HeadlessBackend.html) that
 unlocks snapshot testing. → [Drawing & backends](../internals/drawing.md)
 
 ### D12 · Persistence → dropped {#d12}

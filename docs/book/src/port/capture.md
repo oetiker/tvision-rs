@@ -9,17 +9,17 @@ A capture is a handler that gets first look at every event *before* the normal
 view-tree routing. It can read the event, act on it, swallow it, or wave it
 through. Stack a few of these and you have modality, mouse tracking, drag/resize,
 and press-and-hold — without a single nested event loop. The whole thing lives in
-[`src/capture.rs`](../api/tvision-rs/capture/index.html) and is driven by the one
-event loop in [`Program`](../api/tvision-rs/app/struct.Program.html).
+[`src/capture.rs`](../api/tvision_rs/capture/index.html) and is driven by the one
+event loop in [`Program`](../api/tvision_rs/app/struct.Program.html).
 
 ## The stack
 
 The event loop owns a single
-[`CaptureStack`](../api/tvision-rs/capture/struct.CaptureStack.html) — a LIFO stack
+[`CaptureStack`](../api/tvision_rs/capture/struct.CaptureStack.html) — a LIFO stack
 of handlers. When an event arrives, the loop offers it to the handlers **top-down**
 (most recently pushed first) before any view sees it. Each handler implements
-[`CaptureHandler`](../api/tvision-rs/capture/trait.CaptureHandler.html) and answers
-with a [`CaptureFlow`](../api/tvision-rs/capture/enum.CaptureFlow.html):
+[`CaptureHandler`](../api/tvision_rs/capture/trait.CaptureHandler.html) and answers
+with a [`CaptureFlow`](../api/tvision_rs/capture/enum.CaptureFlow.html):
 
 | `CaptureFlow` | Meaning |
 | ------------- | ------- |
@@ -27,7 +27,7 @@ with a [`CaptureFlow`](../api/tvision-rs/capture/enum.CaptureFlow.html):
 | `Consumed`    | I handled it; stop routing. I stay on the stack. |
 | `ConsumedPop` | I handled it **and** I am done — remove me from the stack (e.g. a modal dialog closing, a mouse button released). |
 
-A handler holds a [`ViewId`](../api/tvision-rs/view/struct.ViewId.html) for the view
+A handler holds a [`ViewId`](../api/tvision_rs/view/struct.ViewId.html) for the view
 it speaks for — never a view reference (see [Pointers & infoPtr →
 handles](handles.md)). The whole idea fits in one sentence: **a handler that
 consumes every otherwise-unhandled event behaves exactly like a blocking loop, so
@@ -37,7 +37,7 @@ you never need to write one.**
 
 A handler runs while the loop is holding the stack, so it cannot reach in and push
 another handler inline. Instead it asks — via
-[`Context::push_capture`](../api/tvision-rs/view/struct.Context.html#method.push_capture)
+[`Context::push_capture`](../api/tvision_rs/view/struct.Context.html#method.push_capture)
 or the higher-level helpers — and the loop performs the push *after* dispatch,
 through the [Deferred channel](deferred.md). One pleasant consequence: a
 freshly-pushed capture first sees the **next** event, never the one that pushed
@@ -56,20 +56,20 @@ unrelated on the surface:
   See [Modal `execView`](modal.md).
 
 - **Window drag and resize.** Grabbing a window's title bar or a resize corner in
-  the [`Frame`](../api/tvision-rs/frame/struct.Frame.html) pushes a drag handler that
+  the [`Frame`](../api/tvision_rs/frame/struct.Frame.html) pushes a drag handler that
   owns the mouse until you let go, translating each move into a new window
   position or size.
 
 - **Press-and-hold across the widgets.** When you press and hold on a control,
   the widget pushes a mouse-tracking capture that forwards masked move/auto-repeat
   events to that one view and discards everything else until the button comes up.
-  Roughly ten widgets rely on this — [`Button`](../api/tvision-rs/widgets/struct.Button.html),
-  [`Cluster`](../api/tvision-rs/widgets/struct.Cluster.html),
-  [`Editor`](../api/tvision-rs/widgets/struct.Editor.html),
-  [`InputLine`](../api/tvision-rs/widgets/struct.InputLine.html),
-  [`ScrollBar`](../api/tvision-rs/widgets/struct.ScrollBar.html),
+  Roughly ten widgets rely on this — [`Button`](../api/tvision_rs/widgets/struct.Button.html),
+  [`Cluster`](../api/tvision_rs/widgets/struct.Cluster.html),
+  [`Editor`](../api/tvision_rs/widgets/struct.Editor.html),
+  [`InputLine`](../api/tvision_rs/widgets/struct.InputLine.html),
+  [`ScrollBar`](../api/tvision_rs/widgets/struct.ScrollBar.html),
   `ListViewer`, `Outline`, the status line, the menus, and the window
-  [`Frame`](../api/tvision-rs/frame/struct.Frame.html) — each for its own gesture
+  [`Frame`](../api/tvision_rs/frame/struct.Frame.html) — each for its own gesture
   (autoscroll, rubber-band selection, repeating arrows, drag-select), all over the
   same `MouseTrackCapture`.
 

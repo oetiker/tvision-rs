@@ -53,8 +53,8 @@ Turbo Vision routinely computes *negative* and off-screen coordinates — a view
 scrolled partly above its owner, a delta that goes negative mid-calculation, a
 rectangle intersected down to nothing. An unsigned type would underflow on
 exactly the arithmetic Turbo Vision does every frame. Keeping the signed width
-means the geometry math in [`Point`](../api/tvision-rs/view/struct.Point.html) and
-[`Rect`](../api/tvision-rs/view/struct.Rect.html) ports line-for-line from the C++
+means the geometry math in [`Point`](../api/tvision_rs/view/struct.Point.html) and
+[`Rect`](../api/tvision_rs/view/struct.Rect.html) ports line-for-line from the C++
 and behaves identically at the edges.
 
 So when you see `i32` on a bounds calculation and reach for "shouldn't that be

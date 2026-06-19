@@ -7,9 +7,9 @@ covers both halves: the key model your `View`s see, and the configurable
 
 ## The key model
 
-A keystroke is a physical [`Key`](../api/tvision-rs/event/enum.Key.html) plus a
-separate [`KeyModifiers`](../api/tvision-rs/event/struct.KeyModifiers.html) channel,
-bundled into a [`KeyEvent`](../api/tvision-rs/event/struct.KeyEvent.html). There are
+A keystroke is a physical [`Key`](../api/tvision_rs/event/enum.Key.html) plus a
+separate [`KeyModifiers`](../api/tvision_rs/event/struct.KeyModifiers.html) channel,
+bundled into a [`KeyEvent`](../api/tvision_rs/event/struct.KeyEvent.html). There are
 deliberately **no** modifier-combined variants: keys and modifiers are always
 separate. `Ctrl+C` is
 `Key::Char('c')` with `ctrl` set; `Shift+Tab` is `Key::Tab` with `shift`;
@@ -21,19 +21,19 @@ and `alt` collapse the platform's left/right distinctions *(mirroring the C++
 
 Two helpers bridge the old DOS conventions into this model:
 
-- [`ctrl_to_arrow`](../api/tvision-rs/event/fn.ctrl_to_arrow.html) maps the WordStar
+- [`ctrl_to_arrow`](../api/tvision_rs/event/fn.ctrl_to_arrow.html) maps the WordStar
   Ctrl-letter diamond (`Ctrl+S`/`D`/`E`/`X` and friends) to the equivalent arrow
   and navigation keys, clearing all modifiers on a match and passing everything
   else through unchanged — a faithful port of `ctrlToArrow`.
-- [`hot_key`](../api/tvision-rs/event/fn.hot_key.html) extracts the `~`-delimited
+- [`hot_key`](../api/tvision_rs/event/fn.hot_key.html) extracts the `~`-delimited
   accelerator character from a label (uppercased), so a button or menu item
   knows which `Alt+` chord activates it.
 
 ## The keymap
 
 Text input does not hard-wire keys to editing actions. Instead a
-[`Keymap`](../api/tvision-rs/keymap/struct.Keymap.html) maps a **chord** to a
-[`Command`](../api/tvision-rs/command/struct.Command.html) by name — the same
+[`Keymap`](../api/tvision_rs/keymap/struct.Keymap.html) maps a **chord** to a
+[`Command`](../api/tvision_rs/command/struct.Command.html) by name — the same
 data-driven shape as a VS Code keybindings file. A chord is one keystroke, or
 two for a prefix sequence in the classic `Ctrl-K`/`Ctrl-Q` editor style. You
 describe chords as strings: space-separated strokes, each a `+`-joined list of
@@ -55,7 +55,7 @@ historic behaviours survive: alphabetic characters lowercase and drop `shift`
 binding. Keys where shift carries meaning — `Shift+Insert` for paste — keep it.
 
 Resolving a stroke (optionally combined with a pending prefix) yields a
-[`Resolve`](../api/tvision-rs/keymap/enum.Resolve.html): a fully matched `Command`,
+[`Resolve`](../api/tvision_rs/keymap/enum.Resolve.html): a fully matched `Command`,
 a `Prefix` signal meaning "this begins a two-stroke chord, hold the next key", or
 `None` so the caller treats the key as insertable text or lets it bubble.
 
@@ -71,7 +71,7 @@ Three ready-made keymaps ship as constructors:
 
 There is one **process-global** keymap, the default for all text input; it starts
 as `word_star()`. Swap it once at startup with
-[`set_global`](../api/tvision-rs/keymap/fn.set_global.html), and the editor and every
+[`set_global`](../api/tvision_rs/keymap/fn.set_global.html), and the editor and every
 input field follow:
 
 ```rust
@@ -80,7 +80,7 @@ tv::keymap::set_global(tv::keymap::Keymap::cua());
 ```
 
 Widgets consult it via
-[`resolve_global`](../api/tvision-rs/keymap/fn.resolve_global.html); you rarely call
+[`resolve_global`](../api/tvision_rs/keymap/fn.resolve_global.html); you rarely call
 that yourself, but it is how a custom text view would join the same binding
 scheme.
 

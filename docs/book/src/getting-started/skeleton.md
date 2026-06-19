@@ -5,14 +5,14 @@ makes the rest of the framework easier to read.
 
 ## `Program` and `Application`
 
-[`Program`](../api/tvision-rs/app/struct.Program.html) is the engine. It owns the
+[`Program`](../api/tvision_rs/app/struct.Program.html) is the engine. It owns the
 **view tree** (the desktop with its windows, the menu bar, the status line), the
 **event loop**, the **capture stack** that drives modal dialogs, and the
 **backend** that talks to the terminal *(the successor to C++ `TProgram`)*. The
 `hello` example builds a `Program` directly and wraps it in its own
 `HelloApp` struct.
 
-[`Application`](../api/tvision-rs/app/struct.Application.html) is a thin wrapper *over*
+[`Application`](../api/tvision_rs/app/struct.Application.html) is a thin wrapper *over*
 `Program`. It forwards everything to the embedded `Program` and adds the
 application-level commands `tile` / `cascade` (desktop window layout) and
 `dosShell` (suspend the terminal) *(the successor to C++ `TApplication`)*. You
@@ -42,9 +42,9 @@ Each factory receives the screen rectangle and returns the view to install
 
 ## The run loop
 
-Calling [`run`](../api/tvision-rs/app/struct.Program.html#method.run) spins the event
+Calling [`run`](../api/tvision_rs/app/struct.Program.html#method.run) spins the event
 loop until a quit command ends it. For an app that needs to react to its *own*
-commands, [`run_app`](../api/tvision-rs/app/struct.Program.html#method.run_app) takes a
+commands, [`run_app`](../api/tvision_rs/app/struct.Program.html#method.run_app) takes a
 closure that is called whenever the program handles a command it does not
 recognise *(the successor to overriding C++ `TApplication::handleEvent`)*:
 
@@ -53,7 +53,7 @@ recognise *(the successor to overriding C++ `TApplication::handleEvent`)*:
 ```
 
 Under the hood, each turn of the loop is one call to
-[`pump_once`](../api/tvision-rs/app/struct.Program.html#method.pump_once): read the next
+[`pump_once`](../api/tvision_rs/app/struct.Program.html#method.pump_once): read the next
 event, route it through the capture stack and the view tree, apply any deferred
 effects, then redraw the whole tree and diff it against the back buffer. The
 [event loop in depth](../internals/event-loop.md) chapter walks through exactly

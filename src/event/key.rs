@@ -19,16 +19,37 @@
 //! that decomposition as the [`Key`] enum and a separate [`KeyModifiers`]
 //! (deviations D4 and D5).
 
-/// A physical key.
+/// A logical, modifier-free key — the base of a [`KeyEvent`].
 ///
-/// Only the base, modifier-free keys appear here. Modifier combinations such as
-/// Ctrl+A, Shift+Tab, Alt+F3 or Ctrl+Enter are *not* variants; they decompose
-/// into one of these plus the matching [`KeyModifiers`] flags.
+/// Only the 16 base keys appear here; modifier combinations are expressed by
+/// pairing a `Key` with a [`KeyModifiers`] in a [`KeyEvent`]:
+///
+/// - `Ctrl+C` → `Key::Char('c')` + `modifiers.ctrl = true`
+/// - `Shift+Tab` → `Key::Tab` + `modifiers.shift = true`
+/// - `Alt+F3` → `Key::F(3)` + `modifiers.alt = true`
+///
+/// This replaces the ~150 `kb*` combined key+modifier constants from `tkeys.h`;
+/// each constant was a specific bitwise combination of a scan code and a
+/// modifier mask. Here the two dimensions are orthogonal and independently
+/// matchable.
+///
+/// There is no `BackTab` variant. Shift+Tab is `Key::Tab` with `shift` set.
+/// Raw hardware scan codes are not preserved (they are DOS-era platform data
+/// with no cross-platform meaning).
+///
+/// # Turbo Vision heritage
+///
+/// Ports the `kb*` key-code family (`tkeys.h`) and the `TKey` canonical form
+/// (`tkeys.h` / `tkey.cpp`); the 1992 guide's `charCode: Char` (low byte) maps
+/// to `Key::Char(char)` carrying the full Unicode character. Deviations D4 and D5.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Key {
-    /// A printable character: letters, digits, symbols, and space (`Char(' ')`).
-    /// Holds the base character; case and the Ctrl/Alt modifiers live in
-    /// [`KeyModifiers`].
+    /// A printable character: letters, digits, symbols, and space.
+    ///
+    /// Holds the base character case-as-typed; case modification and
+    /// Ctrl/Alt semantics live in the accompanying [`KeyModifiers`].
+    /// The 1992 guide's `charCode: Char` (low byte of `keyCode: Word`) maps
+    /// here, extended to full Unicode.
     Char(char),
     /// A function key, `F(1)`..=`F(12)`.
     F(u8),
@@ -41,13 +62,13 @@ pub enum Key {
     /// The Tab key. Note there is no `BackTab` variant: Shift+Tab is `Tab` + the
     /// `shift` modifier.
     Tab,
-    /// The Up arrow.
+    /// The Up arrow key.
     Up,
-    /// The Down arrow.
+    /// The Down arrow key.
     Down,
-    /// The Left arrow.
+    /// The Left arrow key.
     Left,
-    /// The Right arrow.
+    /// The Right arrow key.
     Right,
     /// The Home key.
     Home,
@@ -63,33 +84,73 @@ pub enum Key {
     Delete,
 }
 
-/// The active keyboard modifiers — a struct of three named `bool` flags.
+/// The keyboard modifiers active when a key or mouse event occurred — a struct
+/// of three named `bool` flags.
 ///
-/// Only the three logical modifiers are modeled; the platform left/right-Ctrl,
-/// left/right-Alt and left/right-Shift distinctions collapse into a single flag
-/// each.
+/// Used in both [`KeyEvent`] (keyboard) and [`super::MouseEvent`] (mouse) to
+/// represent the held modifiers at event time. Check individual flags in a
+/// handler:
+///
+/// ```
+/// use tvision_rs::event::{Event, Key};
+/// fn handle(ev: &Event) {
+///     if let Event::KeyDown(ke) = ev {
+///         if ke.key == Key::Char('c') && ke.modifiers.ctrl {
+///             // Ctrl+C
+///         }
+///     }
+/// }
+/// ```
+///
+/// Only three logical modifiers are tracked; left- vs. right-side (e.g.
+/// `kbLeftShift` / `kbRightShift`) collapse into a single flag each. This is
+/// sufficient for all standard TUI key bindings.
 ///
 /// # Turbo Vision heritage
-/// The packed `controlKeyState` bit-word becomes a struct-of-bools (deviation
-/// D5); the left/right modifier-side bits are folded into one flag each.
+///
+/// The packed `controlKeyState` bit-word (`kbShift`, `kbCtrlShift`,
+/// `kbAltShift`, plus left/right variants) becomes a struct-of-bools (deviation
+/// D5). Left/right-side bits are folded into one flag each.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct KeyModifiers {
-    /// Shift is held.
+    /// Shift (either side) is held.
     pub shift: bool,
-    /// Ctrl is held.
+    /// Ctrl (either side) is held.
     pub ctrl: bool,
-    /// Alt is held.
+    /// Alt (either side) is held.
     pub alt: bool,
 }
 
-/// A key-down event: a physical [`Key`] together with the [`KeyModifiers`]
-/// active when it was pressed (see the [module docs](self) for the decomposed
-/// form).
+/// A key-down event: the logical [`Key`] that was pressed plus the
+/// [`KeyModifiers`] held at that moment.
+///
+/// This is the direct analog of magiblot's `TKey` canonical form (which
+/// already decomposed a keystroke into base code + modifier mask). Construct
+/// with [`KeyEvent::from`] for the no-modifier case, or [`KeyEvent::new`] with
+/// explicit modifiers:
+///
+/// ```
+/// use tvision_rs::event::{Key, KeyEvent, KeyModifiers};
+/// // Enter with no modifiers:
+/// let enter = KeyEvent::from(Key::Enter);
+/// // Ctrl+S:
+/// let ctrl_s = KeyEvent::new(Key::Char('s'), KeyModifiers { ctrl: true, ..Default::default() });
+/// ```
+///
+/// Match a `KeyEvent` in [`View::handle`](crate::view::View::handle) by
+/// destructuring `Event::KeyDown(ke)` and checking `ke.key` and `ke.modifiers`.
+///
+/// # Turbo Vision heritage
+///
+/// Ports the `KeyDownEvent` sub-record (`system.h`) and the `TKey` canonical
+/// form (`tkeys.h`/`tkey.cpp`). `TKey` already decomposed each keystroke into
+/// base code + modifier mask; tvision-rs keeps that decomposition as the [`Key`]
+/// enum + [`KeyModifiers`] (deviations D4 and D5).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct KeyEvent {
-    /// The physical key pressed.
+    /// The logical key that was pressed, without modifier encoding.
     pub key: Key,
-    /// The modifiers held while it was pressed.
+    /// The modifiers (shift, ctrl, alt) held while the key was pressed.
     pub modifiers: KeyModifiers,
 }
 
@@ -168,6 +229,13 @@ pub fn hot_key(s: &str) -> Option<char> {
 /// [`KeyEvent`] has **all modifiers cleared** (only the base arrow/nav key is
 /// returned). Any key that does not match — including literal arrow keys,
 /// non-Char keys, or Char keys without `ctrl` — is returned unchanged.
+///
+/// **When to call:** pass an incoming `KeyDown` event through this function
+/// *before* dispatching it for navigation — e.g. in `InputLine::handle_event`
+/// and `Editor::handle_event` — so that applications supporting WordStar-style
+/// navigation can use either arrow keys or the traditional Ctrl-letter chords.
+/// Widgets that do **not** want WordStar mode (e.g. plain text fields that use
+/// Ctrl letters for cut/copy/paste) should skip this call.
 ///
 /// # Turbo Vision heritage
 /// Ports `ctrlToArrow` (`drivers2.cpp`).

@@ -110,12 +110,17 @@ pub struct Frame {
 }
 
 impl Frame {
-    /// Construct a frame.
+    /// Construct a frame sized to `bounds`.
     ///
-    /// The grow mode stretches the frame with its owner on the right and bottom
-    /// edges. The frame is **not** selectable (it never takes focus), so its
-    /// options stay all-false. Broadcast and mouse-up events are delivered
-    /// unconditionally, so there is no event mask to set.
+    /// Normally called only by [`Window::new`](crate::window::Window::new), which
+    /// creates the frame, inserts it as its first child, and then pushes title /
+    /// flags / number / palette down through the owner-data setters. App code that
+    /// subclasses `Window` (by wrapping it and overriding behaviour) does not
+    /// construct a `Frame` directly — the window handles that internally.
+    ///
+    /// The grow mode is set so the frame stretches with its owner on the right and
+    /// bottom edges (`hi_x` + `hi_y`). The frame is **not** selectable (it never
+    /// takes focus). Broadcast and mouse-up events are delivered unconditionally.
     pub fn new(bounds: Rect) -> Self {
         let mut st = ViewState::new(bounds);
         st.grow_mode = GrowMode {
@@ -186,7 +191,14 @@ impl Frame {
         self.palette = palette;
     }
 
-    /// The owner's colour scheme.
+    /// The owner's colour scheme, which selects the border-role family used
+    /// during [`draw`](View::draw).
+    ///
+    /// `Blue` selects `Role::Frame*` (classic window), `Cyan` selects
+    /// `Role::FrameCyan*`, and `Gray` selects `Role::FrameGray*` (dialogs).
+    /// Reading this value is rarely needed by callers; it is mainly a getter
+    /// companion for the `pub(crate)` `set_palette` that the owning window calls
+    /// when it changes colour scheme.
     pub fn palette(&self) -> WindowPalette {
         self.palette
     }

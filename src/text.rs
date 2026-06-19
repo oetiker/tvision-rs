@@ -292,12 +292,44 @@ impl StringList {
         }
     }
 
-    /// Insert or replace the string for `key`.
+    /// Associate `value` with `key`, overwriting any previous entry for that key.
+    ///
+    /// Use this to build a `StringList` at startup (the equivalent of
+    /// `TStrListMaker::Put` from Turbo Vision). Keys are arbitrary `u16` values;
+    /// iteration and lookup are in ascending key order.
+    ///
+    /// ```
+    /// use tvision_rs::text::StringList;
+    ///
+    /// let mut list = StringList::new();
+    /// list.insert(10, "Open");
+    /// list.insert(20, "Save");
+    /// list.insert(10, "Open…"); // overwrite key 10
+    /// assert_eq!(list.get(10), Some("Open…"));
+    /// assert_eq!(list.len(), 2);
+    /// ```
     pub fn insert(&mut self, key: u16, value: impl Into<String>) {
         self.map.insert(key, value.into());
     }
 
-    /// Return the string for `key`, or `None` when absent.
+    /// Look up the string stored under `key`, returning a borrowed slice, or
+    /// `None` when no entry exists for that key.
+    ///
+    /// Use this to display or process a string identified by a numeric key — for
+    /// example, to retrieve a help message at runtime:
+    ///
+    /// ```
+    /// use tvision_rs::text::StringList;
+    ///
+    /// let mut list = StringList::new();
+    /// list.insert(1, "File not found");
+    /// assert_eq!(list.get(1), Some("File not found"));
+    /// assert_eq!(list.get(99), None);
+    ///
+    /// // Callers that need an empty-string fallback for missing keys:
+    /// let msg = list.get(99).unwrap_or("");
+    /// assert_eq!(msg, "");
+    /// ```
     pub fn get(&self, key: u16) -> Option<&str> {
         self.map.get(&key).map(String::as_str)
     }

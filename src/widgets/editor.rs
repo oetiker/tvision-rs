@@ -335,6 +335,12 @@ fn prev_grapheme_byte_len(chunk: &[u8]) -> usize {
 
 /// The gap-buffer text editor.
 ///
+/// Search/replace state — the find string, the replacement string, and the
+/// `EF_*` option flags — is **per-editor**: each editor independently
+/// remembers its own last search. (C++ Turbo Vision kept these in class-static
+/// globals shared across every editor; per-instance is the intentional
+/// deviation, and is usually what a user wants.)
+///
 /// # Turbo Vision heritage
 ///
 /// Ports `TEditor` (`teditor1.cpp`, `teditor2.cpp`, `edits.cpp`).
@@ -520,33 +526,55 @@ impl Editor {
 
     // -- test/inspection accessors ------------------------------------------
 
-    /// Logical text length.
+    /// Number of logical text bytes currently in the buffer (not counting the gap).
+    ///
+    /// Use this to check whether the editor is empty (`buf_len() == 0`) or to
+    /// drive a progress indicator. For the raw text itself, call [`text`](Editor::text).
     pub fn buf_len(&self) -> usize {
         self.buf_len
     }
 
-    /// The cursor position (logical offset).
+    /// Byte offset of the cursor in the logical (gap-elided) text.
+    ///
+    /// Use this to record the cursor position before a programmatic edit, or to
+    /// verify cursor placement in tests. Offsets are byte-granular; grapheme
+    /// boundaries are respected by the navigation methods but not enforced here.
     pub fn cur_ptr(&self) -> usize {
         self.cur_ptr
     }
 
-    /// The content extent (`(max line length, line count)`).
+    /// Content extent: `x` = maximum line length (fixed at 256), `y` = number of lines.
+    ///
+    /// Use this to size or configure scroll bars programmatically: `limit().y` is
+    /// the total line count, which equals the vertical scroll range. `limit().x` is
+    /// always 256 (the fixed maximum line length used to set horizontal scroll range).
     pub fn limit(&self) -> Point {
         self.limit
     }
 
-    /// The scroll offset (viewport top-left).
+    /// Viewport top-left: `x` = first visible column, `y` = first visible row.
+    ///
+    /// Use this to read the current scroll position, for instance to restore it
+    /// after a programmatic buffer reload. The editor updates `delta` automatically
+    /// when the cursor moves off-screen; set it via [`apply_scroll_delta`](Editor::apply_scroll_delta).
     pub fn delta(&self) -> Point {
         self.delta
     }
 
-    /// The cursor's display position (zero-based row/col). Inspection hook for
-    /// tests asserting indicator/cursor wiring.
+    /// Cursor position in display coordinates: `x` = column, `y` = row (both zero-based).
+    ///
+    /// Use this to read the cursor's visual position, for example to assert
+    /// indicator wiring in tests or to display "line N, col M" in a status bar.
+    /// Updated by every navigation and edit operation.
     pub fn cur_pos(&self) -> Point {
         self.cur_pos
     }
 
-    /// Whether the buffer has unsaved changes.
+    /// Whether the buffer has unsaved changes since the last save or load.
+    ///
+    /// Use this to decide whether to prompt before closing, or to update a dirty
+    /// indicator. Set by any edit; cleared by [`FileEditor`]'s save path. The
+    /// clipboard editor is never marked modified.
     pub fn modified(&self) -> bool {
         self.modified
     }
@@ -1378,8 +1406,13 @@ impl Editor {
         self.flush_if_unlocked(ctx);
     }
 
-    /// Public ctx-taking insert used by the clipboard-paste broker. Inserts then
-    /// flushes (the flush republishes scroll-bar params next pump).
+    /// Insert `text` at the cursor, optionally leaving the inserted bytes selected.
+    ///
+    /// Use this to inject text from the outside (clipboard paste, template fill,
+    /// programmatic population). `select_text = true` leaves the new text selected
+    /// (useful for a paste that should be immediately replaceable). Flushes after
+    /// the insert so scroll-bar params and the indicator are updated on the next pump.
+    /// For a context-free insert (no flush) use the internal `insert_text_core`.
     pub fn insert_text(&mut self, text: &[u8], select_text: bool, ctx: &mut Context) {
         self.lock();
         self.insert_text_core(text, select_text);
@@ -2129,9 +2162,13 @@ impl View for Editor {
         ev.clear();
     }
 
-    /// Flip a state flag, then react: on a change of activity, show/hide the
-    /// scroll bars and indicator and re-gray the editing commands; on focus,
-    /// broadcast the focus gain/loss.
+    /// Set or clear a view state flag and react to the change.
+    ///
+    /// On `Active`: shows or hides the paired scroll bars and indicator and
+    /// re-grays the editing commands (Cut/Copy/Paste/Undo etc.). On `Focused`:
+    /// broadcasts `RECEIVED_FOCUS` or `RELEASED_FOCUS` so other views (such as
+    /// the indicator) can update. Override `update_commands` rather than this
+    /// method to customize command gating.
     fn set_state(&mut self, flag: StateFlag, enable: bool, ctx: &mut Context) {
         self.state.set_flag(flag, enable);
         if flag == StateFlag::Focused {
@@ -2165,8 +2202,12 @@ impl View for Editor {
         // the first active/event boundary.
     }
 
-    /// Geometry + clamp `delta` + flag a redraw. Scrollbar params republish on
-    /// the next flush (mirrors the scroller).
+    /// Resize and reposition the editor to `bounds`, clamping the scroll offset so
+    /// the current content stays in view.
+    ///
+    /// Called by the parent group when the window is resized. Scroll-bar params are
+    /// republished on the next flush rather than inline (the same pattern as
+    /// [`Scroller`](crate::widgets::Scroller)).
     fn change_bounds(&mut self, bounds: Rect) {
         self.state.set_bounds(bounds);
         self.delta.x = 0.max(self.delta.x.min(self.limit.x - self.state.size.x));
@@ -2174,7 +2215,12 @@ impl View for Editor {
         self.update(UF_VIEW);
     }
 
-    /// The editor is valid when its buffer allocated successfully.
+    /// Returns `true` when the editor's buffer allocated successfully; `false` if
+    /// allocation failed (a zero-size fixed buffer).
+    ///
+    /// Called by the framework before a close or dialog-accept to decide whether to
+    /// proceed. The base editor only checks the allocation flag; `FileEditor`
+    /// overrides this to run the modified-save Yes/No/Cancel prompt instead.
     fn valid(&mut self, _cmd: crate::command::Command, _ctx: &mut Context) -> bool {
         self.is_valid
     }
@@ -2360,8 +2406,17 @@ pub struct Memo {
 }
 
 impl Memo {
-    /// Build a memo over a `buf_size`-byte buffer, wired to the given scroll bars
-    /// and frame indicator. Forwards straight to the [`Editor`] constructor.
+    /// Create a fixed-size multi-line text field for use inside a dialog.
+    ///
+    /// `buf_size` is the maximum number of bytes the memo can hold; size it to the
+    /// largest text you expect (the buffer does not grow). Pass the [`ViewId`]s of
+    /// the sibling scroll bars and an optional frame indicator; `None` is fine when
+    /// those controls are absent.
+    ///
+    /// Embed the returned `Memo` into your dialog group with
+    /// [`Group::insert`](crate::view::Group::insert), then wire it to
+    /// any [`Label`](crate::widgets::Label) via [`View::set_value`] /
+    /// [`View::value`] during scatter/gather.
     pub fn new(
         bounds: Rect,
         h_scroll_bar: Option<ViewId>,
@@ -2394,15 +2449,22 @@ impl View for Memo {
         self.editor.handle_event(ev, ctx);
     }
 
-    /// The memo's text as a typed [`FieldValue`].
+    /// Return the memo's entire text as a [`FieldValue::Text`](crate::data::FieldValue).
+    ///
+    /// Called automatically by the owning dialog's scatter pass — prefer
+    /// [`Dialog::gather`](crate::dialog::Dialog) over calling this directly.
     fn value(&self) -> Option<crate::data::FieldValue> {
         Some(crate::data::FieldValue::Text(
             String::from_utf8_lossy(&self.editor.text()).into_owned(),
         ))
     }
 
-    /// Load text into the buffer. Ignores a non-`Text` variant (a type mismatch
-    /// the typed model drops, like `InputLine::set_value`).
+    /// Replace the memo's text with the contents of a [`FieldValue::Text`](crate::data::FieldValue).
+    ///
+    /// Non-`Text` variants are silently ignored (a type mismatch the typed value
+    /// protocol drops for all controls). Called automatically by the owning
+    /// dialog's gather pass — prefer
+    /// [`Dialog::scatter`](crate::dialog::Dialog) over calling this directly.
     fn set_value(&mut self, v: crate::data::FieldValue) {
         if let crate::data::FieldValue::Text(s) = v {
             self.editor.set_text(s.as_bytes());
@@ -2445,7 +2507,12 @@ impl View for Memo {
 pub struct FileEditor {
     /// The editor engine, in file-editor mode.
     pub editor: Editor,
-    /// The backing file, or `None` for an untitled buffer.
+    /// The backing file path, or `None` for an untitled (unsaved) buffer.
+    ///
+    /// Set at construction time if a path was provided, then updated by the
+    /// save-as dialog completion. Read this to determine the current title or
+    /// whether a buffer has ever been saved. Do not mutate it directly; let
+    /// `save` / the save-as dialog completion update it.
     pub file_name: Option<std::path::PathBuf>,
     /// The user's answer to the modified-save prompt, cached by
     /// [`View::set_modal_answer`] between the `valid()` that requested the box and
@@ -2466,9 +2533,16 @@ pub struct FileEditor {
 }
 
 impl FileEditor {
-    /// Build a file editor wired to the given scroll bars and frame indicator.
-    /// A `None` `file_name` is untitled; a given one is loaded immediately, and
-    /// `is_valid` reflects whether the load succeeded.
+    /// Create a file-backed editor wired to the given scroll bars and frame indicator.
+    ///
+    /// Pass a `file_name` to open an existing file: the path is expanded to
+    /// absolute and the file is read immediately. `None` starts an untitled buffer
+    /// you can save later via [`FileEditor::save`]. A missing file is treated as an
+    /// empty buffer (not an error); a real I/O error is reported the first time
+    /// `handle_event` runs (the constructor has no [`Context`] for modal dialogs).
+    ///
+    /// This constructor is called by [`EditWindow::new`] — prefer that for the
+    /// typical "open a file in a window" use case.
     pub fn new(
         bounds: Rect,
         h_scroll_bar: Option<ViewId>,
@@ -2497,9 +2571,15 @@ impl FileEditor {
         fe
     }
 
-    /// Read the whole file into the buffer.
-    /// Missing/unopenable file ⇒ empty buffer, success.
-    /// A real read error ⇒ false; stores `pending_load_error` for display on first `handle_event`.
+    /// Read `file_name` into the buffer, growing it to fit.
+    ///
+    /// A missing or unopenable file is treated as an empty buffer (returns `true`,
+    /// matching the C++ behavior). A real read error stores a message in
+    /// `pending_load_error` and returns `false`; the message is shown via a modal
+    /// dialog on the first `handle_event` call (the constructor has no `Context`).
+    ///
+    /// Call this after changing `file_name` to reload from the new path. The buffer
+    /// is grown infallibly to fit the file — there is no out-of-memory failure path.
     pub fn load_file(&mut self) -> bool {
         let Some(path) = self.file_name.clone() else {
             self.editor.set_buf_len(0);
@@ -2527,8 +2607,14 @@ impl FileEditor {
         }
     }
 
-    /// Write the buffer's logical text to `file_name`. On a write failure, pops an
-    /// error message box ([`Context::request_message_box`]).
+    /// Write the buffer's logical text to `file_name` and clear the dirty flag.
+    ///
+    /// Returns `false` and pops an error dialog on failure. If the
+    /// `EF_BACKUP_FILES` flag is set in the editor's `editor_flags`, the existing
+    /// file is renamed to `<name>~` before writing.
+    ///
+    /// Call [`save`](FileEditor::save) rather than this directly — `save` handles
+    /// the untitled case by opening a save-as dialog first.
     pub fn save_file(&mut self, ctx: &mut Context) -> bool {
         let Some(path) = self.file_name.clone() else {
             return false;
@@ -2569,17 +2655,17 @@ impl FileEditor {
         }
     }
 
-    /// Save to the existing file, or — if untitled — start a save-as.
+    /// Save the buffer to disk, opening a file-picker dialog if the buffer is untitled.
     ///
-    /// The untitled branch is asynchronous: a leaf view holds only `&mut Context`
-    /// and cannot run a nested modal dialog inline, so it **requests** the save-as
-    /// dialog ([`Context::request_save_as_dialog`]) and returns `false` for now.
-    /// The real save happens after the dialog closes: the completion sets
-    /// `file_name` and re-injects a Save command, which re-runs this method — now
-    /// with a non-empty `file_name`, so it writes the file.
+    /// If `file_name` is set, delegates immediately to [`save_file`](FileEditor::save_file).
+    /// If the buffer is untitled, requests an async save-as dialog (a leaf view cannot
+    /// run a blocking dialog inline): the dialog runs on the next event-loop pump,
+    /// sets `file_name`, and re-injects a `Save` command that triggers a second call
+    /// to `save`, this time with `file_name` set.
     ///
-    /// For the modal-close path, `validate_modal_close` drives the save-as dialog
-    /// inline and pumps once to service the re-injected Save.
+    /// Returns `false` when the save is deferred (untitled path) or when writing
+    /// fails; `true` on a successful write. Normally invoked via the `Save` command
+    /// in `handle_event` — callers rarely need to call this directly.
     pub fn save(&mut self, ctx: &mut Context) -> bool {
         if self.file_name.is_some() {
             self.save_file(ctx)
@@ -2604,7 +2690,19 @@ impl View for FileEditor {
         Some(self)
     }
 
-    /// Run the editor first, then handle the Save / Save-As commands.
+    /// Handle events for the file editor: delegates to the inner [`Editor`], then
+    /// processes `Save` and `Save-As` commands and deferred load errors.
+    ///
+    /// **Load-error popup:** if `load_file` stored an error at construction time it
+    /// is popped as a modal dialog on the first event (the constructor has no
+    /// [`Context`] for dialogs).
+    ///
+    /// **Save-As:** opens a file-picker dialog asynchronously; the completion sets
+    /// `file_name`, sets `pending_title_update`, and re-injects a `Save` command.
+    ///
+    /// **Save:** calls [`save`](FileEditor::save), flushes the update flags, and —
+    /// when `pending_title_update` is set — broadcasts `cmUpdateTitle` to refresh
+    /// every open [`EditWindow`]'s frame title.
     fn handle_event(&mut self, ev: &mut crate::event::Event, ctx: &mut Context) {
         use crate::command::Command;
         use crate::event::Event;
@@ -2749,7 +2847,11 @@ pub(crate) fn editor_mut(v: &mut dyn View) -> Option<&mut Editor> {
 pub struct EditWindow {
     /// The embedded window (frame + children).
     pub window: crate::window::Window,
-    /// The inserted [`FileEditor`]'s id (for reachability / tests).
+    /// The id of the hosted [`FileEditor`] child.
+    ///
+    /// Use `window.child_mut(editor_id)` to reach the child, then downcast with
+    /// `as_any_mut()` to `&mut FileEditor` when you need to inspect `file_name`
+    /// or call file-editor methods directly. Read-only — do not reassign.
     pub editor_id: ViewId,
     /// The (initially hidden) horizontal scroll bar.
     pub h_scroll_bar_id: ViewId,
@@ -2760,12 +2862,20 @@ pub struct EditWindow {
 }
 
 impl EditWindow {
-    /// Build an edit window hosting `file_name` (or untitled) with window number
-    /// `number`.
+    /// Create an edit window that opens `file_name` (or an untitled buffer) inside
+    /// a tiled, numbered window.
     ///
-    /// Inserts the (hidden) scroll bars and indicator FIRST to obtain their
-    /// [`ViewId`]s, then constructs the [`FileEditor`] wired to those ids, then
-    /// inserts the editor. The title is the filename, or "Untitled".
+    /// `bounds` is the window rectangle in its parent's coordinate space; `number`
+    /// is the window number shown in the frame title (use `0` for none). The window
+    /// is tileable (`ofTileable` set) so the desktop can arrange it alongside others.
+    ///
+    /// The constructor inserts hidden scroll bars and an indicator first (to
+    /// capture their [`ViewId`]s), then wires them to a new [`FileEditor`] which is
+    /// inserted last. The `file_name` path is expanded to absolute and loaded
+    /// immediately; a missing file starts empty rather than failing.
+    ///
+    /// After construction, insert the `EditWindow` into the application desktop
+    /// with [`Group::insert`](crate::view::Group::insert).
     pub fn new(bounds: Rect, file_name: Option<std::path::PathBuf>, number: i16) -> Self {
         // Title: filename or "Untitled".
         let title = match &file_name {
@@ -2830,18 +2940,25 @@ impl EditWindow {
     )
 )]
 impl View for EditWindow {
-    /// Run the window first, then refresh the frame title on a title-update
-    /// broadcast (the hosted [`FileEditor`] fires it after a save-as rename).
+    /// Handle events for this window: delegates to the inner [`Window`](crate::window::Window),
+    /// then handles two extras — hiding instead of closing when hosting the
+    /// clipboard editor, and refreshing the frame title on a `cmUpdateTitle` broadcast.
     ///
-    /// The title is stored, so it is recomputed from the editor's current
-    /// `file_name` (or "Untitled") and re-pushed to the frame via
-    /// [`Window::set_title`](crate::window::Window).
+    /// **Title refresh:** after a save-as the hosted [`FileEditor`] broadcasts
+    /// `cmUpdateTitle`; this handler reads the new `file_name`, pushes it as the
+    /// window title, and leaves the broadcast live so every other open edit window
+    /// can refresh its own title independently.
     ///
-    /// The event is left live (not consumed). The title-update is a broadcast that
-    /// fans out to every window; consuming it on the first window dispatched would
-    /// starve the others. Instead, every edit window refreshes its own title from
-    /// its own editor — idempotent for windows that did not save, and
-    /// order-independent — so the broadcast can safely reach them all.
+    /// **Clipboard-editor close guard:** if the hosted `FileEditor` is the internal
+    /// clipboard editor, a `Close` command hides the window instead of destroying
+    /// it (the clipboard must persist for the lifetime of the application).
+    ///
+    /// # Turbo Vision heritage
+    ///
+    /// In C++ `TEditWindow::handleEvent` consumed the `cmUpdateTitle` broadcast and
+    /// called `frame->drawView()` (pull-title). Rust leaves it live and pushes the
+    /// new title string into `Window` (push-title), so all windows can act on it
+    /// without a fixed consumption order.
     fn handle_event(&mut self, ev: &mut crate::event::Event, ctx: &mut crate::view::Context) {
         use crate::command::Command;
         use crate::event::Event;
@@ -2874,9 +2991,17 @@ impl View for EditWindow {
         }
     }
 
-    /// The minimum window size is 24×6. `calc_bounds` is in the skip list so a
-    /// parent-driven resize routes through this override (via the trait default of
-    /// `calc_bounds`) instead of the window's 16×6 floor.
+    /// Return the minimum and maximum size for this window.
+    ///
+    /// The minimum is fixed at 24 columns × 6 rows — enough room for the frame,
+    /// the editor body, the status bar, and at least a few text columns. This
+    /// overrides the plain `Window` floor of 16×6 because the `EditWindow` has
+    /// additional widgets (scroll bars, indicator) that need the extra columns.
+    ///
+    /// `calc_bounds` is excluded from the `#[delegate]` macro's forwarding so that
+    /// a parent-driven resize calls `size_limits` here (the trait default of
+    /// `calc_bounds` delegates to `size_limits`) and therefore respects the 24×6
+    /// floor rather than the window's 16×6 floor.
     fn size_limits(&self, owner_size: Point) -> (Point, Point) {
         let (_min, max) = View::size_limits(&self.window, owner_size);
         (Point::new(24, 6), max)

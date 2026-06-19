@@ -23,7 +23,7 @@ hot-key, and `Alt-X` quits:
 
 An tvision-rs app is assembled from three factory functions — one each for the
 desktop, the status line, and the menu bar — passed to
-[`Program::new`](../api/tvision-rs/app/struct.Program.html) at construction.
+[`Program::new`](../api/tvision_rs/app/struct.Program.html) at construction.
 *(They are the successors to C++ `TApplication`'s `initDeskTop` /
 `initStatusLine` / `initMenuBar` overrides.)*
 
@@ -39,7 +39,7 @@ it is selected.
 ## Entering the event loop
 
 `main` owns the terminal and runs the loop until a quit command ends it. The
-[`CrosstermBackend`](../api/tvision-rs/backend/struct.CrosstermBackend.html) constructor
+[`CrosstermBackend`](../api/tvision_rs/backend/struct.CrosstermBackend.html) constructor
 takes over raw mode, the alternate screen, and mouse capture, and restores all
 of it on drop — even on a panic or a signal:
 
@@ -54,10 +54,10 @@ windows — is
 
 ## What's next
 
-- The pieces you just wired up — [`Program`](../api/tvision-rs/app/struct.Program.html),
-  [`Desktop`](../api/tvision-rs/desktop/struct.Desktop.html),
-  [`MenuBar`](../api/tvision-rs/menu/menu_bar/struct.MenuBar.html),
-  [`StatusLine`](../api/tvision-rs/status/status_line/struct.StatusLine.html) — are explained at a
+- The pieces you just wired up — [`Program`](../api/tvision_rs/app/struct.Program.html),
+  [`Desktop`](../api/tvision_rs/desktop/struct.Desktop.html),
+  [`MenuBar`](../api/tvision_rs/menu/menu_bar/struct.MenuBar.html),
+  [`StatusLine`](../api/tvision_rs/status/status_line/struct.StatusLine.html) — are explained at a
   higher level in [The application skeleton](skeleton.md).
 - To see how the loop, the views, and drawing actually fit together, read [How
   It Works](../internals/view-tree.md).

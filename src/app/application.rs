@@ -46,11 +46,29 @@ pub struct Application {
 }
 
 impl Application {
-    /// Construct the application.
+    /// Construct the application and its three subviews.
     ///
-    /// Forwards `create_desktop`, `create_status_line`, and `create_menu_bar` to
-    /// [`Program::new`] unchanged. Hardware/mouse/screen subsystem init is handled
-    /// by the backend construction path; no equivalent is needed here.
+    /// `create_desktop`, `create_status_line`, and `create_menu_bar` are
+    /// factory closures, each receiving the full terminal `Rect`; they own their
+    /// own inset (shrink the rect by one row for a menu bar, one row for a status
+    /// line, etc.) and return `None` to omit that subview entirely. Pass
+    /// [`Desktop::new`](crate::desktop::Desktop::new) wrapped in `Some(Box::new(...))`
+    /// for a standard desktop; substitute custom types as needed.
+    ///
+    /// Hardware/mouse/screen subsystem init is handled by the `backend` construction
+    /// path (e.g. [`CrosstermBackend::new`](crate::backend::CrosstermBackend::new));
+    /// history needs no explicit setup — the store is a `thread_local!` `Vec` that
+    /// auto-initializes and auto-drops.
+    ///
+    /// After construction, drive the loop with [`Application::run`] (production) or
+    /// step with [`Application::pump_once`] (tests).
+    ///
+    /// # Turbo Vision heritage
+    /// Ports `TApplication::TApplication` (`tapplica.cpp`). The subsystem-init
+    /// sequence (`TMemoryManager`, `TSystemError`, `TEventQueue`, `TScreen`) is
+    /// folded into the backend construction path; the virtual factory overrides
+    /// (`initDeskTop`, `initStatusLine`, `initMenuBar`) become the three factory
+    /// closures, with `Application` embedding and delegating to its `Program`.
     pub fn new(
         backend: Box<dyn Backend>,
         clock: Box<dyn Clock>,
@@ -131,15 +149,32 @@ impl Application {
         &mut self.program
     }
 
+    /// Register a closure that produces the shell-suspend message printed before
+    /// the terminal is yielded to the shell (`Command::DOS_SHELL`).
+    /// See [`Program::set_shell_msg_hook`] for the full contract and an example.
+    pub fn set_shell_msg_hook(&mut self, hook: Box<dyn Fn() -> String>) {
+        self.program.set_shell_msg_hook(hook);
+    }
+
     // -- tile/cascade layout rectangle ---------------------------------------
 
-    /// The rectangle the tile/cascade commands lay windows into:
-    /// the **desktop child's extent** (`(0,0,w,h)` in desktop-local coords), so it
-    /// stays correct when the desktop is inset under a menu/status bar.
+    /// The rectangle that the tile and cascade window commands lay windows into:
+    /// the desktop child's local-origin extent `(0, 0, w, h)`, so it stays
+    /// correct when the desktop is inset below a menu bar or above a status line.
     /// Returns `None` if no desktop was created.
     ///
-    /// Requires `&mut self` because the underlying `Group::find_mut` requires
-    /// `&mut`, preferred over adding a `&self` resolver to `group.rs`.
+    /// The `TILE` and `CASCADE` command handlers call this internally. You can
+    /// call it directly if you need the desktop layout rectangle for your own
+    /// window-positioning logic (e.g. centering a newly opened window within the
+    /// desktop area). To restrict tiling to a sub-region, size the desktop
+    /// accordingly rather than adjusting this value.
+    ///
+    /// Requires `&mut self` because the underlying `Group::find_mut` requires `&mut`.
+    ///
+    /// # Turbo Vision heritage
+    /// Ports `TApplication::getTileRect` (`tapplica.cpp`); virtual in C++ so
+    /// subclasses could exclude reserved rows. Here the desktop rect is the
+    /// canonical answer; adjust by sizing the desktop in the factory closure.
     pub fn get_tile_rect(&mut self) -> Option<Rect> {
         self.program.get_tile_rect()
     }

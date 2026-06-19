@@ -31,6 +31,19 @@
 //!   the first recompute, then arms the capture. Each tracked move recomputes the
 //!   value from the thumb position. `MouseUp` clears tracking.
 //!
+//! # Colors
+//!
+//! Two [`Theme`](crate::theme::Theme) roles control the scrollbar appearance:
+//!
+//! * [`Role::ScrollBarPage`] — the trough (page) cells.
+//! * [`Role::ScrollBarControls`] — arrow glyphs and the thumb.
+//!
+//! The classic blue theme resolves both to blue-on-cyan via the palette chain
+//! `CScrollBar → cpBlueWindow → cpAppColor` (slots 11–12 in the app palette).
+//! The C++ `CScrollBar` has three entries — page slot and two control slots
+//! (arrows + indicator); those two control slots share one RGB value, so Rust
+//! collapses them into the single `ScrollBarControls` role.
+//!
 //! # Turbo Vision heritage
 //!
 //! Ports `TScrollBar` (`tscrlbar.cpp`/`scrlbar.h`). The hardcoded glyph tables
@@ -97,10 +110,16 @@ impl Part {
 // ScrollBar
 // ---------------------------------------------------------------------------
 
-/// A single-axis scroll-bar widget.
+/// A single-axis scroll-bar widget: a draggable thumb between two step-arrows,
+/// with paging troughs on either side.
 ///
 /// Orientation is derived from bounds at construction (`size.x == 1` →
-/// vertical). Characters come from `ctx.glyphs()`.
+/// vertical, `size.y == 1` → horizontal). Construct with [`ScrollBar::new`],
+/// then call [`set_params`](Self::set_params) (or the convenience wrappers) to
+/// configure the range. When the user interacts with the bar it broadcasts
+/// [`Command::SCROLL_BAR_CHANGED`]; a paired scroller or list viewer listens
+/// for this broadcast and syncs its own position. See the [module-level
+/// documentation](self) for the full broadcast and press-and-hold protocol.
 ///
 /// # Turbo Vision heritage
 ///
@@ -108,15 +127,33 @@ impl Part {
 pub struct ScrollBar {
     /// View state (geometry, flags, etc.) — the composition target.
     pub state: ViewState,
-    /// Current scroll position. `0` when constructed.
+    /// Current scroll position within `[min_value, max_value]`. Starts at `0`.
+    ///
+    /// This field is readable but treat it as read-only from outside the widget:
+    /// use [`set_value`](Self::set_value) (or [`set_params`](Self::set_params))
+    /// to change the position so the broker broadcast fires and the display
+    /// stays consistent. The broker downcast path reads this field directly via
+    /// [`View::value`].
     pub value: i32,
-    /// Minimum value of the range (inclusive).
+    /// Inclusive lower bound of the scroll range. Starts at `0`.
+    ///
+    /// To update the range, call [`set_range`](Self::set_range) or
+    /// [`set_params`](Self::set_params) — they clamp `value` and fire the
+    /// [`Command::SCROLL_BAR_CHANGED`] broadcast.
     pub min_value: i32,
-    /// Maximum value of the range (inclusive).
+    /// Inclusive upper bound of the scroll range. Starts at `0`.
+    ///
+    /// To update the range, call [`set_range`](Self::set_range) or
+    /// [`set_params`](Self::set_params) — they clamp `value` and fire the
+    /// [`Command::SCROLL_BAR_CHANGED`] broadcast.
     pub max_value: i32,
-    /// Page step size (how much a trough page-up/page-down moves).
+    /// Distance the thumb moves when the user clicks the trough (page area).
+    /// Starts at `1`. To update both steps together, call
+    /// [`set_step`](Self::set_step) or [`set_params`](Self::set_params).
     pub page_step: i32,
-    /// Arrow step size (how much an arrow key / click moves).
+    /// Distance the thumb moves when the user clicks an arrow or presses an
+    /// arrow key. Starts at `1`. To update both steps together, call
+    /// [`set_step`](Self::set_step) or [`set_params`](Self::set_params).
     pub arrow_step: i32,
     /// Whether this is a vertical bar (`size.x == 1`). Derived at construction.
     vertical: bool,
@@ -134,12 +171,28 @@ pub struct ScrollBar {
 }
 
 impl ScrollBar {
-    /// Construct a scrollbar from `bounds`.
+    /// Create a scrollbar sized to `bounds`.
     ///
-    /// `value`/`min_value`/`max_value` start at zero, both step sizes at 1, and
-    /// the grow mode is set per orientation so the bar stays pinned to the
-    /// owner's edge as it resizes. Mouse-wheel events are an unconditional field
-    /// on the mouse event, so no explicit event-mask bit is needed.
+    /// Orientation is inferred at construction: `bounds.size.x == 1` means
+    /// vertical; `bounds.size.y == 1` means horizontal. The grow mode is set
+    /// accordingly so the bar stays pinned to its owner's edge as the owner
+    /// resizes.
+    ///
+    /// All scroll state starts at zero (`value`, `min_value`, `max_value`) and
+    /// both step sizes start at `1`. Call [`set_params`](Self::set_params) (or
+    /// the convenience wrappers [`set_range`](Self::set_range) /
+    /// [`set_step`](Self::set_step)) after inserting the bar into a group to
+    /// configure the live range.
+    ///
+    /// The bar is not selectable by default (no [`ofSelectable`] flag), which is
+    /// intentional: mouse events are delivered directly by the group, and
+    /// keyboard events reach it only through post-processing (enabled via
+    /// [`with_keyboard`](Self::with_keyboard)).
+    ///
+    /// Arrow/page glyph characters are read from [`Context::glyphs`] at draw
+    /// time — they are not stored on the widget itself.
+    ///
+    /// [`ofSelectable`]: crate::view::ViewOptions::selectable
     pub fn new(bounds: Rect) -> Self {
         let mut state = ViewState::new(bounds);
         let vertical = state.size.x == 1;
@@ -180,10 +233,20 @@ impl ScrollBar {
         }
     }
 
-    /// Opt this bar into keyboard handling: set the post-process option so it
-    /// receives focused-chain arrow/page/home/end keys even when it is not the
-    /// current view. Builder form for the `ScrollBar::new` path;
-    /// `Window::standard_scroll_bar(handle_keyboard: true)` does the same.
+    /// Enable keyboard scrolling on this bar.
+    ///
+    /// Sets the post-process option (`ofPostProcess`) so the bar receives
+    /// arrow / page / Home / End keys from the focused chain even when the bar
+    /// itself is not the current view. Use this when you want the keyboard to
+    /// scroll a pane that has its own focused content (e.g. an editor with an
+    /// attached vertical scrollbar).
+    ///
+    /// Call this as a builder on [`new`](Self::new):
+    /// ```ignore
+    /// let bar = ScrollBar::new(bounds).with_keyboard();
+    /// ```
+    /// `Window::standard_scroll_bar` passes `handle_keyboard: true` to achieve
+    /// the same effect automatically.
     pub fn with_keyboard(mut self) -> Self {
         self.state.options.post_process = true;
         self
@@ -198,11 +261,20 @@ impl ScrollBar {
     // Value / range logic (ports setParams / setValue / setRange / setStep)
     // -----------------------------------------------------------------------
 
-    /// Update all parameters atomically.
+    /// Update value, range, and step sizes atomically.
     ///
     /// `a_max` is floored to `a_min`; `a_value` is clamped to `[a_min, a_max]`.
-    /// If `value` changed, broadcasts [`Command::SCROLL_BAR_CHANGED`]. Steps are
-    /// set unconditionally at the end, regardless of whether the range changed.
+    /// If `value` changed, broadcasts [`Command::SCROLL_BAR_CHANGED`] so that
+    /// a linked scroller or list viewer can sync its own position (see the
+    /// [module-level broadcast docs](self)). Steps are set unconditionally at
+    /// the end, regardless of whether the value or range changed.
+    ///
+    /// The display is repainted automatically on the next whole-tree redraw pass
+    /// — there is no explicit `draw_view()` call here (unlike the C++
+    /// `TScrollBar::setParams`, which called `drawView()` before broadcasting).
+    /// The convenience wrappers [`set_value`](Self::set_value),
+    /// [`set_range`](Self::set_range), and [`set_step`](Self::set_step) all
+    /// forward to this method.
     pub fn set_params(
         &mut self,
         a_value: i32,
@@ -228,9 +300,11 @@ impl ScrollBar {
         self.arrow_step = a_ar_step;
     }
 
-    /// Set the value, clamping to `[min, max]`.
+    /// Move the scroll position to `a_value`, clamped to `[min_value, max_value]`.
     ///
-    /// Forwards to [`set_params`](Self::set_params).
+    /// Broadcasts [`Command::SCROLL_BAR_CHANGED`] if the value actually changes.
+    /// Use this when the owner has scrolled programmatically and wants the bar to
+    /// reflect the new position. Forwards to [`set_params`](Self::set_params).
     pub fn set_value(&mut self, a_value: i32, ctx: &mut Context) {
         self.set_params(
             a_value,
@@ -242,7 +316,12 @@ impl ScrollBar {
         );
     }
 
-    /// Update the `[min, max]` range, keeping other params.
+    /// Update the `[min, max]` range, keeping value and step sizes.
+    ///
+    /// `value` is clamped to the new range and, if it changed, a
+    /// [`Command::SCROLL_BAR_CHANGED`] broadcast is emitted. Call this when the
+    /// total size of the scrollable content changes (e.g. the file being edited
+    /// gains or loses lines). Forwards to [`set_params`](Self::set_params).
     pub fn set_range(&mut self, a_min: i32, a_max: i32, ctx: &mut Context) {
         self.set_params(
             self.value,
@@ -254,7 +333,13 @@ impl ScrollBar {
         );
     }
 
-    /// Update the page and arrow step sizes, keeping other params.
+    /// Update the page and arrow step sizes, keeping value and range.
+    ///
+    /// Changing step sizes does not broadcast — only a `value` change triggers
+    /// [`Command::SCROLL_BAR_CHANGED`]. Use this when the visible area of the
+    /// scrollable content changes (e.g. the window is resized), since the page
+    /// size typically tracks the viewport height. Forwards to
+    /// [`set_params`](Self::set_params).
     pub fn set_step(&mut self, a_pg_step: i32, a_ar_step: i32, ctx: &mut Context) {
         self.set_params(
             self.value,
@@ -368,18 +453,24 @@ impl View for ScrollBar {
         Some(self)
     }
 
-    /// Paint the scrollbar.
+    /// Paint the scrollbar into its one-cell-wide (or one-cell-tall) bounds.
     ///
-    /// Layout (using vertical as example; horizontal mirrors on x-axis):
-    /// - Cell 0:           back-arrow, controls role.
-    /// - Cells 1..pos-1:   trough/page, page role.
-    /// - Cell pos:         thumb, controls role (omitted when the range is empty).
-    /// - Cells pos+1..s-1: trough/page, page role.
-    /// - Cell s:           fwd-arrow, controls role.
+    /// The bar is divided into five logical zones (shown for vertical; horizontal
+    /// mirrors on the x-axis):
     ///
-    /// Role mapping: troughs use [`Role::ScrollBarPage`]; arrows and thumb use
-    /// [`Role::ScrollBarControls`].
+    /// | Cell(s)         | Glyph source                    | Theme role                      |
+    /// |-----------------|---------------------------------|---------------------------------|
+    /// | 0               | `glyphs.sb_v_arrow_back`        | [`Role::ScrollBarControls`]     |
+    /// | 1 .. pos-1      | `glyphs.sb_page`                | [`Role::ScrollBarPage`]         |
+    /// | pos             | `glyphs.sb_thumb`               | [`Role::ScrollBarControls`]     |
+    /// | pos+1 .. s-1    | `glyphs.sb_page`                | [`Role::ScrollBarPage`]         |
+    /// | s               | `glyphs.sb_v_arrow_fwd`         | [`Role::ScrollBarControls`]     |
     ///
+    /// When `min_value == max_value` (empty range), every inner cell is drawn
+    /// with `glyphs.sb_page_no_range` and the thumb is omitted.  Glyphs are
+    /// read from [`DrawCtx::glyphs`] at paint time and are never stored on the
+    /// widget. This replaces the C++ `drawPos` helper arrays and the hardcoded
+    /// `vChars`/`hChars` tables.
     fn draw(&mut self, ctx: &mut DrawCtx) {
         // Cache absolute origin for the mouse-tracking capture: the
         // MouseTrackCapture converts absolute mouse coords to bar-local via this

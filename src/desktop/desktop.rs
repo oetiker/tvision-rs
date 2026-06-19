@@ -167,8 +167,13 @@ impl Desktop {
         Box::new(Background::new(r, DEFAULT_BKGRND))
     }
 
-    /// The background child's id (the target the current window is sent behind on
-    /// a previous-window cycle).
+    /// The id of the background child inserted during construction, if any.
+    ///
+    /// Pass this to [`Group::put_in_front_of`](crate::view::Group::put_in_front_of)
+    /// (or equivalent) to send the current window behind the background, which is
+    /// exactly how [`Command::PREV`] cycles windows to the back. Returns `None`
+    /// only when the desktop was created without a background factory
+    /// (`create_background` returned `None`).
     pub fn background(&self) -> Option<ViewId> {
         self.background
     }
@@ -192,6 +197,9 @@ impl Desktop {
     /// Insert `view` into the desktop and immediately focus it — the runtime
     /// window-open seam used by `Program::desktop_insert`. Combines `insert_view`
     /// with a `focus_child` call so the new window receives keyboard input at once.
+    ///
+    /// See [`Program::desktop_insert`](crate::app::Program::desktop_insert) for the
+    /// deliberate deviation from C++ `TGroup::insertView`'s `CanMoveFocus` guard.
     pub fn insert_and_focus(
         &mut self,
         view: Box<dyn View>,

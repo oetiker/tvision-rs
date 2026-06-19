@@ -52,8 +52,15 @@ pub struct MenuBar {
 impl MenuBar {
     /// Construct a menu bar over `bounds` presenting `menu`.
     ///
-    /// The bar stretches with the screen width, and it pre-processes events in the
-    /// focused chain so it sees accelerators before the focused view does.
+    /// `bounds` is the initial bounding rectangle (typically `Rect::new(0, 0,
+    /// screen_width, 1)` to occupy the top row); the bar's `grow_mode.hi_x` flag
+    /// causes it to stretch automatically when the terminal is resized. The bar
+    /// sets `options.pre_process = true` so it intercepts accelerator keys and
+    /// Alt-shortcuts in the preprocess pass, before the focused view consumes them.
+    ///
+    /// Use `MenuBar` when you want a persistent horizontal strip of top-level menu
+    /// titles in the application frame. For a transient context popup (a right-click
+    /// menu), use [`popup_menu`](crate::menu::popup_menu) instead.
     pub fn new(bounds: Rect, menu: crate::menu::Menu) -> Self {
         let mut state = ViewState::new(bounds);
         state.grow_mode.hi_x = true; // stretch with screen width

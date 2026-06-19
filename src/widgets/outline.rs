@@ -92,8 +92,24 @@ pub(crate) struct OvTrack {
 /// One outline tree node.
 ///
 /// A node owns its first child (`child_list`) and its next sibling (`next`), both
-/// as `Option<Box<Node>>`; the recursive `Box` drop frees the whole subtree.
-/// `text` is the displayed label; `expanded` is the collapse state.
+/// as `Option<Box<Node>>`; the recursive `Box` drop frees the whole subtree
+/// automatically when the node is dropped or replaced.
+/// `text` is the displayed label; `expanded` controls whether children are shown
+/// in the outline viewer.
+///
+/// Build a tree with [`Node::new`] and the builder methods, then pass the root
+/// to [`Outline::new`]:
+///
+/// ```rust
+/// use tvision_rs::widgets::outline::Node;
+/// let root = Box::new(
+///     Node::new("Animals")
+///         .with_children(Box::new(
+///             Node::new("Cats")
+///                 .with_next(Box::new(Node::new("Dogs")))
+///         ))
+/// );
+/// ```
 ///
 /// # Turbo Vision heritage
 ///
@@ -101,18 +117,38 @@ pub(crate) struct OvTrack {
 /// automatic `Box<Node>` drop.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Node {
-    /// The node's displayed text.
+    /// The text displayed in the outline row for this node.
+    ///
+    /// Displayed verbatim; assign a new value and call [`ov_update`] to refresh
+    /// the column widths.
     pub text: String,
-    /// The first child, or `None`. Siblings chain via `next`.
+    /// The first child of this node, or `None` if the node is a leaf.
+    ///
+    /// Siblings of the first child chain through their [`Node::next`] fields.
+    /// Set this (or use [`Node::with_children`]) before inserting the node into
+    /// an [`Outline`]; then call [`ov_update`] to publish the new extents.
     pub child_list: Option<Box<Node>>,
-    /// The next sibling, or `None`.
+    /// The next sibling of this node, or `None` if this is the last sibling.
+    ///
+    /// Use [`Node::with_next`] in the builder chain, or assign directly when
+    /// building a sibling list manually.
     pub next: Option<Box<Node>>,
-    /// Whether the node is expanded. New nodes default to expanded.
+    /// Whether this node's children are currently shown (`true`) or hidden
+    /// (`false`).
+    ///
+    /// New nodes default to `true` (expanded). Set to `false` via
+    /// [`Node::with_expanded`] to start collapsed, or let the user collapse
+    /// the node interactively via the `-` key or a click on the graph column.
     pub expanded: bool,
 }
 
 impl Node {
-    /// A leaf node, expanded, with no children or siblings.
+    /// Create a leaf node with the given display text.
+    ///
+    /// The new node has no children or next sibling and starts expanded.
+    /// Chain [`with_children`](Self::with_children), [`with_next`](Self::with_next),
+    /// and [`with_expanded`](Self::with_expanded) to build a full subtree before
+    /// boxing and passing to [`Outline::new`].
     pub fn new(text: impl Into<String>) -> Self {
         Node {
             text: text.into(),
@@ -122,19 +158,37 @@ impl Node {
         }
     }
 
-    /// Builder: set the next sibling.
+    /// Attach a next sibling to this node and return `self`.
+    ///
+    /// The next sibling (and its own `next` chain) is freed automatically when
+    /// this node is dropped. To build a sibling list for use as children, chain
+    /// `with_next` calls starting from the last sibling:
+    ///
+    /// ```rust
+    /// use tvision_rs::widgets::outline::Node;
+    /// // "Cats" → "Dogs" sibling pair.
+    /// let siblings = Box::new(Node::new("Cats").with_next(Box::new(Node::new("Dogs"))));
+    /// ```
     pub fn with_next(mut self, next: Box<Node>) -> Self {
         self.next = Some(next);
         self
     }
 
-    /// Builder: set the first child (siblings chain via `next` on the children).
+    /// Attach a first child to this node and return `self`.
+    ///
+    /// Additional children are siblings of `children`, chained via
+    /// [`with_next`](Self::with_next). The entire subtree is freed automatically
+    /// when this node is dropped.
     pub fn with_children(mut self, children: Box<Node>) -> Self {
         self.child_list = Some(children);
         self
     }
 
-    /// Builder: set the initial expanded state.
+    /// Set whether this node starts expanded or collapsed and return `self`.
+    ///
+    /// Pass `false` to start collapsed; the user can then expand it with the
+    /// `+` key or a click on the graph column. When `false`, [`Node::child_list`]
+    /// is owned but not shown until expanded.
     pub fn with_expanded(mut self, expanded: bool) -> Self {
         self.expanded = expanded;
         self
@@ -155,17 +209,35 @@ impl Node {
 pub struct OutlineViewerState {
     /// View state (geometry, flags, …) — the `View` composition target.
     pub state: ViewState,
-    /// The scroll offset (x = horizontal char skip, y = the first visible DFS
-    /// position). Refreshed from the bars by the read-sync.
+    /// The scroll offset: `x` is the number of character columns to skip on
+    /// the left; `y` is the DFS position of the first visible row.
+    ///
+    /// Read `delta` to find out which part of the tree is visible. Do not assign
+    /// it directly — changes come from scrollbar broadcasts that the pump
+    /// resolves and applies via [`apply_delta`](Self::apply_delta).
     pub delta: Point,
-    /// The content extent (x = max graph+text width, y = the visible node count).
-    /// Set by [`set_limit`](Self::set_limit).
+    /// The content extent: `x` is the maximum graph+text width (in character
+    /// columns); `y` is the total number of currently-visible nodes.
+    ///
+    /// Updated by [`ov_update`] after every tree mutation. Read it to know the
+    /// scrollable content size; do not assign directly.
     pub limit: Point,
-    /// The horizontal scrollbar, by id (`None` if absent).
+    /// The horizontal scrollbar view id, or `None` if none was wired.
+    ///
+    /// Set at construction via [`OutlineViewerState::new`]; the outline viewer
+    /// reads and writes its value through the pump broker.
     pub h_scroll_bar: Option<ViewId>,
-    /// The vertical scrollbar, by id (`None` if absent).
+    /// The vertical scrollbar view id, or `None` if none was wired.
+    ///
+    /// Set at construction via [`OutlineViewerState::new`]; the outline viewer
+    /// reads and writes its value through the pump broker.
     pub v_scroll_bar: Option<ViewId>,
-    /// The focused item's DFS position (0-based).
+    /// The DFS position (0-based) of the focused node.
+    ///
+    /// Read this to find out which node is focused. To move the focus
+    /// programmatically, call [`adjust_focus`] (it also scrolls the focused row
+    /// into view and notifies the trait via
+    /// [`OutlineViewer::focused_item`]). Do not assign directly.
     pub foc: i32,
     /// Absolute screen position of this view's `(0, 0)`, cached by the last
     /// `draw` call — feeds the [`MouseTrackCapture`] origin.
@@ -177,11 +249,17 @@ pub struct OutlineViewerState {
 }
 
 impl OutlineViewerState {
-    /// Construct outline-viewer state.
+    /// Create the shared state for an outline viewer.
     ///
-    /// Grows with its lower-right corner, is selectable, and starts focused at
-    /// the top with a zero scroll offset. Opting into the broadcast class has no
-    /// analogue here (broadcasts are always delivered).
+    /// `bounds` sets the initial geometry; `h` and `v` are the optional
+    /// horizontal and vertical scrollbar ids (pass `None` when scrollbars are
+    /// absent). The view starts selectable, grows with its lower-right corner,
+    /// and focuses at DFS position 0 with a zero scroll offset.
+    ///
+    /// After embedding this state and inserting the widget into a group, call
+    /// [`ov_update`] with the resulting [`Context`] to publish the scrollbar
+    /// range and page parameters — those require a live `Context` that is not
+    /// available at construction time.
     pub fn new(bounds: Rect, h: Option<ViewId>, v: Option<ViewId>) -> Self {
         let mut state = ViewState::new(bounds);
         state.options = Options {
@@ -293,19 +371,55 @@ pub trait OutlineViewer: View {
 
     // -- Abstract read-only virtuals (borrow `&Node`s out of `&self`) ---------
 
-    /// The root node (or `None` if the tree is empty).
+    /// Return the root node of the tree, or `None` if the tree is empty.
+    ///
+    /// Called at the start of every traversal (draw, update, expand-all). The
+    /// concrete widget returns the root of its owned tree; the lifetime `'a`
+    /// ties the returned reference to `&'a self` so that callers can keep it
+    /// alive while iterating.
     fn get_root(&self) -> Option<&Node>;
-    /// `node`'s next sibling (or `None`).
+
+    /// Return `node`'s next sibling, or `None` if `node` is the last sibling.
+    ///
+    /// The traversal walks siblings by repeatedly calling this method; `'a`
+    /// ties the returned node to the same lifetime as `node` (which is itself
+    /// already tied to `&'a self` at the call site).
     fn get_next<'a>(&'a self, node: &'a Node) -> Option<&'a Node>;
-    /// `node`'s `i`-th child (0-based, or `None`).
+
+    /// Return the `i`-th child of `node` (0-based), or `None` if out of range.
+    ///
+    /// The traversal calls this with `i = 0` to obtain the first child, then
+    /// follows [`get_next`](Self::get_next) for subsequent siblings. A concrete
+    /// widget that stores children in a `Vec` may use `children.get(i as usize)`.
     fn get_child<'a>(&'a self, node: &'a Node, i: i32) -> Option<&'a Node>;
-    /// `node`'s child count.
+
+    /// Return the number of direct children of `node`.
+    ///
+    /// Used by the traversal and by [`ov_update`] to decide whether to recurse.
+    /// Must agree with [`has_children`](Self::has_children): return `0` iff
+    /// `has_children` returns `false`.
     fn get_num_children(&self, node: &Node) -> i32;
-    /// `node`'s displayed text.
+
+    /// Return the display text for `node`, borrowed from `self`.
+    ///
+    /// Displayed verbatim in the outline row to the right of the graph prefix.
+    /// The lifetime `'a` allows returning a `&str` into the node's own storage
+    /// without copying.
     fn get_text<'a>(&'a self, node: &'a Node) -> &'a str;
-    /// Whether `node` is expanded.
+
+    /// Return `true` if `node`'s children are currently shown.
+    ///
+    /// The traversal recurses into `node` only when both `has_children` and
+    /// `is_expanded` return `true`. For [`Outline`], this reads
+    /// [`Node::expanded`]. Override to store the expanded state externally (for
+    /// example in a `HashMap<NodeId, bool>`).
     fn is_expanded(&self, node: &Node) -> bool;
-    /// Whether `node` has any children.
+
+    /// Return `true` if `node` has at least one child.
+    ///
+    /// Determines whether the graph prefix shows an expand/collapse indicator
+    /// and whether the traversal may recurse. Must agree with
+    /// [`get_num_children`](Self::get_num_children).
     fn has_children(&self, node: &Node) -> bool;
 
     // -- Abstract mutation method ---------------------------------------------
@@ -314,6 +428,11 @@ pub trait OutlineViewer: View {
     /// **currently visible** tree (0-based, same numbering as
     /// [`foc`](OutlineViewerState::foc)).
     ///
+    /// Called by the keyboard handler (`+`/`-`/`*` keys) and by the mouse
+    /// handler when the user clicks the graph prefix column. After `adjust`
+    /// returns, the caller invokes [`ov_update`] to recount visible nodes and
+    /// republish scrollbar limits.
+    ///
     /// The contract is keyed by DFS position rather than a node reference,
     /// because the shared free functions only hold `&self`; the concrete widget
     /// resolves `pos` to the owned node mutably.
@@ -321,20 +440,30 @@ pub trait OutlineViewer: View {
 
     // -- Overridable with defaults --------------------------------------------
 
-    /// The node at position `i` received focus. Default: record it as the focus.
+    /// Notify the concrete widget that node at DFS position `i` received focus.
+    ///
+    /// The default writes `i` to [`OutlineViewerState::foc`]. Override to
+    /// maintain additional per-item focus state, such as a selection set.
+    /// Always call `self.ov_mut().foc = i` (or `super`) to keep the default
+    /// rendering consistent.
     fn focused_item(&mut self, i: i32) {
         self.ov_mut().foc = i;
     }
 
-    /// Whether position `i` is "selected" (drawn in the selected color).
-    /// Default: `i == foc` (single selection); multi-select subclasses override.
+    /// Return `true` if DFS position `i` should be drawn in the selected color.
+    ///
+    /// The default returns `i == foc` (single-selection mode). Override in a
+    /// multi-select widget to highlight a range or set of positions in addition
+    /// to the focused one.
     fn is_selected(&self, i: i32) -> bool {
         self.ov().foc == i
     }
 
-    /// The user committed to position `i` (double-click / Enter). The default
-    /// does nothing; override to act (e.g. broadcast
-    /// [`Command::OUTLINE_ITEM_SELECTED`]).
+    /// The user committed to DFS position `i` (double-click or Enter key).
+    ///
+    /// The default does nothing. Override to react — for example, broadcast
+    /// [`Command::OUTLINE_ITEM_SELECTED`] so that an enclosing dialog can read
+    /// the focused node and act on it.
     fn selected(&mut self, _i: i32) {}
 }
 
@@ -405,12 +534,23 @@ where
     false
 }
 
-/// DFS-visit every currently visible node, calling `action` for each. The
-/// visitor returns `true` to stop.
+/// DFS-visit every currently visible node, calling `action` for each.
 ///
-/// Visits the root, its visible subtree, then the root's next siblings at level 0
-/// (the root-sibling pass is lifted out here so `traverse_inner` stays a pure
-/// subtree walk).
+/// The visitor signature is `(this, node, level, position, lines, flags) -> bool`,
+/// where `level` is the nesting depth (0 = root), `position` is the 0-based DFS
+/// counter, `lines` is a bitmask of levels that have a continuation bar, and
+/// `flags` is a combination of `OV_EXPANDED`, `OV_CHILDREN`, and `OV_LAST`.
+/// Returning `true` from `action` stops the traversal early (like C++ `firstThat`);
+/// returning `false` visits all nodes (like C++ `forEach`).
+///
+/// Collapsed subtrees are skipped — only the nodes that are visually present are
+/// visited. Use this when you need to count visible nodes, build a row list, or
+/// search the visible tree.
+///
+/// # Turbo Vision heritage
+///
+/// Collapses the two C++ methods `TOutlineViewer::firstThat` (stop on `true`)
+/// and `forEach` (visit all) into one generic function.
 pub fn traverse<L, F>(this: &L, action: &mut F)
 where
     L: OutlineViewer + ?Sized,
@@ -438,9 +578,23 @@ where
     }
 }
 
-/// Find the `(level, lines, flags)` of the node at DFS position `pos`, or `None`.
-/// The draw/event code uses it to recover graph-draw parameters for the focused
-/// node.
+/// Return the `(level, lines, flags)` of the node at DFS position `pos`,
+/// or `None` if `pos` is out of range.
+///
+/// `level` is the nesting depth (0 = root); `lines` is the continuation-bar
+/// bitmask used by `create_graph`; `flags` combines `OV_EXPANDED`,
+/// `OV_CHILDREN`, and `OV_LAST`.
+///
+/// The draw and event code uses this to retrieve graph-draw parameters for the
+/// focused node so it can determine whether a mouse click landed in the graph
+/// column. You can call it directly when you need the structural metadata of a
+/// specific DFS position.
+///
+/// # Turbo Vision heritage
+///
+/// Replaces `TOutlineViewer::getNode`, which returned a raw `TNode*`. Returning
+/// `(level, lines, flags)` instead avoids exposing a mutable pointer into the
+/// owned tree.
 pub fn ov_get_node_info<L: OutlineViewer + ?Sized>(this: &L, pos: i32) -> Option<(i32, i64, u16)> {
     let mut result = None;
     traverse(this, &mut |_ov: &L,
@@ -463,11 +617,29 @@ pub fn ov_get_node_info<L: OutlineViewer + ?Sized>(this: &L, pos: i32) -> Option
 // create_graph / get_graph — the indent/box-drawing prefix
 // ---------------------------------------------------------------------------
 
-/// Build the indent + node graph string (the box-drawing prefix on each row).
+/// Build the box-drawing prefix string for one outline row.
 ///
-/// `chars` layout: [0] level filler, [1] level mark, [2] end-first (not last),
-/// [3] end-first (last), [4] end filler, [5] end-child, [6] retracted,
-/// [7] expanded.
+/// Returns the indent and connector graphic that appears to the left of each
+/// node's text label. `level` is the nesting depth (0 = root);
+/// `lines` is the continuation-bar bitmask (bit `k` set means level `k` draws a
+/// vertical bar through this row); `flags` combines `OV_EXPANDED`, `OV_CHILDREN`,
+/// and `OV_LAST`; `lev_width` and `end_width` are the column widths of the
+/// per-level indent and the connector end-graphic (both 3 in the default style).
+///
+/// `chars` maps symbol roles to characters:
+/// `[0]` = level filler (space), `[1]` = level continuation bar (│),
+/// `[2]` = end connector for a non-last child (├), `[3]` = end connector for
+/// the last child (└), `[4]` = end filler / straight run (─),
+/// `[5]` = end child-link indicator (─ or a custom char), `[6]` = retracted
+/// (collapsed, `+`), `[7]` = expanded (─ or space).
+///
+/// Use [`ov_get_graph`] for the default style. Call `create_graph` directly only
+/// when you need a custom character set or different column widths.
+///
+/// # Turbo Vision heritage
+///
+/// Ports `TOutlineViewer::createGraph` (`toutline.cpp`). The C++ `const char*`
+/// byte string becomes a `&[char; 8]` typed array.
 pub fn create_graph(
     level: i32,
     mut lines: i64,
@@ -534,8 +706,19 @@ pub fn create_graph(
     graph
 }
 
-/// The default graph string (level width = end width = 3) with the classic
-/// box-drawing chars.
+/// Return the default box-drawing prefix for one outline row.
+///
+/// Uses a level width and end width of 3, and the classic box-drawing character
+/// set (space, │, ├, └, ─, ─, +, ─). Called from [`ov_draw`] for every visible
+/// row. To use a different character set or column widths, build an outline
+/// viewer that does not call `ov_draw` and instead calls [`create_graph`]
+/// directly with the desired parameters.
+///
+/// # Turbo Vision heritage
+///
+/// Ports `TOutlineViewer::getGraph` (`toutline.cpp`). The C++ virtual method
+/// becomes a free function; a concrete widget that wants a different style
+/// replaces the call rather than overriding the method.
 pub fn ov_get_graph<L: OutlineViewer + ?Sized>(
     _this: &L,
     level: i32,
@@ -701,11 +884,19 @@ pub fn adjust_focus<L: OutlineViewer + ?Sized>(
     }
 }
 
-/// Recount the visible nodes + max width, (re)publish the scrollbar limits, and
-/// re-clamp the focus.
+/// Recount the visible nodes, republish the scrollbar limits, and re-clamp the
+/// focus.
 ///
-/// The count walks the same visible traversal as draw, so it counts only
-/// currently-visible nodes (collapsed subtrees excluded).
+/// Call this after every mutation to the tree (node inserted, removed, or
+/// expanded/collapsed) **and** after inserting the widget into a group for the
+/// first time. Without this call the scrollbar ranges and the focus clamp are
+/// stale: the initial call after insertion is mandatory because a [`Context`]
+/// is unavailable at construction time.
+///
+/// Internally this counts only the currently-visible nodes (collapsed subtrees
+/// are excluded), computes the maximum row width, calls
+/// [`OutlineViewerState::set_limit`] to publish those extents to the scrollbars,
+/// and then calls [`adjust_focus`] to re-clamp `foc` within the new count.
 pub fn ov_update<L: OutlineViewer + ?Sized>(this: &mut L, ctx: &mut Context) {
     // Count visible nodes and the max graph+text width. The default graph width
     // is deterministic — `level * 3 + 3` (level width = end width = 3) — so we
@@ -732,17 +923,20 @@ pub fn ov_update<L: OutlineViewer + ?Sized>(this: &mut L, ctx: &mut Context) {
     adjust_focus(this, foc, ctx);
 }
 
-/// Expand the node at position `pos` and all of its descendants (NOT its
-/// siblings).
+/// Expand the node at DFS position `pos` and all of its descendants.
 ///
-/// The shared code is keyed by DFS position, and positions shift as nodes
-/// expand. We restart the traversal each round: find the depth (`start_level`)
-/// of the node at `pos`
-/// once, then repeatedly expand the first unexpanded node-with-children that is
-/// inside the `pos` subtree (position `>= pos`, and either `position == pos` or
-/// `level > start_level`); a node at `level <= start_level && position > pos` is
-/// either a sibling or an ancestor's sibling → stop. Converges because each round
-/// expands at least one node.
+/// Sibling nodes of the subtree at `pos` are left unchanged. This is the
+/// operation bound to the `*` key: press `*` to recursively expand everything
+/// under the focused node.
+///
+/// Because DFS positions shift each time a node expands, the algorithm restarts
+/// the traversal each round: it finds the nesting depth of `pos` once, then
+/// repeatedly locates the first unexpanded node-with-children inside that
+/// subtree and calls [`OutlineViewer::adjust`] to expand it. The loop
+/// terminates when no unexpanded node-with-children remains in the subtree.
+///
+/// After the loop, call [`ov_update`] to recount visible nodes and publish the
+/// new scrollbar limits.
 pub fn ov_expand_all<L: OutlineViewer + ?Sized>(this: &mut L, pos: i32) {
     // 1. Find the level of the node at `pos`.
     let mut start_level = 0i32;
@@ -795,8 +989,20 @@ pub fn ov_expand_all<L: OutlineViewer + ?Sized>(this: &mut L, pos: i32) {
     }
 }
 
-/// Flip the flag (plus the focus broadcast), then on `Active`/`Selected`
-/// show/hide both bars. Mirrors the scroller's `set_state`.
+/// Apply a view-state flag change to an outline viewer.
+///
+/// Delegates to the concrete widget's [`View`] method. In addition to flipping
+/// the flag, this function:
+/// - On [`StateFlag::Focused`]: broadcasts [`Command::RECEIVED_FOCUS`] or
+///   [`Command::RELEASED_FOCUS`] so the rest of the application can track which
+///   outline has keyboard focus.
+/// - On [`StateFlag::Active`] or [`StateFlag::Selected`]: shows or hides both
+///   scrollbars to match the visibility convention (bars appear when the viewer
+///   is active or selected, hide otherwise).
+///
+/// Concrete widgets that delegate `View::set_state` to this function
+/// (as [`Outline`] does) get the scroller-compatible show/hide behavior for
+/// free without duplicating it.
 pub fn ov_set_state<L: OutlineViewer + ?Sized>(
     this: &mut L,
     flag: StateFlag,
@@ -1151,24 +1357,47 @@ fn clear_and_adjust<L: OutlineViewer + ?Sized>(
 // Outline — the concrete outline over an owned tree
 // ---------------------------------------------------------------------------
 
-/// The concrete outline viewer over an owned [`Node`] tree.
+/// A collapsible tree widget backed by an owned [`Node`] tree.
+///
+/// `Outline` is the ready-to-use concrete outline viewer. Build a [`Node`]
+/// tree with [`Node::new`] and the builder methods, pass it to [`Outline::new`],
+/// insert the widget into a group, and call [`ov_update`] once to publish the
+/// scrollbar parameters. After that, the widget handles keyboard and mouse
+/// navigation on its own.
+///
+/// To replace the displayed tree at runtime, assign a new value to
+/// [`Outline::root`] and call [`ov_update`] again so the scrollbar limits
+/// reflect the new content.
 ///
 /// # Turbo Vision heritage
 ///
-/// Ports `TOutline` (`toutline.cpp`).
+/// Ports `TOutline` (`toutline.cpp`). The C++ pointer-based tree becomes owned
+/// `Box<Node>` links whose recursive drop replaces the explicit `disposeNode`
+/// destructor.
 pub struct Outline {
     ov: OutlineViewerState,
-    /// The owned tree root (`None` = empty).
+    /// The owned root node of the displayed tree, or `None` for an empty outline.
+    ///
+    /// Siblings chain through [`Node::next`] and children through
+    /// [`Node::child_list`]; the recursive `Box<Node>` drop frees the entire
+    /// subtree when this field is replaced or the `Outline` is dropped.
+    ///
+    /// To swap the tree at runtime, replace this field and call [`ov_update`]
+    /// so the scrollbar limits stay consistent with the new content.
     pub root: Option<Box<Node>>,
 }
 
 impl Outline {
-    /// Build an outline over `bounds`, the two scrollbars, and `root`.
+    /// Create an `Outline` over `bounds`, with optional horizontal (`h`) and
+    /// vertical (`v`) scrollbar ids and an initial tree `root`.
     ///
-    /// **NOTE:** publishing the scroll-bar limits needs a `Context` we do not
-    /// have at construction. The consumer must call [`ov_update`] once after
-    /// inserting this outline into a group (the same constraint the scroller /
-    /// list-viewer constructors hit).
+    /// After calling `new`, insert the widget into a group and then call
+    /// [`ov_update`] with the resulting [`Context`]. That second step is
+    /// mandatory: publishing the scrollbar range and page parameters requires a
+    /// `Context`, which is unavailable at construction time (the same constraint
+    /// that [`crate::widgets::Scroller`] and [`crate::widgets::ListViewer`] face).
+    /// Skipping `ov_update` leaves the scrollbars at their zero defaults and the
+    /// focus unclamped.
     pub fn new(
         bounds: Rect,
         h: Option<ViewId>,
@@ -1224,12 +1453,19 @@ impl OutlineViewer for Outline {
         &mut self.ov
     }
 
+    /// Returns `self.root.as_deref()` — the root of the owned node tree.
     fn get_root(&self) -> Option<&Node> {
         self.root.as_deref()
     }
+
+    /// Returns the next sibling of `node` by following [`Node::next`].
     fn get_next<'a>(&'a self, node: &'a Node) -> Option<&'a Node> {
         node.next.as_deref()
     }
+
+    /// Returns the `i`-th child of `node` (0-based) by walking the
+    /// [`Node::child_list`] → [`Node::next`] sibling chain `i` steps.
+    /// Returns `None` if `i` is out of range.
     fn get_child<'a>(&'a self, node: &'a Node, i: i32) -> Option<&'a Node> {
         // C++ getChild walks childList->next i times.
         let mut p = node.child_list.as_deref();
@@ -1243,6 +1479,9 @@ impl OutlineViewer for Outline {
         }
         p
     }
+
+    /// Counts `node`'s direct children by walking the sibling chain starting
+    /// at [`Node::child_list`].
     fn get_num_children(&self, node: &Node) -> i32 {
         let mut i = 0;
         let mut p = node.child_list.as_deref();
@@ -1252,16 +1491,30 @@ impl OutlineViewer for Outline {
         }
         i
     }
+
+    /// Returns `node.text` as a `&str`.
     fn get_text<'a>(&'a self, node: &'a Node) -> &'a str {
         &node.text
     }
+
+    /// Returns `node.expanded`.
     fn is_expanded(&self, node: &Node) -> bool {
         node.expanded
     }
+
+    /// Returns `true` when [`Node::child_list`] is `Some`.
     fn has_children(&self, node: &Node) -> bool {
         node.child_list.is_some()
     }
 
+    /// Set the expanded state of the node at DFS position `pos` in the
+    /// currently visible tree.
+    ///
+    /// Unlike the C++ `TOutline::adjust`, which takes a raw node pointer,
+    /// this implementation takes a DFS position index. It walks the owned tree
+    /// with [`set_expanded_at_pos`] to find and mutate the node — making the
+    /// shared traversal code position-keyed throughout rather than mixing
+    /// positions and pointers.
     fn adjust(&mut self, pos: i32, expand: bool) {
         if pos < 0 {
             return;

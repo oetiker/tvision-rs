@@ -39,24 +39,42 @@ impl DrawBuffer {
         }
     }
 
-    /// The buffer's capacity in columns.
+    /// The buffer's width in columns; all write operations are clipped to this limit.
+    ///
+    /// Equals the `width` passed to [`DrawBuffer::new`]. Use this to cap a fill
+    /// count or guard a manual write loop so it stays within the allocated buffer.
     pub fn capacity(&self) -> usize {
         self.data.len()
     }
 
-    /// The cells written so far.
+    /// A read-only view of all cells in the buffer, from column 0 to
+    /// [`capacity`](DrawBuffer::capacity) − 1.
+    ///
+    /// Call this after filling the buffer to hand the completed row to a
+    /// drawing context (e.g. pass it to `ctx.write_buf`), or to inspect
+    /// individual cells in tests. The slice length always equals `capacity`.
     pub fn cells(&self) -> &[Cell] {
         &self.data
     }
 
-    /// Set the char of a single cell, keeping its style.
+    /// Set the char of a single cell at `indent`, leaving its style untouched.
+    ///
+    /// Prefer this over [`move_char`](DrawBuffer::move_char) when you only want to
+    /// change the glyph of an already-styled cell — for example, placing a border
+    /// corner over a cell whose colour was set by an earlier pass. Out-of-range
+    /// `indent` is a silent no-op.
     pub fn put_char(&mut self, indent: usize, ch: char) {
         if indent < self.data.len() {
             self.data[indent].set_char(ch);
         }
     }
 
-    /// Set the style of a single cell, keeping its char.
+    /// Set the style of a single cell at `indent`, leaving its char untouched.
+    ///
+    /// Prefer this over [`move_char`](DrawBuffer::move_char) when you only want to
+    /// restyle a cell without changing its glyph — for example, applying a
+    /// highlight colour to text that was placed by an earlier pass. Out-of-range
+    /// `indent` is a silent no-op.
     pub fn put_attribute(&mut self, indent: usize, style: Style) {
         if indent < self.data.len() {
             self.data[indent].set_style(style);
@@ -186,8 +204,20 @@ impl DrawBuffer {
     /// Copy a run of pre-built cells into the buffer at `indent`, clipped to
     /// capacity.
     ///
+    /// Use `move_buf` when you have already assembled the styled cells — for
+    /// example, copying another view's row out of a [`DrawBuffer`] or blitting a
+    /// pre-rendered sprite. For the common cases of filling with a single
+    /// character+style use [`move_char`](Self::move_char); for rendering a string
+    /// use [`move_str`](Self::move_str) or [`move_cstr`](Self::move_cstr).
+    ///
     /// In the typed cell model the meaningful operation is copying cells, so this
     /// takes a `&[Cell]` rather than a raw byte buffer.
+    ///
+    /// # Turbo Vision heritage
+    ///
+    /// Ports `MoveBuf` (`drivers.cpp`); the C++ `Word`/attribute pair buffer
+    /// becomes a typed `&[Cell]` slice. `MoveBuf`'s raw-byte
+    /// coupling to the `TDrawBuffer` layout has no equivalent here.
     pub fn move_buf(&mut self, indent: usize, src: &[Cell]) {
         let cap = self.data.len();
         if indent >= cap {

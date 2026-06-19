@@ -27,7 +27,12 @@ use crate::view::{DrawCtx, Rect, View, ViewState};
 /// streaming machinery is dropped (deviation D12).
 pub struct Background {
     st: ViewState,
-    /// The fill character.
+    /// The character tiled across the entire background extent on every draw.
+    ///
+    /// Set this to any printable Unicode scalar before (or after) construction to
+    /// customise the fill. The default desktop fill is `'\u{2591}'` (░ U+2591
+    /// LIGHT SHADE). Any single-column glyph works; double-width characters fill
+    /// correctly but leave a trailing continuation cell for each glyph.
     pub pattern: char,
 }
 

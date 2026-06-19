@@ -86,11 +86,22 @@ fn used_bytes(history: &[HistRec]) -> usize {
 
 /// Add `str` to the history channel identified by `id`.
 ///
+/// Call this after the user confirms an input line (typically in the owning
+/// dialog's close handler) so subsequent pops of the history viewer offer the
+/// entry. Each history-capable input line should use a unique, stable `id`
+/// (typically a small application-defined constant) so channels don't share
+/// entries.
+///
 /// Operation order:
 /// 1. Ignore empty strings.
 /// 2. Remove any existing duplicate for this `(id, str)` pair.
 /// 3. Evict globally-oldest entries until the new entry fits within the budget.
 /// 4. Append the new entry (newest position).
+///
+/// # Turbo Vision heritage
+///
+/// Ports `historyAdd` (`histlist.cpp`); the raw block pointer + byte-offset
+/// encoding becomes a `thread_local! Vec<HistRec>`.
 pub fn history_add(id: u8, str: &str) {
     if str.is_empty() {
         return;
@@ -123,7 +134,13 @@ pub fn history_add(id: u8, str: &str) {
 /// Return the number of history entries for `id`.
 ///
 /// `history_str(id, 0)` is the oldest; `history_str(id, count-1)` is the
-/// newest.
+/// newest. Use this to range-check an index before calling [`history_str`], or
+/// to drive a list viewer over the stored entries.
+///
+/// # Turbo Vision heritage
+///
+/// Ports `historyCount` (`histlist.cpp`); return type changed from `Word` to
+/// `usize` (idiomatic).
 #[must_use]
 pub fn history_count(id: u8) -> usize {
     HISTORY.with(|h| h.borrow().iter().filter(|e| e.id == id).count())
@@ -131,6 +148,16 @@ pub fn history_count(id: u8) -> usize {
 
 /// Return the entry at `index` (oldest-first) for `id`, or `None` if out of
 /// range.
+///
+/// Index `0` is the oldest stored entry; index [`history_count(id)`](history_count) − 1
+/// is the most recent. Returns `None` when `index >= history_count(id)`. The
+/// [`HistoryViewer`] walks the channel this way to populate its list.
+///
+/// # Turbo Vision heritage
+///
+/// Ports `historyStr` (`histlist.cpp`); return type changed from the C-style
+/// output-parameter `String` to `Option<String>` (idiomatic out-of-range
+/// signaling).
 #[must_use]
 pub fn history_str(id: u8, index: usize) -> Option<String> {
     HISTORY.with(|h| {
@@ -142,7 +169,27 @@ pub fn history_str(id: u8, index: usize) -> Option<String> {
     })
 }
 
-/// Remove all history entries for all ids.
+/// Remove every stored history entry across all channel ids.
+///
+/// Typical call sites:
+///
+/// - **Dialog reset** — call before opening a dialog if you want the
+///   recall list to start empty for this session (e.g. a fresh search).
+/// - **Session end / new project** — call when the user's context changes
+///   completely and old recall entries would be confusing or confidential.
+/// - **Tests** — call at the top of each test to ensure a clean store;
+///   the history is `thread_local`, so each `#[test]` thread starts
+///   fresh automatically, but explicit clearing is clearer than relying
+///   on thread isolation.
+///
+/// To remove entries for only one channel, keep the entries you want
+/// (there is no per-channel clear function).
+///
+/// # Turbo Vision heritage
+///
+/// Ports `ClearHistory` (`histlist.cpp`), which freed the raw memory block
+/// backing the history store. Here the store is a `thread_local Vec`, so
+/// clearing is a plain `Vec::clear`.
 pub fn clear_history() {
     HISTORY.with(|h| h.borrow_mut().clear());
 }
@@ -188,15 +235,19 @@ pub struct HistoryViewer {
 }
 
 impl HistoryViewer {
-    /// The history viewer's color quintet: a normal row
-    /// ([`Role::HistoryViewerNormal`](crate::theme::Role::HistoryViewerNormal),
-    /// white on blue) and a focused row
-    /// ([`Role::HistoryViewerFocused`](crate::theme::Role::HistoryViewerFocused),
-    /// white on green).
+    /// The five-slot color quintet for the history recall list.
     ///
-    /// Lives here (not next to the base `LIST_VIEWER` quintet) because it is this
-    /// class's own palette knowledge, sparing `list_viewer.rs` any reference to
-    /// the history roles.
+    /// Maps all five list-viewer color slots to two history-specific roles:
+    /// normal rows (active, inactive, selected, and the divider) use
+    /// [`Role::HistoryViewerNormal`](crate::theme::Role::HistoryViewerNormal)
+    /// (white on blue), and the focused row uses
+    /// [`Role::HistoryViewerFocused`](crate::theme::Role::HistoryViewerFocused)
+    /// (white on green). This gives the recall list its blue-on-green highlight
+    /// distinct from the gray dialog palette used by plain list boxes.
+    ///
+    /// Returned by [`list_roles`](Self::list_roles) and consulted by the base
+    /// [`ListViewer`] painter. Lives on `HistoryViewer` (not in `list_viewer.rs`)
+    /// so that the base module has no dependency on history-specific roles.
     pub const LIST_ROLES: crate::widgets::ListRoles = crate::widgets::ListRoles {
         normal_active: crate::theme::Role::HistoryViewerNormal,
         normal_inactive: crate::theme::Role::HistoryViewerNormal,
@@ -205,11 +256,16 @@ impl HistoryViewer {
         divider: crate::theme::Role::HistoryViewerNormal,
     };
 
-    /// Construct a `HistoryViewer` (the data-init portion of the widget).
+    /// Construct a `HistoryViewer` over `bounds`, wired to optional horizontal
+    /// scrollbar `h` and vertical scrollbar `v`, displaying channel `history_id`.
     ///
-    /// `bounds`: the view rectangle; `h`/`v`: optional scrollbar ids;
-    /// `history_id`: the store channel this viewer presents.  No `Context` is
-    /// needed here (see [`setup`](Self::setup)).
+    /// This is the data-init portion only — no `Context` is available yet.
+    /// After inserting the viewer into its group, call [`setup`](Self::setup)
+    /// to publish the list range, default focus, and horizontal scrollbar range.
+    /// Omitting `setup` leaves the viewer with `range == 0` and nothing visible.
+    ///
+    /// In practice you do not construct this directly; [`HistoryWindow::new`]
+    /// builds and inserts the viewer for you.
     pub fn new(bounds: Rect, h: Option<ViewId>, v: Option<ViewId>, history_id: u8) -> Self {
         HistoryViewer {
             // Always a single column.
@@ -218,13 +274,20 @@ impl HistoryViewer {
         }
     }
 
-    /// Context-needing tail of construction — call once after insertion.
+    /// Context-needing tail of construction — call once after insertion into a
+    /// group, before the first event.
     ///
-    /// 1. Set the list length to the channel's entry count.
-    /// 2. If more than one entry exists, focus item 1 (the second-oldest) as the
-    ///    default selection.
-    /// 3. If a horizontal bar is wired, publish its range as
-    ///    `0 ..= history_width() - size.x + 3`.
+    /// [`HistoryWindow::handle_event`] calls this automatically on the first
+    /// event; you only need to call it directly when driving a `HistoryViewer`
+    /// standalone (e.g., in tests).
+    ///
+    /// 1. Sets the list range to the channel's entry count via
+    ///    [`history_count`].
+    /// 2. If more than one entry exists, focuses item 1 (the second-oldest) so
+    ///    the most-recent non-duplicate entry is highlighted by default.
+    /// 3. If a horizontal scrollbar is wired, publishes its range as
+    ///    `0 ..= history_width() - size.x + 3`. A negative max is safe —
+    ///    `ScrollBar::set_params` floors it to the minimum.
     pub fn setup(&mut self, ctx: &mut Context) {
         let count = history_count(self.history_id) as i32;
         list_viewer::set_range(self, count, ctx);
@@ -265,9 +328,13 @@ impl ListViewer for HistoryViewer {
         &mut self.lv
     }
 
-    /// Return the store entry for `item`.
+    /// Return the display string for list row `item` (the text the user sees in
+    /// the recall list).
     ///
-    /// Negative or out-of-range items return an empty string.
+    /// Fetches entry `item` (oldest-first) from the history channel via
+    /// [`history_str`]. Negative or out-of-range indices return an empty
+    /// string rather than panicking, so the base [`ListViewer`] paint loop
+    /// can call this unconditionally for any row.
     fn get_text(&self, item: i32) -> String {
         if item < 0 {
             return String::new();
@@ -376,7 +443,7 @@ impl HistoryViewer {
 ///
 /// A window with a close box only (not movable) that assembles two scroll bars
 /// and the viewer, then runs modally so the caller can read
-/// [`get_selection`](HistoryWindow::get_selection) after `exec_view` returns.
+/// `get_selection` (crate-internal) after `exec_view` returns.
 ///
 /// # Color
 ///
@@ -405,13 +472,22 @@ pub struct HistoryWindow {
 }
 
 impl HistoryWindow {
-    /// Build a `HistoryWindow` over `bounds` for the given channel.
+    /// Build a `HistoryWindow` over `bounds` that presents channel `history_id`.
     ///
-    /// 1. A numberless, titleless window.
-    /// 2. Close box only — not movable, growable, or zoomable.
-    /// 3. Shrink the extent by one cell on each side, build a horizontal then a
-    ///    vertical scroll bar, build a [`HistoryViewer`] over that inner rect, and
-    ///    insert it into the window group.
+    /// Typically called by the event loop when it drains a
+    /// `Deferred::OpenHistory` request (queued by [`THistory::handle_event`]);
+    /// you rarely construct this directly. Pass it to
+    /// [`Program::exec_view`](crate::app::Program::exec_view) to run the modal
+    /// and retrieve the result command. After `exec_view` returns
+    /// [`Command::OK`], call `get_selection` (crate-internal) to read
+    /// the chosen string.
+    ///
+    /// 1. A numberless, titleless window with a close box only.
+    /// 2. Shrinks the interior by one cell on each side, builds a horizontal and
+    ///    a vertical scrollbar with keyboard handling enabled, then inserts a
+    ///    [`HistoryViewer`] over that inner rect.
+    /// 3. Defers the viewer's context-needing `setup` (range, focus, h-bar range)
+    ///    to the first call to [`handle_event`](Self::handle_event).
     pub fn new(bounds: Rect, history_id: u8) -> Self {
         // (1) Numberless, titleless window.
         let mut window = Window::new(bounds, None, 0);
@@ -475,7 +551,7 @@ impl HistoryWindow {
 )]
 impl View for HistoryWindow {
     /// Downcast hook so the modal completion can downcast the modal
-    /// `dyn View` back to `HistoryWindow` and read [`get_selection`](Self::get_selection).
+    /// `dyn View` back to `HistoryWindow` and read `get_selection`.
     /// Must be a real `Some(self)` — delegating to `window.as_any_mut()` would
     /// downcast to a `Window`, returning `None` for the `HistoryWindow` downcast
     /// (a silent pick-nothing). NOT in the `skip(...)` list for that reason.
@@ -572,12 +648,19 @@ pub struct THistory {
 }
 
 impl THistory {
-    /// Build the icon over `bounds`, linked to input `link`, for channel
-    /// `history_id`.
+    /// Build the history dropdown icon over `bounds`, linked to input `link`,
+    /// for history channel `history_id`.
+    ///
+    /// Use this when adding a recall button next to an [`InputLine`](crate::widgets::InputLine):
+    /// insert both into the same group so the icon can post-process key events
+    /// from the focused input. The icon has no title and is 3 cells wide
+    /// (`▐↓▌`) — size it with `Rect::new(x, y, x+3, y+1)` placed immediately
+    /// to the right of the input.
     ///
     /// The icon is *not* selectable, so a click delivers to it without grabbing
     /// focus — it is never the current view. It opts into post-processing so it
-    /// sees key events only after the focused input line has had its turn.
+    /// sees key events only after the focused input line has had its turn,
+    /// leaving the ↓ arrow available as a keyboard trigger.
     pub fn new(bounds: Rect, link: ViewId, history_id: u8) -> Self {
         let mut state = ViewState::new(bounds);
         // Post-process: the icon gets key-downs after the focused input line,

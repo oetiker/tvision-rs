@@ -3,7 +3,7 @@
 A scroller needs to know how far its scrollbars have moved; a list box needs to
 push its position back into them. In tvision-rs, ownership is a downward tree of
 `Box<dyn View>`, and every up- or sideways link is a lightweight handle — a
-[`ViewId`](../api/tvision-rs/view/struct.ViewId.html) — rather than a raw pointer.
+[`ViewId`](../api/tvision_rs/view/struct.ViewId.html) — rather than a raw pointer.
 The event loop resolves handles and performs the actual cross-view reads and
 writes at a safe point when no other borrow is active. See
 [Pointers & `infoPtr` → handles](../port/handles.md) for the broader handle
@@ -101,3 +101,64 @@ setter — `ScrollBar::set_params` — is change-guarded: it re-broadcasts
 `cmScrollBarChanged` only when the value actually changes. Writing back the value
 the bar already holds is a silent no-op, and the cycle goes quiet on the next
 pump.
+
+## Broadcast as a message
+
+Beyond the scroller/list synchronization use-case, **broadcasts are the general
+"shout to the tree" primitive** in tvision-rs. Any view can post a broadcast via
+`Context::broadcast(command, source)` and any other view can handle it. The
+canonical pattern has two flavors:
+
+**1. "Who handled this?" probe** — a broadcast where the *sender* watches whether
+any recipient clears the event. The scroller itself uses this: it does not clear
+`cmScrollBarChanged` on receipt (in fact it just returns); the broadcast
+propagates to every child in the group. Another common probe is
+`cmCommandSetChanged` — the status line and menu bar handle it to regray their
+items without any explicit callback.
+
+**2. "Find topmost of type"** — a broadcast cleared by the *first* handler that
+matches some condition. Because broadcasts are delivered top-to-bottom (frontmost
+child first), the highest Z-order handler wins:
+
+```rust,ignore
+// Post a broadcast; clear it in the handler that claims it:
+ctx.broadcast(Command::MY_QUERY, None);
+
+// In a view's handle_event:
+if let Event::Broadcast { command, .. } = ev {
+    if *command == Command::MY_QUERY {
+        // Handle, then consume so lower views don't see it.
+        ev.clear();
+    }
+}
+```
+
+Because "consumed" in tvision-rs means `Event::Nothing` (clearing the event in place,
+no return value), there is no separate "handled" flag to check. If the event is
+still live after the delivery, it was not handled by any child.
+
+A broadcast also carries an optional `source: Option<ViewId>` — the *subject* of
+the broadcast, not the *sender*. The scrollbar sets itself as source when it
+broadcasts `cmScrollBarChanged`; a scroller with two bars uses `source` to tell
+which bar fired without downcasting.
+
+**The "find the right one" idiom** uses this filtering:
+
+```rust,ignore
+// Inside a view that reacts to its own scrollbar and ignores the other:
+if let Event::Broadcast { command, source }  = ev {
+    if *command == Command::SCROLL_BAR_CHANGED && *source == Some(self.v_scroll_bar_id) {
+        // This is our bar — handle the scroll.
+        // Do NOT clear — broadcasts are conventionally left live.
+    }
+}
+```
+
+Not clearing is deliberate: a broadcast is not "consumed" in the sense that only
+one recipient should handle it. Multiple handlers can react, and the loop always
+delivers to every child. A handler that *does* clear a broadcast is using it as a
+"claim" signal — both patterns are legitimate; the convention for pure-notification
+broadcasts is to leave them live.
+
+Source: `src/view/context.rs` (`Context::broadcast`), `src/view/group.rs`
+(broadcast arm of `route_event`).

@@ -43,11 +43,19 @@ pub struct StaticText {
 }
 
 impl StaticText {
-    /// Construct a static text view from `bounds` and `text`.
+    /// Construct a static text view displaying `text` within `bounds`.
+    ///
+    /// Use this when you need a read-only, word-wrapped caption or help paragraph
+    /// inside a dialog or group. The text is drawn word-wrapped; embed `\n` for an
+    /// explicit line break and prefix a paragraph with `\x03` (ETX) to center it.
     ///
     /// The view has a fixed grow mode (`state.grow_mode.fixed = true`), so it
     /// keeps its size when its owner resizes, and is not selectable — static text
-    /// ignores focus.
+    /// ignores focus and receives no input events.
+    ///
+    /// To update the text at runtime, use [`ParamText`] instead and call
+    /// [`ParamText::set_text`], or swap out the text with [`StaticText::set_text`]
+    /// directly and trigger a repaint.
     pub fn new(bounds: Rect, text: impl Into<String>) -> Self {
         let mut state = ViewState::new(bounds);
         // gfFixed: the view keeps its size regardless of the owner's resize.
@@ -63,7 +71,12 @@ impl StaticText {
         }
     }
 
-    /// The current text content.
+    /// The current text content as a string slice.
+    ///
+    /// Returns a borrow of the full text with no length cap. Unlike the C++
+    /// `getText(char* S)` — which copied into a caller-provided buffer capped at
+    /// 255 bytes — this is a zero-copy reference and carries the entire content
+    /// regardless of length.
     pub fn text(&self) -> &str {
         &self.text
     }
@@ -229,10 +242,16 @@ pub struct ParamText {
 }
 
 impl ParamText {
-    /// Construct with empty text.
+    /// Construct a `ParamText` view within `bounds`, starting with empty text.
     ///
-    /// The fixed grow mode and non-selectable options come from
-    /// [`StaticText::new`].
+    /// Use this when you need a read-only text block whose content is not known
+    /// at construction time — for example, a status line or confirmation message
+    /// filled in just before a dialog is shown. Format the string at the call site
+    /// (via `format!(…)`) and hand the result to [`set_text`](Self::set_text);
+    /// the view picks it up on the next render pass.
+    ///
+    /// The fixed grow mode and non-selectable options are inherited from
+    /// `StaticText::new`.
     pub fn new(bounds: Rect) -> Self {
         ParamText {
             inner: StaticText::new(bounds, ""),
@@ -241,14 +260,37 @@ impl ParamText {
 
     /// Set (or replace) the displayed text.
     ///
-    /// Formatting is the caller's responsibility via `format!(…)`; the view
-    /// picks up the new text on the next render pass.
+    /// The caller is responsible for all formatting — this method takes an already-
+    /// formatted `String`, not a format-string template. Use `format!(…)` at the
+    /// call site:
+    ///
+    /// ```rust
+    /// # use tvision_rs::widgets::ParamText;
+    /// # use tvision_rs::view::Rect;
+    /// let mut pt = ParamText::new(Rect::new(0, 0, 20, 1));
+    /// let count = 42;
+    /// pt.set_text(format!("Found {count} items"));
+    /// ```
+    ///
+    /// There is no length cap. The view picks up the new text on the next render
+    /// pass (the event loop's whole-tree redraw).
     pub fn set_text(&mut self, text: impl Into<String>) {
         self.inner.set_text(text);
     }
 
-    /// Byte length of the current text. See the struct-level note on byte vs.
-    /// display-column semantics.
+    /// Byte length of the current text.
+    ///
+    /// Returns the number of **bytes** in the stored string, not the number of
+    /// display columns or Unicode scalar values. For all-ASCII content (the common
+    /// case in dialog labels) this equals the display width; for multi-byte UTF-8
+    /// the byte count is larger. Use this for buffer-size or `strlen`-equivalent
+    /// comparisons, not for computing layout widths (use a display-width function
+    /// for that).
+    ///
+    /// # Turbo Vision heritage
+    ///
+    /// Mirrors `TParamText::getTextLen` (magiblot), which returned `strlen(str)` —
+    /// a byte count over the 256-byte C buffer.
     pub fn text_len(&self) -> usize {
         self.inner.text().len()
     }
@@ -314,6 +356,12 @@ impl View for ParamText {}
 /// [`Option<ViewId>`] with focusing routed through the event loop (deviations D3,
 /// D4); the palette AttrPairs become explicit (lo, hi) [`Role`] pairs
 /// (`(LabelNormal, LabelNormalShortcut)` / `(LabelLight, LabelLightShortcut)`).
+///
+/// C++ `TLabel` paints an optional monochrome focus marker in column 0 when
+/// `showMarkers` (`SpecialChars`) is set. tvision-rs does not model marker
+/// decoration — a label always draws the plain form and the column-0 slot is
+/// filler. Focus is shown by color (the label's highlight role), which reads
+/// correctly under both color and monochrome themes.
 pub struct Label {
     /// The delegated [`StaticText`] — its `state: ViewState` is the one true home
     /// for all view metadata.
@@ -330,10 +378,20 @@ impl Label {
     /// Build a label over `bounds` with `text` (a `~`-marked hotkey title)
     /// optionally linking `link`.
     ///
+    /// Use this to attach a caption to a control inside a dialog. Mark the hotkey
+    /// character with tildes (e.g. `"~N~ame"` makes `Alt+N` — and on the
+    /// post-process walk, plain `N` — focus the linked control. Pass `Some(id)` to
+    /// connect the label to a control so it highlights when that control is focused;
+    /// pass `None` for a bare decorative caption with no focus behavior.
+    ///
+    /// Passing `None` as the link is intentionally permitted — it creates a caption
+    /// that fires no focus request on click or hotkey. The C++ guide warns against a
+    /// nil link, but a bare caption is a valid and common use case in Rust dialogs.
+    ///
     /// Starts unlit and opts into both the pre-process and post-process event
     /// phases (both load-bearing — a non-selectable label only ever sees its
     /// hotkey via those sweeps). The fixed grow mode and non-selectable default
-    /// come from [`StaticText::new`].
+    /// come from `StaticText::new`.
     pub fn new(bounds: Rect, text: impl Into<String>, link: Option<ViewId>) -> Self {
         let mut inner = StaticText::new(bounds, text);
         // Keep StaticText's fixed grow_mode (untouched) and its non-selectable
@@ -350,12 +408,23 @@ impl Label {
         }
     }
 
-    /// The current link, if any.
+    /// The control this label focuses on click or hotkey, if any.
+    ///
+    /// Returns `None` when the label is a bare decorative caption — it still draws
+    /// and accepts hotkeys but click/hotkey clears the event without requesting
+    /// focus. A `Some(id)` handle is resolved by the event loop at focus time;
+    /// storing only the id means the label never holds a raw reference to its peer.
     pub fn link(&self) -> Option<ViewId> {
         self.link
     }
 
-    /// Whether the label is currently highlighted (its link holds focus).
+    /// Whether the label is currently highlighted (its linked control holds focus).
+    ///
+    /// Set to `true` when a `RECEIVED_FOCUS` broadcast arrives with
+    /// `source == link`, and back to `false` on `RELEASED_FOCUS` from the same
+    /// source. The draw path switches from the normal `(LabelNormal,
+    /// LabelNormalShortcut)` role pair to `(LabelLight, LabelLightShortcut)` while
+    /// this is `true`. Stays `false` for a bare caption (`link == None`).
     pub fn is_light(&self) -> bool {
         self.light
     }

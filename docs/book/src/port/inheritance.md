@@ -10,18 +10,18 @@ for behaviour and **composition** for data.
 
 The `TView` class splits into two pieces:
 
-- [`View`](../api/tvision-rs/view/trait.View.html) — the **trait** that carries the
+- [`View`](../api/tvision_rs/view/trait.View.html) — the **trait** that carries the
   virtual methods. `draw`, `handle_event`, `set_state`, `calc_bounds` and the
   rest live here. Most have a faithful default body, so a widget overrides only
   what differs.
-- [`ViewState`](../api/tvision-rs/view/struct.ViewState.html) — a plain **struct**
+- [`ViewState`](../api/tvision_rs/view/struct.ViewState.html) — a plain **struct**
   holding what were `TView`'s data members: `origin`, `size`, `cursor`, the
   state/option/grow/drag flag sets, the event mask, the help context, and the
   view's own id. The flag words become named-boolean structs —
-  [`State`](../api/tvision-rs/view/struct.State.html) (`sf*`),
-  [`Options`](../api/tvision-rs/view/struct.Options.html) (`of*`),
-  [`GrowMode`](../api/tvision-rs/view/struct.GrowMode.html) (`gf*`),
-  [`DragMode`](../api/tvision-rs/view/struct.DragMode.html) (`dm*`) — see
+  [`State`](../api/tvision_rs/view/struct.State.html) (`sf*`),
+  [`Options`](../api/tvision_rs/view/struct.Options.html) (`of*`),
+  [`GrowMode`](../api/tvision_rs/view/struct.GrowMode.html) (`gf*`),
+  [`DragMode`](../api/tvision_rs/view/struct.DragMode.html) (`dm*`) — see
   [Flag words → struct-of-bools](flags.md).
 
 Every widget *embeds* a `ViewState` and exposes it through the trait's two

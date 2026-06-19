@@ -110,7 +110,11 @@ pub struct ButtonFlags {
 }
 
 impl ButtonFlags {
-    /// All-false flags.
+    /// Returns all-false flags — equivalent to the C++ `bfNormal` constant ($00).
+    ///
+    /// Use this when you want a plain, non-default, centered button without any
+    /// special behavior. Combine with struct-update syntax to enable individual
+    /// flags: `ButtonFlags { default: true, ..ButtonFlags::new() }`.
     pub fn new() -> Self {
         Self::default()
     }
@@ -124,14 +128,26 @@ impl ButtonFlags {
 pub struct Button {
     /// View state (geometry, flags, cursor) — the composition target.
     pub state: ViewState,
-    /// The button label, with `~` marking the hotkey letter.
+    /// The button label displayed on the face. Surround a letter with `~` to
+    /// mark it as the hotkey: `"~O~K"` makes `O` the accelerator, drawn in the
+    /// shortcut (hi) color. The `~` characters themselves are not printed.
     pub title: String,
-    /// The command fired when the button is pressed.
+    /// The command fired when the button is pressed. When the `broadcast` flag
+    /// is clear (the default), the command is posted as an [`Event::Command`];
+    /// when the flag is set, it is broadcast with the button's own
+    /// [`ViewId`](crate::view::ViewId) as the source.
     pub command: Command,
-    /// The decoration/behavior flags.
+    /// Controls visual appearance and press behavior. Build with
+    /// [`ButtonFlags::new`] (all false) or struct-update syntax and flip
+    /// individual fields: `ButtonFlags { default: true, ..ButtonFlags::new() }`.
     pub flags: ButtonFlags,
-    /// Whether the button currently acts as the default (toggled by the
-    /// grab/release-default commands; initialized from the `default` flag).
+    /// Whether the button is currently acting as the dialog's default button —
+    /// that is, the one that fires when [`Command::DEFAULT`] (Enter) is pressed.
+    /// Starts as a copy of `flags.default`; toggled at runtime by
+    /// [`GRAB_DEFAULT`](Button::GRAB_DEFAULT) / [`RELEASE_DEFAULT`](Button::RELEASE_DEFAULT)
+    /// broadcasts. Read this field to query the live default state; to *change*
+    /// it programmatically, send the appropriate broadcast or call
+    /// [`make_default`](Button::make_default).
     pub am_default: bool,
     /// The in-flight press-flash timer, if armed.
     pub animation_timer: Option<TimerId>,
@@ -302,6 +318,13 @@ impl View for Button {
     /// Pressed (`down`): the body shifts right by one — cols 0..=1 take the shadow
     /// style, the right-column shadow glyph vanishes (`ch = ' '`), the title is
     /// drawn with `i = 2`. The bottom row is all shadow spaces.
+    ///
+    /// # Note: DrawState merge
+    ///
+    /// The C++ API exposes a separate `DrawState(bool down)` method called by both
+    /// `Draw` and `HandleEvent`. This port merges the two: the pressed/normal
+    /// distinction is captured in the `self.down` field, which `draw` reads
+    /// directly. There is no separate `draw_state` method.
     fn draw(&mut self, ctx: &mut DrawCtx) {
         // Cache the absolute origin for the mouse-tracking capture: the
         // MouseTrackCapture converts absolute mouse coords to button-local via

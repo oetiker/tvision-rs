@@ -40,24 +40,49 @@ use crate::view::{Context, DrawCtx, Rect, View, ViewState};
 /// pointer here — the parent-of relationship between an open box and the level
 /// above it is held by the menu session's level stack instead.
 ///
+/// Normally you do not construct this directly: [`MenuBar::new`] and
+/// [`MenuBox::new`] call [`MenuViewState::new`] for you.
+///
+/// [`MenuBar::new`]: crate::menu::MenuBar::new
+/// [`MenuBox::new`]: crate::menu::MenuBox::new
+///
 /// # Turbo Vision heritage
 /// Ports the `TMenuView` data members (`tmnuview.cpp`/`menus.h`).
 pub struct MenuViewState {
     /// The embedded [`ViewState`] (geometry, flags, id).
     pub state: ViewState,
     /// The menu tree this view presents.
+    ///
+    /// The [`MenuSession`] clones this at activation time, so in-place
+    /// mutations during an open session are not visible until the next
+    /// activation. To update items between sessions, modify `menu.items`
+    /// directly or rebuild the tree and replace this field.
+    ///
+    /// [`MenuSession`]: crate::menu::MenuSession
     pub menu: Menu,
     /// The highlighted item, an **index** into [`menu`](Self::menu)`.items`, or
     /// `None` for nothing highlighted. Consistent with [`Menu::default`] (also an
     /// index). Draw compares `Some(i) == current` to pick the selected colour;
-    /// defaults to `None`.
+    /// the [`MenuSession`] writes it through [`View::set_menu_current`] on every
+    /// navigation step — do not write it yourself while a session is active.
+    ///
+    /// [`MenuSession`]: crate::menu::MenuSession
+    /// [`View::set_menu_current`]: crate::view::View::set_menu_current
     pub current: Option<usize>,
 }
 
 impl MenuViewState {
     /// Build a menu-view state over `state` and `menu`, with nothing highlighted
-    /// (`current = None`). `current` is `pub`, so a caller (or test) can set it
-    /// directly.
+    /// (`current = None`).
+    ///
+    /// Called by [`MenuBar::new`] and [`MenuBox::new`]; you rarely need to call
+    /// this directly. `current` is `pub`, so a caller or test can set it after
+    /// construction. The broadcast mask (`evBroadcast`) that `TMenuView::Init`
+    /// sets in C++ is not ported here — the group fans broadcasts to every child
+    /// unconditionally, so no per-view opt-in is needed.
+    ///
+    /// [`MenuBar::new`]: crate::menu::MenuBar::new
+    /// [`MenuBox::new`]: crate::menu::MenuBox::new
     pub fn new(state: ViewState, menu: Menu) -> Self {
         MenuViewState {
             state,
@@ -88,9 +113,18 @@ pub trait MenuView: View {
     /// Mutably borrow the embedded [`MenuViewState`].
     fn mv_mut(&mut self) -> &mut MenuViewState;
 
-    /// The screen rect of item `index` within this view. The default is an empty
-    /// rect; [`MenuBar`](crate::menu::MenuBar) and
-    /// [`MenuBox`](crate::menu::MenuBox) override it with their own layout.
+    /// The screen rect (view-local coordinates) of item `index` within this view.
+    ///
+    /// Every concrete implementor **must** override this — the default returns an
+    /// empty rect, which the session uses as a fallback but which will produce
+    /// invisible hit-testing. [`MenuBar`] overrides it with a horizontal
+    /// left-to-right accumulator; [`MenuBox`] overrides it with a closed-form
+    /// `y = 1 + index` formula. Implement it so the returned rect matches the
+    /// cells drawn by [`View::draw`] cell-for-cell: the session's mouse
+    /// hit-testing reads item rects to track which item the cursor is over.
+    ///
+    /// [`MenuBar`]: crate::menu::MenuBar
+    /// [`MenuBox`]: crate::menu::MenuBox
     fn get_item_rect(&self, _index: usize) -> Rect {
         Rect::new(0, 0, 0, 0)
     }
@@ -118,7 +152,17 @@ pub struct MenuColors {
 }
 
 impl MenuColors {
-    /// Resolve the menu palette roles from the draw context's theme.
+    /// Resolve the six menu colour roles from the draw context's theme into a
+    /// ready-to-use `MenuColors` matrix.
+    ///
+    /// Call this once at the start of `draw` and reuse the result per item —
+    /// it reads six [`Role::Menu*`] entries from the theme and builds the four
+    /// `(lo, hi)` pairs used to paint normal/selected × enabled/disabled items.
+    /// The disabled pair collapses to a single style (no shortcut highlight
+    /// when greyed). The theme's derivation of these roles from the classic
+    /// six-entry `CMenuView` palette is documented in `src/theme.rs`.
+    ///
+    /// [`Role::Menu*`]: crate::theme::Role
     pub fn resolve(ctx: &DrawCtx) -> Self {
         let d = ctx.style(Role::MenuDisabled);
         let sd = ctx.style(Role::MenuSelectedDisabled);

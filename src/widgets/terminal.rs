@@ -70,14 +70,27 @@ pub struct Terminal {
 }
 
 impl Terminal {
-    /// Create the terminal with a ring buffer of `a_buf_size` bytes (capped at
-    /// 32000). The view grows with the lower-right corner of its owner and the
-    /// ring buffer starts empty.
+    /// Create a terminal view backed by a ring buffer of `a_buf_size` bytes
+    /// (clamped to `1..=32000`). The view grows with the lower-right corner of
+    /// its owner group and the ring buffer starts empty.
     ///
-    /// **NOTE:** setting the scroll limit, cursor position, and cursor visibility
-    /// all need a [`Context`] not available here, so they are deferred. The
-    /// consumer must call [`Terminal::init`] once after inserting this view into a
-    /// group.
+    /// Call this once to allocate storage and geometry; then insert the returned
+    /// value into a group and call [`Terminal::init`] to complete setup — `new`
+    /// intentionally does **not** touch the scroll limit, cursor position, or
+    /// cursor visibility because those require a [`Context`] that is not
+    /// available until the view belongs to a group.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use tvision_rs::{Terminal, Rect};
+    /// let term = Terminal::new(
+    ///     Rect::new(0, 0, 80, 24),
+    ///     None, // no horizontal scrollbar
+    ///     None, // no vertical scrollbar
+    ///     4096, // ring-buffer capacity in bytes
+    /// );
+    /// ```
     pub fn new(
         bounds: Rect,
         h_scroll_bar: Option<ViewId>,
@@ -101,10 +114,16 @@ impl Terminal {
         }
     }
 
-    /// Post-insert initializer — call once after inserting the terminal into a group.
+    /// Complete terminal setup after the view has been inserted into a group.
     ///
-    /// Performs the context-requiring setup that the constructor cannot: sets the
-    /// scroll limit to one line, parks the cursor at `(0, 0)`, and shows it.
+    /// Call this exactly once, immediately after [`Group::insert`](crate::view::Group::insert)
+    /// returns the terminal's [`ViewId`]. It performs the context-requiring steps
+    /// that [`Terminal::new`] cannot: sets the scroll limit to one line, parks
+    /// the cursor at `(0, 0)`, and makes the cursor visible.
+    ///
+    /// Forgetting this call leaves the terminal with an uninitialised scroll
+    /// limit (zero lines) so no content will ever be scrolled or displayed
+    /// correctly.
     pub fn init(&mut self, ctx: &mut Context) {
         self.scroller.set_limit(0, 1, ctx);
         self.scroller.state_mut().cursor = Point::new(0, 0);
@@ -150,7 +169,12 @@ impl Terminal {
         }
     }
 
-    /// `true` when the ring buffer is empty.
+    /// Returns `true` when the ring buffer contains no data.
+    ///
+    /// Use this to check whether any text has been written to the terminal
+    /// since it was created or last drained. An empty terminal draws only blank
+    /// rows. The test is an equality check on the two ring-buffer pointers
+    /// (`que_back == que_front`), so it is `O(1)`.
     pub fn que_empty(&self) -> bool {
         self.que_back == self.que_front
     }

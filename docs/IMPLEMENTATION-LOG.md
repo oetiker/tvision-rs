@@ -134,6 +134,62 @@ in `tvision-rs-macros/src/specs.rs` and a spy entry in `tests/delegate_view.rs`
 (the *write* direction scroller → `ScrollBar`) and `Deferred::SplitterDivider`
 (divider-move op on `Splitter`). These are the two non-scroll-read-sync broker arms
 and were explicitly excluded from Phase 3's specification.
+## TV2-audit documentation-backlog closure — rustdoc score-3 sweep + concept chapters (2026-06-19)
+
+Closed the documentation backlog the TV2 coverage audit (`docs/audit/`) produced:
+**644 below-bar public symbols → 3**, the `Role` palette chain documented, and the
+per-symbol-uncarryable concepts filled in the mdBook guide. Branch
+`docs/audit-backlog-closure` (off `main` @ `bc15704`), subagent-driven, 54 commits.
+Spec [`2026-06-19-audit-doc-backlog-closure-design.md`](superpowers/specs/2026-06-19-audit-doc-backlog-closure-design.md);
+plans C/B/A under `superpowers/plans/`.
+
+**Workstream C (gate, code-bearing) — 2 commits:** `InputLine::set_validator`
+(post-construction validator) and `Program::set_on_idle` (borrow-safe per-idle-pass
+hook via `pump_and_drive`, fires through modal loops) — the only behavior changes on
+the branch; both Opus-reviewed. Plus 7 deliberate-absence doc notes.
+
+**Workstream A (rustdoc score-3 sweep) — 37 `docs(rustdoc)` commits:** one playbook
+per audit section — raise each below-bar **public** symbol to "what + how/when",
+reclassify `pub(crate)`/private as honest `N/A`, strip porting bookkeeping, quarantine
+C++ lineage into `# Turbo Vision heritage`. Ran as parallel worktree implementers
+(≤2 building agents, own per-tag target dirs) with the orchestrator doing a
+structural + **link-visibility** review before each cherry-pick, and fresh reviewer
+subagents on the foundation/meaty sections (TMenuItem, TDialog, TOutlineViewer, TView,
+the theme pass). Disjoint single-file groups ran in pairs; shared-substrate
+(TView/TGroup/TProgram/TApplication/Globals) ran sequentially; the colorpick/validator
+"entangled blob" turned out disjoint (TStringCollection had 0 rows). A consolidated
+`src/theme.rs` pass documented all ~75 `Role` variants (BIOS colors read from
+`classic_blue()`) + the `WindowPalette`→Role table.
+
+**Workstream B (concept chapters) — 9 `docs(guide)` commits:** all 10 tasks across
+the mdBook `internals/`, `port/`, `apps/` chapters — event phase, cursor shape,
+idle/getEvent, abandoned events + masks, modal execView/Execute/endModal, draw-on-demand
+vs whole-tree + clipping, coordinates/set_state/custom colors, drag limits/grow/restack,
+transfer order/validation/history, editor commands/bindings/find-replace/memo,
+hints/broadcast-messaging/outline+terminal. The six `→concept` anchors are stable and
+linked from the A-sweep rows.
+
+**Outcome:** below-bar **644 → 3**; the 3 are structurally blocked (TIndicator
+`SetState` and TWindow `Close` need a code change; TTextDevice `GetPalette` is a
+concept row with no public symbol). `rustdoc-scorecard.md` + `coverage-matrix.md`
+reconciled to the per-section rollups. All gates green: **1323 tests**, `clippy
+--all-targets -D warnings`, `fmt`, `cargo xtask test` (35 guide chapters), `cargo
+build --examples`, and `cargo xtask docs` (book↔api link check).
+
+**Recurring defect caught throughout:** implementers repeatedly produced bad intra-doc
+links — public→`pub(crate)` targets, links to non-existent symbols (`Group::insert_child`,
+`Context::make_local`, private `FileList::search`), and leaked `deviation Dx` labels —
+each fixed before merge by grepping every link target's visibility/existence.
+
+**Also fixed (pre-existing, unblocked the finish gate):** the crate-rename
+(`rstv`→`tvision-rs`) had left **806 site-wide book links** pointing at
+`api/tvision-rs/` (hyphen) when rustdoc emits `api/tvision_rs/` (underscore), failing
+`cargo xtask docs` on `main`; corrected across 33 chapters (`2ac7a70`).
+
+**Known remaining base-tree debt (out of scope):** a handful of pre-existing
+`(deviation Dx)` porting labels survive in module/struct heritage docs (color.rs,
+theme.rs, view.rs, and the un-rewritten parts of event/menu/window) — a future
+site-wide bookkeeping-strip pass should remove them.
 
 ## Dialog layout guide + `TabBar` + `PageStack` + color-picker rebuild (2026-06-15)
 

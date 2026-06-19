@@ -30,12 +30,27 @@ pub struct Dialog {
 }
 
 impl Dialog {
-    /// Construct the dialog with the given bounds and optional title.
+    /// Construct the dialog over `bounds` with an optional `title`.
     ///
-    /// The dialog draws no window number, does not grow with its owner, carries
-    /// decoration flags `move | close` (no grow, no zoom — so the frame shows no
-    /// zoom icon), and renders in the gray dialog color scheme. The flag override
-    /// is re-pushed to the frame by [`Window::set_flags`].
+    /// Use `Dialog` instead of [`Window`] whenever the view will be run modally
+    /// via [`Program::exec_view`](crate::app::Program::exec_view): the dialog
+    /// sets sensible modal defaults (gray scheme, move+close decoration, no
+    /// number, no grow-with-owner) and wires the Esc/Enter/OK/Cancel key
+    /// handling so the caller gets a result command back without writing any
+    /// extra event logic.
+    ///
+    /// After construction, populate the dialog with [`insert_child`](Self::insert_child)
+    /// or the convenience helper [`button_row`](Self::button_row), then pass the
+    /// `Dialog` to `exec_view`.
+    ///
+    /// The four overrides applied here:
+    /// * **Window number 0** — no number is drawn in the title bar.
+    /// * **Decoration flags `move | close`** (no grow, no zoom) — the frame shows
+    ///   a close icon but neither a grow handle nor a zoom icon.
+    /// * **GrowMode all-zero** — the dialog does not track its owner's resize.
+    /// * **[`WindowPalette::Gray`]** — the gray dialog color scheme; pushed down
+    ///   to the frame child (via the window's internal `set_palette`) so the frame
+    ///   renders the `Role::FrameGray*` family immediately.
     pub fn new(bounds: Rect, title: Option<String>) -> Self {
         // Window number 0 -> no number drawn.
         let mut window = Window::new(bounds, title, 0);

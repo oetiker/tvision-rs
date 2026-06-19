@@ -45,16 +45,29 @@ use crate::widgets::{InputLine, Label, LimitMode};
 
 /// The dialog title — which kind of alert this is.
 ///
-/// Each variant maps to a fixed title string shown in the dialog frame.
+/// Pass to [`Program::message_box`] or [`Program::message_box_rect`] as the
+/// `kind` argument. Each variant maps to a fixed title string shown in the
+/// dialog frame:
+///
+/// - [`Warning`](Self::Warning) — "Warning": an unexpected but recoverable condition.
+/// - [`Error`](Self::Error) — "Error": an operation failed.
+/// - [`Information`](Self::Information) — "Information": a neutral informational notice.
+/// - [`Confirmation`](Self::Confirmation) — "Confirm": asking the user to approve an action.
+///
+/// # Turbo Vision heritage
+///
+/// Replaces the C++ `mfWarning`/`mfError`/`mfInformation`/`mfConfirmation`
+/// nibble packed into the `aOptions Word` (`msgbox.cpp`); the type is now a
+/// closed enum.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MessageBoxKind {
-    /// "Warning" title.
+    /// "Warning" title — an unexpected but recoverable condition.
     Warning,
-    /// "Error" title.
+    /// "Error" title — an operation failed.
     Error,
-    /// "Information" title.
+    /// "Information" title — a neutral notice.
     Information,
-    /// "Confirm" title.
+    /// "Confirm" title — asking for user approval before proceeding.
     Confirmation,
 }
 
@@ -70,22 +83,49 @@ impl MessageBoxKind {
     }
 }
 
-/// The set of buttons to show.
+/// The set of buttons to show in a message box.
 ///
 /// Each field, when set, adds one button along the bottom of the dialog. They
 /// always appear in [Yes, No, OK, Cancel] order regardless of which are enabled.
+/// The value returned by [`Program::message_box`] is the [`Command`] of the
+/// button the user pressed.
 ///
-/// Build with one of the convenience constructors ([`MessageBoxButtons::ok`],
-/// [`MessageBoxButtons::ok_cancel`], etc.) or with struct-update syntax.
+/// Use one of the convenience constructors for the most common combinations:
+///
+/// | Constructor | Buttons | Use when |
+/// |---|---|---|
+/// | [`ok()`](Self::ok) | OK | informational notice (only one choice) |
+/// | [`ok_cancel()`](Self::ok_cancel) | OK, Cancel | confirm / discard |
+/// | [`yes_no()`](Self::yes_no) | Yes, No | binary decision without escape |
+/// | [`yes_no_cancel()`](Self::yes_no_cancel) | Yes, No, Cancel | save-before-close |
+///
+/// For an unusual combination use struct-update syntax:
+/// `MessageBoxButtons { yes: true, cancel: true, ..Default::default() }`.
+///
+/// # Turbo Vision heritage
+///
+/// Replaces the C++ `mfOKButton`/`mfCancelButton`/`mfYesButton`/`mfNoButton`
+/// flags packed into the high byte of `aOptions` (`msgbox.cpp`). The type is
+/// now a struct-of-bools; `mfOKCancel`/`mfYesNoCancel`
+/// shorthands become named constructors.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MessageBoxButtons {
-    /// Show a "~Y~es" button firing [`Command::YES`].
+    /// Show a "~Y~es" button (fires [`Command::YES`]).
+    ///
+    /// Use for binary decisions or save-before-close dialogs.
     pub yes: bool,
-    /// Show a "~N~o" button firing [`Command::NO`].
+    /// Show a "~N~o" button (fires [`Command::NO`]).
+    ///
+    /// Pair with `yes` for a binary decision; add `cancel` to allow escape.
     pub no: bool,
-    /// Show an "O~K~" button firing [`Command::OK`].
+    /// Show an "O~K~" button (fires [`Command::OK`]).
+    ///
+    /// The most common single-button choice for informational or confirmation
+    /// dialogs. Do not combine with `yes`/`no` in the same dialog.
     pub ok: bool,
-    /// Show a "~C~ancel" button firing [`Command::CANCEL`].
+    /// Show a "~C~ancel" button (fires [`Command::CANCEL`]).
+    ///
+    /// Always safe to add — allows the user to dismiss without taking action.
     pub cancel: bool,
 }
 

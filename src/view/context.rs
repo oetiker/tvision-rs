@@ -151,12 +151,12 @@ pub enum Deferred {
         /// New arrow step, or `None` to preserve `arrow_step`.
         arrow_step: Option<i32>,
     },
-    /// **Visibility direction**: show/hide a scroller's scrollbar. The pump
-    /// resolves `id` and sets `state.state.visible` (no downcast — `state_mut` is
-    /// on the trait; the painter skips `!visible` children). There is no
-    /// propagating `StateFlag::Visible` (no occlusion tracking — the whole tree is
-    /// redrawn each frame, so visibility carries no side effects), so it is set
-    /// directly on the [`ViewState`](crate::view::ViewState).
+    /// **Visibility direction**: show/hide a view. The pump routes through
+    /// `Group::set_visible_descendant`, which delivers
+    /// [`StateFlag::Visible`](crate::view::StateFlag::Visible) via
+    /// `child.set_state` so widgets with sibling scroll bars (e.g. `ListViewer`)
+    /// can show/hide them in sync. `StateFlag::Visible` does NOT propagate to
+    /// children (whole-tree redraw — no occlusion cache to maintain).
     SetVisible(ViewId, bool),
 
     // -- the splitter keyboard-resize broker (D3 sibling-broker) -------
@@ -556,7 +556,16 @@ pub enum Deferred {
 // DrawCtx — the downward draw context
 // ---------------------------------------------------------------------------
 
-/// The drop-shadow offset: 2 columns right, 1 row down.
+/// The drop-shadow offset applied to every window with `State::shadow = true`:
+/// **2 columns right, 1 row down**.
+///
+/// [`DrawCtx`] reads this constant when rendering a view's shadow during the
+/// whole-tree draw pass. The value matches the C++ default and is fixed at
+/// compile time — the C++ `shadowSize` global was mutable, but tvision-rs
+/// does not expose a runtime override. If you need a different shadow size,
+/// the constant can be shadowed (pun intended) per-project by re-exporting a
+/// custom value and patching the draw context; but the standard shadow looks
+/// best at `(2, 1)`.
 ///
 /// # Turbo Vision heritage
 /// Ports `shadowSize` (`tview.cpp:35`).
@@ -617,7 +626,15 @@ impl<'a> DrawCtx<'a> {
         }
     }
 
-    /// The [`Style`] for `role` from the active theme.
+    /// Look up the [`Style`] (foreground + background + modifiers) for `role`
+    /// from the active theme.
+    ///
+    /// Call this inside [`View::draw`](crate::view::View::draw) to obtain the
+    /// correct color pair for a semantic role (`Role::Background`,
+    /// `Role::MenuSelected`, etc.) and pass the result to
+    /// [`put_char`](Self::put_char) / [`put_str`](Self::put_str) / [`fill`](Self::fill).
+    /// Using roles rather than hard-coded colors lets the whole application
+    /// switch themes without touching widget code.
     pub fn style(&self, role: Role) -> Style {
         self.theme.style(role)
     }
@@ -627,7 +644,15 @@ impl<'a> DrawCtx<'a> {
         self.theme.glyphs()
     }
 
-    /// The absolute clip rect (already intersected with the buffer bounds).
+    /// The absolute clip rect for this draw pass (already intersected with the
+    /// buffer bounds at construction).
+    ///
+    /// Use this inside [`View::draw`](crate::view::View::draw) when a widget
+    /// wants to skip drawing rows or columns that are entirely outside the
+    /// clip — for example, to avoid iterating over a large list's invisible
+    /// rows. All [`DrawCtx`] write methods already clip automatically, so
+    /// querying this rect is an optimization, not a correctness requirement.
+    /// The rect is in **absolute** screen coordinates, not view-local.
     pub fn clip(&self) -> Rect {
         self.clip
     }
@@ -1096,12 +1121,26 @@ impl<'a> Context<'a> {
     /// Request `cmd` be enabled in the program's command set — **deferred**
     /// ([`Deferred::EnableCommand`]). Lets a view enable a command without an
     /// up-pointer to the program.
+    ///
+    /// The change is applied by the loop *after* the current dispatch; a
+    /// subsequent [`command_enabled`](Self::command_enabled) call in the same
+    /// handler still returns the old value. Call this from
+    /// [`View::handle_event`](crate::view::View::handle_event) (e.g. to enable a
+    /// Save command once data is present) or from `update_commands` on a focus
+    /// change. To disable, use [`disable_command`](Self::disable_command). The
+    /// underlying model is a denylist: a command is enabled iff it is not in the
+    /// disabled set.
     pub fn enable_command(&mut self, cmd: Command) {
         self.deferred.push(Deferred::EnableCommand(cmd));
     }
 
-    /// Request `cmd` be disabled — **deferred** ([`Deferred::DisableCommand`]; see
-    /// [`enable_command`](Self::enable_command)).
+    /// Request `cmd` be disabled in the program's command set — **deferred**
+    /// ([`Deferred::DisableCommand`]). The mirror of
+    /// [`enable_command`](Self::enable_command): the change is applied after the
+    /// current dispatch, and the denylist model means disabling an already-disabled
+    /// command is harmless. Call this to gray out menu items or buttons that are
+    /// not applicable in the current context (e.g. Paste when the clipboard is
+    /// empty). Re-enable with `enable_command`.
     pub fn disable_command(&mut self, cmd: Command) {
         self.deferred.push(Deferred::DisableCommand(cmd));
     }
@@ -1152,14 +1191,29 @@ impl<'a> Context<'a> {
             .push(Deferred::MakeButtonDefault { button, enable });
     }
 
-    /// Request the (modal) loop end with `cmd` — **deferred** ([`Deferred::EndModal`]).
-    /// Ends the modal loop from a view with no up-pointer to the program: the
-    /// pump sets `Program::end_state` and the nested `exec_view` loop observes it.
+    /// Signal that the current modal loop should end, returning `cmd` as its
+    /// result — **deferred** ([`Deferred::EndModal`]).
     ///
-    /// **View-side, deferred.** This is the path a [`View`](crate::view::View)
-    /// takes (it holds only `&mut Context`, never `&mut Program`). The owner /
-    /// top-level path is the immediate `Program::end_modal`. Rule of thumb:
-    /// view → `ctx.end_modal`; owner / top-level → `Program::end_modal`.
+    /// Call this from inside a [`View::handle_event`](crate::view::View::handle_event)
+    /// override (or any code that holds `&mut Context`) to close the modal
+    /// dialog started by [`Program::exec_view`](crate::app::Program::exec_view)
+    /// and return `cmd` to its caller. Common commands are
+    /// [`Command::OK`](crate::command::Command::OK) (user confirmed) and
+    /// [`Command::CANCEL`](crate::command::Command::CANCEL) (user dismissed).
+    ///
+    /// The call is **deferred**: it pushes a [`Deferred::EndModal`] onto the
+    /// queue; the pump applies it by setting `Program::end_state` after the
+    /// current dispatch unwinds. This is safe from deep inside the view tree
+    /// where no up-pointer to `Program` exists.
+    ///
+    /// **View-side, deferred.** A [`View`](crate::view::View) holds only
+    /// `&mut Context`, never `&mut Program`. The top-level path (when you
+    /// already hold `&mut Program`) is the immediate `Program::end_modal`.
+    /// Rule of thumb: view → `ctx.end_modal`; owner / top-level →
+    /// `Program::end_modal`.
+    ///
+    /// See also: [ending a modal](../../../port/modal.html#endmodal) in the
+    /// tvision-rs guide.
     pub fn end_modal(&mut self, cmd: Command) {
         self.deferred.push(Deferred::EndModal(cmd));
     }
@@ -1465,12 +1519,16 @@ impl<'a> Context<'a> {
         self.deferred.push(Deferred::InputLinePaste(id));
     }
 
-    /// Re-queue a **raw event** into the loop's event queue — the raw-event
-    /// sibling of [`post`](Self::post) (which only ever queues an
-    /// `Event::Command`). The menu session re-posts the triggering event so
-    /// the next pump re-delivers it (e.g. an outside click that should reach the
-    /// view recovering focus, or a mouse event on submenu-open). Lands in
-    /// `out_events`, drained before the backend is polled.
+    /// Re-queue a **raw event** into the loop's event queue.
+    ///
+    /// Unlike [`post`](Self::post) (which queues only `Event::Command`), this
+    /// accepts any `Event` — useful for re-delivering a mouse or key event on
+    /// the next pump. The event lands in `out_events`, which the loop drains
+    /// before polling the backend, so it is processed on the very next pump
+    /// cycle. Typical use: the menu session re-posts the triggering outside
+    /// click so the view that recovers focus sees it; a capture handler
+    /// forwards a deferred key press. Prefer [`post`](Self::post) or
+    /// [`broadcast`](Self::broadcast) for simple command notifications.
     pub fn put_event(&mut self, ev: Event) {
         self.out_events.push_back(ev);
     }

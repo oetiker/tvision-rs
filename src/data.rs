@@ -65,7 +65,10 @@ impl<T: Any + fmt::Debug> CustomValue for T {
 /// (runtime-checked; see [`value_as`](FieldValue::value_as)).
 #[derive(Clone, Debug)]
 pub enum FieldValue {
-    /// A text field's contents (an input line).
+    /// A text field's string contents, used by `InputLine::value` and
+    /// `Memo::value`. Produced during a dialog gather walk and consumed
+    /// during scatter. Replaces the raw `TMemoData` buffer that
+    /// `TMemo::getData`/`setData` filled in the original.
     Text(String),
     /// An integer value (e.g. a scroll bar's position).
     Int(i32),

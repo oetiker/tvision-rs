@@ -50,12 +50,21 @@ fn cstrlen(s: &str) -> i32 {
 
 /// Compute the box bounds that fit `menu` inside `bounds`.
 ///
-/// Width starts at a floor of 10 and grows to the widest item: each item is its
-/// label width plus 6 padding columns, plus 3 more for a submenu's `►` marker
-/// column, or plus the shortcut-text width plus 2 for a command with shortcut
-/// text. Height is 2 (the top and bottom borders) plus one row per item —
-/// separators included. The result is then clamped into `bounds`: the box keeps
-/// its preferred size where it fits, otherwise it is pushed against the far edge.
+/// **Width** starts at a floor of 10 and grows to the widest item. The per-item
+/// column budget is:
+/// - command with shortcut text: `cstrlen(name) + 6 + cstrlen(param) + 2`
+/// - submenu entry: `cstrlen(name) + 6 + 3` (the `+3` reserves a column for `►`)
+/// - command without shortcut: `cstrlen(name) + 6`
+/// - separator: no width contribution (but still adds a row)
+///
+/// **Height** is `2 + item_count` — 2 for the top and bottom borders plus one
+/// row per item, separators included. The computed `(width, height)` is then
+/// clamped into `bounds`: the box prefers its preferred size but is pushed
+/// against the far edge when the available space is smaller.
+///
+/// The menu session calls this to size each submenu box as it opens; you can
+/// also call it directly to pre-compute a popup box's bounds before passing them
+/// to [`popup_menu`](crate::menu::popup_menu).
 ///
 /// # Turbo Vision heritage
 /// Ports the static `getRect` sizing helper (`tmenubox.cpp`).
@@ -109,7 +118,16 @@ impl MenuBox {
     /// Construct a menu box presenting `menu`, sized by [`menu_box_rect`] to fit
     /// inside `bounds`.
     ///
-    /// The box casts a drop shadow and pre-processes events in the focused chain.
+    /// `bounds` is the hint rect within which the box must fit — typically the
+    /// remaining desktop area below and to the right of the parent item. The
+    /// actual bounds are computed by [`menu_box_rect`] (the box shrinks to its
+    /// content). The box casts a drop shadow (`state.shadow = true`) and
+    /// pre-processes events (`options.pre_process = true`) so it intercepts
+    /// accelerator keys before the focused view.
+    ///
+    /// Under normal operation the menu session constructs boxes on your behalf
+    /// via `Deferred::OpenMenuBox`; call `MenuBox::new` directly only in tests
+    /// or when building a standalone draw fixture.
     pub fn new(bounds: Rect, menu: Menu) -> Self {
         let rect = menu_box_rect(bounds, &menu);
         let mut state = ViewState::new(rect);

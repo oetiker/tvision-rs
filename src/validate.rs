@@ -62,8 +62,12 @@ pub trait Validator {
         true
     }
 
-    /// The final-form check, run when the field must be fully valid (the modal-OK
-    /// / focus-release path). Default: accept.
+    /// The final-form check, run when the field must be fully valid (the
+    /// modal-OK / focus-release path). Override this to enforce your validity
+    /// rule; the base accepts every string. Prefer [`validate`](Validator::validate)
+    /// when you also need to pop the error box on failure.
+    ///
+    /// Default: `true`.
     fn is_valid(&self, _s: &str) -> bool {
         true
     }
@@ -76,10 +80,12 @@ pub trait Validator {
     /// This is a [`Validator`] method, not a [`View`](crate::view::View) method.
     fn error(&self, _ctx: &mut Context) {}
 
-    /// Report the error and fail iff [`is_valid`](Validator::is_valid) is false,
-    /// else succeed. A provided method that dispatches through the overridable
-    /// `is_valid`/`error`. Threads `&mut Context` so a failing validator's `error`
-    /// can request its box.
+    /// Validate `s` and, if invalid, pop the error box. Call this at the
+    /// field-commit point (modal OK / focus release): it calls `is_valid`, and on
+    /// failure calls `error` to display the message box before returning `false`.
+    /// Returns `true` immediately when valid without touching the context.
+    ///
+    /// A provided method; override `is_valid` and `error` rather than this.
     fn validate(&self, s: &str, ctx: &mut Context) -> bool {
         if self.is_valid(s) {
             true
@@ -96,22 +102,24 @@ pub trait Validator {
         true
     }
 
-    /// Report the field's value as a typed [`FieldValue`]. `Some(typed value)`
-    /// only when the validator has transfer enabled; `None` means "I don't
-    /// transfer — the input line keeps its text value". Base: `None`.
+    /// Report the field's current text `s` as a typed [`FieldValue`] during a
+    /// dialog **gather** walk. Return `Some(typed value)` when the validator has
+    /// transfer enabled and can parse the text; return `None` to leave the input
+    /// line carrying its plain text (the default, meaning "I don't transfer").
     ///
-    /// This is a [`Validator`]-trait method, not a
-    /// [`View`](crate::view::View)-trait method.
+    /// Override this together with [`transfer_set`](Validator::transfer_set) to
+    /// participate in dialog data transfer.
     fn transfer_get(&self, _s: &str) -> Option<FieldValue> {
         None
     }
 
-    /// Format a typed value back to the field's text. `Some(text)` only when
-    /// transfer-enabled AND `v` is the type this validator handles; `None` → the
-    /// input line falls back to its text path. Base: `None`.
+    /// Format a typed [`FieldValue`] back to the field's text during a dialog
+    /// **scatter** walk. Return `Some(text)` when transfer is enabled and `v`
+    /// is the type this validator handles; return `None` to leave the input line
+    /// on its own text path (the default).
     ///
-    /// Like [`transfer_get`](Validator::transfer_get), this is a
-    /// [`Validator`]-trait method, not a [`View`](crate::view::View)-trait method.
+    /// Override this together with [`transfer_get`](Validator::transfer_get) to
+    /// participate in dialog data transfer.
     fn transfer_set(&self, _v: &FieldValue) -> Option<String> {
         None
     }
@@ -135,7 +143,13 @@ pub struct FilterValidator {
 }
 
 impl FilterValidator {
-    /// Build a filter from the set of accepted characters.
+    /// Build a filter that accepts only characters in `valid_chars`. Pass any
+    /// `Into<String>` — typically a string literal like `"0123456789"` or
+    /// `"+-0123456789"`. Membership is tested per Unicode `char`.
+    ///
+    /// Attach the result to an [`InputLine`](crate::widgets::InputLine) as
+    /// its validator to restrict what the user can type and what the final
+    /// value may contain.
     pub fn new(valid_chars: impl Into<String>) -> Self {
         Self {
             valid_chars: valid_chars.into(),
@@ -144,19 +158,24 @@ impl FilterValidator {
 }
 
 impl Validator for FilterValidator {
-    /// Every char of `s` must be in `valid_chars`.
+    /// Returns `true` iff every `char` of `s` is in `valid_chars`. An empty
+    /// string passes (vacuously all characters are valid). Use this at the
+    /// final-commit check; for the while-typing path see `is_valid_input`.
     fn is_valid(&self, s: &str) -> bool {
         s.chars().all(|c| self.valid_chars.contains(c))
     }
 
-    /// Same check applied while typing; `suppress_fill` is ignored (a filter never
-    /// auto-fills).
+    /// Returns `true` iff every `char` of `s` is in `valid_chars` — the same
+    /// rule as `is_valid`, applied per-keystroke. Never mutates `s` (a filter
+    /// never auto-fills); `suppress_fill` is ignored.
     fn is_valid_input(&self, s: &mut String, _suppress_fill: bool) -> bool {
         self.is_valid(s)
     }
 
-    /// Report an invalid character via the async-modal-from-a-view seam
-    /// (informational, OK-only).
+    /// Pop an OK-only "Invalid character in input" error box via
+    /// [`Context::request_message_box`]. Called automatically by
+    /// [`validate`](Validator::validate) when [`is_valid`](FilterValidator::is_valid)
+    /// returns `false`.
     fn error(&self, ctx: &mut Context) {
         ctx.request_message_box(
             "Invalid character in input".to_string(),
@@ -169,16 +188,18 @@ impl Validator for FilterValidator {
 }
 
 /// The accept-all base for lookup-style validators — it accepts every input.
-/// [`StringLookupValidator`] is the concrete variant that checks membership in
-/// a list.
+///
+/// Use `LookupValidator` as a stand-in when you need a no-op validator in a
+/// context that expects a lookup-style type, or as the starting point before
+/// you know which concrete validator to plug in. For actual membership testing,
+/// use [`StringLookupValidator`] instead.
 ///
 /// # Turbo Vision heritage
 ///
 /// Ports `TLookupValidator` (`tvalidator.cpp`), an abstract intermediate that
-/// routed validity through a virtual lookup step. That indirection collapses
-/// here: each concrete lookup validator folds the lookup directly into its
-/// `is_valid` (deviation D2), so this type realises only the base's own
-/// accept-all behavior.
+/// routed validity through a virtual `lookup` step. In tvision-rs the indirection
+/// collapses: each concrete lookup validator folds the lookup directly into its
+/// `is_valid`, so this type only realises the base's accept-all behaviour.
 pub struct LookupValidator;
 
 impl LookupValidator {
@@ -200,22 +221,46 @@ impl Validator for LookupValidator {}
 /// Valid iff the input exactly matches one entry in an owned list of strings.
 /// On an invalid final value, `error` pops up an OK-only error message box.
 ///
+/// Validation is a linear scan (`O(n)`) over the list, which preserves the
+/// caller's order (UI pickers may rely on it). [`StringLookupValidator::new_string_list`] replaces
+/// the whole list.
+///
 /// # Turbo Vision heritage
 ///
 /// Ports `TStringLookupValidator` (`tvalidator.cpp`). The lookup folds into
 /// `is_valid` (deviation D2), the string collection becomes an owned
 /// `Vec<String>`, and the streaming machinery is dropped (deviation D12).
+///
+/// C++ `TStringLookupValidator` held a *sorted* collection and binary-searched
+/// (`O(log n)`). For the small fixed lists these validators carry, the linear
+/// scan is simpler and fast enough; order preservation is the deliberate
+/// trade-off.
 pub struct StringLookupValidator {
     strings: Vec<String>,
 }
 
 impl StringLookupValidator {
-    /// Build from a list of accepted strings.
+    /// Build a validator that accepts only strings in `strings`. Pass an owned
+    /// `Vec<String>` of the allowed values; the order is preserved and used as
+    /// the iteration order for membership tests. Attach the result to an
+    /// [`InputLine`](crate::widgets::InputLine) to restrict the final value to
+    /// one of the listed entries.
     pub fn new(strings: Vec<String>) -> Self {
         Self { strings }
     }
 
-    /// Replace the accepted-string list; the old `Vec` is dropped here.
+    /// Replace the accepted-string list at runtime, dropping the previous `Vec`.
+    ///
+    /// Call this when the set of valid entries changes after the validator is
+    /// already in use — e.g. a dependent field whose allowed values depend on
+    /// another control's selection. The new `strings` order becomes the
+    /// membership-test iteration order, exactly as in [`new`](Self::new); pass an
+    /// empty `Vec` to reject every input until the list is repopulated.
+    ///
+    /// # Turbo Vision heritage
+    /// Ports `TStringLookupValidator::newStringList`. The C++ `newStringList(nil)`
+    /// form (dispose the list without installing a replacement) has no analog —
+    /// pass an empty `Vec` instead.
     pub fn new_string_list(&mut self, strings: Vec<String>) {
         self.strings = strings;
     }
@@ -227,8 +272,10 @@ impl Validator for StringLookupValidator {
         self.strings.iter().any(|x| x == s)
     }
 
-    /// Report a non-member value via the async-modal-from-a-view seam
-    /// (informational, OK-only).
+    /// Pop an OK-only "Input is not in list of valid strings" error box via
+    /// [`Context::request_message_box`]. Called automatically by
+    /// [`validate`](Validator::validate) when
+    /// [`is_valid`](StringLookupValidator::is_valid) returns `false`.
     fn error(&self, ctx: &mut Context) {
         ctx.request_message_box(
             "Input is not in list of valid strings".to_string(),
@@ -282,8 +329,12 @@ fn parse_long(s: &str) -> Option<i32> {
 }
 
 impl RangeValidator {
-    /// `min >= 0` → `"+0123456789"` (unsigned), else `"+-0123456789"` (signed).
-    /// Transfer is OFF by default.
+    /// Build a range validator that requires the entered integer to be in
+    /// `[min, max]` (inclusive). The embedded charset filter is selected by
+    /// `min`: non-negative → digits + `'+'`; negative → digits + `'+'` +
+    /// `'-'`. Call [`set_transfer`](RangeValidator::set_transfer) afterward
+    /// to enable typed `i32` transfer for dialog gather/scatter; transfer is
+    /// **off by default**.
     pub fn new(min: i32, max: i32) -> Self {
         let chars = if min >= 0 {
             "+0123456789"
@@ -308,7 +359,10 @@ impl RangeValidator {
 }
 
 impl Validator for RangeValidator {
-    /// Charset gate first, then parse, then the `[min, max]` range check.
+    /// Returns `true` iff `s` passes the charset gate, parses as an `i32`,
+    /// and falls within `[min, max]` (inclusive). All three conditions must
+    /// hold; the charset gate fires first so malformed input is caught early
+    /// without an attempted parse.
     fn is_valid(&self, s: &str) -> bool {
         self.filter.is_valid(s) && parse_long(s).is_some_and(|v| v >= self.min && v <= self.max)
     }
@@ -343,8 +397,10 @@ impl Validator for RangeValidator {
         }
     }
 
-    /// Report an out-of-range value, naming the bounds, via the
-    /// async-modal-from-a-view seam (informational, OK-only).
+    /// Pop an OK-only error box naming the valid range ("Value not in the
+    /// range {min} to {max}") via [`Context::request_message_box`]. Called
+    /// automatically by [`validate`](Validator::validate) when
+    /// [`is_valid`](RangeValidator::is_valid) returns `false`.
     fn error(&self, ctx: &mut Context) {
         ctx.request_message_box(
             format!("Value not in the range {} to {}", self.min, self.max),
@@ -885,11 +941,14 @@ pub struct PXPictureValidator {
 }
 
 impl PXPictureValidator {
-    /// Build a validator from a mask and an auto-fill flag.
+    /// Build a Paradox picture validator from `pic` (the mask) and
+    /// `auto_fill` (whether to insert mask literals while the user types).
     ///
-    /// Runs the matcher on EMPTY input as a syntax probe: a well-formed mask
-    /// yields `Empty`, so status stays OK; any other result means the mask syntax
-    /// is bad and status goes not-OK.
+    /// The constructor runs the engine on empty input as a **syntax probe**:
+    /// a well-formed mask returns `Empty`, leaving `is_status_ok()` true;
+    /// any other result means the mask is malformed and `is_status_ok()`
+    /// returns `false`. Check `is_status_ok()` after construction if you want
+    /// to report a bad mask before the field is even used.
     pub fn new(pic: impl Into<String>, auto_fill: bool) -> Self {
         let pic = pic.into();
         let mut p = Picture::new(pic.as_bytes(), Vec::new());
@@ -916,8 +975,10 @@ impl Validator for PXPictureValidator {
         r != PicResult::Error
     }
 
-    /// The final check: the input fully matches the mask. Runs the matcher on a
-    /// copy, with no write-back.
+    /// Returns `true` iff `s` fully satisfies the mask (i.e. the engine returns
+    /// `Complete`). Runs the matcher on a copy with auto-fill off, so `s` is
+    /// never mutated. Use this at the final-commit check; for the while-typing
+    /// path see [`is_valid_input`](PXPictureValidator::is_valid_input).
     fn is_valid(&self, s: &str) -> bool {
         let mut p = Picture::new(self.pic.as_bytes(), s.as_bytes().to_vec());
         p.run(false) == PicResult::Complete
@@ -929,8 +990,10 @@ impl Validator for PXPictureValidator {
         self.status_ok
     }
 
-    /// Report a malformed picture mask, quoting it, via the
-    /// async-modal-from-a-view seam (informational, OK-only).
+    /// Pop an OK-only error box quoting the malformed mask ("Error in picture
+    /// format. {pic}") via [`Context::request_message_box`]. Called
+    /// automatically by [`validate`](Validator::validate) when
+    /// [`is_valid`](PXPictureValidator::is_valid) returns `false`.
     fn error(&self, ctx: &mut Context) {
         ctx.request_message_box(
             format!("Error in picture format.\n {}", self.pic),

@@ -71,8 +71,13 @@ use crate::view::{Context, DrawCtx, Options, Phase, Point, Rect, View, ViewState
 // ClusterKind — the data-driven polymorphism
 // ---------------------------------------------------------------------------
 
-/// Which concrete cluster behavior the engine runs. Replaces per-subclass virtual
-/// dispatch with a closed set of data variants the engine branches on.
+/// Selects which of the three cluster behaviors the [`Cluster`] engine applies.
+///
+/// Pass a `ClusterKind` to [`Cluster::new`] when you need the raw engine.
+/// In practice, call the named constructors instead:
+/// [`CheckBoxes::new`] → [`ClusterKind::CheckBoxes`],
+/// [`RadioButtons::new`] → [`ClusterKind::RadioButtons`],
+/// [`MultiCheckBoxes::new`] → [`ClusterKind::MultiCheckBoxes`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ClusterKind {
     /// Check boxes — `value` is a bitmask (bit `item` set ⇔ item checked).
@@ -84,13 +89,23 @@ pub enum ClusterKind {
     RadioButtons,
     /// Multi-state check boxes — `value` packs an n-bit state per item. Box
     /// ` [ ] `, markers from `states` (idx = the item's current state).
+    ///
+    /// Use this variant (or [`MultiCheckBoxes::new`]) when each option can be
+    /// in one of three or more named states. The three fields together determine
+    /// how many bits each item occupies in `value` and how those bits are drawn.
     MultiCheckBoxes {
-        /// Number of distinct states an item cycles through.
+        /// Number of distinct states each item cycles through (must be ≤ the
+        /// number of characters in `states`). Press / click / hotkey advances
+        /// an item's state by 1, wrapping back to 0 after `sel_range - 1`.
         sel_range: u8,
-        /// Packed item layout: `lo = flags & 0xff` is the per-item mask; `hi =
-        /// flags >> 8` is the per-item bit-shift multiplier.
+        /// Packed item-layout descriptor — low byte (`flags & 0xff`) is the
+        /// per-item bit mask and high byte (`flags >> 8`) is the per-item
+        /// bit-shift stride. Example: `0x0203` = 2-bit items (mask `0x03`,
+        /// stride 2), supporting up to 4 states and up to 16 items in a `u32`.
         flags: u16,
-        /// The marker glyph for each state value (idx = state).
+        /// Marker glyphs for each state value; character at index `s` is drawn
+        /// when an item is in state `s`. Must have at least `sel_range`
+        /// characters — indices beyond the string length display a space.
         states: String,
     },
 }
@@ -117,23 +132,73 @@ impl ClusterKind {
 /// [`CheckBoxes`] / [`RadioButtons`] / [`MultiCheckBoxes`] wrappers delegate to
 /// an instance of this.
 ///
+/// Most callers never construct a `Cluster` directly — they call
+/// [`CheckBoxes::new`], [`RadioButtons::new`], or [`MultiCheckBoxes::new`],
+/// which pick the right [`ClusterKind`] and wrap the result. Use `Cluster`
+/// directly only when you need to inspect or mutate shared engine state (e.g.
+/// `cluster.value`, `cluster.sel`) via one of the named wrapper's `.cluster`
+/// field.
+///
 /// # Turbo Vision heritage
 ///
 /// Ports `TCluster` (`tcluster.cpp`).
 pub struct Cluster {
     /// View state (geometry, flags, cursor) — the composition target.
     pub state: ViewState,
-    /// The cluster value, interpreted per [`kind`](Cluster::kind) (bitmask /
-    /// index / packed states). A `u32`; the multi-state kind uses all 32 bits.
+    /// The current value of the cluster, interpreted per [`kind`](Cluster::kind).
+    ///
+    /// - [`CheckBoxes`]: a bitmask — bit `i` is set when item `i` is checked.
+    ///   Read `value & (1 << i) != 0` to test; the engine toggles bits via
+    ///   Space / mouse / hotkey.
+    /// - [`RadioButtons`]: the index of the selected button (0-based). The
+    ///   engine writes `value = item` on every press or arrow-key move, so
+    ///   `value` is always the index of the one visible bullet.
+    /// - [`MultiCheckBoxes`]: packed n-bit states — use `multi_mark(i)` (via
+    ///   the engine's internal reader) to unpack item `i`'s state, or construct
+    ///   the packed word using the `flags` field documented on
+    ///   [`ClusterKind::MultiCheckBoxes`].
+    ///
+    /// Starts at `0` after construction. Write it directly when restoring saved
+    /// state (e.g. re-loading a dialog); the next `draw` pass will reflect the
+    /// new value without any explicit redraw call (the whole-tree redraw
+    /// runs every event loop tick).
     pub value: u32,
-    /// The currently-highlighted item index.
+    /// The index of the currently-highlighted item (the selection cursor).
+    ///
+    /// For [`CheckBoxes`] and [`MultiCheckBoxes`] this is purely the visual
+    /// focus position — pressing Space toggles or cycles the highlighted item.
+    /// For [`RadioButtons`] it mirrors `value`: moving the cursor also selects
+    /// (the arrow keys update both `sel` and `value` together).
+    ///
+    /// When restoring a [`RadioButtons`] from saved state, set both `sel` and
+    /// `value` to the same index so the visual cursor starts on the pressed
+    /// button.
     pub sel: i32,
-    /// Enable mask: bit `item` set ⇔ item is enabled. Constructor default
-    /// `0xFFFF_FFFF` (all enabled).
+    /// Bitmask controlling which items are interactive; bit `i` set ⇔ item `i`
+    /// is enabled.
+    ///
+    /// Default after construction: `0xFFFF_FFFF` (all 32 slots enabled).
+    /// Use [`set_button_state`](Cluster::set_button_state) to enable or disable
+    /// items at runtime — it updates both this mask and the cluster's
+    /// `selectable` option (clearing `selectable` when every item is disabled).
+    /// Only items 0–31 are represented; items 32 and above are always treated
+    /// as disabled regardless of this field's value.
     pub enable_mask: u32,
-    /// The item labels, in `cur = j*size.y + i` (column-major) fill order.
+    /// The item labels displayed next to each box, in construction order.
+    ///
+    /// Each string may contain a `~` hotkey marker: `"~A~lpha"` displays
+    /// "Alpha" with `A` as the accelerator key (activated by Alt+A or, when
+    /// focused, by the plain letter `A`). The `~` characters are stripped
+    /// from the visual column-width calculation.
+    ///
+    /// The vector is filled column-major (`item = column * size.y + row`) by
+    /// the layout engine — the insertion order here is the visual top-to-bottom,
+    /// left-to-right reading order.
     pub strings: Vec<String>,
-    /// The per-kind behavior selector.
+    /// The per-kind behavior selector; determines how `value` is interpreted and
+    /// how `draw` renders each item. Set at construction via [`Cluster::new`];
+    /// do not change after construction (the named wrappers seal this at build
+    /// time).
     pub kind: ClusterKind,
     /// Absolute screen position of view-local `(0, 0)`, cached each `draw` for
     /// the mouse-tracking capture (the same pattern as [`Button`](crate::widgets::Button)).
@@ -145,11 +210,19 @@ pub struct Cluster {
 }
 
 impl Cluster {
-    /// Build a cluster from `bounds`, `strings`, `kind`.
+    /// Build a cluster from `bounds`, `strings`, and a [`ClusterKind`].
     ///
-    /// Starts with `value = 0`, `sel = 0`, all items enabled, and the cursor at
-    /// `(2, 0)` (inside the first box) and shown. The view is selectable,
-    /// first-click-aware, and takes part in pre- and post-processing.
+    /// Most callers should prefer the named constructors
+    /// ([`CheckBoxes::new`] / [`RadioButtons::new`] / [`MultiCheckBoxes::new`]),
+    /// which call this with the correct kind. Use `Cluster::new` directly only
+    /// when you need to share the engine or construct a custom kind.
+    ///
+    /// The constructed cluster starts with:
+    /// - `value = 0`, `sel = 0` — no item selected/checked.
+    /// - `enable_mask = 0xFFFF_FFFF` — all items enabled.
+    /// - Cursor at `(2, 0)` (inside the first box) and shown.
+    /// - View options: selectable, first-click-aware, pre- and post-processing
+    ///   enabled (needed for hotkey delivery via the event pipeline).
     pub fn new(bounds: Rect, strings: Vec<String>, kind: ClusterKind) -> Self {
         let mut state = ViewState::new(bounds);
         state.options = Options {
@@ -281,11 +354,24 @@ impl Cluster {
         item < 32 && (self.enable_mask & (1u32 << item)) != 0
     }
 
-    /// Enable/disable the items in `a_mask` and recompute selectability (the
-    /// cluster is selectable iff at least one item is enabled).
+    /// Enable or disable the items selected by `a_mask` and recompute
+    /// the cluster's selectability.
     ///
-    /// With `n = count < 32`, `test_mask = (1 << n) - 1`; the cluster's
-    /// `selectable` option is set iff any enabled bit lies in `test_mask`.
+    /// `a_mask` is a bitmask in the same layout as [`enable_mask`](Cluster::enable_mask):
+    /// bit `i` set in `a_mask` selects item `i`. Pass `enable = true` to make
+    /// those items interactive, `false` to grey them out (they will still be
+    /// drawn but will not respond to keyboard or mouse input).
+    ///
+    /// After updating [`enable_mask`](Cluster::enable_mask), this method
+    /// recomputes whether the cluster as a whole is selectable: if every item
+    /// (within the first `count` slots) is disabled, the cluster clears its
+    /// `selectable` option so the focus order skips it entirely. Re-enabling
+    /// any item restores selectability automatically.
+    ///
+    /// ```rust,ignore
+    /// // Grey out the second option (item index 1) in a two-item CheckBoxes.
+    /// my_checkboxes.cluster.set_button_state(1 << 1, false);
+    /// ```
     pub fn set_button_state(&mut self, a_mask: u32, enable: bool) {
         if !enable {
             self.enable_mask &= !a_mask;
@@ -724,12 +810,32 @@ fn cstrlen(s: &str) -> i32 {
 // Concrete subclasses — thin embed-and-delegate wrappers
 // ---------------------------------------------------------------------------
 
-/// A column of independent checkboxes; `value` is a bitmask. An
-/// embed-and-delegate wrapper over [`Cluster`] with [`ClusterKind::CheckBoxes`].
+/// A group of independent on/off checkboxes; `cluster.value` is a bitmask
+/// where bit `i` is set when item `i` is checked.
+///
+/// Use `CheckBoxes` when the user may select any combination of options
+/// independently. Each item is toggled individually: pressing Space, clicking
+/// the box, or using the item's hotkey flips only that item's bit in `value`.
+///
+/// After the user interacts with the widget, read the result from
+/// `my_checkboxes.cluster.value` (bitmask). To pre-populate the state, set
+/// `cluster.value` before the dialog runs; bit `i` set ⇔ item `i` starts
+/// checked.
+///
+/// ```rust,ignore
+/// let boxes = CheckBoxes::new(
+///     Rect::new(2, 2, 20, 3),
+///     vec!["~V~erbose".into(), "~D~ry run".into(), "~Q~uiet".into()],
+/// );
+/// // After the dialog: inspect the bitmask.
+/// let verbose = boxes.cluster.value & (1 << 0) != 0;
+/// let dry_run = boxes.cluster.value & (1 << 1) != 0;
+/// ```
 ///
 /// # Turbo Vision heritage
 ///
-/// Ports `TCheckBoxes` (`tcheckbo.cpp`).
+/// Ports `TCheckBoxes` (`tcheckbo.cpp`). The box icon is ` [ ] ` with `X` as
+/// the checked marker, matching the original.
 pub struct CheckBoxes {
     /// The shared engine (state + layout + nav + draw + events).
     pub cluster: Cluster,
@@ -752,13 +858,31 @@ impl View for CheckBoxes {
     }
 }
 
-/// A column of mutually-exclusive buttons; `value` is the selected index. An
-/// embed-and-delegate wrapper over [`Cluster`] with
-/// [`ClusterKind::RadioButtons`].
+/// A group of mutually-exclusive radio buttons; `cluster.value` is the index of
+/// the currently selected button (0-based).
+///
+/// Use `RadioButtons` when exactly one option must be active at a time.
+/// Pressing any button (Space, click, or hotkey) deselects the previous one
+/// and sets `value = item`. Moving the cursor with the arrow keys also updates
+/// `value` — the visual selection and the logical value always agree.
+///
+/// After the dialog, read `my_radio.cluster.value` for the chosen index. To
+/// pre-select an item, set both `cluster.value` and `cluster.sel` to the same
+/// index before the dialog runs so the bullet appears on the right button.
+///
+/// ```rust,ignore
+/// let mut radio = RadioButtons::new(
+///     Rect::new(2, 2, 16, 3),
+///     vec!["~L~ow".into(), "~M~edium".into(), "~H~igh".into()],
+/// );
+/// radio.cluster.value = 1; // pre-select "Medium"
+/// radio.cluster.sel = 1;
+/// ```
 ///
 /// # Turbo Vision heritage
 ///
-/// Ports `TRadioButtons` (`tradiobu.cpp`).
+/// Ports `TRadioButtons` (`tradiobu.cpp`). The box icon is ` ( ) ` with `•`
+/// (U+2022) as the selected marker, matching the original CP437 bullet glyph.
 pub struct RadioButtons {
     /// The shared engine (state + layout + nav + draw + events).
     pub cluster: Cluster,
@@ -780,13 +904,40 @@ impl View for RadioButtons {
     }
 }
 
-/// Checkboxes with multi-state items; `value` packs an n-bit state per item. An
-/// embed-and-delegate wrapper over [`Cluster`] with
-/// [`ClusterKind::MultiCheckBoxes`].
+/// Checkboxes where each item cycles through more than two states; `cluster.value`
+/// packs an n-bit state field per item into a single `u32`.
+///
+/// Use `MultiCheckBoxes` when each option can be in one of three or more states
+/// (e.g. Off / On / Auto, or None / Low / Medium / High). Pressing Space (or
+/// clicking / using a hotkey) cycles the focused item forward through
+/// `sel_range` states, wrapping back to 0.
+///
+/// The packing is controlled by the `flags` parameter (a `u16` word):
+/// - Low byte (`flags & 0xff`): per-item bit mask (e.g. `0x03` = 2-bit items).
+/// - High byte (`flags >> 8`): per-item bit shift (e.g. `0x02` = 2-bit stride).
+///
+/// Common flag values:
+/// | Bits per item | States | `flags` |
+/// |---|---|---|
+/// | 1 | 2 (off/on) | `0x0101` |
+/// | 2 | up to 4 | `0x0203` |
+/// | 4 | up to 16 | `0x0401` (lo=0x01? typically mask is `(1<<bits)-1`) |
+///
+/// Read the current state of item `i` via the engine:
+/// `cluster.multi_mark(i)` (private method; accessible through the public
+/// `cluster` field after construction: `my_multi.cluster.multi_mark(i)` is
+/// `pub(self)` — read `cluster.value` directly with the formula
+/// `(value & (flo << (fhi * i))) >> (fhi * i)` where `flo = flags & 0xff`,
+/// `fhi = flags >> 8`).
+///
+/// After the dialog, decode `cluster.value` to recover each item's state using
+/// that same formula.
 ///
 /// # Turbo Vision heritage
 ///
-/// Ports `TMultiCheckBoxes` (`tmulchkb.cpp`).
+/// Ports `TMultiCheckBoxes` (`tmulchkb.cpp`). The original `cfXXXX` flag
+/// constants (`cfOneBit = 0x0101`, `cfTwoBits = 0x0203`, etc.) are not ported
+/// as named constants — pass the equivalent `u16` literal directly.
 pub struct MultiCheckBoxes {
     /// The shared engine (state + layout + nav + draw + events).
     pub cluster: Cluster,
@@ -796,7 +947,12 @@ pub struct MultiCheckBoxes {
 impl View for MultiCheckBoxes {}
 
 impl CheckBoxes {
-    /// Build from `bounds` + `strings`.
+    /// Create a [`CheckBoxes`] widget inside `bounds` with the given item labels.
+    ///
+    /// `strings` is the ordered list of labels, one per checkbox, top-to-bottom
+    /// within each column. Each label may include a `~` hotkey marker
+    /// (e.g. `"~V~erbose"`). The constructed widget starts with all items
+    /// unchecked (`value = 0`) and the cursor on item 0.
     pub fn new(bounds: Rect, strings: Vec<String>) -> Self {
         CheckBoxes {
             cluster: Cluster::new(bounds, strings, ClusterKind::CheckBoxes),
@@ -805,7 +961,13 @@ impl CheckBoxes {
 }
 
 impl RadioButtons {
-    /// Build from `bounds` + `strings`.
+    /// Create a [`RadioButtons`] widget inside `bounds` with the given item labels.
+    ///
+    /// `strings` is the ordered list of labels, one per button, top-to-bottom
+    /// within each column. Each label may include a `~` hotkey marker
+    /// (e.g. `"~H~igh"`). The constructed widget starts with item 0 selected
+    /// (`value = 0`, `sel = 0`). Call `.cluster.value = n; .cluster.sel = n;`
+    /// to pre-select a different item.
     pub fn new(bounds: Rect, strings: Vec<String>) -> Self {
         RadioButtons {
             cluster: Cluster::new(bounds, strings, ClusterKind::RadioButtons),
@@ -814,8 +976,20 @@ impl RadioButtons {
 }
 
 impl MultiCheckBoxes {
-    /// Build from `bounds` + `strings` plus `sel_range`, `flags`, and `states`
-    /// (the marker string).
+    /// Create a [`MultiCheckBoxes`] widget inside `bounds`.
+    ///
+    /// - `strings`: item labels (hotkey markers `~X~` supported), top-to-bottom
+    ///   within each column.
+    /// - `sel_range`: number of distinct states each item cycles through (2 =
+    ///   binary; 3 = three-state, etc.).
+    /// - `flags`: packed layout descriptor — low byte is the per-item bit mask,
+    ///   high byte is the per-item bit-shift stride. See [`MultiCheckBoxes`] for
+    ///   a table of common values.
+    /// - `states`: a string whose characters are the display markers for each
+    ///   state value (e.g. `" XO"` for off/on/other). Must have at least
+    ///   `sel_range` characters; out-of-range indices fall back to a space.
+    ///
+    /// The widget starts with `value = 0` (every item in state 0).
     pub fn new(
         bounds: Rect,
         strings: Vec<String>,

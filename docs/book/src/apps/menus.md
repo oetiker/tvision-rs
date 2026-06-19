@@ -3,17 +3,17 @@
 The top **menu bar**, the bottom **status line**, and the **context-sensitive
 help** that ties them together are the chrome of every Turbo Vision program. In
 tvision-rs all three are *data trees* you describe with fluent builders, then hand
-to a view. The data lives in [`tv::menu`](../api/tvision-rs/menu/index.html) and
-[`tv::status`](../api/tvision-rs/status/index.html); the help context is
-[`HelpCtx`](../api/tvision-rs/help/struct.HelpCtx.html).
+to a view. The data lives in [`tv::menu`](../api/tvision_rs/menu/index.html) and
+[`tv::status`](../api/tvision_rs/status/index.html); the help context is
+[`HelpCtx`](../api/tvision_rs/help/struct.HelpCtx.html).
 
 ## The menu bar
 
-A menu is a [`Menu`](../api/tvision-rs/menu/struct.Menu.html) — an ordered list of
+A menu is a [`Menu`](../api/tvision_rs/menu/struct.Menu.html) — an ordered list of
 entries plus a default selection. You rarely build one by hand; instead you chain
-a [`MenuBuilder`](../api/tvision-rs/menu/struct.MenuBuilder.html) — a fluent
+a [`MenuBuilder`](../api/tvision_rs/menu/struct.MenuBuilder.html) — a fluent
 builder where each call appends one
-[`MenuItem`](../api/tvision-rs/menu/enum.MenuItem.html) and returns `self`
+[`MenuItem`](../api/tvision_rs/menu/enum.MenuItem.html) and returns `self`
 *(the idiomatic successor to C++'s `operator+` chains)*:
 
 ```rust,ignore
@@ -35,14 +35,14 @@ Three things to notice:
 
 - **`~`-marked labels.** The tildes bracket the hot-letter (`"~F~ile"` highlights
   the `F`). Submenus take an
-  [`alt()`](../api/tvision-rs/menu/fn.alt.html) accelerator — a convenience that
+  [`alt()`](../api/tvision_rs/menu/fn.alt.html) accelerator — a convenience that
   builds an `Alt`+`<char>` key.
 - **Three entry kinds.** `command` / `command_key` append a
-  [`MenuItem::Command`](../api/tvision-rs/menu/enum.MenuItem.html) (the latter adds
+  [`MenuItem::Command`](../api/tvision_rs/menu/enum.MenuItem.html) (the latter adds
   an accelerator key plus the shortcut text shown at the right, like `"F3"`);
   `submenu` appends a nested menu; `separator` appends a divider.
 - **It is just data.** Choosing an item emits its
-  [`Command`](../api/tvision-rs/command/struct.Command.html) as an event — the menu
+  [`Command`](../api/tvision_rs/command/struct.Command.html) as an event — the menu
   never *does* anything itself. See [Commands & events](commands.md) for how that
   command reaches a handler, and for how a greyed-out (`disabled`) item is driven
   by command enable/disable state.
@@ -53,7 +53,7 @@ Three things to notice:
 > label convention and `kbAltF` literals.
 
 Wrap the finished `Menu` in a
-[`MenuBar`](../api/tvision-rs/menu/menu_bar/struct.MenuBar.html) and return it from
+[`MenuBar`](../api/tvision_rs/menu/menu_bar/struct.MenuBar.html) and return it from
 your `init_menu_bar` factory. `F10` enters the bar; the `Alt` accelerators open
 submenus directly. With the `File` menu pulled down it looks like this:
 
@@ -67,10 +67,10 @@ sources are the `menubar` and `statusline` entries in the
 
 ## The status line
 
-A status line is a `Vec<`[`StatusDef`](../api/tvision-rs/status/struct.StatusDef.html)`>`
+A status line is a `Vec<`[`StatusDef`](../api/tvision_rs/status/struct.StatusDef.html)`>`
 — a list of *definitions*, each owning a list of
-[`StatusItem`](../api/tvision-rs/status/struct.StatusItem.html)s, built with
-[`StatusDef::list()`](../api/tvision-rs/status/struct.StatusDefListBuilder.html):
+[`StatusItem`](../api/tvision_rs/status/struct.StatusItem.html)s, built with
+[`StatusDef::list()`](../api/tvision_rs/status/struct.StatusDefListBuilder.html):
 
 ```rust,ignore
 let defs = StatusDef::list()
@@ -84,7 +84,7 @@ let defs = StatusDef::list()
 
 Each item carries display text, an optional accelerator key, and a command —
 clicking the label or pressing the key fires that command. Hand the `defs` to a
-[`StatusLine`](../api/tvision-rs/status/status_line/struct.StatusLine.html) and
+[`StatusLine`](../api/tvision_rs/status/status_line/struct.StatusLine.html) and
 return it from your `init_status_line` factory.
 
 A **hidden hotkey binding** is an item with no text — use the `key_item` builder
@@ -95,15 +95,15 @@ globally — the standard trick for app-wide shortcuts like `Shift-Del` ⇒ Cut
 ## Context-sensitive help
 
 This is what a multiple-`StatusDef` list is *for*. Each def carries a
-[`HelpCtxRange`](../api/tvision-rs/status/enum.HelpCtxRange.html); the status line
+[`HelpCtxRange`](../api/tvision_rs/status/enum.HelpCtxRange.html); the status line
 shows the items of the **first def whose range matches the current help
 context**. Most apps need only one universal def — that is what `def_all`
-([`HelpCtxRange::All`](../api/tvision-rs/status/enum.HelpCtxRange.html)) builds — but
+([`HelpCtxRange::All`](../api/tvision_rs/status/enum.HelpCtxRange.html)) builds — but
 you can register a `def_one_of(...)` whose items appear only while a particular
 context is active, so the bottom line changes as focus moves between an editor, a
 browser, and so on.
 
-The current context is a [`HelpCtx`](../api/tvision-rs/help/struct.HelpCtx.html).
+The current context is a [`HelpCtx`](../api/tvision_rs/help/struct.HelpCtx.html).
 A help context is a namespaced `&'static str`
 (`HelpCtx::custom("myapp.editor")`), so app- and view-defined contexts can never
 collide. Because string identity carries no ordering, context ranges are expressed
@@ -114,6 +114,57 @@ whole UI.
 > **Turbo Vision heritage:** the C++ `HelpCtx` was a hand-assigned `int`, and
 > ranges were `[min, max]` numeric intervals. tvision-rs replaces the integer with a
 > `&'static str` key and the numeric range with `HelpCtxRange`.
+
+## Context-sensitive hints
+
+Beyond switching which status-line items appear, the status line can show a
+**free-form hint string** to the right of the items — a short message that
+changes as the focused view changes context. This is the `hint` provider.
+
+By default no hint is shown (`None`). Install one with
+[`StatusLine::with_hint`](../api/tvision_rs/status/status_line/struct.StatusLine.html#method.with_hint)
+(builder) or
+[`StatusLine::set_hint`](../api/tvision_rs/status/status_line/struct.StatusLine.html#method.set_hint)
+(post-construction). The provider is a closure `Fn(HelpCtx) -> Option<String>`;
+it receives the *current* help context and returns the text to show (or `None`
+to show nothing):
+
+```rust
+# use tvision_rs as tv;
+# use tv::help::HelpCtx;
+# use tv::status::{StatusDef, StatusLine};
+# use tv::Rect;
+# #[allow(unused_variables)]
+# fn _demo() {
+let defs = StatusDef::list()
+    .def_all(|d| d)
+    .build();
+
+let line = StatusLine::new(Rect::new(0, 23, 80, 24), defs)
+    .with_hint(|ctx| match ctx {
+        c if c == HelpCtx::custom("myapp.editor") =>
+            Some("F2 Save  F3 Open  Ctrl-F Find".to_string()),
+        c if c == HelpCtx::custom("myapp.browser") =>
+            Some("Enter Select  Esc Back  F5 Refresh".to_string()),
+        _ => None,
+    });
+# let _ = line;
+# }
+```
+
+The `Program` idle loop reads the focused view's `help_ctx` from its `ViewState`
+and calls `StatusLine::set_help_ctx` at the start of each pump — so the hint
+updates automatically as the user moves focus. The status line re-draws itself
+when the context changes (it skips the redraw if the context has not changed,
+making it idempotent).
+
+**Combining defs with hints:** the two mechanisms are independent. Defs swap the
+entire item list; the hint overlays a text string at the right end of the line.
+Use `def_one_of` when you want *different command buttons* per context; use
+`with_hint` for a short advisory string that supplements a shared button set.
+
+Source: `src/status/status_line.rs` (`StatusLine::set_hint`, `StatusLine::with_hint`,
+`StatusLine::set_help_ctx`), `src/status/mod.rs` (`HelpCtxRange`, `StatusDef`).
 
 ## See also
 

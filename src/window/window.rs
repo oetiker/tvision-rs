@@ -16,15 +16,28 @@ use crate::widgets::{Orientation, ScrollBar};
 /// Window decoration flags: which of move / grow / close / zoom the window
 /// allows.
 ///
-/// These belong to the window (the [`Frame`] only renders a pushed-down copy);
-/// the window pushes them down to its frame via
-/// [`Frame::set_flags`](crate::frame::Frame::set_flags). The `move` field is
-/// spelled `r#move` because `move` is a Rust keyword.
+/// Build a customised `WindowFlags` (e.g. at construction) to change which
+/// controls appear on the frame. The default (via `Default`) enables all
+/// four. Disable individual fields to suppress a decoration:
+///
+/// ```rust
+/// use tvision_rs::window::WindowFlags;
+/// let no_zoom = WindowFlags { zoom: false, ..Default::default() };
+/// assert!(!no_zoom.zoom);
+/// ```
+///
+/// **`r#move` spelling:** `move` is a Rust keyword, so the field is accessed as
+/// `flags.r#move`. The raw-identifier syntax is a Rust-only artefact; at the
+/// semantic level it is identical to the C++ `wfMove` bit.
+///
+/// These flags belong to the window; the [`Frame`] receives a pushed-down copy
+/// via [`Frame::set_flags`](crate::frame::Frame::set_flags) and renders the
+/// corresponding icons (close `[×]`, zoom `[↕]`, grow corner `▐`).
 ///
 /// # Turbo Vision heritage
 ///
-/// Ports the window-flag family (`dialogs.h`) as a struct-of-bools (deviation
-/// D5).
+/// Ports the `wfMove / wfGrow / wfClose / wfZoom` flag word (`views.h`) as a
+/// struct-of-bools.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct WindowFlags {
     /// The window can be moved by dragging its frame.
@@ -43,23 +56,41 @@ pub struct WindowFlags {
 
 /// Which colour scheme the window draws in.
 ///
-/// The scheme is pushed down to the [`Frame`] child, which selects the matching
-/// role family: `Blue` → `Role::FrameActive` / `FramePassive` / `FrameDragging`
-/// / `FrameIcon`; `Cyan` → `Role::FrameCyan*`; `Gray` (used by dialogs) →
-/// `Role::FrameGray*`.
+/// Choose the variant that matches the window's purpose:
+///
+/// - [`Blue`](WindowPalette::Blue) — plain application windows; the default.
+///   Draws in the `Role::FrameActive` / `FramePassive` / `FrameDragging` /
+///   `FrameIcon` / `Role::ScrollBar*` / `Role::Scroller*` role family.
+/// - [`Cyan`](WindowPalette::Cyan) — secondary / highlight windows (e.g.
+///   help viewers). Draws in the `Role::FrameCyanActive` / `FrameCyanPassive`
+///   / `FrameCyanIcon` family.
+/// - [`Gray`](WindowPalette::Gray) — dialog boxes. [`Dialog`](crate::dialog::Dialog)
+///   sets this automatically; use it directly when building a dialog-styled
+///   custom window. Draws in the `Role::FrameGrayActive` / `FrameGrayPassive`
+///   / `FrameGrayIcon` family.
+///
+/// The scheme is stored on the [`Window`] and pushed down to the [`Frame`]
+/// child automatically; no manual frame update is needed when the palette
+/// changes.
 ///
 /// # Turbo Vision heritage
 ///
-/// Replaces the window's palette-pointer selector (`views.h`) with a theme-role
-/// selector instead (deviation D7).
+/// Replaces the `wpBlueWindow = 1 / wpCyanWindow = 2 / wpGrayWindow = 3`
+/// integer palette selector (`views.h`; the guide calls these
+/// `dpBlueDialog / dpCyanDialog / dpGrayDialog`) with a typed enum, which the
+/// frame maps to named `Role` entries in the theme. The eight
+/// per-palette entries described in the guide (frame passive, frame active,
+/// frame icon, scrollbar page, scrollbar controls, scroller normal, scroller
+/// selected, reserved) are expressed as named `Role` variants rather than
+/// integer indices.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum WindowPalette {
-    /// The default window scheme.
+    /// The default window scheme (`Role::Frame*` family).
     #[default]
     Blue,
-    /// The cyan scheme (`Role::FrameCyan*`).
+    /// The cyan scheme (`Role::FrameCyan*` family).
     Cyan,
-    /// The gray scheme used by dialogs (`Role::FrameGray*`).
+    /// The gray scheme used by dialogs (`Role::FrameGray*` family).
     Gray,
 }
 
@@ -115,8 +146,16 @@ pub struct Window {
 }
 
 impl Window {
-    /// Construct the window over `bounds` with an optional `title` and a window
+    /// Construct a window over `bounds` with an optional `title` and a window
     /// `number`.
+    ///
+    /// **`number`:** pass a positive value (`1`–`9`) to make the window reachable
+    /// via the Alt-*N* keyboard shortcut; [`Program`](crate::Program) broadcasts
+    /// [`Command::SELECT_WINDOW_NUM`](crate::Command::SELECT_WINDOW_NUM) and the
+    /// desktop finds the matching window by its number. Pass `0` (the
+    /// `wnNoNumber` sentinel from Turbo Vision) for an unnumbered window that is
+    /// never a select-by-number target — this is the common case for document
+    /// windows that are cycled with `NEXT`/`PREV` instead of by number.
     ///
     /// Defaults set at construction: all four decoration flags enabled
     /// (move/grow/close/zoom); the un-zoom rect set to the current bounds; the
@@ -179,18 +218,35 @@ impl Window {
 
     // -- accessors -----------------------------------------------------------
 
-    /// The frame child's id ([`zoom`](Self::zoom) pushes the zoomed flag through
-    /// it).
+    /// The [`ViewId`] of the [`Frame`](crate::frame::Frame) child that draws the
+    /// window border, title, and icons.
+    ///
+    /// Use this id to reach the frame via `child_mut` + downcast when you need to
+    /// call a frame-specific method (e.g. to read [`Frame::zoomed`]). The window
+    /// itself never holds a direct `&mut Frame` reference across calls; instead it
+    /// always resolves the id on demand — the push-down pattern that avoids upward
+    /// parent pointers.
     pub fn frame_id(&self) -> ViewId {
         self.frame_id
     }
 
-    /// The decoration flags.
+    /// The current decoration flags (which of move / grow / close / zoom are enabled).
+    ///
+    /// Read these to check which operations the window permits; for example,
+    /// `flags().zoom` is true when the zoom icon is shown and the zoom command is
+    /// accepted. To change the flags after construction use `set_flags` (crate-internal).
     pub fn flags(&self) -> WindowFlags {
         self.flags
     }
 
-    /// The saved bounds for un-zoom.
+    /// The pre-zoom bounds, saved when the window zooms in to fill its owner,
+    /// used to restore the original size when it un-zooms.
+    ///
+    /// When the user zooms the window to fill the owner, the window's current
+    /// bounds are stored here first; a second zoom (un-zoom) restores them from
+    /// this value. At construction `zoom_rect` equals the initial bounds. This
+    /// getter is primarily useful for testing and serialisation; normal application
+    /// code does not need to read it directly.
     pub fn zoom_rect(&self) -> Rect {
         self.zoom_rect
     }
@@ -199,12 +255,24 @@ impl Window {
     // below (returning `Option<i16>` — `None` for an unnumbered window), so Alt-N
     // can query any `&dyn View` for its number. No inherent getter.
 
-    /// The colour scheme.
+    /// The colour scheme used to draw this window's frame.
+    ///
+    /// Plain windows use [`WindowPalette::Blue`] (the default); dialogs use
+    /// [`WindowPalette::Gray`] (set automatically by [`Dialog`](crate::dialog::Dialog)).
+    /// Inspect this to branch on the active scheme; to change it after construction
+    /// use `set_palette` (crate-internal).
     pub fn palette(&self) -> WindowPalette {
         self.palette
     }
 
-    /// The window title.
+    /// The window title displayed in the frame's title bar, or `None` for an
+    /// untitled window.
+    ///
+    /// Pass the title at construction via [`Window::new`]. To rename the window
+    /// after construction (e.g. after a save-as), use `set_title` (crate-internal),
+    /// which updates both this field and the frame child. The frame truncates the
+    /// title to the available title-bar width at draw time; no explicit length limit
+    /// is needed here.
     pub fn title(&self) -> Option<&str> {
         self.title.as_deref()
     }
@@ -385,14 +453,27 @@ impl Window {
 
     // -- standard scroll bar -------------------------------------------------
 
-    /// Insert a standard scroll bar on the right (vertical) or bottom (horizontal)
-    /// edge and return its [`ViewId`].
+    /// Insert a standard scroll bar on the right or bottom edge and return its
+    /// [`ViewId`].
     ///
-    /// A vertical bar occupies the right edge inset by one row top and bottom; a
-    /// horizontal bar occupies the bottom edge inset by two columns each side. For
-    /// `handle_keyboard` we enable post-processing on the concrete [`ScrollBar`]
-    /// **before** boxing + inserting (`insert` consumes the box, so we mutate
-    /// first).
+    /// Pass [`ScrollBarOptions`] to choose vertical (right edge) or horizontal
+    /// (bottom edge) placement, and whether the bar handles keyboard arrow keys
+    /// when it is not the focused view (`handle_keyboard`).
+    ///
+    /// The bar is sized to fit exactly inside the frame without covering the
+    /// frame corners:
+    /// - **Vertical** (right edge): occupies `(width−1, 1) .. (width, height−1)` —
+    ///   one cell wide, inset one row from each frame corner.
+    /// - **Horizontal** (bottom edge): occupies `(2, height−1) .. (width−2, height)` —
+    ///   one cell tall, inset two columns from each frame corner.
+    ///
+    /// Call this method after construction and before the window is shown. The
+    /// returned [`ViewId`] can be passed to a scroller or list viewer as its
+    /// linked scroll bar.
+    ///
+    /// For `handle_keyboard`, post-processing is enabled on the [`ScrollBar`]
+    /// **before** boxing + inserting (the `insert` call consumes the box, so
+    /// the flag must be set first).
     pub fn standard_scroll_bar(&mut self, opts: ScrollBarOptions) -> ViewId {
         let ext = self.group.state().get_extent();
         let r = if opts.vertical {
@@ -1274,8 +1355,16 @@ impl View for Window {
         }
     }
 
-    /// The window's size limits: the group's maximum, with the minimum forced to
-    /// the window minimum (16×6).
+    /// The window's size limits: the owner-derived maximum with the minimum forced
+    /// to 16 columns × 6 rows — the smallest a window can be while still showing
+    /// its frame icons legibly.
+    ///
+    /// This `size_limits` override is intentionally *not* in the `#[delegate]`
+    /// skip list, while `calc_bounds` *is* skipped: `calc_bounds` therefore routes
+    /// through the *trait default*, which calls **this** `size_limits` override
+    /// (giving the 16×6 floor). If `calc_bounds` were delegated to the inner `Group`, it would
+    /// use the group's own `size_limits` (min 0×0) and silently bypass the window
+    /// minimum on owner-driven resizes.
     fn size_limits(&self, owner_size: Point) -> (Point, Point) {
         let (_min, max) = self.group.size_limits(owner_size);
         (Point::new(16, 6), max)
@@ -1288,8 +1377,15 @@ impl View for Window {
     // (min 0×0) and silently bypass the window's minimum on an owner-driven
     // resize.
 
-    /// The window number, or `None` for an unnumbered (`0`) window. A window
-    /// numbered `0` is never a select-by-number target.
+    /// The window number (1–9), or `None` for an unnumbered window.
+    ///
+    /// A positive number makes the window reachable by Alt+*N* (where *N* is the
+    /// digit). The program's event handler broadcasts `cmSelectWindowNum` and the
+    /// desktop walks its children calling `View::number()` on each; the first
+    /// window whose number matches `N` is focused
+    /// ([`Group::focus_by_number`](crate::view::Group)). A window constructed with
+    /// `number == 0` (or any non-positive value) returns `None` and is never a
+    /// select-by-number target.
     fn number(&self) -> Option<i16> {
         if self.number > 0 {
             Some(self.number)
