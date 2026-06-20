@@ -26,6 +26,7 @@
 # Building Apps
 
 - [Windows & the desktop](apps/windows.md)
+- [The data-movement model](apps/data-movement.md)
 - [Dialogs & data](apps/dialogs.md)
 - [Third-party components](apps/extensibility.md)
 - [Controls](apps/controls.md)

@@ -70,9 +70,13 @@ pub enum FieldValue {
     /// during scatter. Replaces the raw `TMemoData` buffer that
     /// `TMemo::getData`/`setData` filled in the original.
     Text(String),
-    /// An integer value (e.g. a scroll bar's position).
+    /// A numeric value — the currency for integer inputs and scrollbar positions.
+    /// Produced by numeric input controls and read by the broker when syncing a
+    /// scrollbar's current value into a scroller or list viewer.
     Int(i32),
-    /// A boolean field.
+    /// A single toggle control's on/off state. Contrast with [`Bits`](Self::Bits),
+    /// which carries a whole cluster's bitmask (multiple check boxes or radio
+    /// buttons packed into one `u32`).
     Bool(bool),
     /// A packed bit word — a cluster control's value (check boxes: a bitmask;
     /// radio buttons: the selected index). Faithful to `TCluster::value`. NOT a
@@ -91,6 +95,11 @@ pub enum FieldValue {
 
 impl FieldValue {
     /// Wrap a user payload as [`Custom`](FieldValue::Custom).
+    ///
+    /// Recover the payload on the read side with [`value_as`](Self::value_as)
+    /// (descriptive error on mismatch — recommended) or [`as_custom`](Self::as_custom)
+    /// (`Option`). See the [extensibility guide](../../../apps/extensibility.html)
+    /// for the full open-exchange story.
     pub fn custom<T: Any + fmt::Debug>(v: T) -> Self {
         FieldValue::Custom(Rc::new(v))
     }

@@ -51,6 +51,8 @@ A suggested path:
 2. If you are coming from C++ Turbo Vision, read **[The Idiomatic
    Port](port/faithful.md)** next: it explains the *ideas* behind each
    deviation.
-3. Otherwise jump to **[Building Apps](apps/windows.md)** for task recipes, and
-   dip into **[How It Works](internals/view-tree.md)** when you want to write
-   your own `View`.
+3. Otherwise jump to **[Building Apps](apps/windows.md)** for task recipes.
+   [The data-movement model](apps/data-movement.md) is a good early read —
+   it explains in one place how values travel between dialogs, controls, siblings,
+   and modals. Dip into **[How It Works](internals/view-tree.md)** when you want
+   to write your own `View`.

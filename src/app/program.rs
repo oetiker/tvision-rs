@@ -1265,9 +1265,9 @@ impl Program {
     /// An tvision-rs-original extension (no direct Borland/magiblot counterpart).
     /// The chosen color is read out of the modal's own
     /// [`ColorPicker`](crate::dialog::ColorPicker) and returned **by value** via
-    /// [`exec_view_with`](Self::exec_view_with)-style capture — no shared sink,
-    /// no `ModalCompletion` variant. `Color` is deliberately not a `FieldValue`
-    /// (a 4-variant enum, not a packable scalar; spec non-goal).
+    /// [`exec_view_with`](Self::exec_view_with)-style capture. `Color` is
+    /// deliberately not a `FieldValue` (a 4-variant enum, not a packable scalar;
+    /// spec non-goal).
     ///
     /// # Turbo Vision heritage
     /// Supersedes `TColorDialog` (guide pp. 406–409), which was an interactive
@@ -10483,8 +10483,8 @@ mod tests {
             assert_eq!(program.capture_len(), 0, "ModalFrame popped on close");
         }
 
-        /// Cancel returns `None` — the sink is never written when the dialog ends
-        /// with `cmCancel`, so `color_dialog` returns `None`.
+        /// Cancel returns `None` — `color_dialog` yields `None` when the dialog ends
+        /// with `cmCancel`.
         #[test]
         fn color_dialog_cancel_returns_none() {
             use crate::color::Color;
@@ -10493,7 +10493,7 @@ mod tests {
                 .out_events
                 .push_back(Event::Command(Command::CANCEL));
             let result = program.color_dialog(Color::Rgb(255, 0, 0));
-            assert_eq!(result, None, "Cancel yields None (sink not written)");
+            assert_eq!(result, None, "Cancel yields None");
             assert_eq!(program.capture_len(), 0, "ModalFrame popped on cancel");
         }
 
@@ -10512,8 +10512,7 @@ mod tests {
     mod theme_editor_c8 {
         use super::*;
 
-        /// Cancel leaves the theme unchanged — the sink is never written when the
-        /// dialog ends with `cmCancel`.
+        /// Cancel: the dialog ends with `cmCancel` and no new theme is installed.
         #[test]
         fn theme_editor_cancel_leaves_theme_unchanged() {
             let (mut program, _handle, _clock) = program_with_desktop(80, 30);
@@ -10546,8 +10545,7 @@ mod tests {
 
         /// OK extracts the ThemeEditorBody's modified working theme BY VALUE,
         /// exercising the public `exec_view_with` wrapper over the same core
-        /// (`exec_view_capture`) that `Program::theme_editor` uses — replacing the
-        /// old Rc/RefCell sink that went away with the deleted ThemeEdit variant.
+        /// (`exec_view_capture`) that `Program::theme_editor` uses.
         #[test]
         fn theme_editor_ok_installs_new_theme() {
             use crate::color::{Color, Style};
@@ -11505,7 +11503,7 @@ mod tests {
 
     /// `exec_view_with` returns the closure's value BY VALUE, and the closure sees
     /// the modal's end command. OK → the extracted value; Cancel → the cancel value.
-    /// Proves the by-value channel (no Rc sink, no dyn Any in the framework).
+    /// Proves the by-value channel: the closure's return crosses back by value.
     #[test]
     fn exec_view_with_returns_extract_value_by_command() {
         use crate::dialog::Dialog;

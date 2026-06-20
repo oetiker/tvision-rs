@@ -75,8 +75,7 @@ This drain is what lets a button request `end_modal(Command::OK)` from deep
 inside a dialog, a window request its own `Close`, a dragged frame request new
 `ChangeBounds`, a scroller stay in sync with a sibling scrollbar it can never
 touch directly, and a list view launch a custom modal via `OpenModal` (reusing
-the existing `pending_modal` slot + `RouteModalAnswer` completion — no new
-`ModalCompletion` variant needed). The cross-view (`ViewId`-addressed) cases are
+the existing modal machinery). The cross-view (`ViewId`-addressed) cases are
 the subject of [Cross-view brokering & `ViewId`](brokering.md); the drain's place
 in the loop is in [The event loop in depth](event-loop.md).
 

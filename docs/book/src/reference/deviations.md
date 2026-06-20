@@ -95,6 +95,8 @@ becomes [`Program::exec_view_with`](../api/tvision_rs/app/struct.Program.html#me
 becomes a typed `value()`/`set_value()` protocol over a
 [`FieldValue`](../api/tvision_rs/data/enum.FieldValue.html). → [Dialogs & data](../apps/dialogs.md)
 
+See [The data-movement model](../apps/data-movement.md) for the whole-design overview.
+
 ### D11 · Platform layer → Backend trait {#d11}
 
 *chosen.* The platform layer (`THardwareInfo`, ncurses/win32 strategies) becomes

@@ -5,6 +5,45 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## Data-movement docs — front-door article + de-framing pass (2026-06-20)
+
+Documentation follow-up to the data-movement unification (Phases 1–5, now on
+`main`). Built on branch `docs/data-movement-model`, base `69d092b`,
+subagent-driven (one implementer → spec+quality review → fix wave → orchestrator
+re-verify).
+
+**New front-door article** — `docs/book/src/apps/data-movement.md` ("The
+data-movement model"), wired into `SUMMARY.md` as the conceptual lead-in before
+*Dialogs & data*, cross-linked from the Introduction (`README.md`) and deviation
+D10. It introduces the unification as one page: the problem (C++'s loose
+`getData`/`message`/`execView` idioms), the **three kinds of movement** (field/
+record data via `FieldValue`; sync signals via defaulted `View` methods brokered
+by the pump; by-value modal results via `exec_view_with<R>`), the modal-result
+decision rule stated once, and what deliberately stays separate (`Broadcast`
+source as subject-filter; `Color`/`Theme` by value; structural parent→child
+pushes). The prior pages (`dialogs.md`, `extensibility.md`, `port/modal.md`,
+`internals/brokering.md`) each cover one slice well but were never *introduced*
+as one design — this is that introduction.
+
+**Review caught one factual error** (fixed before merge): the article had
+presented the view-launched typed data-back path (`request_exec_view` →
+`set_modal_data`) as live. It is deliberately NOT built (`context.rs:1384`;
+`set_modal_data` is live only for the editor's *Program*-launched Find/Replace,
+Phase 4) — now framed as a documented future extension linking
+`port/modal.md#data-back-path`.
+
+**De-framing pass** — removed rstv-internal "what we replaced" mentions (the
+deleted `ModalCompletion` sink variants, `Rc<Cell>`/`Rc<RefCell>` sinks) from
+`port/modal.md`, `internals/deferred.md`, and several `program.rs` doc/test
+comments; pre-1.0, contrasting against rstv's own superseded internals is noise.
+**C++ Turbo Vision heritage notes were preserved** (`getData`/`TColorDialog`/
+`execView`/`infoPtr`, the `# Turbo Vision heritage` sections) — that lineage is
+the port's reference value, a deliberately different category. Also fleshed out
+three thin `FieldValue` rustdoc one-liners (`Int`/`Bool`/`custom()`).
+
+Gate green on the integrated tree: `clippy --all-targets -D warnings`, `cargo
+xtask test` (37 chapters), `cargo xtask docs` (exit 0, links resolve), `fmt`.
+
 ## Phase 5 — generic ExecView from a view (`Context::request_exec_view`; consumer-API coverage, 2026-06-19)
 
 Closed consumer-API gap #2: a custom view can now launch its own modal dialog

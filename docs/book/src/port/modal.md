@@ -54,7 +54,7 @@ then_command)` instead queues a `Deferred::OpenModal`
 and returns immediately; the pump moves the boxed view into the existing
 `pending_modal` slot, runs it via the same single-loop machinery, and on close
 delivers the result to `requester` and re-injects `then_command`. No new loop
-is spun, and no new `ModalCompletion` variant is needed.
+is spun.
 
 ## Getting a result back: `exec_view_with`
 
@@ -74,11 +74,9 @@ let chosen: Option<Color> = program.exec_view_with(Box::new(dialog), |modal, cmd
 });
 ```
 
-There is no shared `Rc<Cell>` sink and no `dyn Any` in the framework: the result
-type `R` is named by the caller, never by the framework. This is the by-value
-successor to the old per-dialog `ModalCompletion` "sink" variants. A single field
-crosses as a [`FieldValue`](../api/tvision_rs/data/enum.FieldValue.html) via
-`View::value`; a richer native value (a `Color`, a whole `Theme`) is returned
+The result type `R` is named by the caller, never by the framework. A single
+field crosses as a [`FieldValue`](../api/tvision_rs/data/enum.FieldValue.html)
+via `View::value`; a richer native value (a `Color`, a whole `Theme`) is returned
 directly from `extract` — `Color`/`Theme` are deliberately not `FieldValue`s.
 
 ## Launching a modal from a view: `Context::request_exec_view`
