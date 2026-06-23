@@ -131,8 +131,8 @@ pub use validate::{
     RegexValidator, StringLookupValidator, Validator,
 };
 pub use view::{
-    Context, DragMode, DrawCtx, Group, GrowMode, Options, Phase, Point, Rect, SelectMode, State,
-    StateFlag, View, ViewId, ViewState,
+    Context, Deferred, DragMode, DrawCtx, Group, GrowMode, Options, Phase, Point, Rect, SelectMode,
+    State, StateFlag, View, ViewId, ViewState,
 };
 pub use widgets::Indicator;
 pub use widgets::PageStack;

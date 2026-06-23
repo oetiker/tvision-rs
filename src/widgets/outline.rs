@@ -1398,6 +1398,22 @@ impl Outline {
     /// that [`crate::widgets::Scroller`] and [`crate::widgets::ListViewer`] face).
     /// Skipping `ov_update` leaves the scrollbars at their zero defaults and the
     /// focus unclamped.
+    ///
+    /// # Warning: call `ov_update` before first use
+    ///
+    /// Without [`ov_update`], `limit.y` stays 0 and `adjust_focus` clamps the
+    /// focus index to -1. Even on a non-empty tree, pressing the down-arrow will
+    /// appear to have no effect and the selection will be invisible. Call
+    /// [`ov_update`] once after the widget is inserted into a group, the first
+    /// time a [`Context`] is available — typically at the start of your first
+    /// `handle_event` call with a `seeded` guard:
+    ///
+    /// ```rust,ignore
+    /// if !self.seeded {
+    ///     tv::ov_update(&mut self.outline, ctx);
+    ///     self.seeded = true;
+    /// }
+    /// ```
     pub fn new(
         bounds: Rect,
         h: Option<ViewId>,
@@ -1540,6 +1556,14 @@ impl View for Outline {
     }
     fn set_state(&mut self, flag: StateFlag, enable: bool, ctx: &mut Context) {
         ov_set_state(self, flag, enable, ctx);
+    }
+
+    /// Return the index of the currently focused node as
+    /// `Some(FieldValue::Int(foc))`, matching the [`crate::widgets::ListBox`]
+    /// contract. Returns `Some(FieldValue::Int(-1))` when no node is focused
+    /// (e.g. before [`ov_update`] is called on an empty tree).
+    fn value(&self) -> Option<crate::data::FieldValue> {
+        Some(crate::data::FieldValue::Int(self.ov().foc))
     }
 
     /// Re-publish scrollbar range/page params with the stored `limit` and the new
@@ -1860,6 +1884,46 @@ mod tests {
         }
         assert_eq!(o.ov().foc, 1, "Down → focus position 1");
         assert!(ev.is_nothing(), "Down consumed");
+    }
+
+    #[test]
+    fn value_returns_focused_index() {
+        // Before ov_update, foc = 0 and limit.y = 0. value() still returns Some.
+        let mut o = Outline::new(Rect::new(0, 0, 20, 5), None, None, Some(animals_tree()));
+        assert_eq!(
+            o.value(),
+            Some(crate::data::FieldValue::Int(0)),
+            "value() returns Some(Int(foc)) before ov_update"
+        );
+
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred = vec![];
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            ov_update(&mut o, &mut ctx);
+        }
+        // foc is still 0 after ov_update (no navigation yet).
+        assert_eq!(
+            o.value(),
+            Some(crate::data::FieldValue::Int(0)),
+            "value() returns Some(Int(0)) at start"
+        );
+
+        // Navigate down once → foc = 1.
+        let mut ev = Event::KeyDown(crate::event::KeyEvent::new(
+            Key::Down,
+            crate::event::KeyModifiers::default(),
+        ));
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            o.handle_event(&mut ev, &mut ctx);
+        }
+        assert_eq!(
+            o.value(),
+            Some(crate::data::FieldValue::Int(1)),
+            "value() tracks focused index after Down"
+        );
     }
 
     #[test]
