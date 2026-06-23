@@ -246,6 +246,9 @@ pub struct OutlineViewerState {
     /// (between `MouseDown` and `MouseUp`), `None` otherwise. Guards the
     /// tracking arms against stray (untracked) events.
     pub(crate) track: Option<OvTrack>,
+    /// Whether the initial [`ov_update`] has run; gates the auto-seed so it
+    /// happens exactly once. Do not assign directly.
+    pub(crate) seeded: bool,
 }
 
 impl OutlineViewerState {
@@ -256,10 +259,12 @@ impl OutlineViewerState {
     /// absent). The view starts selectable, grows with its lower-right corner,
     /// and focuses at DFS position 0 with a zero scroll offset.
     ///
-    /// After embedding this state and inserting the widget into a group, call
-    /// [`ov_update`] with the resulting [`Context`] to publish the scrollbar
-    /// range and page parameters — those require a live `Context` that is not
-    /// available at construction time.
+    /// The initial scrollbar population is seeded automatically the first time a
+    /// context-bearing lifecycle call reaches the viewer (event, state change, or
+    /// bounds change), so no explicit [`ov_update`] is needed after construction.
+    /// Call [`ov_update`] explicitly only after mutating the tree (swapping
+    /// [`Outline::root`], or expanding/collapsing programmatically) to recount
+    /// visible nodes and republish the limits.
     pub fn new(bounds: Rect, h: Option<ViewId>, v: Option<ViewId>) -> Self {
         let mut state = ViewState::new(bounds);
         state.options = Options {
@@ -280,6 +285,7 @@ impl OutlineViewerState {
             foc: 0,
             abs_origin: Point::new(0, 0),
             track: None,
+            seeded: false,
         }
     }
 
@@ -887,11 +893,9 @@ pub fn adjust_focus<L: OutlineViewer + ?Sized>(
 /// Recount the visible nodes, republish the scrollbar limits, and re-clamp the
 /// focus.
 ///
-/// Call this after every mutation to the tree (node inserted, removed, or
-/// expanded/collapsed) **and** after inserting the widget into a group for the
-/// first time. Without this call the scrollbar ranges and the focus clamp are
-/// stale: the initial call after insertion is mandatory because a [`Context`]
-/// is unavailable at construction time.
+/// This is invoked automatically on first display or interaction via
+/// [`ensure_seeded`], so you only need to call it explicitly after mutating the
+/// tree (node inserted, removed, or expanded/collapsed programmatically).
 ///
 /// Internally this counts only the currently-visible nodes (collapsed subtrees
 /// are excluded), computes the maximum row width, calls
@@ -918,6 +922,7 @@ pub fn ov_update<L: OutlineViewer + ?Sized>(this: &mut L, ctx: &mut Context) {
         }
         false
     });
+    this.ov_mut().seeded = true;
     this.ov_mut().set_limit(max_x, count, ctx);
     let foc = this.ov().foc;
     adjust_focus(this, foc, ctx);
@@ -989,6 +994,16 @@ pub fn ov_expand_all<L: OutlineViewer + ?Sized>(this: &mut L, pos: i32) {
     }
 }
 
+/// Run the initial [`ov_update`] exactly once, the first time a context-bearing
+/// lifecycle call reaches the viewer. After this, navigation and scrollbars are
+/// correct without the consumer calling `ov_update` manually; an explicit
+/// `ov_update` is still required after MUTATING the tree (see its docs).
+fn ensure_seeded<L: OutlineViewer + ?Sized>(this: &mut L, ctx: &mut Context) {
+    if !this.ov().seeded {
+        ov_update(this, ctx); // sets seeded = true
+    }
+}
+
 /// Apply a view-state flag change to an outline viewer.
 ///
 /// Delegates to the concrete widget's [`View`] method. In addition to flipping
@@ -1009,6 +1024,7 @@ pub fn ov_set_state<L: OutlineViewer + ?Sized>(
     enable: bool,
     ctx: &mut Context,
 ) {
+    ensure_seeded(this, ctx);
     this.ov_mut().state.set_flag(flag, enable);
     if flag == StateFlag::Focused {
         let source = this.ov().state.id();
@@ -1041,6 +1057,7 @@ pub fn ov_handle_event<L: OutlineViewer + View + ?Sized>(
     ev: &mut Event,
     ctx: &mut Context,
 ) {
+    ensure_seeded(this, ctx);
     // The scroll-bar-changed read-sync filter (same as the scroller). Do NOT
     // clear the event — it stays live for the scrollbar's own handling.
     if let Event::Broadcast { command, source } = *ev
@@ -1391,29 +1408,14 @@ impl Outline {
     /// Create an `Outline` over `bounds`, with optional horizontal (`h`) and
     /// vertical (`v`) scrollbar ids and an initial tree `root`.
     ///
-    /// After calling `new`, insert the widget into a group and then call
-    /// [`ov_update`] with the resulting [`Context`]. That second step is
-    /// mandatory: publishing the scrollbar range and page parameters requires a
-    /// `Context`, which is unavailable at construction time (the same constraint
-    /// that [`crate::widgets::Scroller`] and [`crate::widgets::ListViewer`] face).
-    /// Skipping `ov_update` leaves the scrollbars at their zero defaults and the
-    /// focus unclamped.
+    /// The initial scrollbar population is now seeded **automatically** on the
+    /// first display or interaction (the first context-bearing lifecycle call —
+    /// `handle_event`, `set_state`, or `on_bounds_changed`). You do not need to
+    /// call [`ov_update`] manually just to make navigation work after construction.
     ///
-    /// # Warning: call `ov_update` before first use
-    ///
-    /// Without [`ov_update`], `limit.y` stays 0 and `adjust_focus` clamps the
-    /// focus index to -1. Even on a non-empty tree, pressing the down-arrow will
-    /// appear to have no effect and the selection will be invisible. Call
-    /// [`ov_update`] once after the widget is inserted into a group, the first
-    /// time a [`Context`] is available — typically at the start of your first
-    /// `handle_event` call with a `seeded` guard:
-    ///
-    /// ```rust,ignore
-    /// if !self.seeded {
-    ///     tv::ov_update(&mut self.outline, ctx);
-    ///     self.seeded = true;
-    /// }
-    /// ```
+    /// You still need to call [`ov_update`] explicitly after **mutating** the
+    /// tree — swapping [`Outline::root`], or expanding/collapsing nodes
+    /// programmatically — so the scrollbar limits reflect the updated node count.
     pub fn new(
         bounds: Rect,
         h: Option<ViewId>,
@@ -1568,8 +1570,10 @@ impl View for Outline {
 
     /// Re-publish scrollbar range/page params with the stored `limit` and the new
     /// `size` after the loop applies new bounds (identical to the scroller, which
-    /// the outline viewer derives from).
+    /// the outline viewer derives from). Also auto-seeds the limit on the first
+    /// call so the initial bounds application produces a correct first-frame state.
     fn on_bounds_changed(&mut self, ctx: &mut Context) {
+        ensure_seeded(self, ctx);
         let (x, y) = (self.ov().limit.x, self.ov().limit.y);
         self.ov_mut().set_limit(x, y, ctx);
     }
@@ -1831,6 +1835,18 @@ mod tests {
         let mut out = VecDeque::new();
         let mut timers = crate::timer::TimerQueue::new();
         let mut deferred: Vec<Deferred> = vec![];
+
+        // Pre-seed: the first context-bearing call triggers the auto-seed, which
+        // queues SetScrollBarParams entries. Clear those before the targeted test
+        // so deferred counts are unambiguous.
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            group
+                .find_mut(id)
+                .unwrap()
+                .handle_event(&mut Event::Nothing, &mut ctx);
+        }
+        deferred.clear();
 
         // CHANGED from own h-bar → ScrollSync queued.
         let mut ev = Event::Broadcast {
@@ -2442,6 +2458,82 @@ mod tests {
                 .iter()
                 .all(|d| !matches!(d, Deferred::PushCapture(_))),
             "double-click does NOT arm tracking"
+        );
+    }
+
+    // -- auto-seed: limit populated without explicit ov_update ----------------
+
+    /// `Outline` auto-seeds scrollbar limits on the first context-bearing call.
+    ///
+    /// Construct the outline with a known tree, do NOT call `ov_update`, then
+    /// drive a single `ov_set_state` call and assert the limits are now correct.
+    /// A second call must not change the result (idempotent / seeded-once).
+    #[test]
+    fn auto_seeds_limit_on_first_event() {
+        // animals_tree has 3 visible nodes (Animals, Cats, Dogs).
+        let mut o = Outline::new(Rect::new(0, 0, 20, 5), None, None, Some(animals_tree()));
+        // Confirm we start unseeded with limit.y == 0.
+        assert!(!o.ov().seeded, "seeded starts false");
+        assert_eq!(o.ov().limit.y, 0, "limit.y starts at 0 before auto-seed");
+
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+
+        // Drive ov_set_state — this is the first context-bearing call.
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            ov_set_state(&mut o, StateFlag::Selected, true, &mut ctx);
+        }
+
+        // limit.y should now equal 3 (all three nodes are visible).
+        assert!(
+            o.ov().seeded,
+            "seeded is true after first context-bearing call"
+        );
+        assert_eq!(
+            o.ov().limit.y,
+            3,
+            "limit.y = 3 after auto-seed (Animals + Cats + Dogs)"
+        );
+
+        // Drive a second call — limit must not change (idempotent).
+        let limit_after_first = o.ov().limit;
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            ov_set_state(&mut o, StateFlag::Selected, false, &mut ctx);
+        }
+        assert_eq!(
+            o.ov().limit,
+            limit_after_first,
+            "limit unchanged after second call (ensure_seeded is a no-op once seeded)"
+        );
+    }
+
+    /// `ov_handle_event` also auto-seeds; verify via a keyboard event.
+    #[test]
+    fn auto_seeds_via_handle_event() {
+        let mut o = Outline::new(Rect::new(0, 0, 20, 5), None, None, Some(animals_tree()));
+        assert_eq!(o.ov().limit.y, 0, "pre-seed limit is 0");
+
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+
+        // A KeyDown event that ov_handle_event will not consume (an unbound key).
+        let mut ev = Event::KeyDown(crate::event::KeyEvent::new(
+            Key::Char('z'),
+            crate::event::KeyModifiers::default(),
+        ));
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            o.handle_event(&mut ev, &mut ctx);
+        }
+        assert!(o.ov().seeded, "seeded after handle_event");
+        assert_eq!(
+            o.ov().limit.y,
+            3,
+            "limit.y = 3 after auto-seed via handle_event"
         );
     }
 }
