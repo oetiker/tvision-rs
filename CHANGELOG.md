@@ -27,6 +27,12 @@ moves it into a dated, versioned section when a release is cut.
 
 ### Changed
 
+- `Outline` now auto-seeds its scrollbar limits and focus on first
+  display/interaction (the first context-bearing lifecycle call —
+  `handle_event`, `set_state`, or `on_bounds_changed`), so `ov_update` no
+  longer needs to be called manually just to populate it after construction.
+  An explicit `ov_update` is still required after mutating the tree (swapping
+  `root`, or expanding/collapsing nodes programmatically).
 - CI: bump `actions/checkout` to v5 and pass the crates.io token via the
   `CARGO_REGISTRY_TOKEN` env var instead of the deprecated `cargo publish
   --token` flag, clearing the Node-20 and cargo deprecation warnings in the
@@ -34,10 +40,11 @@ moves it into a dated, versioned section when a release is cut.
 
 ### Docs
 
-- `Outline::new`: added a **Warning** note explaining that `ov_update` must be
-  called once after the widget is inserted (before any navigation), and what
-  symptoms appear when it is skipped (`limit.y` stays 0, down-arrow appears
-  broken).
+- `Outline::new` / `OutlineViewerState::new`: documented that `ov_update` only
+  needs to be called after **mutating** the tree (swapping `root`, or
+  expanding/collapsing nodes programmatically); the initial population is
+  auto-seeded on first display (see _Changed_), so no manual call is required
+  after construction.
 - `Program::set_on_idle`: added a **"Driving the UI from external / async data
   sources"** note with a code sketch of the `Rc<RefCell<AppState>>` +
   `broadcast` pattern.
