@@ -174,6 +174,20 @@ impl InputLine {
     /// or replace the validator after construction, use
     /// [`set_validator`](InputLine::set_validator). For the common case of a
     /// byte-limited field with no validator, prefer [`with_limit`](InputLine::with_limit).
+    ///
+    /// # Note: headless / unit-test use outside a `Program`
+    ///
+    /// When constructing an `InputLine` outside a `Program` (e.g. in a unit test
+    /// with a hand-built [`crate::view::Context`]), the field will silently ignore
+    /// all key events unless `state.state.selected` is set to `true` before
+    /// driving it — the same condition a group sets when it focuses a child.
+    /// All the fields involved are `pub`, so the workaround is straightforward:
+    ///
+    /// ```rust,ignore
+    /// let mut il = InputLine::with_limit(Rect::new(0, 0, 20, 1), 64);
+    /// il.state.state.selected = true; // required to receive key events in tests
+    /// il.handle_event(&mut Event::Key(/* … */), &mut ctx);
+    /// ```
     pub fn new(
         bounds: Rect,
         limit: i32,

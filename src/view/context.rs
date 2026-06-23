@@ -1092,6 +1092,15 @@ impl<'a> Context<'a> {
     /// Broadcast a command (`Event::Broadcast`) into the loop's queue. `source`
     /// names the view the broadcast is about (the resolvable subject), or `None`
     /// if it concerns no particular view.
+    ///
+    /// # Note: signalling view refreshes from external data
+    ///
+    /// `broadcast` is the view-side half of the external-data pattern: after
+    /// draining new data into shared state, call
+    /// `ctx.broadcast(REFRESH_CMD, None)` to notify all views. See
+    /// [`Program::set_on_idle`](crate::app::Program::set_on_idle) for the full
+    /// pattern, and [`Context::set_timer`] for the view-owned periodic-drain
+    /// variant.
     pub fn broadcast(&mut self, command: Command, source: Option<ViewId>) {
         self.out_events
             .push_back(Event::Broadcast { command, source });
@@ -1099,6 +1108,25 @@ impl<'a> Context<'a> {
 
     /// Arm a timer, returning its handle. `now_ms` is supplied from this
     /// context's dispatch snapshot (the clock is not stored in the queue).
+    ///
+    /// # Note: view-owned periodic drain for external data
+    ///
+    /// `set_timer` is the building block for driving the UI from an external or
+    /// async data source entirely within a view. The pattern:
+    ///
+    /// - Embed a zero-area child view (a "pump view") in your window's group.
+    ///   It is never drawn or hit-tested, but `Event::Timer` is delivered to
+    ///   every child unconditionally — even zero-area ones — on each tick.
+    /// - In the pump view's first `handle_event`, arm a recurring timer:
+    ///   `ctx.set_timer(Duration::from_millis(50), Some(Duration::from_millis(50)))`.
+    /// - On each `Event::Timer(_)`, drain the external source (e.g.
+    ///   `try_recv`), update shared `Rc<RefCell<AppState>>`, drop the borrow,
+    ///   then call `ctx.broadcast(REFRESH_CMD, None)`.
+    /// - Other views match that broadcast in their `handle_event` and repaint
+    ///   from the shared state.
+    ///
+    /// For program-level drains where `&mut Program` is available, prefer
+    /// [`Program::set_on_idle`](crate::app::Program::set_on_idle) instead.
     pub fn set_timer(&mut self, timeout: Duration, period: Option<Duration>) -> TimerId {
         self.timers.set_timer(self.now_ms, timeout, period)
     }

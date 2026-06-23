@@ -691,6 +691,38 @@ impl Program {
     /// itself: while the hook runs, it is taken out, so a modal it opens will not
     /// fire the hook recursively.
     ///
+    /// # Driving the UI from external / async data sources
+    ///
+    /// `set_on_idle` is the **program-level** hook for draining external data into
+    /// the view tree. The pattern:
+    ///
+    /// 1. Hold shared application state in an `Rc<RefCell<AppState>>` cloned into
+    ///    each view factory closure and into the idle callback.
+    /// 2. In the callback, drain the external source (e.g. `try_recv` on a
+    ///    `std::sync::mpsc::Receiver`) into the shared state.
+    /// 3. Broadcast a refresh command so interested views repaint from the updated
+    ///    state. Use a stable `Command::custom("myapp.refresh")` constant.
+    ///
+    /// ```rust,ignore
+    /// let shared = Rc::new(RefCell::new(AppState::default()));
+    /// let shared_idle = Rc::clone(&shared);
+    /// program.set_on_idle(move |prog| {
+    ///     let mut state = shared_idle.borrow_mut();
+    ///     if let Ok(msg) = receiver.try_recv() {
+    ///         state.update(msg);
+    ///         drop(state); // release borrow before broadcast
+    ///         prog.broadcast(REFRESH, None);
+    ///     }
+    /// });
+    /// ```
+    ///
+    /// For **view-owned** drains (where the drain logic lives inside a view with
+    /// access to `Context` rather than `&mut Program`), prefer a periodic timer
+    /// set via [`Context::set_timer`] combined with [`Context::broadcast`]. A
+    /// zero-area child view can hold the timer and be invisible on screen while
+    /// still receiving every `Event::Timer` tick — see [`Context::set_timer`] for
+    /// the cross-reference.
+    ///
     /// # Turbo Vision heritage
     ///
     /// The successor to overriding `TProgram::idle`, which Turbo Vision called
