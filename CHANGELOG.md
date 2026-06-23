@@ -12,6 +12,14 @@ moves it into a dated, versioned section when a release is cut.
 
 ### New
 
+### Changed
+
+### Fixed
+
+## 0.1.1 - 2026-06-23
+
+### New
+
 - `examples/external_state.rs` — demonstrates the canonical pattern for feeding
   data from a background thread (or any external source) into the TUI: a zero-
   area `PumpView` drains an `mpsc::Receiver` on each `Event::Timer` tick,
@@ -24,7 +32,6 @@ moves it into a dated, versioned section when a release is cut.
 - `Outline` now implements `View::value()`, returning
   `Some(FieldValue::Int(foc))` — the focused node's DFS index — consistent
   with `ListBox`. Previously it inherited the default `None`.
-
 ### Changed
 
 - `Outline` now auto-seeds its scrollbar limits and focus on first
