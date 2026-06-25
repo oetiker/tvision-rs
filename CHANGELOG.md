@@ -12,6 +12,14 @@ moves it into a dated, versioned section when a release is cut.
 
 ### New
 
+### Changed
+
+### Fixed
+
+## 0.2.0 - 2026-06-25
+
+### New
+
 - Hierarchical Tab focus traversal. Tab / Shift-Tab now walk the focusable-leaf
   tree across nested groups — descending into sub-groups (and splitter panes) at
   their first/last leaf and ascending when a sub-tree is exhausted — instead of
@@ -24,7 +32,6 @@ moves it into a dated, versioned section when a release is cut.
   multi-widget pane (e.g. a form) be Tab-navigated. Widgets that own Tab (a
   multi-line editor) still consume it; divider resize is unaffected
   (`Command::RESIZE`).
-
 ### Changed
 
 - `tvision-rs-macros` now ships a `README.md` (and a `readme` manifest field), so
