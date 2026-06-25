@@ -1064,6 +1064,29 @@ pub trait View {
         false
     }
 
+    /// Whether this view's subtree contains a focusable leaf (visible, enabled,
+    /// selectable). Base: whether THIS view is itself a focusable leaf; `Group`
+    /// overrides to recurse into children; wrapper views delegate. Used by the
+    /// hierarchical Tab traversal to skip selectable-but-empty subtrees.
+    fn has_focusable_leaf(&self) -> bool {
+        let s = self.state();
+        s.state.visible && !s.state.disabled && s.options.selectable
+    }
+
+    /// Focus the first (Tab, `backward = false`) or last (Shift-Tab,
+    /// `backward = true`) focusable leaf in this view's subtree, establishing the
+    /// full focus path down to it. Returns `true` if a focusable leaf was focused.
+    ///
+    /// Base: a leaf reports whether IT is focusable — its owning group has already
+    /// made it current, so there is nothing further to descend into. `Group`
+    /// overrides to pick its edge child and recurse; wrapper views delegate. Used
+    /// by the hierarchical Tab traversal to ENTER a group at its edge.
+    fn focus_to_edge(&mut self, backward: bool, ctx: &mut Context) -> bool {
+        let _ = (backward, ctx);
+        let s = self.state();
+        s.state.visible && !s.state.disabled && s.options.selectable
+    }
+
     /// Establish this view's INTERNAL currency — for a group-bearing view, set its
     /// current child to the first visible+selectable child. The insert-time
     /// currency cascade cannot run inside the context-less `Group::insert`, so

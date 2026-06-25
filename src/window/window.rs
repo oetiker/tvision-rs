@@ -1255,8 +1255,12 @@ impl View for Window {
         if let Event::KeyDown(k) = *ev
             && k.key == Key::Tab
         {
-            // Tab cycles focus forward, Shift+Tab backward.
-            self.group.focus_next(k.modifiers.shift, ctx);
+            // The group's hierarchical Tab pass (in `Group::handle_event`, run via
+            // the delegation above) already advanced focus within the focused
+            // subtree, descending into nested groups/splitters. A live Tab here
+            // means the whole window tree was exhausted — wrap to the first (Tab)
+            // or last (Shift+Tab) focusable leaf.
+            self.group.focus_to_edge(k.modifiers.shift, ctx);
             ev.clear();
         }
         // Drag detection. Runs AFTER group delegation: the desktop delivered this

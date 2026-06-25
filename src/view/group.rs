@@ -53,7 +53,7 @@
 
 use crate::command::Command;
 use crate::data::FieldValue;
-use crate::event::Event;
+use crate::event::{Event, Key};
 use crate::view::context::{Context, DrawCtx};
 use crate::view::geometry::{Point, Rect};
 use crate::view::id::ViewId;
@@ -723,6 +723,44 @@ impl Group {
         }
     }
 
+    /// Advance focus to the next eligible sibling in tab order **without wrapping**,
+    /// entering a child group at its edge (via [`View::focus_to_edge`]). `backward`
+    /// is Shift-Tab; tab order is insertion index (forward = increasing index,
+    /// matching [`find_next`](Self::find_next)'s plain-Tab direction). Returns
+    /// `false` when there is no further sibling — the hierarchical Tab pass in
+    /// [`handle_event`](View::handle_event) then leaves the key unconsumed so it
+    /// bubbles to the parent group; the window wraps at the top. Skips
+    /// selectable-but-empty subtrees (no focusable leaf).
+    fn advance_no_wrap(&mut self, backward: bool, ctx: &mut Context) -> bool {
+        let n = self.children.len() as i32;
+        if n == 0 {
+            return false;
+        }
+        // Start at the current child; with none, start just outside so the first
+        // step lands on the leading edge.
+        let start = self.current.and_then(|id| self.index_of(id));
+        let mut i = match start {
+            Some(s) => s as i32,
+            None if backward => n,
+            None => -1,
+        };
+        loop {
+            i += if backward { -1 } else { 1 };
+            if i < 0 || i >= n {
+                return false;
+            }
+            let idx = i as usize;
+            let s = self.children[idx].view.state();
+            let eligible = s.state.visible && !s.state.disabled && s.options.selectable;
+            if eligible && self.children[idx].view.has_focusable_leaf() {
+                let id = self.children[idx].id;
+                self.focus_child(id, ctx);
+                self.children[idx].view.focus_to_edge(backward, ctx);
+                return true;
+            }
+        }
+    }
+
     /// Select (raise + focus) the selectable child whose [`number`](View::number)
     /// matches `num`. Returns whether a match was found. This backs the
     /// "select window N" shortcut (Alt-1 … Alt-9): it walks the children directly
@@ -1147,6 +1185,38 @@ impl View for Group {
         false
     }
 
+    /// A group has a focusable leaf iff any visible, enabled child does (a leaf
+    /// child reports itself; a group child recurses).
+    fn has_focusable_leaf(&self) -> bool {
+        self.children.iter().any(|c| {
+            let s = c.view.state();
+            s.state.visible && !s.state.disabled && c.view.has_focusable_leaf()
+        })
+    }
+
+    /// Enter this group at its edge child for hierarchical Tab: the first child
+    /// (Tab) or last (Shift-Tab) that has a focusable leaf, made current and then
+    /// recursively entered. Returns whether a leaf was focused.
+    fn focus_to_edge(&mut self, backward: bool, ctx: &mut Context) -> bool {
+        let n = self.children.len();
+        let order: Vec<usize> = if backward {
+            (0..n).rev().collect()
+        } else {
+            (0..n).collect()
+        };
+        for idx in order {
+            let s = self.children[idx].view.state();
+            let eligible = s.state.visible && !s.state.disabled && s.options.selectable;
+            if eligible && self.children[idx].view.has_focusable_leaf() {
+                let id = self.children[idx].id;
+                self.focus_child(id, ctx);
+                self.children[idx].view.focus_to_edge(backward, ctx);
+                return true;
+            }
+        }
+        false
+    }
+
     /// The group's [`View::set_visible_descendant`] — write the visible flag in
     /// the OWNING group and run the visibility-change currency tail: if the flag
     /// actually changed and the child is selectable, re-establish currency
@@ -1293,6 +1363,21 @@ impl View for Group {
         let saved_owner_size = ctx.owner_size();
         ctx.set_owner_size(self.st.size); // children's owner is THIS group (Copy read first)
         self.route_event(ev, ctx);
+        // Hierarchical Tab traversal. `route_event` delivered the key to the
+        // focused child first (recursing into nested groups, which advance and
+        // consume it there). A still-live Tab/Shift-Tab means the focused subtree
+        // was at its edge, so advance to the next focusable leaf at THIS level
+        // (entering a child group at its edge). Leaving it unconsumed lets it
+        // bubble to the parent group; the window wraps at the top. A widget that
+        // owns Tab (e.g. a multi-line editor) consumes it in `route_event`, so it
+        // never reaches here.
+        let is_tab = matches!(ev, Event::KeyDown(k) if k.key == Key::Tab);
+        if is_tab {
+            let backward = matches!(ev, Event::KeyDown(k) if k.modifiers.shift);
+            if self.advance_no_wrap(backward, ctx) {
+                ev.clear();
+            }
+        }
         ctx.set_owner_size(saved_owner_size); // unconditional restore (see doc above)
     }
 }
@@ -1436,6 +1521,111 @@ mod tests {
 
     fn key(k: Key) -> Event {
         Event::KeyDown(KeyEvent::new(k, KeyModifiers::default()))
+    }
+
+    fn shift_key(k: Key) -> Event {
+        Event::KeyDown(KeyEvent::new(
+            k,
+            KeyModifiers {
+                shift: true,
+                ..Default::default()
+            },
+        ))
+    }
+
+    /// A selectable leaf that does NOT consume keys (unlike `Probe`), so Tab passes
+    /// through to the group's hierarchical traversal — models an InputLine/ListBox.
+    struct Pass(ViewState);
+    impl Pass {
+        fn boxed() -> Box<dyn View> {
+            let mut st = ViewState::new(Rect::new(0, 0, 1, 1));
+            st.options.selectable = true;
+            Box::new(Pass(st))
+        }
+    }
+    impl View for Pass {
+        fn state(&self) -> &ViewState {
+            &self.0
+        }
+        fn state_mut(&mut self) -> &mut ViewState {
+            &mut self.0
+        }
+        fn draw(&mut self, _ctx: &mut DrawCtx) {}
+        fn handle_event(&mut self, _ev: &mut Event, _ctx: &mut Context) {}
+    }
+
+    #[test]
+    fn tab_traverses_nested_groups_hierarchically() {
+        // root = [ A, G[ B, C ], D ]. Tab must visit A → B → C → D (descending into
+        // G at its first leaf, ascending out of G to D), and Shift-Tab reverses.
+        let mut out = VecDeque::new();
+        let mut timers = TimerQueue::new();
+
+        let mut sub = Group::new(Rect::new(0, 0, 4, 2));
+        let b = sub.insert(Pass::boxed());
+        let c = sub.insert(Pass::boxed());
+
+        let mut root = Group::new(Rect::new(0, 0, 12, 2));
+        // Mark the root focused so the `focused` flag propagates down the current
+        // chain (a real window/desktop does this); then it is a correct global
+        // focus-tip indicator for the assertions below.
+        root.state_mut().state.focused = true;
+        let a = root.insert(Pass::boxed());
+        let _g = root.insert(Box::new(sub));
+        let d = root.insert(Pass::boxed());
+
+        let focused = |root: &mut Group, id| {
+            root.find_mut(id)
+                .map(|v| v.state().state.focused)
+                .unwrap_or(false)
+        };
+
+        with_ctx(&mut out, &mut timers, |ctx| {
+            root.focus_child(a, ctx);
+            assert!(focused(&mut root, a), "seed: A focused");
+
+            // Tab: A → B (descend into G at its first leaf)
+            let mut ev = key(Key::Tab);
+            root.handle_event(&mut ev, ctx);
+            assert!(ev.is_nothing(), "Tab consumed");
+            assert!(focused(&mut root, b) && !focused(&mut root, a), "A → B");
+
+            // Tab: B → C (within G)
+            let mut ev = key(Key::Tab);
+            root.handle_event(&mut ev, ctx);
+            assert!(focused(&mut root, c) && !focused(&mut root, b), "B → C");
+
+            // Tab: C → D (ascend out of G)
+            let mut ev = key(Key::Tab);
+            root.handle_event(&mut ev, ctx);
+            assert!(focused(&mut root, d) && !focused(&mut root, c), "C → D");
+
+            // Tab at the last leaf: nothing left at the root → unconsumed (a window
+            // would wrap). focus_to_edge models the wrap back to the first leaf A.
+            let mut ev = key(Key::Tab);
+            root.handle_event(&mut ev, ctx);
+            assert!(
+                !ev.is_nothing(),
+                "Tab past the last leaf bubbles (unconsumed)"
+            );
+            assert!(focused(&mut root, d), "still on D until the window wraps");
+            root.focus_to_edge(false, ctx);
+            assert!(focused(&mut root, a) && !focused(&mut root, d), "wrap → A");
+
+            // Shift-Tab reverses: A → D (wrap backward), then D → C (into G at last leaf)
+            let mut ev = shift_key(Key::Tab);
+            root.handle_event(&mut ev, ctx);
+            assert!(!ev.is_nothing(), "Shift-Tab before the first leaf bubbles");
+            root.focus_to_edge(true, ctx);
+            assert!(focused(&mut root, d), "Shift-Tab wrap → D (last leaf)");
+
+            let mut ev = shift_key(Key::Tab);
+            root.handle_event(&mut ev, ctx);
+            assert!(
+                focused(&mut root, c) && !focused(&mut root, d),
+                "Shift-Tab D → C"
+            );
+        });
     }
 
     fn mouse_down_at(x: i32, y: i32) -> Event {

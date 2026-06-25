@@ -12,6 +12,19 @@ moves it into a dated, versioned section when a release is cut.
 
 ### New
 
+- Hierarchical Tab focus traversal. Tab / Shift-Tab now walk the focusable-leaf
+  tree across nested groups — descending into sub-groups (and splitter panes) at
+  their first/last leaf and ascending when a sub-tree is exhausted — instead of
+  only cycling a window's direct children. `Group::handle_event` advances focus
+  one level after the focused child has had the key (so a leaf at its sub-tree's
+  edge lets Tab bubble to the parent), and the window wraps at the top. Two new
+  `View` hooks support it (forwarded by `#[delegate]`): `focus_to_edge` (enter a
+  sub-tree at its first/last leaf) and `has_focusable_leaf` (skip empty
+  sub-trees). Composes through arbitrarily nested groups/splitters, and lets a
+  multi-widget pane (e.g. a form) be Tab-navigated. Widgets that own Tab (a
+  multi-line editor) still consume it; divider resize is unaffected
+  (`Command::RESIZE`).
+
 ### Changed
 
 - `tvision-rs-macros` now ships a `README.md` (and a `readme` manifest field), so

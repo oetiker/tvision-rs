@@ -756,9 +756,11 @@ impl View for Splitter {
     fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
         match ev {
             Event::KeyDown(_) => {
-                // No splitter-owned keys: keyboard divider resize is driven by the
-                // window's resize capture (Command::RESIZE → Tab cycles dividers). F6 etc.
-                // fall through to the normal group/program handling (e.g. cmNext).
+                // No splitter-owned keys. Tab focus traversal (including descending
+                // into and cycling among the panes) is handled by the hierarchical
+                // pass in `Group::handle_event`, so the splitter is transparent to
+                // focus here. Divider resize is driven by the window's resize
+                // capture (Command::RESIZE), not a raw KeyDown.
                 self.group.handle_event(ev, ctx);
             }
             Event::MouseDown(me) => {
