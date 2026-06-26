@@ -871,6 +871,13 @@ pub struct Glyphs {
     /// Input-line right-scroll arrow `►` (U+25BA) — drawn at the last column when
     /// the field can scroll right.
     pub input_right_arrow: char,
+
+    // --- Menu bar glyphs ---
+    /// The collapsed application menu bar's "kebab" affordance, drawn at the
+    /// top-right when a `Fullscreen::Screen` window covers the menu row. Themable;
+    /// its display width sets the collapsed bar's width (so it may be other than
+    /// 3 columns).
+    pub menu_kebab: &'static str,
 }
 
 impl Default for Glyphs {
@@ -956,6 +963,9 @@ impl Default for Glyphs {
             // Input line: ◄ (0x11) left scroll arrow, ► (0x10) right.
             input_left_arrow: '\u{25C4}',
             input_right_arrow: '\u{25BA}',
+
+            // Menu bar kebab: [⋮] (3 display columns).
+            menu_kebab: "[\u{22EE}]",
         }
     }
 }

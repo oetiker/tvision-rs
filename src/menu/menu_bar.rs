@@ -39,6 +39,11 @@ fn cstrlen(s: &str) -> i32 {
         .sum()
 }
 
+/// Display width of the kebab string (no `~` markers — plain display columns).
+fn kebab_width(s: &str) -> i32 {
+    unicode_width::UnicodeWidthStr::width(s) as i32
+}
+
 /// The horizontal menu bar. Holds the shared [`MenuViewState`]; the bar-specific
 /// layout lives in [`draw`](MenuBar::draw) /
 /// [`get_item_rect`](MenuView::get_item_rect).
@@ -47,9 +52,10 @@ fn cstrlen(s: &str) -> i32 {
 /// Ports `TMenuBar` (`tmenubar.cpp`/`menus.h`).
 pub struct MenuBar {
     mv: MenuViewState,
-    /// When true the bar is rendered as a `[⋮]` bracketed kebab (top-right 3
-    /// cells) and activation opens a corner popup instead of the in-bar session.
-    /// Driven by the pump when a `Fullscreen::Screen` window covers the menu row.
+    /// When true the bar is rendered as the themed `menu_kebab` glyph
+    /// (top-right, width derived from the glyph) and activation opens a corner
+    /// popup instead of the in-bar session. Driven by the pump when a
+    /// `Fullscreen::Screen` window covers the menu row.
     collapsed: bool,
 }
 
@@ -126,10 +132,13 @@ impl View for MenuBar {
         let colors = MenuColors::resolve(ctx);
 
         if self.collapsed {
-            // Render the [⋮] kebab at the top-right 3 cells; the rest of the row
-            // is left transparent so the fullscreen window shows through.
+            // Render the themed kebab at the top-right; width derived from the
+            // glyph so the rest of the row stays transparent (fullscreen window
+            // shows through).
             let size = self.mv.state.size;
-            ctx.put_str(size.x - 3, 0, "[⋮]", colors.normal.0);
+            let kebab = ctx.glyphs().menu_kebab;
+            let kw = kebab_width(kebab);
+            ctx.put_str(size.x - kw, 0, kebab, colors.normal.0);
             return;
         }
 

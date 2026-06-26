@@ -2057,6 +2057,7 @@ impl Program {
             let mut ctx = Context::new(out_events, timers, now, deferred);
             ctx.set_disabled_commands(disabled_commands.clone());
             ctx.set_clipboard_snapshot(*clipboard_editor_id, *clipboard_has_selection);
+            let kebab_w = unicode_width::UnicodeWidthStr::width(theme.glyphs().menu_kebab) as i32;
             if group.find_mut(slot.window).is_none() {
                 apply_fullscreen(
                     group,
@@ -2066,6 +2067,7 @@ impl Program {
                     fullscreen,
                     slot.window,
                     crate::window::Fullscreen::Off,
+                    kebab_w,
                     &mut ctx,
                 );
             } else if size_changed {
@@ -2077,6 +2079,7 @@ impl Program {
                     fullscreen,
                     slot.window,
                     slot.mode,
+                    kebab_w,
                     &mut ctx,
                 );
             }
@@ -2410,6 +2413,9 @@ impl Program {
                             // restore the menu bar, re-bound the desktop, and re-fit
                             // the window — all through the View trait, no downcast.
                             Deferred::SetFullscreen { window, mode } => {
+                                let kebab_w = unicode_width::UnicodeWidthStr::width(
+                                    theme.glyphs().menu_kebab,
+                                ) as i32;
                                 apply_fullscreen(
                                     group,
                                     *desktop,
@@ -2418,6 +2424,7 @@ impl Program {
                                     fullscreen,
                                     window,
                                     mode,
+                                    kebab_w,
                                     &mut ctx,
                                 );
                             }
@@ -3377,6 +3384,9 @@ fn centered_msgbox_rect_for(group: &Group, desktop: Option<ViewId>, msg: &str) -
 /// bar (+ its bounds) and re-bound the desktop — plus the loop-owned `slot`
 /// tracking. All via the `View` trait (no downcast except the menu-bar collapse
 /// flag). Reused by the deferred drain and the resize/vanish path.
+///
+/// `kebab_w` is the display width of the themed kebab glyph; it sets the
+/// collapsed menu-bar width (column span at the top-right corner).
 #[allow(clippy::too_many_arguments)]
 fn apply_fullscreen(
     group: &mut Group,
@@ -3386,6 +3396,7 @@ fn apply_fullscreen(
     slot: &mut Option<FullscreenSlot>,
     window: ViewId,
     mode: crate::window::Fullscreen,
+    kebab_w: i32,
     ctx: &mut Context,
 ) {
     use crate::window::Fullscreen;
@@ -3405,7 +3416,7 @@ fn apply_fullscreen(
         None
     };
 
-    // 1. Menu bar: collapse + bounds ([⋮] kebab 3-cell when Screen, full top row otherwise).
+    // 1. Menu bar: collapse + bounds (kebab-width when Screen, full top row otherwise).
     if let Some(mb) = menu_bar {
         let collapsed = mode == Fullscreen::Screen;
         if let Some(v) = group.find_mut(mb) {
@@ -3416,7 +3427,7 @@ fn apply_fullscreen(
                 bar.set_collapsed(collapsed);
             }
             let bounds = if collapsed {
-                Rect::new(w - 3, 0, w, 1)
+                Rect::new(w - kebab_w, 0, w, 1)
             } else {
                 Rect::new(0, 0, w, 1)
             };
