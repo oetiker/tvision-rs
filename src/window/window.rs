@@ -102,7 +102,7 @@ pub enum WindowPalette {
 ///
 /// `Off` is a normal framed window; `Desktop` hides the border and fills the
 /// desktop area; `Screen` additionally covers the menu row (the menu bar
-/// collapses to a `⋮` kebab at the top-right). Per-window property, driven by
+/// collapses to a `[⋮]` kebab at the top-right). Per-window property, driven by
 /// `set_fullscreen`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum Fullscreen {
@@ -111,7 +111,7 @@ pub enum Fullscreen {
     Off,
     /// Frameless, fills the desktop; menu bar and status line unchanged.
     Desktop,
-    /// Frameless, also covers the menu row; the menu bar collapses to `⋮`.
+    /// Frameless, also covers the menu row; the menu bar collapses to `[⋮]`.
     Screen,
 }
 
@@ -670,12 +670,14 @@ impl Window {
     ///
     /// The bar is sized to fit exactly inside the frame without covering the
     /// frame corners:
-    /// - **Vertical** (right edge): one cell wide, spanning the client height, flush
-    ///   against the right frame edge. Bordered: `(width−1, 1) .. (width, height−1)`.
-    ///   Frameless: reaches the top and bottom screen edges.
-    /// - **Horizontal** (bottom edge): one cell tall, spanning the client width
-    ///   inset by one. Bordered: `(2, height−1) .. (width−2, height)`. Frameless:
-    ///   inset one column from the left and right screen edges.
+    /// - **Vertical** (right edge): one cell wide, flush against the right frame
+    ///   edge. Bordered: `(width−1, 1) .. (width, height−1)` (frame-corner inset).
+    ///   Frameless: spans from the top screen edge to the bottom, stopping one row
+    ///   above the horizontal bar's row when both bars are present.
+    /// - **Horizontal** (bottom edge): one cell tall. Bordered: `(2, height−1) ..
+    ///   (width−2, height)` (frame-corner inset). Frameless: starts at the left
+    ///   screen edge and runs to just before the vertical bar's column when both
+    ///   bars are present (no left inset).
     ///
     /// Call this method after construction and before the window is shown. The
     /// returned [`ViewId`] can be passed to a scroller or list viewer as its

@@ -74,6 +74,7 @@ otherwise (the framework starts them off — see [Commands & events](commands.md
 | `Command::ZOOM` | `F5` | Toggle between restored size and filling the desktop |
 | `Command::CLOSE` | `Alt-F3` | Close the active window |
 | `Command::RESIZE` | — | Enter keyboard move/resize mode (arrows, `Enter`/`Esc`) |
+| `Command::FULLSCREEN` | — | Cycle the active window through Off/Desktop/Screen (no default key; example binds F4) |
 
 The keys above are the bindings the `hello` example installs on its status line
 and menu; the commands themselves carry no built-in key.
@@ -83,6 +84,58 @@ resize it — the desktop routes the click and the window starts the drag. The d
 runs as a capture handler on the single event loop, with no nested loop
 (see [Modal execView → one loop + capture](../port/modal.md)) *(C++ used a
 dedicated `dragView` nested-mouse-loop for this)*.
+
+## Fullscreen windows
+
+A window can fill the screen without its frame border via three modes of
+[`Fullscreen`](../api/tvision_rs/window/enum.Fullscreen.html):
+
+| Mode | What you see |
+| ---- | ------------ |
+| `Fullscreen::Off` | Normal framed window (the default). |
+| `Fullscreen::Desktop` | Frameless; fills the desktop area. The menu bar and status line are unchanged. |
+| `Fullscreen::Screen` | Frameless; also covers the menu row. The menu bar collapses to a `[⋮]` kebab at the top-right corner that opens a popup with the full menu. |
+
+Call `set_fullscreen` to switch modes, or dispatch `Command::FULLSCREEN` to
+cycle `Off → Desktop → Screen → Off` on the active window:
+
+```rust
+# use tvision_rs as tv;
+# use tv::{Window, Fullscreen, Context};
+# fn _demo(win: &mut Window, ctx: &mut Context) {
+// Drive the active window frameless, filling the desktop:
+win.set_fullscreen(Fullscreen::Desktop, ctx);
+
+// ...or compose the independent primitives directly:
+win.set_bordered(false, ctx);  // hide the frame border
+win.maximize(ctx);             // grow to fill the owner
+# }
+```
+
+### How it works — composable primitives
+
+`set_fullscreen` is a thin composer over three independent primitives that apps
+can also call directly:
+
+- **`set_bordered(bool, ctx)` / `bordered() -> bool`** — show or hide the frame
+  border. Toggling it reflows content through each child's existing
+  [grow modes](#grow-modes-anchoring-edges): every content child resizes and
+  shifts by the border thickness, and owned scroll bars re-anchor to the new
+  client edge. Idempotent.
+- **`maximize(ctx)` / `restore(ctx)` / `is_maximized() -> bool`** — one unified
+  maximize/restore slot, shared by `Command::ZOOM` and `Fullscreen::Desktop` so
+  they cannot desync. `maximize` fills the owner; `restore` returns to the saved
+  pre-maximize bounds.
+- **`client_rect() -> Rect`** — the content area: inset by the frame when
+  bordered, full extent when frameless, *minus* any scroll-bar lanes (the right
+  column for a vertical bar, the bottom row for a horizontal one). Content placed
+  at `client_rect` always fills right up to the bars without overlapping them,
+  regardless of border state.
+
+For `Fullscreen::Screen`, the pump calls
+[`MenuBar::set_collapsed(true)`](../api/tvision_rs/menu/menu_bar/struct.MenuBar.html#method.set_collapsed)
+on the application menu bar and shrinks the desktop to the full screen height; on
+exit it restores both. See [Menus](menus.md) for the menu bar layout.
 
 ## Tiling and cascading
 

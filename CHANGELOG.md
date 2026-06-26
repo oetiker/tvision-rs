@@ -19,7 +19,7 @@ moves it into a dated, versioned section when a release is cut.
   also re-fits on resize and auto-restores chrome if the fullscreen window is
   removed. Backed by the loop-owned `FullscreenSlot { window, mode }` and the
   `Program.fullscreen` field.
-- Frameless fullscreen windows: `Window::set_fullscreen(Fullscreen::{Off,Desktop,Screen})` and a cycling `Command::FULLSCREEN`. `Desktop` hides the frame and fills the desktop; `Screen` also covers the menu row, collapsing the menu bar to a `⋮` kebab that opens a corner popup. `Window::client_rect()` exposes the frameless content area.
+- Frameless fullscreen windows: `Window::set_fullscreen(Fullscreen::{Off,Desktop,Screen})` and a cycling `Command::FULLSCREEN`. `Desktop` hides the frame and fills the desktop; `Screen` also covers the menu row, collapsing the menu bar to a `[⋮]` kebab that opens a corner popup. `Window::client_rect()` exposes the frameless content area.
 - Fullscreen decomposed into independent primitives (`set_fullscreen` now
   composes them): `Window::set_bordered(bool, ctx)` toggles the frame border
   independently of fullscreen/zoom and reflows content to the new client area (a
@@ -42,6 +42,13 @@ moves it into a dated, versioned section when a release is cut.
   with a stale restore slot, and frameless window content now reflows to fill the
   enlarged client area instead of keeping a 1-cell margin (the two coupling bugs
   removed by the orthogonal-primitive rework).
+- Frameless windows now keep their scroll bars at the window edges: the vertical
+  bar spans from the top screen edge to the bottom (stopping above the horizontal
+  bar's row when both are present), and the horizontal bar starts at the left
+  screen edge (no left inset). `Window::client_rect()` excludes the scroll-bar
+  lanes so content fills up to the bars without overlapping them. The tvdemo
+  example (F4 cycles the active window through Off/Desktop/Screen) demonstrates
+  the reflow.
 
 ## 0.2.0 - 2026-06-25
 

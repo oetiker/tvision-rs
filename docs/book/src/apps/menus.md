@@ -55,7 +55,10 @@ Three things to notice:
 Wrap the finished `Menu` in a
 [`MenuBar`](../api/tvision_rs/menu/menu_bar/struct.MenuBar.html) and return it from
 your `init_menu_bar` factory. `F10` enters the bar; the `Alt` accelerators open
-submenus directly. With the `File` menu pulled down it looks like this:
+submenus directly. When a window is in `Fullscreen::Screen` mode the framework
+calls `MenuBar::set_collapsed(true)`, which replaces the full bar with a `[⋮]`
+kebab at the top-right corner; pressing `F10` (or clicking the kebab) opens the
+full menu as a corner popup. With the `File` menu pulled down it looks like this:
 
 {{#include ../screens/menubar.html}}
 
