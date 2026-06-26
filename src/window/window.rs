@@ -494,6 +494,24 @@ impl Window {
             .set_current(Some(id), crate::view::SelectMode::Normal, ctx);
     }
 
+    // -- client rect ---------------------------------------------------------
+
+    /// The window's interior content rectangle (view-local). Inset by the frame on
+    /// every side when bordered; the **full extent** when frameless-fullscreen, so
+    /// content and scroll bars reach the screen edge. Apps placing window content
+    /// should key off this rather than hardcoding the frame inset.
+    pub fn client_rect(&self) -> Rect {
+        let ext = self.group.state().get_extent();
+        if self.fullscreen == Fullscreen::Off {
+            Rect::from_points(
+                Point::new(ext.a.x + 1, ext.a.y + 1),
+                Point::new(ext.b.x - 1, ext.b.y - 1),
+            )
+        } else {
+            ext
+        }
+    }
+
     // -- standard scroll bar -------------------------------------------------
 
     /// Insert a standard scroll bar on the right or bottom edge and return its
@@ -505,10 +523,12 @@ impl Window {
     ///
     /// The bar is sized to fit exactly inside the frame without covering the
     /// frame corners:
-    /// - **Vertical** (right edge): occupies `(width−1, 1) .. (width, height−1)` —
-    ///   one cell wide, inset one row from each frame corner.
-    /// - **Horizontal** (bottom edge): occupies `(2, height−1) .. (width−2, height)` —
-    ///   one cell tall, inset two columns from each frame corner.
+    /// - **Vertical** (right edge): one cell wide, spanning the client height, flush
+    ///   against the right frame edge. Bordered: `(width−1, 1) .. (width, height−1)`.
+    ///   Frameless: reaches the top and bottom screen edges.
+    /// - **Horizontal** (bottom edge): one cell tall, spanning the client width
+    ///   inset by one. Bordered: `(2, height−1) .. (width−2, height)`. Frameless:
+    ///   reaches the left and right screen edges.
     ///
     /// Call this method after construction and before the window is shown. The
     /// returned [`ViewId`] can be passed to a scroller or list viewer as its
@@ -519,15 +539,17 @@ impl Window {
     /// the flag must be set first).
     pub fn standard_scroll_bar(&mut self, opts: ScrollBarOptions) -> ViewId {
         let ext = self.group.state().get_extent();
+        let cr = self.client_rect();
         let r = if opts.vertical {
-            Rect::from_points(
-                Point::new(ext.b.x - 1, ext.a.y + 1),
-                Point::new(ext.b.x, ext.b.y - 1),
-            )
+            // Right column; spans the client height. Bordered: identical to the
+            // previous (ext.b.x-1, ext.a.y+1)..(ext.b.x, ext.b.y-1).
+            Rect::from_points(Point::new(ext.b.x - 1, cr.a.y), Point::new(ext.b.x, cr.b.y))
         } else {
+            // Bottom row; spans the client width inset one. Bordered: identical to
+            // the previous (ext.a.x+2, ext.b.y-1)..(ext.b.x-2, ext.b.y).
             Rect::from_points(
-                Point::new(ext.a.x + 2, ext.b.y - 1),
-                Point::new(ext.b.x - 2, ext.b.y),
+                Point::new(cr.a.x + 1, ext.b.y - 1),
+                Point::new(cr.b.x - 1, ext.b.y),
             )
         };
         let sb = ScrollBar::new(r);
@@ -2912,5 +2934,21 @@ mod tests {
         assert_eq!(Fullscreen::Off.next(), Fullscreen::Desktop);
         assert_eq!(Fullscreen::Desktop.next(), Fullscreen::Screen);
         assert_eq!(Fullscreen::Screen.next(), Fullscreen::Off);
+    }
+
+    #[test]
+    fn client_rect_full_when_frameless() {
+        use crate::window::Fullscreen;
+        let mut win = Window::new(Rect::new(0, 0, 20, 8), None, 0);
+        let ext = win.state().get_extent(); // (0,0,20,8)
+        // Bordered: inset by one on every side.
+        let cr = win.client_rect();
+        assert_eq!(
+            (cr.a.x, cr.a.y, cr.b.x, cr.b.y),
+            (1, 1, ext.b.x - 1, ext.b.y - 1)
+        );
+        // Frameless: the full extent.
+        win.fullscreen = Fullscreen::Desktop;
+        assert_eq!(win.client_rect(), ext);
     }
 }
