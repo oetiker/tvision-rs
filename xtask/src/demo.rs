@@ -33,6 +33,8 @@ const fn scene(keys: &'static [&'static str], hold_cs: u16) -> Scene {
 ///     t=Ascii table.
 ///   - The calculator takes keyboard input (6 * 7 = → 42).
 ///   - Ctrl-F5 enters size/move mode; arrows glide the window; Enter confirms.
+///   - F4 cycles the active window through frameless fullscreen: Desktop (fills
+///     the desktop) → Screen (covers the menu, which collapses to a [⋮] kebab) → Off.
 ///   - F10 → Right Right → Down opens the Windows menu; a=Cascade.
 ///   - F5 zooms/restores the top window.
 fn tour() -> Vec<Scene> {
@@ -84,6 +86,13 @@ fn tour() -> Vec<Scene> {
         scene(&["Down"], 50), // grow the list pane…
         scene(&["Down"], 60),
         scene(&["Enter"], 150), // commit the new layout
+        // Fullscreen tour on the splitter window: F4 cycles the active window
+        // Off → Desktop (frameless, content reflows to fill the desktop) →
+        // Screen (also covers the menu row, which collapses to a [⋮] kebab at
+        // the top-right) → Off (the framed window returns).
+        scene(&["F4"], 150), // Desktop: frameless, fills the desktop
+        scene(&["F4"], 170), // Screen: covers the menu, [⋮] kebab top-right
+        scene(&["F4"], 120), // restore the framed window
         scene(&["F10", "Right", "Right", "Down", "a"], 170), // cascade (all windows)
         scene(&["F5"], 140),    // zoom top window
         scene(&["F5"], 110),    // restore
