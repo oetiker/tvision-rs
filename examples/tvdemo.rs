@@ -21,7 +21,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use tvision_rs::{
     Backend, Button, ButtonFlags, ButtonRowAlign, Color, ColorPicker, Command, Constraints,
-    CrosstermBackend, Desktop, Dialog, DrawCtx, Event, Frame, Key, KeyEvent, KeyModifiers, Menu,
+    CrosstermBackend, Desktop, Dialog, DrawCtx, Event, GrowMode, Key, KeyEvent, KeyModifiers, Menu,
     MenuBar, Program, Rect, Role, ScrollBarOptions, Scroller, Splitter, StaticText, StatusDef,
     StatusLine, SystemClock, Tab, Theme, View, ViewId, ViewState, Window, WindowFlags, alt,
     delegate,
@@ -323,22 +323,13 @@ struct PuzzleWindow {
 impl PuzzleWindow {
     fn new() -> Self {
         let mut window = Window::new(Rect::new(1, 1, 21, 7), Some("Puzzle".to_string()), 0);
-        // Disable grow and zoom: flags &= ~(wfZoom | wfGrow)
-        {
-            let frame_id = window.frame_id();
-            if let Some(frame) = window
-                .child_mut(frame_id)
-                .and_then(|v| v.as_any_mut())
-                .and_then(|a| a.downcast_mut::<Frame>())
-            {
-                frame.set_flags(WindowFlags {
-                    r#move: true,
-                    grow: false,
-                    close: true,
-                    zoom: false,
-                });
-            }
-        }
+        // Disable grow and zoom — set_flags syncs both Window and its Frame.
+        window.set_flags(WindowFlags {
+            r#move: true,
+            grow: false,
+            close: true,
+            zoom: false,
+        });
         window.state_mut().grow_mode = Default::default();
 
         let ext = window.state().get_extent();
@@ -539,21 +530,13 @@ impl AsciiWindow {
     fn new() -> Self {
         // Window size: 34 × 12 (32 chars wide + frame, 8 rows + report + frame).
         let mut window = Window::new(Rect::new(0, 0, 34, 12), Some("ASCII Chart".to_string()), 0);
-        {
-            let frame_id = window.frame_id();
-            if let Some(frame) = window
-                .child_mut(frame_id)
-                .and_then(|v| v.as_any_mut())
-                .and_then(|a| a.downcast_mut::<Frame>())
-            {
-                frame.set_flags(WindowFlags {
-                    r#move: true,
-                    grow: false,
-                    close: true,
-                    zoom: false,
-                });
-            }
-        }
+        // Disable grow and zoom — set_flags syncs both Window and its Frame.
+        window.set_flags(WindowFlags {
+            r#move: true,
+            grow: false,
+            close: true,
+            zoom: false,
+        });
         window.state_mut().grow_mode = Default::default();
         window.state_mut().options.center_x = true;
         window.state_mut().options.center_y = true;
@@ -826,21 +809,13 @@ struct CalendarWindow {
 impl CalendarWindow {
     fn new() -> Self {
         let mut window = Window::new(Rect::new(1, 1, 24, 12), Some("Calendar".to_string()), 0);
-        {
-            let frame_id = window.frame_id();
-            if let Some(frame) = window
-                .child_mut(frame_id)
-                .and_then(|v| v.as_any_mut())
-                .and_then(|a| a.downcast_mut::<Frame>())
-            {
-                frame.set_flags(WindowFlags {
-                    r#move: true,
-                    grow: false,
-                    close: true,
-                    zoom: false,
-                });
-            }
-        }
+        // Disable grow and zoom — set_flags syncs both Window and its Frame.
+        window.set_flags(WindowFlags {
+            r#move: true,
+            grow: false,
+            close: true,
+            zoom: false,
+        });
         window.state_mut().grow_mode = Default::default();
 
         let ext = window.state().get_extent();
@@ -1207,8 +1182,14 @@ struct EventLog {
 
 impl EventLog {
     fn new(bounds: Rect, h: Option<ViewId>, v: Option<ViewId>) -> Self {
+        let mut scroller = Scroller::new(bounds, h, v);
+        scroller.state_mut().grow_mode = GrowMode {
+            hi_x: true,
+            hi_y: true,
+            ..Default::default()
+        };
         EventLog {
-            scroller: Scroller::new(bounds, h, v),
+            scroller,
             lines: Vec::new(),
         }
     }
@@ -1330,7 +1311,12 @@ struct FileViewer {
 
 impl FileViewer {
     fn new(bounds: Rect, h: Option<ViewId>, v: Option<ViewId>, path: &std::path::Path) -> Self {
-        let scroller = Scroller::new(bounds, h, v);
+        let mut scroller = Scroller::new(bounds, h, v);
+        scroller.state_mut().grow_mode = GrowMode {
+            hi_x: true,
+            hi_y: true,
+            ..Default::default()
+        };
         let mut fv = FileViewer {
             scroller,
             lines: vec![],
