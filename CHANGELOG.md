@@ -12,6 +12,14 @@ moves it into a dated, versioned section when a release is cut.
 
 ### New
 
+- `Deferred::SetFullscreen { window, mode }` variant + `Context::set_fullscreen`
+  helper: a window requests fullscreen-mode changes via the deferred queue; the
+  pump applies the cross-tree layout (menu bar collapse/restore + bounds, desktop
+  re-bound, window re-fit) through the `View` trait with no downcast. The loop
+  also re-fits on resize and auto-restores chrome if the fullscreen window is
+  removed. Backed by `FullscreenSlot` (loop-owned restore + shadow tracking) and
+  the `Program.fullscreen` field.
+
 ### Changed
 
 ### Fixed

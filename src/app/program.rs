@@ -283,6 +283,18 @@ impl CaptureHandler for ModalFrame {
 /// Boxed per-idle-pass callback registered via [`Program::set_on_idle`].
 type IdleHook = Box<dyn FnMut(&mut Program)>;
 
+/// Loop-owned record of the window currently in frameless-fullscreen, used to
+/// re-fit on resize and restore chrome if the window is removed out from under us.
+#[derive(Clone, Copy)]
+struct FullscreenSlot {
+    window: crate::view::ViewId,
+    mode: crate::window::Fullscreen,
+    /// Pre-fullscreen window bounds, restored on exit.
+    restore: Rect,
+    /// Pre-fullscreen shadow flag, restored verbatim on exit.
+    shadow: bool,
+}
+
 /// Ports `TProgram` (`tprogram.cpp`). The original derived an application class
 /// from this root by inheritance; here [`Application`] embeds a `Program` and
 /// forwards to it (deviation D2), and the single event loop replaces the nested
@@ -331,6 +343,8 @@ pub struct Program {
     /// pre-routing in [`pump_once`](Self::pump_once) reads it to hand keyDown /
     /// over-the-line mouseDown events to the line first.
     status_line: Option<ViewId>,
+    /// The window currently in frameless-fullscreen, if any (loop-owned).
+    fullscreen: Option<FullscreenSlot>,
     /// The global mouse auto-repeat synthesizer: while a real mouse button is
     /// held, idle pump passes synthesize [`Event::MouseAuto`] on the 440 ms /
     /// 110 ms cadence (see [`MouseAutoState`]).
@@ -586,6 +600,7 @@ impl Program {
             desktop,
             menu_bar,
             status_line,
+            fullscreen: None,
             mouse_auto: MouseAutoState::default(),
             end_state: None,
             command_set_changed: true, // first idle pump broadcasts cmCommandSetChanged so startup-disabled buttons self-gray
@@ -1973,11 +1988,10 @@ impl Program {
             deferred,
             disabled_commands,
             desktop,
-            // The menu bar is not read by the pump (its events route through the
-            // normal group dispatch / preProcess phase); bind it `_` so the
-            // exhaustive destructure does not trip `-D warnings`.
-            menu_bar: _,
+            // The menu bar is used by the fullscreen layout engine (apply_fullscreen).
+            menu_bar,
             status_line,
+            fullscreen,
             mouse_auto,
             end_state,
             command_set_changed,
@@ -1997,13 +2011,46 @@ impl Program {
         //    Event::Resize variant (avoids enum churn).
         let (w, h) = renderer.backend().size();
         let cur = group.state().size;
-        if cur.x != w as i32 || cur.y != h as i32 {
+        let size_changed = cur.x != w as i32 || cur.y != h as i32;
+        if size_changed {
             renderer.resize(w, h);
             group.change_bounds(Rect::new(0, 0, w as i32, h as i32));
         }
 
         // 2. Sample the clock once for this pass.
         let now = clock.now_ms();
+
+        // 2a. Fullscreen layout maintenance: re-fit the tracked window after a
+        //     resize (the growMode cascade just re-stretched the collapsed menu
+        //     bar — re-shrink it), or restore chrome if the window was removed.
+        if let Some(slot) = *fullscreen {
+            let mut ctx = Context::new(out_events, timers, now, deferred);
+            ctx.set_disabled_commands(disabled_commands.clone());
+            ctx.set_clipboard_snapshot(*clipboard_editor_id, *clipboard_has_selection);
+            if group.find_mut(slot.window).is_none() {
+                apply_fullscreen(
+                    group,
+                    *desktop,
+                    *menu_bar,
+                    *status_line,
+                    fullscreen,
+                    slot.window,
+                    crate::window::Fullscreen::Off,
+                    &mut ctx,
+                );
+            } else if size_changed {
+                apply_fullscreen(
+                    group,
+                    *desktop,
+                    *menu_bar,
+                    *status_line,
+                    fullscreen,
+                    slot.window,
+                    slot.mode,
+                    &mut ctx,
+                );
+            }
+        }
 
         // 2b. Settle pending insert-time currency cascades BEFORE the event
         //     pick, so the dispatched event sees C++-equivalent currency: in C++
@@ -2328,6 +2375,21 @@ impl Program {
                             // nested exec_view loop observes it.
                             Deferred::EndModal(cmd) => {
                                 *end_state = Some(cmd);
+                            }
+                            // Frameless-fullscreen cross-tree layout engine: collapse/
+                            // restore the menu bar, re-bound the desktop, and re-fit
+                            // the window — all through the View trait, no downcast.
+                            Deferred::SetFullscreen { window, mode } => {
+                                apply_fullscreen(
+                                    group,
+                                    *desktop,
+                                    *menu_bar,
+                                    *status_line,
+                                    fullscreen,
+                                    window,
+                                    mode,
+                                    &mut ctx,
+                                );
                             }
                             // -- TScroller cross-view broker --------
                             //
@@ -3278,6 +3340,102 @@ fn centered_msgbox_rect_for(group: &Group, desktop: Option<ViewId>, msg: &str) -
     r
 }
 
+/// Apply a fullscreen `mode` to `window` across the tree. Border visibility is
+/// toggled inline by `Window::set_fullscreen`; this performs the cross-tree work:
+/// collapse/restore the menu bar (+ its bounds), re-bound the desktop, and re-fit
+/// the window — all through the `View` trait (no downcast). Tracks/clears the
+/// loop-owned `slot`. Reused by the deferred drain and the resize/vanish path.
+#[allow(clippy::too_many_arguments)]
+fn apply_fullscreen(
+    group: &mut Group,
+    desktop: Option<ViewId>,
+    menu_bar: Option<ViewId>,
+    status_line: Option<ViewId>,
+    slot: &mut Option<FullscreenSlot>,
+    window: ViewId,
+    mode: crate::window::Fullscreen,
+    ctx: &mut Context,
+) {
+    use crate::window::Fullscreen;
+    let screen = group.state().size;
+    let (w, h) = (screen.x, screen.y);
+    let menu_present = menu_bar.is_some();
+    let status_h = i32::from(status_line.is_some());
+
+    // 1. Edge bookkeeping: capture restore bounds + shadow on first entering;
+    //    clear the shadow while fullscreen.
+    let entering =
+        slot.as_ref().is_none_or(|s| s.mode == Fullscreen::Off) && mode != Fullscreen::Off;
+    if entering {
+        if let Some(v) = group.find_mut(window) {
+            let restore = v.state().get_bounds();
+            let shadow = v.state().state.shadow;
+            v.state_mut().state.shadow = false;
+            *slot = Some(FullscreenSlot {
+                window,
+                mode,
+                restore,
+                shadow,
+            });
+        }
+    } else if let Some(s) = slot.as_mut() {
+        s.mode = mode;
+    }
+
+    // 2. Menu bar: collapse + bounds (⋮ cell when Screen, full top row otherwise).
+    if let Some(mb) = menu_bar {
+        let collapsed = mode == Fullscreen::Screen;
+        if let Some(v) = group.find_mut(mb) {
+            if let Some(bar) = v
+                .as_any_mut()
+                .and_then(|a| a.downcast_mut::<crate::menu::MenuBar>())
+            {
+                bar.set_collapsed(collapsed);
+            }
+            let bounds = if collapsed {
+                Rect::new(w - 1, 0, w, 1)
+            } else {
+                Rect::new(0, 0, w, 1)
+            };
+            v.change_bounds(bounds);
+        }
+    }
+
+    // 3. Desktop bounds: top row 0 when Screen, else below the menu bar.
+    let top = if mode == Fullscreen::Screen {
+        0
+    } else {
+        i32::from(menu_present)
+    };
+    if let Some(dt) = desktop
+        && let Some(v) = group.find_mut(dt)
+    {
+        v.change_bounds(Rect::new(0, top, w, h - status_h));
+    }
+
+    // 4. Window bounds: fill the (now-sized) desktop, or restore on Off.
+    let target = if mode == Fullscreen::Off {
+        slot.as_ref().map(|s| s.restore)
+    } else {
+        let dh = (h - status_h) - top;
+        Some(Rect::new(0, 0, w, dh)) // desktop-local: the window fills its owner
+    };
+    if let Some(rect) = target
+        && let Some(v) = group.find_mut(window)
+    {
+        v.change_bounds(rect);
+        v.on_bounds_changed(ctx);
+    }
+
+    // 5. Exit: restore the shadow verbatim and clear the slot.
+    if mode == Fullscreen::Off
+        && let Some(s) = slot.take()
+        && let Some(v) = group.find_mut(window)
+    {
+        v.state_mut().state.shadow = s.shadow;
+    }
+}
+
 /// Run a [`ModalCompletion`] as a DIRECT `group` mutation, while the modal
 /// is still in the tree by `modal_id`. NOT a deferred queue entry (that drain
 /// fires only when a `Some(ev)` pump pass runs inside `pump_once`, and would
@@ -4071,6 +4229,102 @@ mod tests {
         assert!(
             !win_selected(&mut program, w1),
             "window 1 deselected (focus moved to w2)"
+        );
+    }
+
+    // -- Deferred::SetFullscreen wires through the pump ------------------
+
+    /// Build a `Program` with a desktop (one window inside), a stubbed status
+    /// line, and a real `MenuBar`. Returns `(program, window_id, desktop_id)`.
+    /// The menu bar id is available via `program.menu_bar()` after construction.
+    fn program_with_fullscreen_scaffold(
+        w: u16,
+        h: u16,
+    ) -> (Program, crate::view::ViewId, crate::view::ViewId) {
+        use crate::menu::MenuBar;
+        use crate::window::Window;
+        let (backend, _handle) = HeadlessBackend::new(w, h);
+        let theme = Theme::classic_blue();
+        let clock = Rc::new(ManualClock::new(0));
+        let win_id: Rc<RefCell<Option<crate::view::ViewId>>> = Rc::new(RefCell::new(None));
+        let win_id_cap = win_id.clone();
+        let w_i32 = w as i32;
+        let mut program = Program::new(
+            Box::new(backend),
+            Box::new(clock),
+            theme,
+            move |r| {
+                let mut desktop = Desktop::new(r, |r2| Some(Desktop::init_background(r2)));
+                let win = Window::new(Rect::new(2, 2, 20, 8), Some("Test".into()), 1);
+                *win_id_cap.borrow_mut() = Some(desktop.insert_view(Box::new(win)));
+                Some(Box::new(desktop))
+            },
+            |_r| None, // no status line
+            move |_r| {
+                Some(Box::new(MenuBar::new(
+                    Rect::new(0, 0, w_i32, 1),
+                    modal_menu(),
+                )))
+            },
+        );
+        program.out_events.clear();
+        let window_id = win_id.borrow().unwrap();
+        let desktop_id = program.desktop.unwrap();
+        (program, window_id, desktop_id)
+    }
+
+    /// End-to-end: `Deferred::SetFullscreen { mode: Screen }` collapses the menu
+    /// bar to the `⋮` cell, expands the desktop to cover row 0, and records the
+    /// fullscreen slot.
+    #[test]
+    fn set_fullscreen_screen_collapses_menu_and_covers_top() {
+        use crate::view::Deferred;
+        use crate::window::Fullscreen;
+
+        let (mut program, window_id, desktop_id) = program_with_fullscreen_scaffold(40, 12);
+
+        // Push the fullscreen request and a benign broadcast so the deferred
+        // drain runs (the drain requires an event dispatch pass).
+        program.deferred.push(Deferred::SetFullscreen {
+            window: window_id,
+            mode: Fullscreen::Screen,
+        });
+        program.out_events.push_back(Event::Broadcast {
+            command: Command::custom("test.noop"),
+            source: None,
+        });
+        program.pump_once();
+
+        // Menu bar collapsed to the ⋮ cell (top-right corner, width 1).
+        let mb_id = program.menu_bar().expect("menu bar present");
+        let mb = program
+            .group_mut()
+            .find_mut(mb_id)
+            .expect("menu bar")
+            .state()
+            .get_bounds();
+        assert_eq!(
+            (mb.a.x, mb.b.x, mb.a.y, mb.b.y),
+            (39, 40, 0, 1),
+            "menu bar is the ⋮ cell at top-right"
+        );
+
+        // Desktop top moved to row 0 (covers the former menu row).
+        let dt = program
+            .group_mut()
+            .find_mut(desktop_id)
+            .expect("desktop")
+            .state()
+            .get_bounds();
+        assert_eq!(
+            dt.a.y, 0,
+            "desktop covers the menu row after Screen fullscreen"
+        );
+
+        // The fullscreen slot is recorded.
+        assert!(
+            program.fullscreen.is_some(),
+            "fullscreen slot set after SetFullscreen"
         );
     }
 

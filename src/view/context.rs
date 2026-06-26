@@ -97,6 +97,22 @@ pub enum Deferred {
     /// affects the result.
     EndModal(Command),
 
+    /// **Frameless-fullscreen layout broker.** A window requests its own
+    /// fullscreen `mode` by id; the pump applies all cross-tree layout (frame
+    /// already toggled inline by `Window::set_fullscreen`): collapse/restore the
+    /// menu bar, re-bound the desktop, and re-fit the window — through the `View`
+    /// trait, no downcast. Carries only the window id (the menu bar / desktop are
+    /// singletons the pump supplies from its own state), exactly like
+    /// [`UpdateMenu`](Self::UpdateMenu). Touches the **view-tree** family (+ the
+    /// loop-owned fullscreen slot), so the insertion-order drain stays
+    /// order-equivalent.
+    SetFullscreen {
+        /// The window changing fullscreen state.
+        window: ViewId,
+        /// The target mode (`Off` restores the chrome and the window's bounds).
+        mode: crate::window::Fullscreen,
+    },
+
     // -- unified sibling-scrollbar read-sync broker -------------
     //
     // All these touch the **view tree** family (same as `ChangeBounds`/`SetState`/
@@ -1205,6 +1221,17 @@ impl<'a> Context<'a> {
     /// the id — check it.
     pub fn request_focus(&mut self, id: ViewId) {
         self.deferred.push(Deferred::FocusById(id));
+    }
+
+    /// Request a fullscreen-mode change for `window`. The pump applies the
+    /// cross-tree layout (menu bar, desktop, window re-fit). See
+    /// [`Deferred::SetFullscreen`].
+    ///
+    /// # Note
+    /// This method is wired by `Window::set_fullscreen` (added in a later task).
+    #[allow(dead_code)] // wired by Window::set_fullscreen in a later task
+    pub fn set_fullscreen(&mut self, window: ViewId, mode: crate::window::Fullscreen) {
+        self.deferred.push(Deferred::SetFullscreen { window, mode });
     }
 
     /// Request the `button` be made (or un-made) the dialog's default —
