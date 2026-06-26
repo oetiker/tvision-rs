@@ -12,6 +12,8 @@
 //! Run it: `cargo run --example tvdemo [file ...]`
 //!   - `Alt-X` or File → Exit quits.
 //!   - `F10` opens the menu.
+//!   - `F4` cycles the active window: normal → frameless (fills the desktop) →
+//!     fullscreen (covers the menu, which collapses to a `⋮` kebab) → normal.
 
 use std::io;
 use std::path::PathBuf;
@@ -1507,6 +1509,7 @@ impl TVDemo {
                     .item("~F10~ Menu", KeyEvent::from(Key::F(10)), Command::MENU)
                     .item("~F3~ Open", KeyEvent::from(Key::F(3)), CMD_OPEN)
                     .item("~F5~ Zoom", KeyEvent::from(Key::F(5)), Command::ZOOM)
+                    .item("~F4~ Full", KeyEvent::from(Key::F(4)), Command::FULLSCREEN)
                     .item("~F6~ Next", KeyEvent::from(Key::F(6)), Command::NEXT)
                     .item("~Alt-F3~ Close", alt_f3(), Command::CLOSE)
                     .key_item(ctrl_f5(), Command::RESIZE)
@@ -1538,6 +1541,12 @@ impl TVDemo {
             .submenu("~W~indows", alt('w'), |m| {
                 m.command_key("~S~ize/move", Command::RESIZE, ctrl_f5(), "Ctrl-F5")
                     .command_key("~Z~oom", Command::ZOOM, KeyEvent::from(Key::F(5)), "F5")
+                    .command_key(
+                        "~F~ull screen",
+                        Command::FULLSCREEN,
+                        KeyEvent::from(Key::F(4)),
+                        "F4",
+                    )
                     .command("~T~ile", Command::TILE)
                     .command("C~a~scade", Command::CASCADE)
                     .command_key("~N~ext", Command::NEXT, KeyEvent::from(Key::F(6)), "F6")
