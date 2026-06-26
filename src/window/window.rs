@@ -95,6 +95,39 @@ pub enum WindowPalette {
 }
 
 // ---------------------------------------------------------------------------
+// Fullscreen
+// ---------------------------------------------------------------------------
+
+/// Whether (and how) a window fills the screen with no frame border.
+///
+/// `Off` is a normal framed window; `Desktop` hides the border and fills the
+/// desktop area; `Screen` additionally covers the menu row (the menu bar
+/// collapses to a `⋮` kebab at the top-right). Per-window property, driven by
+/// [`Window::set_fullscreen`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Fullscreen {
+    /// Normal framed window.
+    #[default]
+    Off,
+    /// Frameless, fills the desktop; menu bar and status line unchanged.
+    Desktop,
+    /// Frameless, also covers the menu row; the menu bar collapses to `⋮`.
+    Screen,
+}
+
+impl Fullscreen {
+    /// The next state in the `Off → Desktop → Screen → Off` cycle (the
+    /// `Command::FULLSCREEN` convenience cycler).
+    pub fn next(self) -> Self {
+        match self {
+            Fullscreen::Off => Fullscreen::Desktop,
+            Fullscreen::Desktop => Fullscreen::Screen,
+            Fullscreen::Screen => Fullscreen::Off,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // ScrollBarOptions — placement + keyboard options for standard_scroll_bar
 // ---------------------------------------------------------------------------
 
@@ -143,6 +176,10 @@ pub struct Window {
     palette: WindowPalette,
     /// The window title.
     title: Option<String>,
+    /// Whether the window is frameless-fullscreen, and in which mode. Driven by
+    /// [`set_fullscreen`](Self::set_fullscreen); read by the `Command::FULLSCREEN`
+    /// cycler and [`client_rect`](Self::client_rect).
+    fullscreen: Fullscreen,
 }
 
 impl Window {
@@ -213,6 +250,7 @@ impl Window {
             number,
             palette: WindowPalette::Blue,
             title,
+            fullscreen: Fullscreen::Off,
         }
     }
 
@@ -275,6 +313,11 @@ impl Window {
     /// is needed here.
     pub fn title(&self) -> Option<&str> {
         self.title.as_deref()
+    }
+
+    /// The window's current [`Fullscreen`] state.
+    pub fn fullscreen(&self) -> Fullscreen {
+        self.fullscreen
     }
 
     /// Update the window title in both the `Window` record and the [`Frame`]
@@ -2855,5 +2898,19 @@ mod tests {
             WindowPalette::Cyan,
             "with_palette must propagate to the frame child"
         );
+    }
+
+    #[test]
+    fn fullscreen_defaults_off_and_cycles() {
+        use crate::window::Fullscreen;
+        let win = Window::new(Rect::new(0, 0, 20, 8), Some("W".into()), 0);
+        assert_eq!(
+            win.fullscreen(),
+            Fullscreen::Off,
+            "new window is not fullscreen"
+        );
+        assert_eq!(Fullscreen::Off.next(), Fullscreen::Desktop);
+        assert_eq!(Fullscreen::Desktop.next(), Fullscreen::Screen);
+        assert_eq!(Fullscreen::Screen.next(), Fullscreen::Off);
     }
 }

@@ -151,4 +151,4 @@ pub use widgets::{
 pub use widgets::{Label, ParamText, StaticText};
 pub use widgets::{Node, Outline, OutlineViewer, OutlineViewerState, ov_update};
 pub use widgets::{Terminal, TextDevice};
-pub use window::{ScrollBarOptions, Window, WindowFlags, WindowPalette};
+pub use window::{Fullscreen, ScrollBarOptions, Window, WindowFlags, WindowPalette};

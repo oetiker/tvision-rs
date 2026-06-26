@@ -25,4 +25,4 @@
 #[allow(clippy::module_inception)]
 mod window;
 
-pub use window::{ScrollBarOptions, Window, WindowFlags, WindowPalette};
+pub use window::{Fullscreen, ScrollBarOptions, Window, WindowFlags, WindowPalette};
