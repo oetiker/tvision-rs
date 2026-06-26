@@ -12,6 +12,14 @@ moves it into a dated, versioned section when a release is cut.
 
 ### New
 
+### Changed
+
+### Fixed
+
+## 0.3.0 - 2026-06-26
+
+### New
+
 - The collapsed application menu bar's `[⋮]` kebab is now a themable glyph
   (`Glyphs::menu_kebab`, default `"[⋮]"`) instead of a string literal; the
   collapsed bar's width is derived from the glyph's display width, so a theme may
@@ -32,7 +40,6 @@ moves it into a dated, versioned section when a release is cut.
   unified maximize through a single `restore_rect` slot shared by the `ZOOM`
   command and fullscreen-Desktop (so they cannot desync). `Window::bordered()`
   reads the border state.
-
 ### Changed
 
 - `Window`'s `client_rect()` and title-drag guard now key off the independent
