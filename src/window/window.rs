@@ -103,7 +103,7 @@ pub enum WindowPalette {
 /// `Off` is a normal framed window; `Desktop` hides the border and fills the
 /// desktop area; `Screen` additionally covers the menu row (the menu bar
 /// collapses to a `⋮` kebab at the top-right). Per-window property, driven by
-/// [`Window::set_fullscreen`].
+/// `set_fullscreen`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum Fullscreen {
     /// Normal framed window.
