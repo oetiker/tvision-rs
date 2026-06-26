@@ -285,14 +285,14 @@ type IdleHook = Box<dyn FnMut(&mut Program)>;
 
 /// Loop-owned record of the window currently in frameless-fullscreen, used to
 /// re-fit on resize and restore chrome if the window is removed out from under us.
+///
+/// The window owns its own restore (the single `restore_rect` slot) and toggled
+/// its own border inline, so the slot tracks only what the **pump** must: the
+/// window id + the mode (the desktop top and menu collapse differ by mode).
 #[derive(Clone, Copy)]
 struct FullscreenSlot {
     window: crate::view::ViewId,
     mode: crate::window::Fullscreen,
-    /// Pre-fullscreen window bounds, restored on exit.
-    restore: Rect,
-    /// Pre-fullscreen shadow flag, restored verbatim on exit.
-    shadow: bool,
 }
 
 /// Ports `TProgram` (`tprogram.cpp`). The original derived an application class
@@ -3340,11 +3340,13 @@ fn centered_msgbox_rect_for(group: &Group, desktop: Option<ViewId>, msg: &str) -
     r
 }
 
-/// Apply a fullscreen `mode` to `window` across the tree. Border visibility is
-/// toggled inline by `Window::set_fullscreen`; this performs the cross-tree work:
-/// collapse/restore the menu bar (+ its bounds), re-bound the desktop, and re-fit
-/// the window — all through the `View` trait (no downcast). Tracks/clears the
-/// loop-owned `slot`. Reused by the deferred drain and the resize/vanish path.
+/// Apply a fullscreen `mode` to `window` across the tree. The window already did
+/// its own window-local work **inline** in `Window::set_fullscreen` (maximize /
+/// restore via its single `restore_rect` slot, the border toggle, and the content
+/// reflow). This performs only the **cross-tree** work — collapse/restore the menu
+/// bar (+ its bounds) and re-bound the desktop — plus the loop-owned `slot`
+/// tracking. All via the `View` trait (no downcast except the menu-bar collapse
+/// flag). Reused by the deferred drain and the resize/vanish path.
 #[allow(clippy::too_many_arguments)]
 fn apply_fullscreen(
     group: &mut Group,
@@ -3362,29 +3364,18 @@ fn apply_fullscreen(
     let menu_present = menu_bar.is_some();
     let status_h = i32::from(status_line.is_some());
 
-    // 1. Edge bookkeeping: capture restore bounds + shadow on first entering;
-    //    clear the shadow while fullscreen.
-    let entering =
-        slot.as_ref().is_none_or(|s| s.mode == Fullscreen::Off) && mode != Fullscreen::Off;
-    if entering {
-        if let Some(v) = group.find_mut(window) {
-            let restore = v.state().get_bounds();
-            let shadow = v.state().state.shadow;
-            v.state_mut().state.shadow = false;
-            *slot = Some(FullscreenSlot {
-                window,
-                mode,
-                restore,
-                shadow,
-            });
-        }
-    } else if mode != Fullscreen::Off
-        && let Some(s) = slot.as_mut()
-    {
-        s.mode = mode;
-    }
+    // On exit (Off), the window restored its own bounds inline. Capture them BEFORE
+    // the desktop is re-bounded below, so the desktop-shrink grow-mode cascade does
+    // not perturb the just-restored window — we re-pin them afterwards. (For
+    // mode != Off the window is re-filled to the new desktop, so no pin is needed;
+    // for the vanish path the window is gone, so this is None and nothing happens.)
+    let pinned = if mode == Fullscreen::Off {
+        group.find_mut(window).map(|v| v.state().get_bounds())
+    } else {
+        None
+    };
 
-    // 2. Menu bar: collapse + bounds (⋮ cell when Screen, full top row otherwise).
+    // 1. Menu bar: collapse + bounds (⋮ cell when Screen, full top row otherwise).
     if let Some(mb) = menu_bar {
         let collapsed = mode == Fullscreen::Screen;
         if let Some(v) = group.find_mut(mb) {
@@ -3403,7 +3394,7 @@ fn apply_fullscreen(
         }
     }
 
-    // 3. Desktop bounds: top row 0 when Screen, else below the menu bar.
+    // 2. Desktop bounds: top row 0 when Screen, else below the menu bar.
     let top = if mode == Fullscreen::Screen {
         0
     } else {
@@ -3415,9 +3406,14 @@ fn apply_fullscreen(
         v.change_bounds(Rect::new(0, top, w, h - status_h));
     }
 
-    // 4. Window bounds: fill the (now-sized) desktop, or restore on Off.
+    // 3. Window bounds:
+    //    - mode != Off: re-fill to the (now-sized) desktop. Screen needs this after
+    //      the desktop expanded to row 0; Desktop already fills inline but re-filling
+    //      is harmless and keeps the resize path uniform.
+    //    - Off: re-pin the inline-restored bounds (undoing the desktop-shrink
+    //      cascade above). The window owns the restore; the pump only preserves it.
     let target = if mode == Fullscreen::Off {
-        slot.as_ref().map(|s| s.restore)
+        pinned
     } else {
         let dh = (h - status_h) - top;
         Some(Rect::new(0, 0, w, dh)) // desktop-local: the window fills its owner
@@ -3429,13 +3425,8 @@ fn apply_fullscreen(
         v.on_bounds_changed(ctx);
     }
 
-    // 5. Exit: restore the shadow verbatim and clear the slot.
-    if mode == Fullscreen::Off
-        && let Some(s) = slot.take()
-        && let Some(v) = group.find_mut(window)
-    {
-        v.state_mut().state.shadow = s.shadow;
-    }
+    // 4. Slot tracking: set while fullscreen, cleared on exit / vanish.
+    *slot = (mode != Fullscreen::Off).then_some(FullscreenSlot { window, mode });
 }
 
 /// Run a [`ModalCompletion`] as a DIRECT `group` mutation, while the modal

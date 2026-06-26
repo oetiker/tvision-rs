@@ -17,13 +17,31 @@ moves it into a dated, versioned section when a release is cut.
   pump applies the cross-tree layout (menu bar collapse/restore + bounds, desktop
   re-bound, window re-fit) through the `View` trait with no downcast. The loop
   also re-fits on resize and auto-restores chrome if the fullscreen window is
-  removed. Backed by `FullscreenSlot` (loop-owned restore + shadow tracking) and
-  the `Program.fullscreen` field.
+  removed. Backed by the loop-owned `FullscreenSlot { window, mode }` and the
+  `Program.fullscreen` field.
 - Frameless fullscreen windows: `Window::set_fullscreen(Fullscreen::{Off,Desktop,Screen})` and a cycling `Command::FULLSCREEN`. `Desktop` hides the frame and fills the desktop; `Screen` also covers the menu row, collapsing the menu bar to a `⋮` kebab that opens a corner popup. `Window::client_rect()` exposes the frameless content area.
+- Fullscreen decomposed into independent primitives (`set_fullscreen` now
+  composes them): `Window::set_bordered(bool, ctx)` toggles the frame border
+  independently of fullscreen/zoom and reflows content to the new client area (a
+  grow-mode resize + a `(∓1,∓1)` origin shift; owned scroll bars re-derived from
+  the `client_rect` formula); `Window::maximize`/`restore`/`is_maximized` are one
+  unified maximize through a single `restore_rect` slot shared by the `ZOOM`
+  command and fullscreen-Desktop (so they cannot desync). `Window::bordered()`
+  reads the border state.
 
 ### Changed
 
+- `Window`'s `client_rect()` and title-drag guard now key off the independent
+  `bordered` primitive (not the fullscreen mode); the `ZOOM` command routes
+  through `maximize`/`restore`. The pre-release `Window::zoom_rect()` accessor is
+  replaced by `restore_rect()`/`is_maximized()`.
+
 ### Fixed
+
+- Zooming a frameless fullscreen window no longer leaves it small-but-frameless
+  with a stale restore slot, and frameless window content now reflows to fill the
+  enlarged client area instead of keeping a 1-cell margin (the two coupling bugs
+  removed by the orthogonal-primitive rework).
 
 ## 0.2.0 - 2026-06-25
 

@@ -107,9 +107,9 @@ pub struct Frame {
     /// (owner-data-down). Empty = today's plain frame, so non-joined windows are
     /// byte-for-byte unchanged. See [`set_junction_marks`](Frame::set_junction_marks).
     junction_marks: Vec<JunctionMark>,
-    /// Whether to draw the border box, title, and icons. `false` for a frameless
-    /// fullscreen window — the interior background fill stays unconditional, but
-    /// every edge/title/icon is suppressed. Pushed down by the owning window like
+    /// Whether to draw the border box, title, and icons. `false` for a borderless
+    /// window — the interior background fill stays unconditional, but every
+    /// edge/title/icon is suppressed. Pushed down by the owning window like
     /// [`zoomed`]. See [`set_border_visible`](Frame::set_border_visible).
     border_visible: bool,
 }
@@ -190,9 +190,9 @@ impl Frame {
     }
 
     /// Show or hide the border box, title, and icons (the interior fill is
-    /// unaffected). The owning [`Window`](crate::window::Window) pushes `false`
-    /// when it goes frameless-fullscreen, via the same `child_mut` + downcast seam
-    /// as [`set_zoomed`](Frame::set_zoomed).
+    /// unaffected). The owning [`Window`](crate::window::Window) pushes this from
+    /// its independent `set_bordered` primitive, via the same `child_mut` +
+    /// downcast seam as [`set_zoomed`](Frame::set_zoomed).
     pub(crate) fn set_border_visible(&mut self, v: bool) {
         self.border_visible = v;
     }
