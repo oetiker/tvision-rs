@@ -1,12 +1,110 @@
 # Design note — frameless fullscreen windows (a chrome-less "app body" mode)
 
-> Status: **DESIGN** (not yet landed; three independent expert reviews folded in —
-> all load-bearing seams verified against source, the menubar-activation seam
-> resolved to a corner `popup_menu`). A
-> modern-TUI extension *alongside* the faithful port (precedent: `RegexValidator`
-> next to the picture-mask port). It reuses existing seams — `Window::zoom`'s
-> saved-geometry model, the Frame push-down setters, and the post-dispatch
-> `Deferred` channel — rather than inventing substrate.
+> Status: **REVISION 2 (in progress)** — the first cut landed on
+> `feat/fullscreen-window` (Fullscreen enum, frameless Frame, collapsible MenuBar,
+> pump engine, command). Live testing exposed two coupling bugs (un-zoom of a
+> fullscreen window → small-but-frameless; frameless content keeps a 1-cell margin
+> because it never reflows). Revision 2 **decouples the primitives**. The section
+> below supersedes the original design (kept further down for history/rationale).
+
+---
+
+## Revision 2 — orthogonal primitives (the current target)
+
+The first cut coupled three things that should be independent: **border
+visibility** was welded to **fullscreen mode**, while **window bounds** were owned
+by zoom *and* fullscreen *and* drag with two separate restore slots. That produced
+incoherent states (zoom a fullscreen window → small frameless window with a stale
+fullscreen slot). Revision 2 makes each concern an independent primitive and lets
+"fullscreen" be a thin convenience that composes them.
+
+### The primitives (each independently settable)
+
+1. **`Window` border** — `set_bordered(bool)` (public, default `true`),
+   independent of zoom/fullscreen/drag. The frame draws iff bordered. Replaces the
+   fullscreen-driven `border_visible`; `Fullscreen` no longer owns it.
+2. **Maximize** — ONE maximized-bounds concept with a single saved restore-rect on
+   `Window` (`restore_rect: Option<Rect>`, `None` = not maximized). Both the
+   **zoom** command and **fullscreen-Desktop** go through this one maximize/restore,
+   so they cannot desync. This unifies (and replaces) the old `zoom_rect` + the
+   pump's per-slot `restore` — there is now exactly one restore slot. (Un-zoom bug
+   class removed by construction.)
+3. **`MenuBar` collapse** — `set_collapsed(bool)`, already an independent property;
+   the kebab renders as **`[⋮]`** (bracketed, so it reads as a clickable affordance).
+4. **Desktop covers menu** — pump re-bounds the desktop to row 0 (Screen only),
+   unchanged from R1.
+
+### Border toggle reflows content as a resize + origin shift (the key change)
+
+Window content components **already react to a window resize** via their
+`grow_mode` — Revision 2 does **not** change that and adds **no** content-pinning
+API. Removing the border is modeled as exactly that resize, with one twist:
+
+- The client area grows by the border thickness (1 cell per edge): deliver the
+  size delta to each **content** child through the **existing** `grow_mode`
+  resize path (`calc_bounds`) — components reflow exactly as on a normal resize.
+- **Plus** translate each content child's origin by the inset delta — `(-1, -1)`
+  on border-removal, `(+1, +1)` on border-add — so the freed top-left border cell
+  is absorbed and the top-left stays the top-left.
+
+So bordered content at interior `(1, 1, w-1, h-1)` becomes frameless `(0, 0, w, h)`
+(origin `-1,-1`, size `+2,+2`), and a partially-filling child reflows per its own
+`grow_mode` just like a resize. This runs **only on a border change** (the plain
+resize path is untouched, so there is no double-apply).
+
+**Scrollbars are chrome, not content.** A `ScrollBar` the window created via
+`standard_scroll_bar` anchors to an edge, not the client origin, so it does **not**
+get the content transform — the window re-derives its position from the
+`client_rect` formula (Task-4 logic) on a border change. The window distinguishes
+them because it **owns the scrollbar ids it minted** (no new app API, no guessing):
+every other non-frame child is content.
+
+### Fullscreen composes the primitives
+
+`Command::FULLSCREEN` still cycles `Off → Desktop → Screen → Off` (no default key),
+and `Window::set_fullscreen(mode)` stays as the high-level entry — but both are now
+defined in terms of the primitives:
+
+- **Desktop** = maximize (into the desktop) + `set_bordered(false)`.
+- **Screen** = Desktop + pump: `MenuBar::set_collapsed(true)` + desktop covers row 0.
+- **Off** = restore (un-maximize) + `set_bordered(true)` + uncollapse + desktop row 1.
+
+`set_bordered`, `maximize`/`restore`, and `MenuBar::set_collapsed` are **public**,
+so an app can build a frameless desktop-filling "app body" directly without the
+cycle. The inline-vs-deferred split is unchanged: the border + content reflow are
+window-local (inline in `set_bordered`); the cross-tree menubar/desktop work stays
+in the pump via `Deferred::SetFullscreen` (which now carries the composed intent).
+
+### What this fixes
+
+- **Un-zoom bug:** zoom and fullscreen share one maximize/restore; border is
+  independent, so no state can be small-yet-frameless-by-accident. Every
+  combination is a coherent, intentional state.
+- **Content margin bug:** content reflows to the client area on border toggle
+  (the whole point of "becomes the background").
+
+### Delta vs. the shipped R1 branch (what changes)
+
+- `Frame::set_border_visible` → driven by `Window::set_bordered`, no longer by
+  fullscreen mode.
+- `Window`: add `set_bordered` + content/scrollbar reflow on border change; replace
+  `zoom_rect` and the pump's `restore` with one `restore_rect` + `maximize`/`restore`;
+  `zoom` command routes through maximize.
+- Pump `apply_fullscreen`: recomposed onto the primitives; `FullscreenSlot` no
+  longer stores `restore` (the window owns the one restore-rect) — it tracks only
+  what the pump must (the window id + whether the desktop/menubar are in their
+  Screen state) for resize re-fit and removal-restore.
+- `MenuBar`: kebab string `⋮` → `[⋮]` (bounds become a 3-cell `[⋮]` at the
+  top-right; collapse stays a bounds change so hit-routing still works).
+- Demos: no `insert_client` needed — content reflows automatically.
+
+---
+
+## Original design (Revision 1 — superseded above, kept for rationale)
+
+> The text below describes the first cut as landed. Where R1 and R2 differ, R2
+> governs. R1 reused existing seams — `Window::zoom`'s saved-geometry model, the
+> Frame push-down setters, and the post-dispatch `Deferred` channel.
 
 ## The idea
 
