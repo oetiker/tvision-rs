@@ -3375,7 +3375,7 @@ fn apply_fullscreen(
         None
     };
 
-    // 1. Menu bar: collapse + bounds (⋮ cell when Screen, full top row otherwise).
+    // 1. Menu bar: collapse + bounds ([⋮] kebab 3-cell when Screen, full top row otherwise).
     if let Some(mb) = menu_bar {
         let collapsed = mode == Fullscreen::Screen;
         if let Some(v) = group.find_mut(mb) {
@@ -3386,7 +3386,7 @@ fn apply_fullscreen(
                 bar.set_collapsed(collapsed);
             }
             let bounds = if collapsed {
-                Rect::new(w - 1, 0, w, 1)
+                Rect::new(w - 3, 0, w, 1)
             } else {
                 Rect::new(0, 0, w, 1)
             };
@@ -4267,8 +4267,8 @@ mod tests {
     }
 
     /// End-to-end: `Deferred::SetFullscreen { mode: Screen }` collapses the menu
-    /// bar to the `⋮` cell, expands the desktop to cover row 0, and records the
-    /// fullscreen slot.
+    /// bar to the `[⋮]` kebab (3 cells), expands the desktop to cover row 0, and
+    /// records the fullscreen slot.
     #[test]
     fn set_fullscreen_screen_collapses_menu_and_covers_top() {
         use crate::view::Deferred;
@@ -4288,7 +4288,7 @@ mod tests {
         });
         program.pump_once();
 
-        // Menu bar collapsed to the ⋮ cell (top-right corner, width 1).
+        // Menu bar collapsed to the [⋮] kebab (top-right 3 cells).
         let mb_id = program.menu_bar().expect("menu bar present");
         let mb = program
             .group_mut()
@@ -4298,8 +4298,8 @@ mod tests {
             .get_bounds();
         assert_eq!(
             (mb.a.x, mb.b.x, mb.a.y, mb.b.y),
-            (39, 40, 0, 1),
-            "menu bar is the ⋮ cell at top-right"
+            (37, 40, 0, 1),
+            "menu bar is the [⋮] kebab at top-right (3 cells)"
         );
 
         // Desktop top moved to row 0 (covers the former menu row).
@@ -4350,7 +4350,7 @@ mod tests {
         assert_eq!(slot.mode, Fullscreen::Screen);
         assert_eq!(slot.window, window_id);
 
-        // Menu bar collapsed to the ⋮ cell (top-right corner, width 1).
+        // Menu bar collapsed to the [⋮] kebab (top-right 3 cells).
         let mb_id = program.menu_bar().unwrap();
         let mb = program
             .group_mut()
@@ -4358,7 +4358,7 @@ mod tests {
             .unwrap()
             .state()
             .get_bounds();
-        assert_eq!((mb.a.x, mb.b.x, mb.a.y, mb.b.y), (39, 40, 0, 1));
+        assert_eq!((mb.a.x, mb.b.x, mb.a.y, mb.b.y), (37, 40, 0, 1));
 
         // Desktop covers the menu row.
         let dt = program
@@ -4598,7 +4598,7 @@ mod tests {
     ///
     /// REGRESSION SIGNAL: if the `size_changed && slot.is_some()` re-apply branch
     /// in `pump_once` (`2a`) is removed, the collapsed menu bar is left at the
-    /// grow-mode width (fills the new full row) and the `(59, 60, 0, 1)` assert fails.
+    /// grow-mode width (fills the new full row) and the `(57, 60, 0, 1)` assert fails.
     #[test]
     fn fullscreen_screen_refits_on_resize() {
         let (mut program, window_id, desktop_id, handle) =
@@ -4624,10 +4624,10 @@ mod tests {
         handle.resize(60, 20);
 
         // One pump: size-change check fires, grow-mode cascade runs (bar stretches
-        // to 60 wide), then the 2a re-apply re-shrinks it back to the ⋮ cell.
+        // to 60 wide), then the 2a re-apply re-shrinks it back to the [⋮] kebab.
         program.pump_once();
 
-        // Collapsed menu bar is at the ⋮ cell for the new width: (59, 60, 0, 1).
+        // Collapsed menu bar is at the [⋮] kebab for the new width: (57, 60, 0, 1).
         let mb_id = program.menu_bar().unwrap();
         let mb = program
             .group_mut()
@@ -4637,8 +4637,8 @@ mod tests {
             .get_bounds();
         assert_eq!(
             (mb.a.x, mb.b.x, mb.a.y, mb.b.y),
-            (59, 60, 0, 1),
-            "collapsed bar re-shrunk to ⋮ cell at new width after resize"
+            (57, 60, 0, 1),
+            "collapsed bar re-shrunk to [⋮] kebab at new width after resize"
         );
 
         // Desktop still covers row 0 (Screen mode active).
@@ -4667,10 +4667,11 @@ mod tests {
 
     /// **Scenario D — corner-popup activation.**
     ///
-    /// After Screen fullscreen collapses the menu bar to the `⋮` cell at `(39, 0)`,
-    /// a `MouseDown` at that position routes to the collapsed `MenuBar::handle_event`
-    /// which calls `popup_menu`. The deferred-apply phase of the same pump inserts
-    /// a `MenuBox` into the root group and arms a `MenuSession` on the capture stack.
+    /// After Screen fullscreen collapses the menu bar to the `[⋮]` kebab at
+    /// columns `(37..40, 0)`, a `MouseDown` anywhere in those 3 cells routes to
+    /// the collapsed `MenuBar::handle_event` which calls `popup_menu`. The
+    /// deferred-apply phase of the same pump inserts a `MenuBox` into the root
+    /// group and arms a `MenuSession` on the capture stack.
     ///
     /// REGRESSION SIGNAL: if `MenuBar::handle_event` does not check `collapsed` or
     /// does not call `popup_menu` on a `MouseDown`, neither the capture nor the box
@@ -4697,7 +4698,7 @@ mod tests {
         assert_eq!(program.capture_len(), 0, "no capture before menu click");
         let group_len_before = program.group_mut().len();
 
-        // Click the ⋮ cell at absolute (39, 0) — the collapsed bar's only cell.
+        // Click within the [⋮] kebab at absolute (39, 0) — inside the 3-cell bar (37..40, 0).
         program.out_events.push_back(mouse_down_at(39, 0));
         program.pump_once();
 

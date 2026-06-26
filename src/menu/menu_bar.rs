@@ -47,9 +47,9 @@ fn cstrlen(s: &str) -> i32 {
 /// Ports `TMenuBar` (`tmenubar.cpp`/`menus.h`).
 pub struct MenuBar {
     mv: MenuViewState,
-    /// When true the bar is rendered as a single `⋮` kebab (top-right cell) and
-    /// activation opens a corner popup instead of the in-bar session. Driven by
-    /// the pump when a `Fullscreen::Screen` window covers the menu row.
+    /// When true the bar is rendered as a `[⋮]` bracketed kebab (top-right 3
+    /// cells) and activation opens a corner popup instead of the in-bar session.
+    /// Driven by the pump when a `Fullscreen::Screen` window covers the menu row.
     collapsed: bool,
 }
 
@@ -126,10 +126,10 @@ impl View for MenuBar {
         let colors = MenuColors::resolve(ctx);
 
         if self.collapsed {
-            // Render only the ⋮ kebab at the top-right cell; the rest of the row
+            // Render the [⋮] kebab at the top-right 3 cells; the rest of the row
             // is left transparent so the fullscreen window shows through.
             let size = self.mv.state.size;
-            ctx.put_char(size.x - 1, 0, '⋮', colors.normal.0);
+            ctx.put_str(size.x - 3, 0, "[⋮]", colors.normal.0);
             return;
         }
 
@@ -220,13 +220,13 @@ impl View for MenuBar {
 }
 
 impl MenuBar {
-    /// Collapse the bar to a `⋮` kebab (or restore the full bar). The pump drives
-    /// this together with a bounds change to the kebab cell.
+    /// Collapse the bar to a `[⋮]` bracketed kebab (or restore the full bar).
+    /// The pump drives this together with a bounds change to the 3-cell kebab rect.
     pub fn set_collapsed(&mut self, v: bool) {
         self.collapsed = v;
     }
 
-    /// Whether the bar is currently collapsed to a `⋮` kebab.
+    /// Whether the bar is currently collapsed to a `[⋮]` bracketed kebab.
     pub fn collapsed(&self) -> bool {
         self.collapsed
     }
@@ -413,12 +413,13 @@ mod tests {
 
     #[test]
     fn collapsed_bar_draws_only_kebab() {
-        // A collapsed bar paints the ⋮ kebab at the top-right cell and nothing else.
+        // A collapsed bar paints the [⋮] kebab at the top-right 3 cells and nothing
+        // else; the rest of the row is left transparent.
         let mut bar = sample_bar(Rect::new(0, 0, 24, 1));
         bar.set_collapsed(true);
         assert!(bar.collapsed());
         let snap = render(&mut bar, 24, 1);
-        assert!(snap.contains('⋮'), "kebab drawn");
+        assert!(snap.contains("[⋮]"), "bracketed kebab drawn");
         assert!(
             !snap.contains("File"),
             "top-level items NOT drawn when collapsed"
