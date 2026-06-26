@@ -1227,9 +1227,6 @@ impl<'a> Context<'a> {
     /// cross-tree layout (menu bar, desktop, window re-fit). See
     /// [`Deferred::SetFullscreen`].
     ///
-    /// # Note
-    /// This method is wired by `Window::set_fullscreen` (added in a later task).
-    #[allow(dead_code)] // wired by Window::set_fullscreen in a later task
     pub fn set_fullscreen(&mut self, window: ViewId, mode: crate::window::Fullscreen) {
         self.deferred.push(Deferred::SetFullscreen { window, mode });
     }

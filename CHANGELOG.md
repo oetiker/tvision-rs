@@ -19,6 +19,7 @@ moves it into a dated, versioned section when a release is cut.
   also re-fits on resize and auto-restores chrome if the fullscreen window is
   removed. Backed by `FullscreenSlot` (loop-owned restore + shadow tracking) and
   the `Program.fullscreen` field.
+- Frameless fullscreen windows: `Window::set_fullscreen(Fullscreen::{Off,Desktop,Screen})` and a cycling `Command::FULLSCREEN`. `Desktop` hides the frame and fills the desktop; `Screen` also covers the menu row, collapsing the menu bar to a `⋮` kebab that opens a corner popup. `Window::client_rect()` exposes the frameless content area.
 
 ### Changed
 

@@ -222,9 +222,6 @@ impl View for MenuBar {
 impl MenuBar {
     /// Collapse the bar to a `⋮` kebab (or restore the full bar). The pump drives
     /// this together with a bounds change to the kebab cell.
-    // Wired by the pump in Task 5 (fullscreen-window integration); no production
-    // caller yet.
-    #[allow(dead_code)]
     pub fn set_collapsed(&mut self, v: bool) {
         self.collapsed = v;
     }

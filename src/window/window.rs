@@ -512,6 +512,23 @@ impl Window {
         }
     }
 
+    // -- fullscreen ----------------------------------------------------------
+
+    /// Set the window's frameless-fullscreen [`mode`](Fullscreen). Toggles the
+    /// frame border **inline** (the only path that reaches the frame — the pump
+    /// cannot downcast to `Window`), records the new mode, and emits
+    /// [`Deferred::SetFullscreen`](crate::view::Deferred::SetFullscreen) for the
+    /// pump to apply the cross-tree layout (menu bar / desktop / window re-fit).
+    pub fn set_fullscreen(&mut self, mode: Fullscreen, ctx: &mut Context) {
+        self.fullscreen = mode;
+        if let Some(frame) = self.frame_mut() {
+            frame.set_border_visible(mode == Fullscreen::Off);
+        }
+        if let Some(id) = self.group.state().id() {
+            ctx.set_fullscreen(id, mode);
+        }
+    }
+
     // -- standard scroll bar -------------------------------------------------
 
     /// Insert a standard scroll bar on the right or bottom edge and return its
@@ -1243,6 +1260,12 @@ impl View for Window {
         // command). The modal-cancel branch is wired here; the dialog layer owns
         // the broader machinery.
         if let Event::Command(c) = *ev
+            && c == Command::FULLSCREEN
+        {
+            self.set_fullscreen(self.fullscreen.next(), ctx);
+            ev.clear();
+        }
+        if let Event::Command(c) = *ev
             && c == Command::CLOSE
             && self.flags.close
         {
@@ -1337,7 +1360,10 @@ impl View for Window {
         // click (the desktop's positional auto-select consumes the selecting
         // click), so the drag only ever starts on the active window — no active
         // re-check needed.
-        if let Event::MouseDown(m) = *ev {
+        // A frameless window has no title bar or grow corners to drag; skip entirely.
+        if let Event::MouseDown(m) = *ev
+            && self.fullscreen == Fullscreen::Off
+        {
             let w = self.group.state().size.x;
             let h = self.group.state().size.y;
             let pos = m.position;

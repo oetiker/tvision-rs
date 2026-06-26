@@ -4328,6 +4328,55 @@ mod tests {
         );
     }
 
+    /// End-to-end: `Command::FULLSCREEN` routed to the active window cycles it
+    /// through Desktop → Screen modes; pump effects confirm the cross-tree layout.
+    #[test]
+    fn fullscreen_command_cycles_to_screen() {
+        use crate::window::Fullscreen;
+
+        let (mut program, window_id, desktop_id) = program_with_fullscreen_scaffold(40, 12);
+
+        // Select the numbered window so the focused FULLSCREEN command routes to it.
+        program.out_events.push_back(alt_digit('1'));
+        program.pump_once();
+        program.out_events.clear();
+
+        // Cycle Off -> Desktop, then Desktop -> Screen (one command per pump pass;
+        // the window updates its own `fullscreen` inline, so the 2nd read sees Desktop).
+        program
+            .out_events
+            .push_back(Event::Command(Command::FULLSCREEN));
+        program.pump_once();
+        program
+            .out_events
+            .push_back(Event::Command(Command::FULLSCREEN));
+        program.pump_once();
+
+        // The slot records Screen for our window.
+        let slot = program.fullscreen.as_ref().expect("fullscreen slot set");
+        assert_eq!(slot.mode, Fullscreen::Screen);
+        assert_eq!(slot.window, window_id);
+
+        // Menu bar collapsed to the ⋮ cell (top-right corner, width 1).
+        let mb_id = program.menu_bar().unwrap();
+        let mb = program
+            .group_mut()
+            .find_mut(mb_id)
+            .unwrap()
+            .state()
+            .get_bounds();
+        assert_eq!((mb.a.x, mb.b.x, mb.a.y, mb.b.y), (39, 40, 0, 1));
+
+        // Desktop covers the menu row.
+        let dt = program
+            .group_mut()
+            .find_mut(desktop_id)
+            .unwrap()
+            .state()
+            .get_bounds();
+        assert_eq!(dt.a.y, 0);
+    }
+
     /// **The ONLY end-to-end test of the real `program.rs`
     /// [`ResolveFocusedFile`](crate::view::Deferred::ResolveFocusedFile) pump arm**
     /// (the `cmFileFocused` payload broker). Every other test for this

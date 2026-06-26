@@ -111,6 +111,10 @@ impl Command {
     /// Emitted by the window's zoom button (frame zoom icon) or a key binding.
     /// Toggles between the zoomed (full-desktop) rect and the saved un-zoom rect.
     pub const ZOOM: Command = Command("tv.zoom");
+    /// Cycle the active window through frameless-fullscreen modes
+    /// (`Off → Desktop → Screen → Off`). Handled by the [`Window`](crate::Window); no default key
+    /// binding (apps bind their own). See [`Window::set_fullscreen`](crate::window::Window::set_fullscreen).
+    pub const FULLSCREEN: Command = Command("tv.fullscreen");
     /// Enter window resize/move mode — handled by the active [`Window`](crate::Window).
     ///
     /// Emitted by the frame drag handle or a key binding. Starts the interactive

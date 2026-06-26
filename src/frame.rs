@@ -193,10 +193,6 @@ impl Frame {
     /// unaffected). The owning [`Window`](crate::window::Window) pushes `false`
     /// when it goes frameless-fullscreen, via the same `child_mut` + downcast seam
     /// as [`set_zoomed`](Frame::set_zoomed).
-    ///
-    /// Called by `Window` (Task 6); `allow(dead_code)` silences the lint until
-    /// that caller lands.
-    #[allow(dead_code)]
     pub(crate) fn set_border_visible(&mut self, v: bool) {
         self.border_visible = v;
     }
