@@ -255,7 +255,10 @@ fn ci_cmp(a: &str, b: &str) -> core::cmp::Ordering {
 /// the owned, case-insensitively sorted `Vec<String>`.
 pub struct SortedListBox {
     lv: ListViewerState,
+    /// The displayed rows (the source narrowed by the query in `Filter` mode).
     items: Vec<String>,
+    /// The full host-supplied set, kept sorted; `items` is derived from this.
+    source: Vec<String>,
     /// The index of the last matched char in the focused item's text; -1 = no
     /// active search.
     search_pos: i32,
@@ -285,9 +288,18 @@ impl SortedListBox {
         SortedListBox {
             lv,
             items: Vec::new(),
+            source: Vec::new(),
             search_pos: -1,
             shift_state: 0,
         }
+    }
+
+    /// Enable find mode (default [`FindMode::Off`] keeps the classic lookup).
+    /// `Filter` makes the list narrow its own (already-sorted) source by the
+    /// query, so the narrowed view stays in sorted order.
+    pub fn with_find(mut self, mode: crate::widgets::list_viewer::FindMode) -> Self {
+        self.lv.find_mode = mode;
+        self
     }
 
     /// Replace the item collection, sort it case-insensitively, and reset the search state.
@@ -302,13 +314,18 @@ impl SortedListBox {
     /// `new_list` sorts them for you.
     pub fn new_list(&mut self, mut items: Vec<String>, ctx: &mut Context) {
         items.sort_by(|a, b| ci_cmp(a, b));
-        self.items = items;
-        let len = self.items.len() as i32;
-        list_viewer::set_range(self, len, ctx);
-        if self.lv.range > 0 {
-            list_viewer::focus_item(self, 0, ctx);
-        }
+        self.source = items;
         self.search_pos = -1;
+        self.rebuild_view(ctx, true);
+    }
+
+    /// Re-derive `items` by narrowing the already-sorted `source` with the query
+    /// (in `Filter` mode); the narrowed view stays sorted because `source` is
+    /// sorted and `filtered_view` preserves order.
+    fn rebuild_view(&mut self, ctx: &mut Context, reset_focus: bool) {
+        self.items = list_viewer::filtered_view(&self.source, self.lv.find_mode, &self.lv.query);
+        let len = self.items.len() as i32;
+        list_viewer::apply_view_len(self, len, reset_focus, ctx);
     }
 
     /// The current item collection as a read-only, case-insensitively sorted slice.
@@ -339,6 +356,12 @@ impl ListViewer for SortedListBox {
     /// Return the text for `item` from the owned Vec.
     fn get_text(&self, item: i32) -> String {
         self.items.get(item as usize).cloned().unwrap_or_default()
+    }
+
+    fn on_query_changed(&mut self, ctx: &mut Context) {
+        if self.lv.find_mode == crate::widgets::list_viewer::FindMode::Filter {
+            self.rebuild_view(ctx, false);
+        }
     }
     // is_selected / select_item: inherit the base (item == focused, and the base
     // broadcasts that an item was selected). Not overridden here.
@@ -1172,6 +1195,47 @@ mod tests {
             "clearing the query restores the full source"
         );
         assert_eq!(lb.get_text(0), "apple");
+    }
+
+    #[test]
+    fn sorted_list_box_self_filter_keeps_sorted_order() {
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred = vec![];
+        let mut slb =
+            SortedListBox::new(Rect::new(0, 0, 14, 5), 1, None, None).with_find(FindMode::Filter);
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            slb.new_list(
+                vec![
+                    "orange".into(),
+                    "apple".into(),
+                    "banana".into(),
+                    "grape".into(),
+                ],
+                &mut ctx,
+            );
+        }
+        // Sorted: apple, banana, grape, orange.
+        assert_eq!(slb.get_text(0), "apple");
+        assert_eq!(slb.lv.range, 4);
+
+        slb.lv.query = "an".into();
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            slb.on_query_changed(&mut ctx);
+        }
+        // Containing "an", in sorted order: banana, orange.
+        assert_eq!(slb.lv.range, 2);
+        assert_eq!(slb.get_text(0), "banana");
+        assert_eq!(slb.get_text(1), "orange");
+
+        slb.lv.query.clear();
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            slb.on_query_changed(&mut ctx);
+        }
+        assert_eq!(slb.lv.range, 4, "clearing restores the full sorted source");
     }
 
     #[test]

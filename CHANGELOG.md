@@ -12,6 +12,14 @@ moves it into a dated, versioned section when a release is cut.
 
 ### New
 
+- `ListViewer` incremental **find mode** (`FindMode::Off`/`Highlight`/`Filter`,
+  opt-in via `ListBox::with_find` / `SortedListBox::with_find`): type while a
+  list is focused to accumulate a query that highlights the matched substring in
+  every row and, in `Filter` mode, narrows the list to its own source. Exposes
+  `ListViewer::find_query` / `clear_find`, broadcasts `Command::LIST_FIND_CHANGED`
+  (self as `source`), and shows `No match: <query>` when a query filters the view
+  empty. The default `Off` leaves the classic type-to-search lookup unchanged.
+
 ### Changed
 
 ### Fixed
