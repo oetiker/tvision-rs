@@ -21,10 +21,10 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use tvision_rs::{
     Backend, Button, ButtonFlags, ButtonRowAlign, Color, ColorPicker, Command, Constraints,
-    CrosstermBackend, Desktop, Dialog, DrawCtx, Event, GrowMode, Key, KeyEvent, KeyModifiers, Menu,
-    MenuBar, Program, Rect, Role, ScrollBarOptions, Scroller, Splitter, StaticText, StatusDef,
-    StatusLine, SystemClock, Tab, Theme, View, ViewId, ViewState, Window, WindowFlags, alt,
-    delegate,
+    CrosstermBackend, Desktop, Dialog, DrawCtx, Event, FindMode, GrowMode, Key, KeyEvent,
+    KeyModifiers, ListBox, Menu, MenuBar, Program, Rect, Role, ScrollBarOptions, Scroller,
+    Splitter, StaticText, StatusDef, StatusLine, SystemClock, Tab, Theme, View, ViewId, ViewState,
+    Window, WindowFlags, alt, delegate,
 };
 
 // ---------------------------------------------------------------------------
@@ -1641,6 +1641,52 @@ fn color_window() -> Box<dyn View> {
     Box::new(dlg)
 }
 
+/// The Splitter "list pane": a self-filtering [`ListBox`], populated on the
+/// first event tick because [`ListBox::new_list`] needs a `&mut Context`.
+/// [`FindMode::Filter`] lets the user type to narrow the visible items.
+struct FindListPane {
+    list: ListBox,
+    populated: bool,
+}
+
+impl FindListPane {
+    fn new() -> Self {
+        let list = ListBox::new(Rect::new(0, 0, 1, 1), 1, None, None).with_find(FindMode::Filter);
+        FindListPane {
+            list,
+            populated: false,
+        }
+    }
+}
+
+#[delegate(to = list)]
+impl View for FindListPane {
+    fn handle_event(&mut self, ev: &mut Event, ctx: &mut tvision_rs::Context) {
+        if !self.populated {
+            self.populated = true;
+            self.list.new_list(
+                vec![
+                    "Apple".into(),
+                    "Apricot".into(),
+                    "Banana".into(),
+                    "Blueberry".into(),
+                    "Cherry".into(),
+                    "Cranberry".into(),
+                    "Grape".into(),
+                    "Mango".into(),
+                    "Orange".into(),
+                    "Peach".into(),
+                    "Pineapple".into(),
+                    "Tangerine".into(),
+                ],
+                ctx,
+            );
+            tvision_rs::widgets::list_viewer::update_steps(&self.list, ctx);
+        }
+        self.list.handle_event(ev, ctx);
+    }
+}
+
 /// A [`Splitter`] grid: a fixed sidebar beside a column split into two stacked
 /// rows, `.joined()` so the seams connect to the window frame and each other.
 fn splitter_window() -> Box<dyn View> {
@@ -1648,10 +1694,7 @@ fn splitter_window() -> Box<dyn View> {
     let ext = win.state().get_extent();
     let interior = Rect::new(1, 1, ext.b.x - 1, ext.b.y - 1);
     let right = Splitter::rows()
-        .pane(
-            Box::new(StaticText::new(Rect::new(0, 0, 1, 1), "list pane")),
-            Constraints::flex(),
-        )
+        .pane(Box::new(FindListPane::new()), Constraints::flex())
         .pane(
             Box::new(StaticText::new(Rect::new(0, 0, 1, 1), "form pane")),
             Constraints::flex(),

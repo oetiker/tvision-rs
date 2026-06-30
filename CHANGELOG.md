@@ -19,6 +19,9 @@ moves it into a dated, versioned section when a release is cut.
   `ListViewer::find_query` / `clear_find`, broadcasts `Command::LIST_FIND_CHANGED`
   (self as `source`), and shows `No match: <query>` when a query filters the view
   empty. The default `Off` leaves the classic type-to-search lookup unchanged.
+- `tvdemo` splitter window's "list pane" is now a live filtering `ListBox`
+  (fruit items, `FindMode::Filter`): type to narrow, Backspace to widen, Escape
+  to clear. The `cargo xtask demo` tour now includes four filter-demo scenes.
 
 ### Changed
 

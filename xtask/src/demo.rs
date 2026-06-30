@@ -74,6 +74,12 @@ fn tour() -> Vec<Scene> {
         scene(&["\x1b[<32;44;20M"], 45),
         scene(&["\x1b[<0;44;20m"], 120), // release (final picked colour)
         scene(&["F10", "Down", "s"], 150), // Splitter grid (joined panes)
+        // The list pane (top-right) is a filtering ListBox: the user types to
+        // narrow the visible items in real time. Focus lands on it automatically.
+        scene(&["a"], 90),          // filter → items containing "a"
+        scene(&["n"], 130),         // filter → "an": Banana, Cranberry, Mango, Orange, Tangerine
+        scene(&["BackSpace"], 100), // widen back → "a" rows
+        scene(&["Escape"], 110),    // clear query — full list returns
         // Resize the split window interactively: Ctrl-F5 enters resize mode; Tab
         // cycles the target (window → each divider); arrows move the active
         // target; Enter commits. Widen the tree pane, then grow the list pane.
