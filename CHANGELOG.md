@@ -12,6 +12,14 @@ moves it into a dated, versioned section when a release is cut.
 
 ### New
 
+### Changed
+
+### Fixed
+
+## 0.6.0 - 2026-07-02
+
+### New
+
 - `DrawCtx::owner_active()` — a draw-time signal (each `Group` fans its own
   `focused` to its children) telling a content widget whether its owning pane is
   the focused one. Content widgets pick their surface from it, so a pane's
@@ -19,7 +27,6 @@ moves it into a dated, versioned section when a release is cut.
   panes and multi-list widgets (e.g. a two-list shuttle) that previously could
   not dim as a whole. rstv deviation: C++ Turbo Vision focus is per-window, with
   no nested panes.
-
 ### Changed
 
 - Renamed surface roles onto the owning-pane axis: `ListNormalActive` →
