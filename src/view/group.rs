@@ -1919,6 +1919,55 @@ mod tests {
         );
     }
 
+    /// Golden: an inner pane with a surface, inset at a NON-ZERO origin inside
+    /// a root group (project rule: never test layout only at (0,0) — the fill
+    /// must land through a real sub-context). Uncovered pane cells render the
+    /// surface role (normal when the pane is focused, inactive when not), the
+    /// child overpaints its own cells, and cells outside the pane stay at the
+    /// buffer default. Eyeball the whole snapshot, not just the asserted cells.
+    #[test]
+    fn surface_snapshot_inset_pane_focused_and_not() {
+        let mut theme = Theme::classic_blue();
+        theme.set_style(
+            Role::ListNormal,
+            Style::new(Color::Bios(0x0), Color::Bios(0x3)),
+        );
+        theme.set_style(
+            Role::ListInactive,
+            Style::new(Color::Bios(0x8), Color::Bios(0x0)),
+        );
+
+        let mut out = VecDeque::new();
+        let mut timers = TimerQueue::new();
+        let log = Rc::new(RefCell::new(Vec::new()));
+
+        // Pane at (2,1)–(10,5) inside a 12x6 root; one child covers only the
+        // pane's top-left 4x2 corner.
+        let mut pane = Group::new(Rect::new(2, 1, 10, 5));
+        pane.set_surface(Role::ListNormal, Role::ListInactive);
+        with_ctx(&mut out, &mut timers, |_ctx| {
+            pane.insert(Probe::boxed(Rect::new(0, 0, 4, 2), 'C', log.clone()));
+        });
+
+        let mut root = Group::new(Rect::new(0, 0, 12, 6));
+        let pane_id = with_ctx(&mut out, &mut timers, |_ctx| root.insert(Box::new(pane)));
+
+        let shot = |root: &mut Group, focused: bool| -> String {
+            root.find_mut(pane_id).unwrap().state_mut().state.focused = focused;
+            let (backend, screen) = HeadlessBackend::new(12, 6);
+            let mut r = Renderer::new(Box::new(backend));
+            r.render(|buf: &mut Buffer| {
+                let bounds = root.state().get_bounds();
+                let mut dc = DrawCtx::new(buf, &theme, bounds, bounds.a);
+                root.draw(&mut dc);
+            });
+            screen.snapshot()
+        };
+
+        insta::assert_snapshot!("group_surface_pane_focused", shot(&mut root, true));
+        insta::assert_snapshot!("group_surface_pane_unfocused", shot(&mut root, false));
+    }
+
     // -- 2. positional routing + local coords --------------------------------
 
     #[test]
