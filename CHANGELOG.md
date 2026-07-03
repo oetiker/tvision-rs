@@ -12,6 +12,14 @@ moves it into a dated, versioned section when a release is cut.
 
 ### New
 
+### Changed
+
+### Fixed
+
+## 0.8.0 - 2026-07-03
+
+### New
+
 - `redeploy-docs.yml` workflow (workflow_dispatch, `tag` input): rebuilds and
   re-deploys an existing tag's versioned docs — the docs counterpart to
   `republish.yml` for recovering a release whose Pages deploy failed.
@@ -21,7 +29,6 @@ moves it into a dated, versioned section when a release is cut.
   `Role::InputSurface`, and an inactive pane still recedes to
   `Role::InputInactive`. Default off = previous behavior; `classic_blue` wires
   all three roles identically, so nothing changes unthemed.
-
 ### Changed
 
 ### Fixed
