@@ -12,6 +12,14 @@ moves it into a dated, versioned section when a release is cut.
 
 ### New
 
+### Changed
+
+### Fixed
+
+## 0.9.0 - 2026-07-03
+
+### New
+
 - `SurfaceRoles` + `DrawCtx::content_surface` — the shared three-surface
   selection rule (`owner_active` recede x self-focus well-vs-surface x
   selectability) every focusable content widget now uses, plus the two new
@@ -19,7 +27,6 @@ moves it into a dated, versioned section when a release is cut.
   `Role::OutlineSurface` (`Outline`). Themes can now distinguish the focused
   widget among focusable siblings (e.g. dim the unfocused list in a two-list
   shuttle, or the field when a dialog button takes focus).
-
 ### Changed
 
 - **Breaking:** `InputLine::set_self_focus_surface` / `with_self_focus_surface`
