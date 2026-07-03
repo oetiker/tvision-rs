@@ -7150,6 +7150,46 @@ mod tests {
         );
     }
 
+    /// A grow-corner drag honours a raised `min_size`: with the floor lifted
+    /// to 24×8 via `with_min_size`, dragging the corner toward the origin
+    /// stops at 24×8, not the built-in 16×6. (Restores the C++ behavior where
+    /// `TFrame::dragWindow` reads `sizeLimits` virtually.)
+    #[test]
+    fn drag_grow_clamps_to_raised_min_size() {
+        let (mut program, _screen, _clock) = program_with_desktop(80, 25);
+        let id = {
+            let w = Window::new(Rect::new(2, 1, 32, 13), Some("Edit".into()), 1)
+                .with_min_size(Point::new(24, 8));
+            program.group_mut().insert(Box::new(w))
+        };
+        program.with_ctx(|g, ctx| g.set_current(Some(id), SelectMode::Normal, ctx));
+        program.out_events.clear();
+
+        // Grab the bottom-right grow corner: size (30,12), so window-local
+        // (29,11) → absolute (31,12). (Corner rule: pos.y >= h-1 && pos.x >= w-2.)
+        program.out_events.push_back(mouse_down_at(31, 12));
+        program.pump_once();
+        assert!(
+            win_state(&mut program, id).state.dragging,
+            "grow drag started"
+        );
+
+        // Drag far past the minimum: raw size would be ~(2,2).
+        program.out_events.push_back(mouse_move_at(3, 2));
+        program.pump_once();
+        let st = win_state(&mut program, id);
+        assert_eq!(
+            st.size,
+            Point::new(24, 8),
+            "size clamps at the raised floor, not 16×6"
+        );
+
+        // Clean finish.
+        program.out_events.push_back(mouse_up_at(3, 2));
+        program.pump_once();
+        assert!(!win_state(&mut program, id).state.dragging);
+    }
+
     // -- 12. close round-trip ------------------------------------------------
 
     /// `cmClose` on a `wfClose` window removes it from the tree (the deferred

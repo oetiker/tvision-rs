@@ -172,6 +172,12 @@ pub struct Window {
     /// restore slot shared by the `ZOOM` command and fullscreen-Desktop (so they
     /// cannot desync). See [`maximize`](Self::maximize) / [`restore`](Self::restore).
     restore_rect: Option<Rect>,
+    /// The interactive-resize floor. Every size clamp (mouse corner drag,
+    /// keyboard resize, ZOOM/restore, owner-driven `calc_bounds`) reads this
+    /// through [`size_limits`](View::size_limits). Defaults to
+    /// [`Self::MIN_WIN_SIZE`] (16×6) and can only be raised, never lowered
+    /// below it ([`set_min_size`](Self::set_min_size) clamps).
+    min_size: Point,
     /// Whether the frame border is drawn (default `true`). An **independent**
     /// primitive, decoupled from [`fullscreen`](Self::fullscreen): toggled by
     /// [`set_bordered`](Self::set_bordered), which also reflows content. Read by
@@ -210,6 +216,12 @@ pub struct Window {
 }
 
 impl Window {
+    /// The absolute minimum a framed window may shrink to and still render its
+    /// title bar and corner icons legibly. Ports `minWinSize` (`twindow.cpp:30`).
+    /// The default [`size_limits`](View::size_limits) minimum; a larger floor
+    /// can be set with [`set_min_size`](Self::set_min_size).
+    pub const MIN_WIN_SIZE: Point = Point::new(16, 6);
+
     /// Construct a window over `bounds` with an optional `title` and a window
     /// `number`.
     ///
@@ -272,6 +284,7 @@ impl Window {
             frame_id,
             flags,
             restore_rect: None,
+            min_size: Self::MIN_WIN_SIZE,
             bordered: true,
             vsb_id: None,
             hsb_id: None,
@@ -427,6 +440,24 @@ impl Window {
         self.group.state_mut().drag_mode = drag_mode;
     }
 
+    /// Raise the window's interactive-resize floor. The argument is clamped up
+    /// to at least [`Self::MIN_WIN_SIZE`] per axis (title/icons must stay
+    /// legible), so this can only grow the minimum. Consulted by every
+    /// size-clamp path — mouse corner drag, keyboard resize, ZOOM/restore,
+    /// owner-driven resize — via [`size_limits`](View::size_limits).
+    ///
+    /// # Turbo Vision heritage
+    /// In C++ a window subclass raises its floor by overriding the virtual
+    /// `sizeLimits` (e.g. `TFileDialog`, `TEditWindow`), which every clamp
+    /// path calls virtually. Embed-and-delegate composition (D2) has no upward
+    /// dispatch, so the wrapper pushes its floor down into the window instead.
+    pub fn set_min_size(&mut self, min: Point) {
+        self.min_size = Point::new(
+            min.x.max(Self::MIN_WIN_SIZE.x),
+            min.y.max(Self::MIN_WIN_SIZE.y),
+        );
+    }
+
     /// Builder form of [`set_flags`](Self::set_flags).
     pub fn with_flags(mut self, flags: WindowFlags) -> Self {
         self.set_flags(flags);
@@ -448,6 +479,12 @@ impl Window {
     /// Builder form of [`set_drag_mode`](Self::set_drag_mode).
     pub fn with_drag_mode(mut self, drag_mode: DragMode) -> Self {
         self.set_drag_mode(drag_mode);
+        self
+    }
+
+    /// Builder form of [`set_min_size`](Self::set_min_size).
+    pub fn with_min_size(mut self, min: Point) -> Self {
+        self.set_min_size(min);
         self
     }
 
@@ -787,7 +824,7 @@ impl Window {
     /// The maximum size (the owner's size) is reached via the owner-extent-down
     /// channel ([`Context::owner_size`](crate::view::Context::owner_size)) instead
     /// of an up-pointer. The window's own [`size_limits`](View::size_limits)
-    /// override (max = owner size, min = 16×6) is used. Shared by the `ZOOM`
+    /// override (max = owner size, min = `min_size`, default 16×6) is used. Shared by the `ZOOM`
     /// command and fullscreen-Desktop, so they cannot desync.
     pub fn maximize(&mut self, ctx: &mut Context) {
         if self.restore_rect.is_none() {
@@ -1666,8 +1703,9 @@ impl View for Window {
     }
 
     /// The window's size limits: the owner-derived maximum with the minimum forced
-    /// to 16 columns × 6 rows — the smallest a window can be while still showing
-    /// its frame icons legibly.
+    /// to [`min_size`](Self::set_min_size) (defaults to [`Self::MIN_WIN_SIZE`],
+    /// 16×6) — the smallest a window can be while still showing its frame icons
+    /// legibly.
     ///
     /// This `size_limits` override is intentionally *not* in the `#[delegate]`
     /// skip list, while `calc_bounds` *is* skipped: `calc_bounds` therefore routes
@@ -1677,7 +1715,7 @@ impl View for Window {
     /// minimum on owner-driven resizes.
     fn size_limits(&self, owner_size: Point) -> (Point, Point) {
         let (_min, max) = self.group.size_limits(owner_size);
-        (Point::new(16, 6), max)
+        (self.min_size, max)
     }
 
     // NOTE: `calc_bounds` is in the skip list above — NOT forwarded to the group.
@@ -1845,7 +1883,7 @@ mod tests {
     fn title_and_size_limits() {
         let w = window_with_frame();
         assert_eq!(w.title(), Some("Edit"));
-        // min forced to the window minimum {16, 6}; max is the owner size.
+        // min defaults to `MIN_WIN_SIZE` {16, 6}; max is the owner size.
         let (min, max) = w.size_limits(Point::new(80, 25));
         assert_eq!(min, Point::new(16, 6), "window minimum");
         assert_eq!(max, Point::new(80, 25), "max is the owner size");
@@ -1872,6 +1910,52 @@ mod tests {
             size.x >= 16 && size.y >= 6,
             "window must not shrink below minWinSize {{16,6}}, got {size:?}"
         );
+    }
+
+    /// `set_min_size` raises the interactive-resize floor; `size_limits`
+    /// reports it (and every clamp path reads through `size_limits`).
+    #[test]
+    fn set_min_size_raises_floor() {
+        let mut w = window_with_frame();
+        w.set_min_size(Point::new(60, 20));
+        let (min, max) = w.size_limits(Point::new(100, 40));
+        assert_eq!(min, Point::new(60, 20), "raised floor");
+        assert_eq!(max, Point::new(100, 40), "max is still the owner size");
+    }
+
+    /// The floor can only be raised: arguments below `MIN_WIN_SIZE` clamp up
+    /// per axis (title/icons must stay legible).
+    #[test]
+    fn set_min_size_clamps_to_win_min() {
+        let mut w = window_with_frame();
+        w.set_min_size(Point::new(4, 2));
+        let (min, _) = w.size_limits(Point::new(80, 25));
+        assert_eq!(
+            min,
+            Window::MIN_WIN_SIZE,
+            "cannot go below the 16×6 chrome floor"
+        );
+        // Mixed: x above the floor, y below — per-axis clamp.
+        w.set_min_size(Point::new(60, 2));
+        let (min, _) = w.size_limits(Point::new(80, 25));
+        assert_eq!(min, Point::new(60, 6), "per-axis clamp");
+    }
+
+    /// An owner-driven resize (`calc_bounds` trait default) honours a raised
+    /// floor, same as `calc_bounds_honours_min_win_size` does for 16×6.
+    #[test]
+    fn calc_bounds_honours_raised_min() {
+        let mut w = window_with_frame(); // bounds 0,0,40,15
+        w.set_min_size(Point::new(60, 20));
+        w.state_mut().grow_mode = GrowMode {
+            hi_x: true,
+            hi_y: true,
+            ..Default::default()
+        };
+        // Owner shrinks by (5,5): raw new size (35,10) — below the raised floor.
+        let b = View::calc_bounds(&mut w, Point::new(100, 40), Point::new(-5, -5));
+        let size = b.b - b.a;
+        assert_eq!(size, Point::new(60, 20), "clamped up to the raised floor");
     }
 
     // -- 3. set_state activation flips the frame active ----------------------
