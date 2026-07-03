@@ -12,13 +12,20 @@ moves it into a dated, versioned section when a release is cut.
 
 ### New
 
+### Changed
+
+### Fixed
+
+## 0.7.0 - 2026-07-03
+
+### New
+
 - `Group::set_surface` / `Group::clear_surface` — opt-in focus-aware background
   surface for composite panes: the group fills its own extent with a
   consumer-supplied role pair (`normal` when the pane is focused, `inactive`
   when not) before children draw, keyed on the same signal fanned to children
   as `owner_active`. Default unchanged (no fill, faithful to `TGroup`); zero
   pixel change under `classic_blue`.
-
 ### Changed
 
 ### Fixed
