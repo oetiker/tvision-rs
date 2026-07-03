@@ -26,6 +26,10 @@ moves it into a dated, versioned section when a release is cut.
   rejects (and previously dropped silently, stripping mirrored versions of
   their fonts). The mirror step now renames such files to their query-stripped
   names.
+- The Pages site mirror silently dropped every version tree the root redirect
+  didn't point at (the redirect has no crawlable links), eroding the
+  multi-version site on each deploy. The mirror now crawls each tree listed in
+  `versions.json` (plus `dev/`) explicitly.
 
 ## 0.7.0 - 2026-07-03
 

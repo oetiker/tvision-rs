@@ -74,15 +74,28 @@ jobs:
 
       # Same mirror + normalize + insert + deploy sequence as release.yml's
       # deploy-docs job — keep the two in sync.
+      #
+      # The root index.html is a JS/meta-refresh redirect with no crawlable
+      # links to the other version trees, so a single recursive wget from the
+      # root only discovers the tree the redirect points at and silently drops
+      # every other version. Crawl each tree listed in versions.json (plus
+      # dev/) explicitly instead. index.html and versions.json are regenerated
+      # below, so only the trees need mirroring.
       - name: Mirror existing GitHub Pages
         run: |
           mkdir -p site
-          wget --mirror --no-parent --no-host-directories \
-               --directory-prefix=site \
-               --reject="index.html?*" \
-               --execute robots=off \
-               --quiet \
-               "$PAGES_URL/" 2>/dev/null || echo "No existing site to mirror"
+          ORIGIN="${PAGES_URL%/tvision-rs}"
+          trees=$(curl -sf "$PAGES_URL/versions.json" \
+                  | grep -o '"path": *"[^"]*"' | cut -d'"' -f4 || true)
+          { echo "/tvision-rs/dev/"; echo "$trees"; } | sort -u | while read -r p; do
+            [ -n "$p" ] || continue
+            wget --mirror --no-parent --no-host-directories \
+                 --directory-prefix=site \
+                 --reject="index.html?*" \
+                 --execute robots=off \
+                 --quiet \
+                 "$ORIGIN$p" 2>/dev/null || echo "No existing tree at $p (skipping)"
+          done
           find site -name "*.tmp" -delete 2>/dev/null || true
           find site -name 'index.html?*' -delete 2>/dev/null || true
 

@@ -244,20 +244,32 @@ jobs:
           path: new-docs
 
       # NOTE: this reconstructs the whole multi-version site from the *live* Pages
-      # URL each run, so a release deploy that mirrors before a just-finished dev
-      # deploy has propagated to the CDN could drop the newest /dev/. The `pages`
-      # concurrency group (shared with docs.yml) serializes the jobs; the residual
-      # risk is the propagation window. Acceptable for now (byonk model); upgrade
+      # URL each run. The `pages` concurrency group (shared with docs.yml)
+      # serializes the jobs; the residual risk is the CDN propagation window
+      # after a just-finished deploy. Acceptable for now (byonk model); upgrade
       # path is a persistent gh-pages branch as the canonical tree.
+      #
+      # The root index.html is a JS/meta-refresh redirect with no crawlable
+      # links to the other version trees, so a single recursive wget from the
+      # root only discovers the tree the redirect points at and silently drops
+      # every other version. Crawl each tree listed in versions.json (plus
+      # dev/) explicitly instead. index.html and versions.json are regenerated
+      # below, so only the trees need mirroring.
       - name: Mirror existing GitHub Pages
         run: |
           mkdir -p site
-          wget --mirror --no-parent --no-host-directories \
-               --directory-prefix=site \
-               --reject="index.html?*" \
-               --execute robots=off \
-               --quiet \
-               "$PAGES_URL/" 2>/dev/null || echo "No existing site to mirror"
+          ORIGIN="${PAGES_URL%/tvision-rs}"
+          trees=$(curl -sf "$PAGES_URL/versions.json" \
+                  | grep -o '"path": *"[^"]*"' | cut -d'"' -f4 || true)
+          { echo "/tvision-rs/dev/"; echo "$trees"; } | sort -u | while read -r p; do
+            [ -n "$p" ] || continue
+            wget --mirror --no-parent --no-host-directories \
+                 --directory-prefix=site \
+                 --reject="index.html?*" \
+                 --execute robots=off \
+                 --quiet \
+                 "$ORIGIN$p" 2>/dev/null || echo "No existing tree at $p (skipping)"
+          done
           find site -name "*.tmp" -delete 2>/dev/null || true
           find site -name 'index.html?*' -delete 2>/dev/null || true
 
