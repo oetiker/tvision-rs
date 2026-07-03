@@ -16,6 +16,12 @@ moves it into a dated, versioned section when a release is cut.
 
 ### Fixed
 
+- `docs.yml` no longer runs on the release workflow's version-bump commit
+  (`Release vX.Y.Z`) — that push already gets its docs built and deployed by
+  `release.yml`, and the duplicate run raced it for the shared GitHub Pages
+  `pages` environment, intermittently failing with "Deployment failed, try
+  again later" (seen on the v0.8.0 release).
+
 ## 0.8.0 - 2026-07-03
 
 ### New

@@ -32,6 +32,13 @@ jobs:
   build:
     name: Build dev docs
     runs-on: ubuntu-latest
+    # release.yml's version-bump commit ("Release vX.Y.Z") touches Cargo.toml/
+    # Cargo.lock, which matches this workflow's push paths — but release.yml
+    # already builds and deploys the versioned docs for that same push (dev
+    # content is unchanged by a pure version bump). Running here too raced the
+    # two deploy jobs for the same "pages" GitHub Pages environment and
+    # intermittently failed with "Deployment failed, try again later".
+    if: github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'Release v')
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
