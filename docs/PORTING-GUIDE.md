@@ -817,11 +817,13 @@ construction. The truecolor picker is reusable and produces any `Color` variant:
 See [`docs/superpowers/specs/2026-06-09-color-picker-design.md`](file:///home/oetiker/checkouts/tvision-rs/docs/superpowers/specs/2026-06-09-color-picker-design.md)
 and [`docs/superpowers/plans/2026-06-09-color-picker.md`](file:///home/oetiker/checkouts/tvision-rs/docs/superpowers/plans/2026-06-09-color-picker.md).
 
-### Active-aware surfaces (`owner_active` × self-focus)
+### Active-aware surfaces (`owner_active` × self-focus, three-surface rule)
 C++ Turbo Vision has no notion of a control surface that follows its owning
-pane's activity: `TInputLine::draw` picks between exactly two palette entries
-via `getColor(sfFocused ? 2 : 1)`, keyed on the field's own focus only.
-tvision-rs adds an orthogonal two-axis model on top of the faithful roles:
+pane's activity, and no per-widget "am I the one focused sibling" surface
+either: `TInputLine::draw` and `TListViewer::draw` pick between exactly two
+palette entries keyed on the field's own focus (or the pane's), and the focus
+model is otherwise per-window and uniform within a window. tvision-rs adds an
+orthogonal model on top of the faithful roles, in three stages:
 
 - **`DrawCtx::owner_active`** (v0.6.0) — "is this control's pane active?"
   `InputLine` keys its background on it (`Role::InputNormal` vs
@@ -829,18 +831,75 @@ tvision-rs adds an orthogonal two-axis model on top of the faithful roles:
   the classic look is unchanged.
 - **`Group::set_surface` / `clear_surface`** (v0.7.0) — an opt-in pane
   background that follows the group's focus.
-- **`InputLine::set_self_focus_surface` / `with_self_focus_surface`** — an
-  opt-in third surface: only the *focused* field paints the `Role::InputNormal`
-  well; a non-focused field in an active pane uses `Role::InputSurface`, and
-  any field in an inactive pane recedes to `Role::InputInactive`. Off by
-  default (the two-role `owner_active` branch above). `classic_blue` wires all
-  three roles identically, so the opt-in is invisible unthemed. The two axes
-  stay orthogonal: `owner_active` alone owns "receded"; own focus only picks
-  well-vs-surface *within* an active pane.
+- **The three-surface rule, default for every focusable content widget**
+  (v0.9.0, generalized from a v0.8.0 `InputLine`-only opt-in that has since
+  been removed — see below). `owner_active` is a **per-group** signal: it
+  answers "is my pane focused", not "am *I* the focused widget", and the two
+  coincide only when a pane holds a single focusable child. The moment a group
+  holds two or more focusable widgets (a form with several `InputLine`s, a
+  two-list shuttle), only the widget's own `state.focused` can say *which* one
+  is focused. Every focusable content widget therefore selects among **three**
+  surfaces, via a role triple (`*Normal` / `*Surface` / `*Inactive`, e.g.
+  `Role::ListNormal`/`Role::ListSurface`/`Role::ListInactive`,
+  `Role::OutlineNormal`/`Role::OutlineSurface`/`Role::OutlineInactive`,
+  `Role::InputNormal`/`Role::InputSurface`/`Role::InputInactive`) and one
+  shared helper, `DrawCtx::content_surface(roles: SurfaceRoles, self_focused:
+  bool, selectable: bool) -> Style`. The rule, verbatim:
+
+  ```rust
+  let surface = if !ctx.owner_active() {
+      roles.inactive            // pane receded — regardless of focus/selectability
+  } else if self_focused || !selectable {
+      roles.normal              // the focused widget, or one that can't compete
+  } else {
+      roles.surface             // active pane, a selectable sibling holds focus
+  };
+  ```
+
+  Two consequences to state explicitly:
+  - **Deliberate deviation from per-window uniformity**, invisible under
+    `classic_blue` — every triple collapses to its `Normal` colour there, so
+    the classic look ships pixel-frozen by default. **The theme is the
+    opt-in:** a theme author only sees sibling-dimming if they deliberately
+    give `*Surface` its own colour, which is precisely them asking for it.
+  - Under such a theme, **any focusable sibling wins the "surface" contest —
+    including buttons, checkboxes, and clusters**, not just other content
+    widgets: a dialog with one `InputLine` and two buttons dims the field to
+    `Role::InputSurface` while a button is focused. Non-selectable content
+    widgets (`selectable == false`, e.g. a read-only list) never compete for
+    focus, so they stay `*Normal` in an active pane, never `*Surface`.
+
+  Single-focusable panes are provably unaffected: their sole selectable child
+  is focused iff its pane is (the focus chain makes `state.focused` and
+  `owner_active` coincide), so they only ever hit `Normal` or `Inactive`,
+  never `Surface`.
+
+  **Standing rule for future widgets:** every future focusable content widget
+  gets a `*Normal`/`*Surface`/`*Inactive` role triple and selects its surface
+  via `DrawCtx::content_surface` by construction — not a hand-rolled branch.
+  Two widgets (`InputLine`, `ListViewer`) independently drifted onto ad hoc
+  versions of this rule before it was generalized; that drift is what the
+  shared helper exists to prevent.
+
+  **Named exception, not yet covered:** the `Scroller`-family content widgets
+  (`Editor`, `Memo`, `Terminal`, `Scroller` itself) already exist and predate
+  both surface axes entirely — they still paint `Role::ScrollerNormal`
+  unconditionally (`editor.rs`'s `color_at`, `terminal.rs::draw`,
+  `scroller.rs::draw`), with no `owner_active` branch at all. Converting them
+  needs a new `Scroller*` role triple; that is deliberate follow-up work, not
+  something this deviation already covers.
+
+  **Superseded API:** the v0.8.0 `InputLine::set_self_focus_surface` /
+  `with_self_focus_surface` opt-in (and its `self_focus` field) implemented an
+  early, `InputLine`-only version of this rule and has been **removed
+  outright** in v0.9.0 — the behavior it enabled is now the unconditional
+  default for `InputLine`, the `ListViewer` family, and `Outline`. There is no
+  current API by that name; do not opt in, there is nothing to opt into.
 
 See `docs/superpowers/specs/2026-07-01-active-aware-surfaces-design.md`,
-`…/2026-07-03-group-focus-aware-surface-design.md`, and
-`…/2026-07-03-inputline-self-focus-surface-design.md`.
+`…/2026-07-03-group-focus-aware-surface-design.md`,
+`…/2026-07-03-inputline-self-focus-surface-design.md` (superseded), and
+`…/2026-07-03-focusable-content-surface-generalization-design.md`.
 
 ---
 

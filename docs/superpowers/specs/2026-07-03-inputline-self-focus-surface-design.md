@@ -1,8 +1,12 @@
 # InputLine self-focus surface: let a field be the "well" only when it is the focused one
 
 **Date:** 2026-07-03
-**Status:** draft (design, ready for review) — authored by the edaptor consumer as
-an upstream request; implementation + release owned by tvision-rs.
+**Status:** shipped in v0.8.0 — **superseded by
+[`2026-07-03-focusable-content-surface-generalization-design.md`](2026-07-03-focusable-content-surface-generalization-design.md)**,
+which makes this behavior the framework default and removes the opt-in
+(`set_self_focus_surface` / `with_self_focus_surface`) in 0.9.0.
+Originally authored by the edaptor consumer as an upstream request;
+implementation + release owned by tvision-rs.
 **Builds on:** [`2026-07-01-active-aware-surfaces-design.md`](2026-07-01-active-aware-surfaces-design.md)
 (the two-axis `owner_active` model, v0.6.0) and
 [`2026-07-03-group-focus-aware-surface-design.md`](2026-07-03-group-focus-aware-surface-design.md)

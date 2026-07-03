@@ -235,15 +235,18 @@ pub struct HistoryViewer {
 }
 
 impl HistoryViewer {
-    /// The five-slot color quintet for the history recall list.
+    /// The six-slot color sextet for the history recall list.
     ///
-    /// Maps all five list-viewer color slots to two history-specific roles:
-    /// normal rows (active, inactive, selected, and the divider) use
+    /// Maps all six list-viewer color slots to two history-specific roles:
+    /// normal rows (active, inactive, surface, selected, and the divider) use
     /// [`Role::HistoryViewerNormal`](crate::theme::Role::HistoryViewerNormal)
     /// (white on blue), and the focused row uses
     /// [`Role::HistoryViewerFocused`](crate::theme::Role::HistoryViewerFocused)
     /// (white on green). This gives the recall list its blue-on-green highlight
-    /// distinct from the gray dialog palette used by plain list boxes.
+    /// distinct from the gray dialog palette used by plain list boxes. The
+    /// history family draws no distinction between `normal`/`inactive`/`surface`
+    /// to begin with, so the three-surface rule collapses to the same behavior
+    /// this widget already had.
     ///
     /// Returned by [`list_roles`](Self::list_roles) and consulted by the base
     /// [`ListViewer`] painter. Lives on `HistoryViewer` (not in `list_viewer.rs`)
@@ -251,6 +254,7 @@ impl HistoryViewer {
     pub const LIST_ROLES: crate::widgets::ListRoles = crate::widgets::ListRoles {
         normal: crate::theme::Role::HistoryViewerNormal,
         inactive: crate::theme::Role::HistoryViewerNormal,
+        surface: crate::theme::Role::HistoryViewerNormal,
         focused: crate::theme::Role::HistoryViewerFocused,
         selected: crate::theme::Role::HistoryViewerNormal,
         divider: crate::theme::Role::HistoryViewerNormal,
@@ -342,7 +346,7 @@ impl ListViewer for HistoryViewer {
         history_str(self.history_id, item as usize).unwrap_or_default()
     }
 
-    /// The history viewer's recolored quintet ([`HistoryViewer::LIST_ROLES`]).
+    /// The history viewer's recolored sextet ([`HistoryViewer::LIST_ROLES`]).
     fn list_roles(&self) -> crate::widgets::ListRoles {
         Self::LIST_ROLES
     }

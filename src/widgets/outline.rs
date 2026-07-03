@@ -34,8 +34,12 @@
 //!
 //! # Colors
 //!
-//! Each role is a [`Role`]: [`Role::OutlineNormal`] / [`Role::OutlineFocused`] /
-//! [`Role::OutlineSelected`] / [`Role::OutlineNotExpanded`].
+//! Each role is a [`Role`]: [`Role::OutlineNormal`] / [`Role::OutlineSurface`] /
+//! [`Role::OutlineFocused`] / [`Role::OutlineSelected`] /
+//! [`Role::OutlineNotExpanded`]. The normal row uses the shared three-surface
+//! rule ([`DrawCtx::content_surface`](crate::view::DrawCtx::content_surface)):
+//! `OutlineNormal`/`OutlineSurface`/`OutlineInactive` cross `owner_active` with
+//! the outline's own focus and selectability.
 //!
 //! # Construction
 //!
@@ -58,9 +62,16 @@
 use crate::capture::TrackMask;
 use crate::command::Command;
 use crate::event::{Event, Key, ctrl_to_arrow};
-use crate::theme::Role;
+use crate::theme::{Role, SurfaceRoles};
 use crate::view::{
     Context, DrawCtx, GrowMode, Options, Point, Rect, StateFlag, View, ViewId, ViewState,
+};
+
+/// Outline's surface triple for [`DrawCtx::content_surface`].
+const SURFACE_ROLES: SurfaceRoles = SurfaceRoles {
+    normal: Role::OutlineNormal,
+    surface: Role::OutlineSurface,
+    inactive: Role::OutlineInactive,
 };
 
 /// Graph flag: the node is drawn as expanded (no children, or expanded).
@@ -770,14 +781,18 @@ pub fn ov_draw<L: OutlineViewer + ?Sized>(this: &mut L, ctx: &mut DrawCtx) {
     let foc = this.ov().foc;
     let focused_state = this.ov().state.state.focused;
 
-    // Normal-row surface follows the owning PANE, not this outline's own focus:
-    // an outline in the focused pane uses OutlineNormal; in an inactive pane it
-    // recedes to OutlineInactive. classic_blue maps them identically.
-    let nrm_color = ctx.style(if ctx.owner_active() {
-        Role::OutlineNormal
-    } else {
-        Role::OutlineInactive
-    });
+    // Normal-row surface: the shared three-surface rule (see
+    // `DrawCtx::content_surface`) — `owner_active` recedes the whole outline to
+    // OutlineInactive regardless of its own focus; within an active pane, own
+    // focus picks well-vs-surface — a focused outline (or one that can never be
+    // selected) is the OutlineNormal well, and an unfocused *selectable* sibling
+    // sits on OutlineSurface. classic_blue collapses all three to the same
+    // color, so unthemed outlines are unchanged.
+    let nrm_color = ctx.content_surface(
+        SURFACE_ROLES,
+        focused_state,
+        this.ov().state.options.selectable,
+    );
     let focused_color = ctx.style(Role::OutlineFocused);
     let selected_color = ctx.style(Role::OutlineSelected);
     let not_expanded_color = ctx.style(Role::OutlineNotExpanded);
@@ -2033,27 +2048,33 @@ mod tests {
         buf.get(x, y).style()
     }
 
-    /// The normal-row surface follows the owning PANE (`DrawCtx::owner_active`),
-    /// NOT this outline's own `state.focused`: an outline in the focused pane
-    /// paints normal rows with `Role::OutlineNormal`; one in an inactive pane
-    /// recedes to `Role::OutlineInactive` — regardless of its own focus. Uses a
-    /// theme where the two roles differ so the difference is observable
-    /// (classic_blue makes them equal).
+    /// The normal-row surface follows the shared three-surface rule
+    /// ([`DrawCtx::content_surface`](crate::view::DrawCtx::content_surface)):
+    /// an inactive pane recedes to `OutlineInactive` regardless of the
+    /// outline's own focus; within an active pane, the outline's own focus
+    /// picks well-vs-surface — a focused (or never-selectable) outline is the
+    /// `OutlineNormal` well, and an unfocused *selectable* sibling sits on
+    /// `OutlineSurface`. Uses a theme where all three roles differ
+    /// (classic_blue makes them identical).
     #[test]
     fn normal_row_surface_follows_owner_active_not_own_focus() {
         use crate::color::{Color, Style};
 
         let mut theme = Theme::classic_blue();
-        // Dim the inactive surface to a distinct colour to prove the predicate.
+        theme.set_style(
+            Role::OutlineSurface,
+            Style::new(Color::bios_rgb(0x0), Color::bios_rgb(0x7)),
+        );
         theme.set_style(
             Role::OutlineInactive,
             Style::new(Color::bios_rgb(0x8), Color::bios_rgb(0x4)),
         );
         let normal_bg = theme.style(Role::OutlineNormal).bg;
+        let surface_bg = theme.style(Role::OutlineSurface).bg;
         let inactive_bg = theme.style(Role::OutlineInactive).bg;
-        assert_ne!(
-            normal_bg, inactive_bg,
-            "test theme must distinguish the roles"
+        assert!(
+            normal_bg != surface_bg && surface_bg != inactive_bg && normal_bg != inactive_bg,
+            "test theme must distinguish all three roles"
         );
 
         // Root "Animals" (pos 0) with normal children "Cats"/"Dogs".
@@ -2061,23 +2082,32 @@ mod tests {
         outline.ov_mut().foc = 0;
         outline.ov_mut().limit = Point::new(10, 3);
 
-        // owner_active=true, outline's own focus=false: still Normal — proves
-        // the surface does NOT key on the outline's own focus.
-        outline.ov_mut().state.state.focused = false;
-        assert_eq!(
-            cell_style(&mut outline, &theme, 15, 1, true).bg,
-            normal_bg,
-            "owner_active pane uses the normal surface even when the outline itself is unfocused"
-        );
+        // Active pane, focused outline → the well.
+        outline.ov_mut().state.state.focused = true;
+        assert_eq!(cell_style(&mut outline, &theme, 15, 1, true).bg, normal_bg);
 
-        // owner_active=false, outline's own focus=true: recedes to Inactive —
-        // proves the surface DOES key on owner_active.
+        // Active pane, unfocused SELECTABLE outline → the pane surface (a
+        // selectable sibling won the focus contest).
+        outline.ov_mut().state.state.focused = false;
+        assert_eq!(cell_style(&mut outline, &theme, 15, 1, true).bg, surface_bg);
+
+        // Inactive pane → receded, regardless of the outline's own focus.
         outline.ov_mut().state.state.focused = true;
         assert_eq!(
             cell_style(&mut outline, &theme, 15, 1, false).bg,
-            inactive_bg,
-            "inactive pane uses the inactive surface even when the outline itself is focused"
+            inactive_bg
         );
+        outline.ov_mut().state.state.focused = false;
+        assert_eq!(
+            cell_style(&mut outline, &theme, 15, 1, false).bg,
+            inactive_bg
+        );
+
+        // Active pane, unfocused NON-selectable outline → OutlineNormal: it
+        // can never win (or lose) a focus contest, so it always stays the well.
+        outline.ov_mut().state.state.focused = false;
+        outline.ov_mut().state.options.selectable = false;
+        assert_eq!(cell_style(&mut outline, &theme, 15, 1, true).bg, normal_bg);
     }
 
     /// The focused-row HIGHLIGHT (the outline's own current position) still

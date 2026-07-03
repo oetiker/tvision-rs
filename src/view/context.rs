@@ -20,7 +20,7 @@ use crate::color::{Color, Style};
 use crate::command::{Command, CommandSet};
 use crate::event::Event;
 use crate::screen::Buffer;
-use crate::theme::{Glyphs, Role, Theme};
+use crate::theme::{Glyphs, Role, SurfaceRoles, Theme};
 use crate::timer::{TimerId, TimerQueue};
 use crate::view::geometry::{Point, Rect};
 use crate::view::id::ViewId;
@@ -664,6 +664,30 @@ impl<'a> DrawCtx<'a> {
     /// Whether the owning pane is the focused one (see [`DrawCtx`] `owner_active`).
     pub fn owner_active(&self) -> bool {
         self.owner_active
+    }
+
+    /// Select a focusable content widget's surface per the three-surface
+    /// rule: `owner_active` recede x own-focus well-vs-surface x
+    /// selectability. `surface` means "a selectable sibling won the focus
+    /// contest", so a widget that can never hold focus
+    /// (`selectable == false`) paints `normal` in an active pane, never
+    /// `surface`. Under `classic_blue` every triple collapses to `normal`'s
+    /// colour, preserving classic per-window uniformity; a theme opts into
+    /// sibling distinction by giving `surface` its own colour.
+    pub fn content_surface(
+        &self,
+        roles: SurfaceRoles,
+        self_focused: bool,
+        selectable: bool,
+    ) -> Style {
+        let role = if !self.owner_active {
+            roles.inactive
+        } else if self_focused || !selectable {
+            roles.normal
+        } else {
+            roles.surface
+        };
+        self.style(role)
     }
 
     /// Set the owning-pane-active flag for this context. Called by `Group::draw`.
@@ -2166,5 +2190,76 @@ mod tests {
         assert_eq!(ctx.phase(), Phase::PostProcess);
         ctx.set_phase(Phase::PreProcess);
         assert_eq!(ctx.phase(), Phase::PreProcess);
+    }
+
+    // -- content_surface (three-surface rule) -------------------------------
+
+    /// A theme whose `List*` triple carries three visibly distinct styles, so a
+    /// `content_surface` result unambiguously identifies which role was picked.
+    fn distinct_surface_theme() -> Theme {
+        let mut theme = Theme::classic_blue();
+        theme.set_style(Role::ListNormal, style(0xF, 0x1)); // white on blue
+        theme.set_style(Role::ListSurface, style(0xE, 0x3)); // yellow on cyan
+        theme.set_style(Role::ListInactive, style(0x8, 0x0)); // darkgray on black
+        theme
+    }
+
+    const LIST_ROLES: SurfaceRoles = SurfaceRoles {
+        normal: Role::ListNormal,
+        surface: Role::ListSurface,
+        inactive: Role::ListInactive,
+    };
+
+    /// `!owner_active` recedes to `inactive`, regardless of self-focus.
+    #[test]
+    fn content_surface_inactive_pane_is_inactive() {
+        let mut buf = Buffer::new(4, 2);
+        let theme = distinct_surface_theme();
+        let mut ctx = DrawCtx::new(&mut buf, &theme, Rect::new(0, 0, 4, 2), Point::new(0, 0));
+        ctx.set_owner_active(false);
+        // Self-focus does not matter once the pane has receded.
+        assert_eq!(ctx.content_surface(LIST_ROLES, true, true), style(0x8, 0x0));
+        assert_eq!(
+            ctx.content_surface(LIST_ROLES, false, true),
+            style(0x8, 0x0)
+        );
+    }
+
+    /// Active pane + this widget is focused → the bright `normal` well.
+    #[test]
+    fn content_surface_active_self_focused_is_normal() {
+        let mut buf = Buffer::new(4, 2);
+        let theme = distinct_surface_theme();
+        let mut ctx = DrawCtx::new(&mut buf, &theme, Rect::new(0, 0, 4, 2), Point::new(0, 0));
+        ctx.set_owner_active(true);
+        assert_eq!(ctx.content_surface(LIST_ROLES, true, true), style(0xF, 0x1));
+    }
+
+    /// Active pane, not focused, but selectable → a sibling won the contest, so
+    /// this widget paints the middle `surface`.
+    #[test]
+    fn content_surface_active_unfocused_selectable_is_surface() {
+        let mut buf = Buffer::new(4, 2);
+        let theme = distinct_surface_theme();
+        let mut ctx = DrawCtx::new(&mut buf, &theme, Rect::new(0, 0, 4, 2), Point::new(0, 0));
+        ctx.set_owner_active(true);
+        assert_eq!(
+            ctx.content_surface(LIST_ROLES, false, true),
+            style(0xE, 0x3)
+        );
+    }
+
+    /// Active pane, not focused, and non-selectable → it can never hold focus,
+    /// so it stays `normal` rather than reading as a receded sibling.
+    #[test]
+    fn content_surface_active_unfocused_nonselectable_is_normal() {
+        let mut buf = Buffer::new(4, 2);
+        let theme = distinct_surface_theme();
+        let mut ctx = DrawCtx::new(&mut buf, &theme, Rect::new(0, 0, 4, 2), Point::new(0, 0));
+        ctx.set_owner_active(true);
+        assert_eq!(
+            ctx.content_surface(LIST_ROLES, false, false),
+            style(0xF, 0x1)
+        );
     }
 }
