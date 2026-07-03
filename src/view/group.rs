@@ -54,6 +54,7 @@
 use crate::command::Command;
 use crate::data::FieldValue;
 use crate::event::{Event, Key};
+use crate::theme::Role;
 use crate::view::context::{Context, DrawCtx};
 use crate::view::geometry::{Point, Rect};
 use crate::view::id::ViewId;
@@ -120,6 +121,10 @@ pub struct Group {
     /// currency. Settled by [`View::settle_currency`]; cleared by any explicit
     /// [`set_current`](Group::set_current).
     currency_dirty: bool,
+    /// Opt-in background surface: `Some((normal, inactive))` fills the group's
+    /// extent before children draw, keyed on the group's own `focused` flag.
+    /// `None` (the default) — the group paints nothing; children cover it.
+    surface: Option<(Role, Role)>,
 }
 
 impl Group {
@@ -153,12 +158,54 @@ impl Group {
             children: Vec::new(),
             current: None,
             currency_dirty: false,
+            surface: None,
         }
     }
 
     /// The current (selected) child's id, if any.
     pub fn current(&self) -> Option<ViewId> {
         self.current
+    }
+
+    /// Paint the group's own extent as a background surface before drawing
+    /// children: `normal` when the group is focused (its pane is the active
+    /// one), `inactive` when not.
+    ///
+    /// Children paint over the surface (painter's algorithm), so a fully-tiled
+    /// group looks unchanged — only cells no child covers show it. Opt-in: a
+    /// group with no surface set fills nothing (the default).
+    ///
+    /// The fill keys on the same signal the group fans to its children as
+    /// [`DrawCtx::owner_active`], so the pane's background and its children's
+    /// content surfaces recede together. Consequently a *nested* group with a
+    /// surface recedes whenever **it** is off the focus chain, even while its
+    /// enclosing pane is focused — intentional: its own children's
+    /// `owner_active` recedes identically, so background and content always
+    /// agree.
+    ///
+    /// Pick the role pair matching the pane's content, e.g.
+    /// [`Role::ListNormal`] / [`Role::ListInactive`] for a pane built of lists:
+    ///
+    /// ```
+    /// use tvision_rs::{Group, Rect, Role};
+    ///
+    /// let mut pane = Group::new(Rect::new(0, 0, 40, 10));
+    /// pane.set_surface(Role::ListNormal, Role::ListInactive);
+    /// ```
+    ///
+    /// # Turbo Vision heritage
+    /// An tvision-rs convenience addition with no `TGroup` counterpart: in
+    /// Turbo Vision a group never paints its own area (backgrounds are
+    /// `TBackground` / frame territory). The faithful default is preserved —
+    /// the surface is strictly opt-in.
+    pub fn set_surface(&mut self, normal: Role, inactive: Role) {
+        self.surface = Some((normal, inactive));
+    }
+
+    /// Remove a surface set by [`set_surface`](Self::set_surface): the group
+    /// reverts to painting no background (the children cover it).
+    pub fn clear_surface(&mut self) {
+        self.surface = None;
     }
 
     /// Number of children currently in the group.
@@ -982,8 +1029,11 @@ impl View for Group {
 
     /// Paint visible children **back-to-front** (`children[0]` →
     /// `children.last()`), each through a sub-context clipped to its bounds —
-    /// painter's algorithm, so higher siblings overpaint lower ones. The group
-    /// does not fill its own area; the children cover it. After each child that
+    /// painter's algorithm, so higher siblings overpaint lower ones. By default
+    /// the group does not fill its own area — the children cover it; a group
+    /// given a surface via [`Group::set_surface`] first fills its extent
+    /// (`normal` role when focused, `inactive` when not), which the children
+    /// then overpaint. After each child that
     /// casts a drop shadow the group draws the shadow ([`DrawCtx::cast_shadow`]):
     /// back-to-front order means later (higher) siblings overwrite the shadow
     /// cells they occlude.
@@ -993,7 +1043,15 @@ impl View for Group {
     /// original paints top-first and tracks occlusion, which tvision-rs drops in favor
     /// of whole-tree redraw + diff.
     fn draw(&mut self, ctx: &mut DrawCtx) {
+        // One signal for both the surface fill and the child fan-out: the
+        // pane's background and its children's content surfaces recede
+        // together (spec: 2026-07-03-group-focus-aware-surface-design.md).
         let owner_active = self.st.state.focused;
+        if let Some((normal, inactive)) = self.surface {
+            let role = if owner_active { normal } else { inactive };
+            let style = ctx.style(role);
+            ctx.fill(self.st.get_extent(), ' ', style);
+        }
         for child in self.children.iter_mut() {
             if child.view.state().state.visible {
                 let bounds = child.view.state().get_bounds();
@@ -1804,6 +1862,61 @@ mod tests {
             view.draw(&mut dc);
         });
         insta::assert_snapshot!(screen.snapshot());
+    }
+
+    // -- opt-in focus-aware surface ------------------------------------------
+
+    /// The surface fill keys on the group's OWN `focused` flag (`normal` when
+    /// focused, `inactive` when not); a child overpaints the cells it covers;
+    /// `clear_surface` reverts to "fills nothing". `classic_blue` may render a
+    /// role pair identically, so the test pins two visibly distinct styles.
+    #[test]
+    fn surface_fill_keys_on_own_focus() {
+        let mut theme = Theme::classic_blue();
+        let normal = Style::new(Color::Bios(0x0), Color::Bios(0x3));
+        let inactive = Style::new(Color::Bios(0x8), Color::Bios(0x0));
+        theme.set_style(Role::ListNormal, normal);
+        theme.set_style(Role::ListInactive, inactive);
+
+        let mut out = VecDeque::new();
+        let mut timers = TimerQueue::new();
+        let log = Rc::new(RefCell::new(Vec::new()));
+
+        let mut group = Group::new(Rect::new(0, 0, 6, 3));
+        group.set_surface(Role::ListNormal, Role::ListInactive);
+        with_ctx(&mut out, &mut timers, |_ctx| {
+            // one child covering only the top-left 2x1 corner
+            group.insert(Probe::boxed(Rect::new(0, 0, 2, 1), 'C', log.clone()));
+        });
+
+        // Draw the group into a fresh buffer and report the cell at (x, y).
+        let draw_cell = |group: &mut Group, focused: bool, x: u16, y: u16| {
+            group.state_mut().state.focused = focused;
+            let mut buf = Buffer::new(6, 3);
+            let bounds = group.state().get_bounds();
+            let mut dc = DrawCtx::new(&mut buf, &theme, bounds, bounds.a);
+            group.draw(&mut dc);
+            buf.get(x, y).clone()
+        };
+
+        // Uncovered cell: the surface tracks the group's own focus.
+        assert_eq!(draw_cell(&mut group, true, 5, 2).style().bg, normal.bg);
+        assert_eq!(draw_cell(&mut group, false, 5, 2).style().bg, inactive.bg);
+        // Covered cell: the child overpaints the surface regardless of focus
+        // (Probe fills with bg=Bios(0x1)).
+        assert_eq!(
+            draw_cell(&mut group, true, 0, 0).style().bg,
+            Color::Bios(0x1)
+        );
+        // clear_surface: back to "fills nothing" — the uncovered cell is
+        // identical to a never-touched buffer cell.
+        group.clear_surface();
+        let fresh = Buffer::new(6, 3);
+        assert_eq!(
+            &draw_cell(&mut group, true, 5, 2),
+            fresh.get(5, 2),
+            "cleared surface must fill nothing"
+        );
     }
 
     // -- 2. positional routing + local coords --------------------------------
