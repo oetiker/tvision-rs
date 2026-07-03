@@ -875,11 +875,19 @@ orthogonal model on top of the faithful roles, in three stages:
   never `Surface`.
 
   **Standing rule for future widgets:** every future focusable content widget
-  (`Editor`, `Memo`, `TextView`-class, …) gets a `*Normal`/`*Surface`/
-  `*Inactive` role triple and selects its surface via `DrawCtx::content_surface`
-  by construction — not a hand-rolled branch. Two widgets (`InputLine`,
-  `ListViewer`) independently drifted onto ad hoc versions of this rule before
-  it was generalized; that drift is what the shared helper exists to prevent.
+  gets a `*Normal`/`*Surface`/`*Inactive` role triple and selects its surface
+  via `DrawCtx::content_surface` by construction — not a hand-rolled branch.
+  Two widgets (`InputLine`, `ListViewer`) independently drifted onto ad hoc
+  versions of this rule before it was generalized; that drift is what the
+  shared helper exists to prevent.
+
+  **Named exception, not yet covered:** the `Scroller`-family content widgets
+  (`Editor`, `Memo`, `Terminal`, `Scroller` itself) already exist and predate
+  both surface axes entirely — they still paint `Role::ScrollerNormal`
+  unconditionally (`editor.rs`'s `color_at`, `terminal.rs::draw`,
+  `scroller.rs::draw`), with no `owner_active` branch at all. Converting them
+  needs a new `Scroller*` role triple; that is deliberate follow-up work, not
+  something this deviation already covers.
 
   **Superseded API:** the v0.8.0 `InputLine::set_self_focus_surface` /
   `with_self_focus_surface` opt-in (and its `self_focus` field) implemented an

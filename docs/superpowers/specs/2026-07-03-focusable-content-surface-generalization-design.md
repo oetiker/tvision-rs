@@ -179,10 +179,13 @@ hand-rolled selection branches.**
 ### Standing rule for future widgets (PORTING-GUIDE)
 
 The PORTING-GUIDE deviation entry states the rule prospectively: **every future
-focusable content widget** (`Editor`, `Memo`, `TextView`-class, …) gets a
-`*Normal / *Surface / *Inactive` role triple and selects its surface via
-`content_surface` **by construction**. Two widgets rediscovering the rule was the
-signal; the helper plus the written rule is what prevents a third.
+focusable content widget** gets a `*Normal / *Surface / *Inactive` role triple
+and selects its surface via `content_surface` **by construction**. Two widgets
+rediscovering the rule was the signal; the helper plus the written rule is what
+prevents a third. [Correction: `Editor`/`Memo`/`Terminal`/`Scroller` are not
+"future" — they already exist, predate both surface axes, and still paint
+`Role::ScrollerNormal` unconditionally. They are a named, deliberate exception
+pending a `Scroller*` triple, not covered by this generalization.]
 
 ## classic_blue stays frozen
 
@@ -207,7 +210,10 @@ focusable content widgets select among **three** surfaces by default
   content widgets to `*Surface`; non-selectable content widgets stay `*Normal`
   in an active pane (they never compete for focus).
 - Standing rule: future focusable content widgets use the triple + helper by
-  construction.
+  construction. [Correction: the `Scroller`-family widgets (`Editor`/`Memo`/
+  `Terminal`/`Scroller`) already exist and are NOT converted by this change —
+  they still paint `Role::ScrollerNormal` unconditionally; that's a named,
+  deliberate follow-up pending a `Scroller*` triple, not covered here.]
 
 ## Tech stack & global constraints
 

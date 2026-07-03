@@ -484,6 +484,12 @@ window-palette divider color (the splitter uses the Blue frame-role family — o
 palettes need palette threading into the splitter); larger Ctrl+arrow *divider*
 nudges (the window target already does ±8/±4).
 
+**Focus-surface generalization follow-up (2026-07-03, not started):** the
+`Scroller`-family content widgets (`Editor`/`Memo`/`Terminal`/`Scroller`) still
+paint `Role::ScrollerNormal` unconditionally and need a future `Scroller*` role
+triple to join the three-surface rule; ride along with it: the pre-existing
+`empty_color` placeholder mismatch in `src/widgets/list_viewer.rs` (~line 1031).
+
 The docs phases are done and self-verifying. Older optional candidates, none
 committed:
 

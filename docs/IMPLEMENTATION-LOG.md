@@ -59,6 +59,19 @@ the opt-in**: it does something the moment (and only the moment) a theme gives
 triple still collapses to its `Normal` colour by default; the new behavior is
 only observable under a theme that assigns `*Surface` a distinct colour.
 
+**Deliberate deviation from the spec's test plan:** the motivating two-list-
+and-a-button shuttle fixture ships in `tests/content_surface.rs` as targeted
+cell-style assertions, not a `.snap` snapshot — the style assertions name each
+state's expected surface directly and add zero new goldens to maintain.
+
+**Known follow-up, not in this scope:** the `Scroller`-family content widgets
+(`Editor`/`Memo`/`Terminal`/`Scroller`) predate both surface axes and still
+paint `Role::ScrollerNormal` unconditionally; converting them needs a future
+`Scroller*` role triple. Ride along with it: the pre-existing `empty_color`
+mismatch in `src/widgets/list_viewer.rs` (~line 1031) where the empty-list
+`<empty>` placeholder paints raw `roles.normal` instead of the computed
+surface.
+
 **Breaking, ships in 0.9.0:** `InputLine::set_self_focus_surface` /
 `with_self_focus_surface` are gone (migration: delete the call, the behavior
 is now the default) and `ListRoles` gained a field. See `CHANGELOG.md` and the
