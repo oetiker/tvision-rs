@@ -1,0 +1,24 @@
+---
+source: src/view/group.rs
+expression: "shot(&mut root, false)"
+---
+size: 12x6
+cursor: hidden
+text:
+|            |
+|  CCCC      |
+|  CCCC      |
+|            |
+|            |
+|            |
+attr:
+|............|
+|..aaaabbbb..|
+|..aaaabbbb..|
+|..bbbbbbbb..|
+|..bbbbbbbb..|
+|............|
+legend:
+  . default
+  a fg=BIOS(15) bg=BIOS(1)
+  b fg=BIOS(8) bg=BIOS(0)
