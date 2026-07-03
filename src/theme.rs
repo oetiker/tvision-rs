@@ -360,18 +360,12 @@ pub enum Role {
     /// `classic_blue` it equals [`InputNormal`](Role::InputNormal); a theme may
     /// dim it to signal an inactive pane.
     InputInactive,
-    /// An [`InputLine`](crate::widgets::InputLine)'s **non-focused** field
-    /// surface within an **active** pane — used only when the field opts into
-    /// the self-focus surface via
-    /// `InputLine::set_self_focus_surface(true)`: the one focused field keeps
-    /// [`InputNormal`](Role::InputNormal) (the bright "well"), its non-focused
-    /// siblings take this role, and any field in an inactive pane recedes to
-    /// [`InputInactive`](Role::InputInactive). Without the opt-in this role is
-    /// never consulted. No C++ counterpart (`TInputLine::draw` has a single
-    /// `getColor(focused ? 2 : 1)` and no pane-recede axis). In `classic_blue`
-    /// it equals [`InputNormal`](Role::InputNormal), so an opt-in field renders
-    /// identically unthemed; a theme wanting a single-well form points this at
-    /// its pane-surface colour.
+    /// The middle content surface of an [`InputLine`](crate::widgets::InputLine):
+    /// its owning pane is active but a selectable sibling holds focus (the
+    /// three-surface rule, [`DrawCtx::content_surface`](crate::view::DrawCtx::content_surface)).
+    /// In `classic_blue` it equals [`InputNormal`](Role::InputNormal), preserving
+    /// classic per-window uniformity; a theme opts into sibling distinction by
+    /// giving it the pane-surface colour.
     InputSurface,
     /// An [`InputLine`](crate::widgets::InputLine)'s selection highlight —
     /// the text region between the cursor and the mark anchor. In
@@ -1191,7 +1185,7 @@ impl Theme {
         // surface.
         set(&mut styles, Role::InputNormal, 0xF, 0x1); // white on blue (chain: cpInputLine[1]=cpInputLine[2]=0x13 → cpGrayDialog[19]=0x32 → cpAppColor[50]=0x1F)
         set(&mut styles, Role::InputInactive, 0xF, 0x1); // == InputNormal (C++ cpInputLine[1]==cpInputLine[2]==0x13); themes may dim to signal focus
-        set(&mut styles, Role::InputSurface, 0xF, 0x1); // == InputNormal; opt-in self-focus middle surface (InputLine::set_self_focus_surface), themes may restyle to the pane surface
+        set(&mut styles, Role::InputSurface, 0xF, 0x1); // == InputNormal; middle content surface (three-surface rule), themes may restyle to the pane surface
         set(&mut styles, Role::InputSelected, 0xF, 0x2); // white on green (chain: cpInputLine[3]=0x14 → cpGrayDialog[20]=0x33 → cpAppColor[51]=0x2F)
         set(&mut styles, Role::InputArrow, 0xA, 0x1); // lightgreen on blue (chain: cpInputLine[4]=0x15 → cpGrayDialog[21]=0x34 → cpAppColor[52]=0x1A)
 
@@ -1299,11 +1293,12 @@ mod tests {
         }
     }
 
-    /// `InputSurface` is the opt-in middle surface for `InputLine`'s
-    /// self-focus mode (active pane, non-focused field). In `classic_blue`
-    /// it must equal `InputNormal` (as `InputInactive` already does) so the
-    /// opt-in renders identically unthemed — the classic_blue-frozen
-    /// guarantee of the self-focus-surface spec.
+    /// `InputSurface`, `ListSurface`, and `OutlineSurface` are each the
+    /// three-surface rule's middle content surface for their widget (active
+    /// pane, non-focused selectable sibling). In `classic_blue` each must
+    /// equal its widget's `*Normal` role (as `*Inactive` already does) so the
+    /// rule collapses to the classic per-window look unthemed — the
+    /// classic_blue-frozen guarantee of the focus-surface generalization.
     #[test]
     fn input_surface_matches_input_normal_in_classic_blue() {
         let t = Theme::classic_blue();
