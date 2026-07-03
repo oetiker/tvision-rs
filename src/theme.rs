@@ -200,6 +200,13 @@ pub enum Role {
     /// [`ListNormal`](Role::ListNormal) — both palette indices resolve to the
     /// same dialog entry (`0x1A`).
     ListInactive,
+    /// The middle content surface of a [`ListViewer`](crate::widgets::ListViewer):
+    /// its owning pane is active but a selectable sibling holds focus (the
+    /// three-surface rule, [`DrawCtx::content_surface`](crate::view::DrawCtx::content_surface)).
+    /// In `classic_blue` it equals [`ListNormal`](Role::ListNormal), preserving
+    /// classic per-window uniformity; a theme opts into sibling distinction by
+    /// giving it the pane-surface colour.
+    ListSurface,
     /// The focused (cursor) item of an active
     /// [`ListViewer`](crate::widgets::ListViewer). In `classic_blue` this is
     /// white on green (`0x2F`), resolved from `cpListViewer[3]=0x1B →
@@ -468,6 +475,13 @@ pub enum Role {
     /// layouts dim unfocused trees. In `classic_blue` it equals
     /// [`OutlineNormal`](Role::OutlineNormal).
     OutlineInactive,
+    /// The middle content surface of an [`Outline`](crate::widgets::Outline):
+    /// its owning pane is active but a selectable sibling holds focus (the
+    /// three-surface rule, [`DrawCtx::content_surface`](crate::view::DrawCtx::content_surface)).
+    /// In `classic_blue` it equals [`OutlineNormal`](Role::OutlineNormal),
+    /// preserving classic per-window uniformity; a theme opts into sibling
+    /// distinction by giving it the pane-surface colour.
+    OutlineSurface,
     /// Style for the focused row of an outline viewer when the viewer has
     /// keyboard focus. Applied to both the graph prefix and the node text,
     /// regardless of whether the node is expanded or collapsed.
@@ -487,7 +501,7 @@ pub enum Role {
 }
 
 /// Number of [`Role`] variants — the fixed length of [`Theme`]'s style array.
-pub(crate) const ROLE_COUNT: usize = 78;
+pub(crate) const ROLE_COUNT: usize = 80;
 
 /// All role variants in index order (appended families grouped semantically) — used by the theme editor.
 pub(crate) const ALL: [Role; ROLE_COUNT] = [
@@ -504,6 +518,7 @@ pub(crate) const ALL: [Role; ROLE_COUNT] = [
     Role::Pressed,
     Role::ListNormal,
     Role::ListInactive,
+    Role::ListSurface,
     Role::ListFocused,
     Role::ListSelected,
     Role::ListDivider,
@@ -553,6 +568,7 @@ pub(crate) const ALL: [Role; ROLE_COUNT] = [
     Role::InfoPane,
     Role::OutlineNormal,
     Role::OutlineInactive,
+    Role::OutlineSurface,
     Role::OutlineFocused,
     Role::OutlineSelected,
     Role::OutlineNotExpanded,
@@ -601,6 +617,7 @@ impl Role {
             Role::Pressed => "Pressed",
             Role::ListNormal => "ListNormal",
             Role::ListInactive => "ListInactive",
+            Role::ListSurface => "ListSurface",
             Role::ListFocused => "ListFocused",
             Role::ListSelected => "ListSelected",
             Role::ListDivider => "ListDivider",
@@ -650,6 +667,7 @@ impl Role {
             Role::InfoPane => "InfoPane",
             Role::OutlineNormal => "OutlineNormal",
             Role::OutlineInactive => "OutlineInactive",
+            Role::OutlineSurface => "OutlineSurface",
             Role::OutlineFocused => "OutlineFocused",
             Role::OutlineSelected => "OutlineSelected",
             Role::OutlineNotExpanded => "OutlineNotExpnd",
@@ -741,8 +759,23 @@ impl Role {
             Role::HistorySides => 72,
             Role::HistoryViewerNormal => 73,
             Role::HistoryViewerFocused => 74,
+            Role::ListSurface => 78,
+            Role::OutlineSurface => 79,
         }
     }
+}
+
+/// The role triple a focusable content widget paints its surface from,
+/// consumed by [`DrawCtx::content_surface`](crate::view::DrawCtx::content_surface)
+/// (three-surface rule).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SurfaceRoles {
+    /// Active pane and this widget is focused (or can never be focused).
+    pub normal: Role,
+    /// Active pane, a selectable sibling holds focus.
+    pub surface: Role,
+    /// Owning pane receded.
+    pub inactive: Role,
 }
 
 /// Holder for the framework's drawing glyphs — frame corners/tee-connectors,
@@ -1101,6 +1134,7 @@ impl Theme {
         // active and inactive normals coincide.
         set(&mut styles, Role::ListNormal, 0x0, 0x3); // black on cyan (chain: cpListViewer[1]=0x1A → cpGrayDialog[26]=0x39 → cpAppColor[57]=0x30)
         set(&mut styles, Role::ListInactive, 0x0, 0x3); // black on cyan (chain: cpListViewer[2]=0x1A → cpGrayDialog[26]=0x39 → cpAppColor[57]=0x30)
+        set(&mut styles, Role::ListSurface, 0x0, 0x3); // == ListNormal; middle content surface (three-surface rule), themes may restyle to the pane surface
         set(&mut styles, Role::ListFocused, 0xF, 0x2); // white on green (chain: cpListViewer[3]=0x1B → cpGrayDialog[27]=0x3A → cpAppColor[58]=0x2F)
         set(&mut styles, Role::ListSelected, 0xE, 0x3); // yellow on cyan (chain: cpListViewer[4]=0x1C → cpGrayDialog[28]=0x3B → cpAppColor[59]=0x3E)
         set(&mut styles, Role::ListDivider, 0x1, 0x3); // blue on cyan (chain: cpListViewer[5]=0x1D → cpGrayDialog[29]=0x3C → cpAppColor[60]=0x31)
@@ -1201,6 +1235,7 @@ impl Theme {
         // cpOutlineViewer → cpBlueWindow → cpAppColor.
         set(&mut styles, Role::OutlineNormal, 0xE, 0x1); // yellow on blue (chain: cpOutlineViewer[1]=0x06 → cpBlueWindow[6]=0x0D → cpAppColor[13]=0x1E)
         set(&mut styles, Role::OutlineInactive, 0xE, 0x1); // == OutlineNormal; deviation so themes can dim unfocused outlines
+        set(&mut styles, Role::OutlineSurface, 0xE, 0x1); // == OutlineNormal; middle content surface (three-surface rule), themes may restyle to the pane surface
         set(&mut styles, Role::OutlineFocused, 0x1, 0x7); // blue on lightgray (chain: cpOutlineViewer[2]=0x07 → cpBlueWindow[7]=0x0E → cpAppColor[14]=0x71)
         set(&mut styles, Role::OutlineSelected, 0xA, 0x1); // lightgreen on blue (chain: cpOutlineViewer[3]=0x03 → cpBlueWindow[3]=0x0A → cpAppColor[10]=0x1A)
         set(&mut styles, Role::OutlineNotExpanded, 0xF, 0x1); // white on blue (chain: cpOutlineViewer[4]=0x08 → cpBlueWindow[8]=0x0F → cpAppColor[15]=0x1F)
@@ -1273,6 +1308,8 @@ mod tests {
     fn input_surface_matches_input_normal_in_classic_blue() {
         let t = Theme::classic_blue();
         assert_eq!(t.style(Role::InputSurface), t.style(Role::InputNormal));
+        assert_eq!(t.style(Role::ListSurface), t.style(Role::ListNormal));
+        assert_eq!(t.style(Role::OutlineSurface), t.style(Role::OutlineNormal));
     }
 
     #[test]

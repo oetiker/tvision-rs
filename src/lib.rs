@@ -123,7 +123,7 @@ pub use menu::{
 };
 pub use screen::{Buffer, Cell, DrawBuffer};
 pub use status::{HelpCtxRange, StatusColors, StatusDef, StatusItem, StatusLine};
-pub use theme::{Role, Theme};
+pub use theme::{Role, SurfaceRoles, Theme};
 pub use timer::{Clock, ManualClock, SystemClock, TimerId, TimerQueue};
 pub use tvision_rs_macros::delegate;
 pub use validate::{
