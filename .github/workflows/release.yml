@@ -261,6 +261,21 @@ jobs:
           find site -name "*.tmp" -delete 2>/dev/null || true
           find site -name 'index.html?*' -delete 2>/dev/null || true
 
+      # wget saves query-string URLs (e.g. FontAwesome's "font.woff2?v=4.7.0"
+      # refs in mdBook CSS) as literal "name?query" files. GitHub Pages rejects
+      # artifacts containing such names ("Deployment failed, try again later");
+      # before it rejected them it silently dropped them, losing the fonts of
+      # every mirrored version. Strip the query suffix so the mirrored tree
+      # matches what the CSS actually references.
+      - name: Normalize wget query-string filenames
+        run: |
+          find site -depth -name '*\?*' -print0 | while IFS= read -r -d '' f; do
+            clean="${f%%\?*}"
+            if [ -e "$clean" ]; then rm "$f"; else mv "$f" "$clean"; fi
+          done
+          leftover=$(find site -name '*\?*' | head -5)
+          [ -z "$leftover" ] || { echo "::error::query-string filenames remain: $leftover"; exit 1; }
+
       - name: Add new version to site
         run: |
           TAG="${{ needs.version.outputs.tag }}"

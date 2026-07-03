@@ -12,9 +12,20 @@ moves it into a dated, versioned section when a release is cut.
 
 ### New
 
+- `redeploy-docs.yml` workflow (workflow_dispatch, `tag` input): rebuilds and
+  re-deploys an existing tag's versioned docs — the docs counterpart to
+  `republish.yml` for recovering a release whose Pages deploy failed.
+
 ### Changed
 
 ### Fixed
+
+- GitHub Pages deploys failed with `deployment_failed`: the wget site mirror in
+  `docs.yml`/`release.yml` saved query-string URLs (mdBook's FontAwesome
+  `font.woff2?v=4.7.0` refs) as literal `?`-named files, which GitHub Pages now
+  rejects (and previously dropped silently, stripping mirrored versions of
+  their fonts). The mirror step now renames such files to their query-stripped
+  names.
 
 ## 0.7.0 - 2026-07-03
 

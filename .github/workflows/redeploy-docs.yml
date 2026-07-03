@@ -1,49 +1,40 @@
-name: Docs
+name: Redeploy docs (recover a failed release docs deploy)
 
+# Finishes a release whose crates/tag/GitHub-release landed but whose
+# `deploy-docs` job failed (a Pages re-run reuses the old workflow definition,
+# so a fixed workflow never reaches it). Point it at the existing tag; it
+# rebuilds that tag's versioned docs and re-deploys the whole multi-version
+# site. Safe to re-run: the version directory is replaced wholesale.
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'src/**'
-      - 'docs/**'
-      - 'xtask/**'
-      - 'tvision-rs-macros/**'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - '.github/workflows/docs.yml'
-      - '.github/scripts/manage-doc-versions.sh'
   workflow_dispatch:
-
-permissions:
-  contents: read
-  pages: write
-  id-token: write
-
-# Serialize Pages deploys; never cancel a half-finished deploy (would corrupt
-# the mirrored multi-version site).
-concurrency:
-  group: pages
-  cancel-in-progress: false
+    inputs:
+      tag:
+        description: 'Existing release tag whose docs to (re)build and deploy, e.g. v0.7.0'
+        required: true
+        type: string
 
 env:
+  CARGO_TERM_COLOR: always
   PAGES_URL: "https://oetiker.github.io/tvision-rs"
 
 jobs:
-  build:
-    name: Build dev docs
+  build-docs:
+    name: Build versioned docs
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag }}
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Install tmux (for screenshots)
         run: sudo apt-get update && sudo apt-get install -y tmux
 
-      # Host this build under /tvision-rs/dev/ instead of /tvision-rs/.
-      - name: Rebase doc URLs to /tvision-rs/dev/
+      - name: Rebase doc URLs to /tvision-rs/${{ inputs.tag }}/
         run: |
-          sed -i 's|^site-url = "/tvision-rs/"|site-url = "/tvision-rs/dev/"|' docs/book/book.toml
-          sed -i 's|href="/tvision-rs/|href="/tvision-rs/dev/|g' docs/book/theme/rustdoc-header.html
+          TAG="${{ inputs.tag }}"
+          sed -i "s|^site-url = \"/tvision-rs/\"|site-url = \"/tvision-rs/${TAG}/\"|" docs/book/book.toml
+          sed -i "s|href=\"/tvision-rs/|href=\"/tvision-rs/${TAG}/|g" docs/book/theme/rustdoc-header.html
           grep -n 'site-url' docs/book/book.toml
           grep -n 'href=' docs/book/theme/rustdoc-header.html
 
@@ -52,14 +43,21 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: docs-dev
+          name: docs-${{ inputs.tag }}
           path: docs/book/book
           retention-days: 1
 
-  deploy:
-    name: Deploy to GitHub Pages
+  deploy-docs:
+    name: Deploy versioned docs
+    needs: build-docs
     runs-on: ubuntu-latest
-    needs: build
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    concurrency:
+      group: pages
+      cancel-in-progress: false
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -68,12 +66,14 @@ jobs:
         with:
           sparse-checkout: .github/scripts
 
-      - name: Download dev docs
+      - name: Download versioned docs
         uses: actions/download-artifact@v4
         with:
-          name: docs-dev
+          name: docs-${{ inputs.tag }}
           path: new-docs
 
+      # Same mirror + normalize + insert + deploy sequence as release.yml's
+      # deploy-docs job — keep the two in sync.
       - name: Mirror existing GitHub Pages
         run: |
           mkdir -p site
@@ -82,7 +82,7 @@ jobs:
                --reject="index.html?*" \
                --execute robots=off \
                --quiet \
-               "$PAGES_URL/" 2>/dev/null || echo "No existing site to mirror (first deployment?)"
+               "$PAGES_URL/" 2>/dev/null || echo "No existing site to mirror"
           find site -name "*.tmp" -delete 2>/dev/null || true
           find site -name 'index.html?*' -delete 2>/dev/null || true
 
@@ -101,11 +101,12 @@ jobs:
           leftover=$(find site -name '*\?*' | head -5)
           [ -z "$leftover" ] || { echo "::error::query-string filenames remain: $leftover"; exit 1; }
 
-      - name: Replace dev docs
+      - name: Add new version to site
         run: |
-          rm -rf site/tvision-rs/dev
-          mkdir -p site/tvision-rs/dev
-          cp -r new-docs/* site/tvision-rs/dev/
+          TAG="${{ inputs.tag }}"
+          rm -rf "site/tvision-rs/$TAG"
+          mkdir -p "site/tvision-rs/$TAG"
+          cp -r new-docs/* "site/tvision-rs/$TAG/"
 
       - name: Update versions and redirect
         run: |
