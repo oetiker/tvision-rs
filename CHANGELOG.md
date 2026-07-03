@@ -15,6 +15,12 @@ moves it into a dated, versioned section when a release is cut.
 - `redeploy-docs.yml` workflow (workflow_dispatch, `tag` input): rebuilds and
   re-deploys an existing tag's versioned docs — the docs counterpart to
   `republish.yml` for recovering a release whose Pages deploy failed.
+- `InputLine::set_self_focus_surface` / `with_self_focus_surface` — opt-in
+  three-surface model for single-well forms: only the focused field paints the
+  `Role::InputNormal` well, a non-focused field in an active pane uses the new
+  `Role::InputSurface`, and an inactive pane still recedes to
+  `Role::InputInactive`. Default off = previous behavior; `classic_blue` wires
+  all three roles identically, so nothing changes unthemed.
 
 ### Changed
 

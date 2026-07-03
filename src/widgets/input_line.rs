@@ -140,6 +140,12 @@ pub struct InputLine {
     /// rather than assigning to this field directly — that keeps the
     /// ownership contract explicit.
     pub validator: Option<Box<dyn Validator>>,
+    /// Opt-in self-focus surface (see
+    /// [`set_self_focus_surface`](InputLine::set_self_focus_surface)): when
+    /// `true`, `draw` distinguishes the focused field (`Role::InputNormal`)
+    /// from its active-pane siblings (`Role::InputSurface`); when `false`
+    /// (default), the surface keys on `owner_active` alone.
+    self_focus: bool,
     // -- validator save-state (oldData/oldCurPos/…) ------------------------
     old_data: String,
     old_cur_pos: i32,
@@ -232,6 +238,7 @@ impl InputLine {
             sel_end: 0,
             anchor: 0,
             validator,
+            self_focus: false,
             old_data: String::new(),
             old_cur_pos: 0,
             old_first_pos: 0,
@@ -266,6 +273,29 @@ impl InputLine {
     /// assigned the new one.
     pub fn set_validator(&mut self, validator: Option<Box<dyn crate::validate::Validator>>) {
         self.validator = validator;
+    }
+
+    /// Opt into a **self-focus surface**: the field paints the input well
+    /// ([`Role::InputNormal`]) only when it *itself* holds focus; a non-focused
+    /// field in an active pane uses [`Role::InputSurface`], and any field in an
+    /// inactive pane recedes to [`Role::InputInactive`]. Off by default, in
+    /// which case the field keys its surface on `owner_active` alone (every
+    /// field in an active pane is the well — the classic Turbo Vision look,
+    /// unchanged).
+    ///
+    /// Use this for a "single-well" form where only the current field is the
+    /// bright input target and the others sit flush on the pane surface. In
+    /// `classic_blue` all three roles resolve to the same colour, so the
+    /// opt-in only becomes visible on a theme that restyles
+    /// [`Role::InputSurface`] / [`Role::InputInactive`].
+    pub fn set_self_focus_surface(&mut self, on: bool) {
+        self.self_focus = on;
+    }
+
+    /// Builder form of [`set_self_focus_surface`](InputLine::set_self_focus_surface).
+    pub fn with_self_focus_surface(mut self, on: bool) -> Self {
+        self.self_focus = on;
+        self
     }
 
     // -- geometry helpers (byte ↔ column) ----------------------------------
@@ -699,10 +729,12 @@ impl View for InputLine {
     /// Render the field: background fill, scrolled text, scroll arrows at the
     /// edges when the content overflows, and the selection highlight.
     ///
-    /// Colors come from three theme roles: [`Role::InputNormal`] for the
+    /// Colors come from the theme roles: [`Role::InputNormal`] for the
     /// background and unselected text within an active pane
-    /// ([`Role::InputInactive`] takes over when the owning pane recedes — see
-    /// below), [`Role::InputArrow`] for the `◄`/`►` overflow indicators,
+    /// ([`Role::InputInactive`] takes over when the owning pane recedes, and,
+    /// under the [`set_self_focus_surface`](InputLine::set_self_focus_surface)
+    /// opt-in, [`Role::InputSurface`] for a non-focused field in an active
+    /// pane), [`Role::InputArrow`] for the `◄`/`►` overflow indicators,
     /// and [`Role::InputSelected`] for highlighted text. Because tvision-rs has
     /// no attribute-only paint, the selected substring is **redrawn** (not just
     /// re-attributed) in the selected style at the correct scroll offset — the
@@ -717,14 +749,21 @@ impl View for InputLine {
         // this value, mirroring the Button `abs_origin` pattern.
         self.abs_origin = ctx.origin();
         let size = self.state.size;
-        // Background follows the owning pane, not this field's own focus: within
-        // the focused pane every field uses InputNormal (the cursor marks the
-        // current one); a field in an inactive pane recedes to InputInactive.
-        // classic_blue maps both to white-on-blue, so unthemed input is unchanged.
-        let color = ctx.style(if ctx.owner_active() {
-            Role::InputNormal
-        } else {
+        // Surface selection. Default: the background follows the owning pane,
+        // not this field's own focus — within the focused pane every field uses
+        // InputNormal (the cursor marks the current one); a field in an
+        // inactive pane recedes to InputInactive. With the self-focus opt-in
+        // (`set_self_focus_surface`), own focus additionally picks
+        // well-vs-surface WITHIN an active pane: only the focused field is the
+        // InputNormal well, its siblings sit on InputSurface. `owner_active`
+        // alone owns "receded" on both paths. classic_blue maps all three roles
+        // to white-on-blue, so unthemed input is unchanged either way.
+        let color = ctx.style(if !ctx.owner_active() {
             Role::InputInactive
+        } else if self.self_focus && !self.state.state.focused {
+            Role::InputSurface
+        } else {
+            Role::InputNormal
         });
         let arrow = ctx.style(Role::InputArrow);
         let selected = ctx.style(Role::InputSelected);
@@ -1379,6 +1418,30 @@ mod tests {
             "selection redraw must keep the scrolled glyphs, got:\n{snap}"
         );
         insta::assert_snapshot!(snap);
+    }
+
+    /// classic_blue frozen: because InputSurface and InputInactive both equal
+    /// InputNormal in classic_blue, a field with the self-focus opt-in ON
+    /// renders byte-identically to a default field — the opt-in is invisible
+    /// unthemed. Guards the zero-pixel-change guarantee of the
+    /// self-focus-surface spec.
+    #[test]
+    fn snapshot_self_focus_classic_blue_identical() {
+        let mut plain = field(12, "hello");
+        plain.cur_pos = 0;
+        plain.first_pos = 0;
+        let mut opted_in = field(12, "hello");
+        opted_in.cur_pos = 0;
+        opted_in.first_pos = 0;
+        opted_in.set_self_focus_surface(true);
+
+        let plain_snap = render(&mut plain);
+        let opted_snap = render(&mut opted_in);
+        assert_eq!(
+            plain_snap, opted_snap,
+            "classic_blue must render an opt-in field byte-identically"
+        );
+        insta::assert_snapshot!(opted_snap);
     }
 
     // -- editing: ASCII -----------------------------------------------------
@@ -2492,5 +2555,76 @@ mod tests {
         // InputInactive: the pane recedes regardless of the field's own focus.
         il.state.state.focused = true;
         assert_eq!(fill_bg(&mut il, &theme, false), inactive_bg);
+
+        // owner_active=true with the field itself focused: still InputNormal —
+        // with the self-focus opt-in OFF (the default), own focus never
+        // changes the surface.
+        il.state.state.focused = true;
+        assert_eq!(fill_bg(&mut il, &theme, true), normal_bg);
+    }
+
+    /// The self-focus surface opt-in (`set_self_focus_surface(true)`) selects
+    /// among THREE roles: an inactive pane recedes to `InputInactive`
+    /// regardless of the field's own focus; within an active pane the focused
+    /// field is the `InputNormal` well and a non-focused field sits on
+    /// `InputSurface`. Uses a theme where all three roles differ (classic_blue
+    /// makes them identical).
+    #[test]
+    fn self_focus_surface_three_way() {
+        use crate::color::{Color, Style};
+
+        let mut theme = Theme::classic_blue();
+        theme.set_style(
+            Role::InputSurface,
+            Style::new(Color::Bios(0x0), Color::Bios(0x7)),
+        );
+        theme.set_style(
+            Role::InputInactive,
+            Style::new(Color::Bios(0x7), Color::Bios(0x4)),
+        );
+        let normal_bg = theme.style(Role::InputNormal).bg;
+        let surface_bg = theme.style(Role::InputSurface).bg;
+        let inactive_bg = theme.style(Role::InputInactive).bg;
+        assert!(
+            normal_bg != surface_bg && surface_bg != inactive_bg && normal_bg != inactive_bg,
+            "test theme must distinguish all three roles"
+        );
+
+        let mut il = field(12, "hello");
+        il.first_pos = 0;
+        il.set_self_focus_surface(true);
+
+        // Active pane, focused field → the well.
+        il.state.state.focused = true;
+        assert_eq!(fill_bg(&mut il, &theme, true), normal_bg);
+
+        // Active pane, non-focused field → the pane surface (the state the
+        // two-role model could not name).
+        il.state.state.focused = false;
+        assert_eq!(fill_bg(&mut il, &theme, true), surface_bg);
+
+        // Inactive pane → receded, regardless of the field's own focus.
+        il.state.state.focused = true;
+        assert_eq!(fill_bg(&mut il, &theme, false), inactive_bg);
+        il.state.state.focused = false;
+        assert_eq!(fill_bg(&mut il, &theme, false), inactive_bg);
+    }
+
+    /// The builder form sets the same flag.
+    #[test]
+    fn with_self_focus_surface_builder() {
+        use crate::color::{Color, Style};
+
+        let mut theme = Theme::classic_blue();
+        theme.set_style(
+            Role::InputSurface,
+            Style::new(Color::Bios(0x0), Color::Bios(0x7)),
+        );
+        let surface_bg = theme.style(Role::InputSurface).bg;
+
+        let mut il = field(12, "hello").with_self_focus_surface(true);
+        il.first_pos = 0;
+        il.state.state.focused = false;
+        assert_eq!(fill_bg(&mut il, &theme, true), surface_bg);
     }
 }

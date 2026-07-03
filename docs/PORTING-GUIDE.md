@@ -817,6 +817,31 @@ construction. The truecolor picker is reusable and produces any `Color` variant:
 See [`docs/superpowers/specs/2026-06-09-color-picker-design.md`](file:///home/oetiker/checkouts/tvision-rs/docs/superpowers/specs/2026-06-09-color-picker-design.md)
 and [`docs/superpowers/plans/2026-06-09-color-picker.md`](file:///home/oetiker/checkouts/tvision-rs/docs/superpowers/plans/2026-06-09-color-picker.md).
 
+### Active-aware surfaces (`owner_active` × self-focus)
+C++ Turbo Vision has no notion of a control surface that follows its owning
+pane's activity: `TInputLine::draw` picks between exactly two palette entries
+via `getColor(sfFocused ? 2 : 1)`, keyed on the field's own focus only.
+tvision-rs adds an orthogonal two-axis model on top of the faithful roles:
+
+- **`DrawCtx::owner_active`** (v0.6.0) — "is this control's pane active?"
+  `InputLine` keys its background on it (`Role::InputNormal` vs
+  `Role::InputInactive`); in `classic_blue` both resolve to the same colour, so
+  the classic look is unchanged.
+- **`Group::set_surface` / `clear_surface`** (v0.7.0) — an opt-in pane
+  background that follows the group's focus.
+- **`InputLine::set_self_focus_surface` / `with_self_focus_surface`** — an
+  opt-in third surface: only the *focused* field paints the `Role::InputNormal`
+  well; a non-focused field in an active pane uses `Role::InputSurface`, and
+  any field in an inactive pane recedes to `Role::InputInactive`. Off by
+  default (the two-role `owner_active` branch above). `classic_blue` wires all
+  three roles identically, so the opt-in is invisible unthemed. The two axes
+  stay orthogonal: `owner_active` alone owns "receded"; own focus only picks
+  well-vs-surface *within* an active pane.
+
+See `docs/superpowers/specs/2026-07-01-active-aware-surfaces-design.md`,
+`…/2026-07-03-group-focus-aware-surface-design.md`, and
+`…/2026-07-03-inputline-self-focus-surface-design.md`.
+
 ---
 
 ## Appendix A — C++ → Rust deviation lookup
