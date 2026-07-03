@@ -1420,6 +1420,30 @@ mod tests {
         insta::assert_snapshot!(snap);
     }
 
+    /// classic_blue frozen: because InputSurface and InputInactive both equal
+    /// InputNormal in classic_blue, a field with the self-focus opt-in ON
+    /// renders byte-identically to a default field — the opt-in is invisible
+    /// unthemed. Guards the zero-pixel-change guarantee of the
+    /// self-focus-surface spec.
+    #[test]
+    fn snapshot_self_focus_classic_blue_identical() {
+        let mut plain = field(12, "hello");
+        plain.cur_pos = 0;
+        plain.first_pos = 0;
+        let mut opted_in = field(12, "hello");
+        opted_in.cur_pos = 0;
+        opted_in.first_pos = 0;
+        opted_in.set_self_focus_surface(true);
+
+        let plain_snap = render(&mut plain);
+        let opted_snap = render(&mut opted_in);
+        assert_eq!(
+            plain_snap, opted_snap,
+            "classic_blue must render an opt-in field byte-identically"
+        );
+        insta::assert_snapshot!(opted_snap);
+    }
+
     // -- editing: ASCII -----------------------------------------------------
 
     #[test]

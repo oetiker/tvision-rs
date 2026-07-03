@@ -1,0 +1,13 @@
+---
+source: src/widgets/input_line.rs
+expression: opted_snap
+---
+size: 12x1
+cursor: hidden
+text:
+| hello      |
+attr:
+|aaaaaaaaaaaa|
+legend:
+  . default
+  a fg=RGB(255,255,255) bg=RGB(0,0,170)
