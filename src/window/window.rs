@@ -824,8 +824,8 @@ impl Window {
     /// The maximum size (the owner's size) is reached via the owner-extent-down
     /// channel ([`Context::owner_size`](crate::view::Context::owner_size)) instead
     /// of an up-pointer. The window's own [`size_limits`](View::size_limits)
-    /// override (max = owner size, min = `min_size`, default 16×6) is used. Shared by the `ZOOM`
-    /// command and fullscreen-Desktop, so they cannot desync.
+    /// override (max = owner size, min = `min_size`, default 16×6) is used. Shared
+    /// by the `ZOOM` command and fullscreen-Desktop, so they cannot desync.
     pub fn maximize(&mut self, ctx: &mut Context) {
         if self.restore_rect.is_none() {
             self.restore_rect = Some(self.group.state().get_bounds());
@@ -1710,7 +1710,7 @@ impl View for Window {
     /// This `size_limits` override is intentionally *not* in the `#[delegate]`
     /// skip list, while `calc_bounds` *is* skipped: `calc_bounds` therefore routes
     /// through the *trait default*, which calls **this** `size_limits` override
-    /// (giving the 16×6 floor). If `calc_bounds` were delegated to the inner `Group`, it would
+    /// (giving the `min_size` floor, default 16×6). If `calc_bounds` were delegated to the inner `Group`, it would
     /// use the group's own `size_limits` (min 0×0) and silently bypass the window
     /// minimum on owner-driven resizes.
     fn size_limits(&self, owner_size: Point) -> (Point, Point) {
@@ -1720,7 +1720,7 @@ impl View for Window {
 
     // NOTE: `calc_bounds` is in the skip list above — NOT forwarded to the group.
     // The trait default routes through `Window::size_limits` (this override's
-    // 16×6 floor) and mutates the group's `ViewState` via `state_mut()`.
+    // `min_size` floor, default 16×6) and mutates the group's `ViewState` via `state_mut()`.
     // Forwarding to `self.group.calc_bounds` would use the group's `size_limits`
     // (min 0×0) and silently bypass the window's minimum on an owner-driven
     // resize.
