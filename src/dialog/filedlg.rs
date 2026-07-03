@@ -1911,11 +1911,12 @@ fn button_specs(options: u16) -> Vec<(&'static str, crate::command::Command, boo
 ///
 /// This **embeds** a [`Dialog`] and forwards the un-overridden
 /// [`View`](crate::view::View) methods (embed-and-delegate composition). It
-/// overrides only `handle_event`, `size_limits`, `reset_current`, and
-/// `as_any_mut` (so the modal loop / the owner-downcast target is the
-/// `FileDialog`, not the inner `Dialog`). `calc_bounds` is left at the trait
-/// default so an owner-driven resize routes through this type's `size_limits`
-/// 49×19 floor — mirroring the `EditWindow` precedent.
+/// overrides only `handle_event`, `reset_current`, and `as_any_mut` (so the
+/// modal loop / the owner-downcast target is the `FileDialog`, not the inner
+/// `Dialog`). The 49×19 minimum (`TFileDialog::sizeLimits`) is pushed into the
+/// embedded window via `set_min_size` at construction (D16), so every clamp
+/// path — including the interactive corner drag — honors it through the
+/// delegated `size_limits`.
 ///
 /// ## Native paths
 ///
@@ -2017,6 +2018,9 @@ impl FileDialog {
             f.grow = true;
             dialog.set_flags(f);
         }
+        // The TFileDialog::sizeLimits floor (49×19), pushed down into the
+        // window (D16): every clamp path incl. the interactive drag reads it.
+        dialog.set_min_size(crate::view::Point::new(49, 19));
 
         // --- fileName: filename input line at (3,3)-(31,4), cap MAXPATH ------
         // Initial text = the wildcard. Grows on the right edge.
@@ -2232,7 +2236,6 @@ impl FileDialog {
         grabs_focus_on_click,
         select_window_num,
         set_value,
-        size_limits,
         value
     )
 )]
@@ -2281,9 +2284,14 @@ impl crate::view::View for FileDialog {
                     bounds.a.y = sb.a.y;
                     bounds.b.y = sb.b.y;
                 }
-                // Apply the size floor (49x19 — FileDialog::size_limits min).
-                let w = (bounds.b.x - bounds.a.x).max(49);
-                let h = (bounds.b.y - bounds.a.y).max(19);
+                // Apply the size floor. C++ applies this resize via locate(),
+                // which clamps through sizeLimits; the ChangeBounds deferred
+                // applies raw change_bounds, so clamp here by hand — reading
+                // the floor from size_limits (single source: the window's
+                // min_size, 49×19).
+                let (floor, _) = crate::view::View::size_limits(self, screen_size);
+                let w = (bounds.b.x - bounds.a.x).max(floor.x);
+                let h = (bounds.b.y - bounds.a.y).max(floor.y);
                 bounds.b.x = bounds.a.x + w;
                 bounds.b.y = bounds.a.y + h;
                 // Only queue if the bounds actually changed.
@@ -2322,24 +2330,6 @@ impl crate::view::View for FileDialog {
             }
             _ => {}
         }
-    }
-
-    /// Returns the allowed size range for this dialog: minimum `{49, 19}` (wide
-    /// and tall enough to fit all sub-panes legibly), maximum from the embedded
-    /// `Dialog`.
-    ///
-    /// The 49×19 floor is enforced because the file-list, info pane, and button
-    /// column have hard-coded relative positions; a smaller window would clip or
-    /// overlap them. `calc_bounds` is in the `#[delegate]` skip list so that
-    /// owner-driven resizes route back through this floor rather than bypassing it.
-    /// You normally do not call this directly; the framework queries it when the
-    /// dialog is resized by its owner.
-    fn size_limits(
-        &self,
-        owner_size: crate::view::Point,
-    ) -> (crate::view::Point, crate::view::Point) {
-        let (_min, max) = crate::view::View::size_limits(&self.dialog, owner_size);
-        (crate::view::Point::new(49, 19), max)
     }
 
     /// Framework init hook: called by the modal loop when the dialog first becomes
@@ -2528,12 +2518,13 @@ impl crate::view::View for FileDialog {
 ///
 /// Like [`FileDialog`], this **embeds** a [`Dialog`] and forwards the
 /// un-overridden [`View`](crate::view::View) methods (embed-and-delegate
-/// composition). It overrides only `handle_event`, `size_limits`,
-/// `reset_current`, and `as_any_mut`. `value`/`set_value` are left at the trait
-/// default (`None` / no-op) because the dialog carries no transfer data; this
-/// stops the macro forwarding to the inner `Dialog`'s gather/scatter.
-/// `calc_bounds` is also left at the default so an owner-driven resize routes
-/// through this type's `size_limits` 48×18 floor.
+/// composition). It overrides only `handle_event`, `reset_current`, and
+/// `as_any_mut`. `value`/`set_value` are left at the trait default (`None` /
+/// no-op) because the dialog carries no transfer data; this stops the macro
+/// forwarding to the inner `Dialog`'s gather/scatter. The 48×18 minimum
+/// (`TChDirDialog::sizeLimits`) is pushed into the embedded window via
+/// `set_min_size` at construction (D16), so every clamp path — including the
+/// interactive corner drag — honors it through the delegated `size_limits`.
 ///
 /// ## Native paths
 ///
@@ -2597,6 +2588,9 @@ impl ChDirDialog {
             f.grow = true;
             dialog.set_flags(f);
         }
+        // The TChDirDialog::sizeLimits floor (48×18), pushed down into the
+        // window (D16).
+        dialog.set_min_size(crate::view::Point::new(48, 18));
 
         // --- dirInput: path input line at (3,3)-(42,4), cap MAXPATH-1 --------
         // Grows on the right edge. InputLine::new(MaxBytes) applies its own
@@ -2789,7 +2783,6 @@ impl ChDirDialog {
         grabs_focus_on_click,
         select_window_num,
         set_value,
-        size_limits,
         value
     )
 )]
@@ -2842,17 +2835,6 @@ impl crate::view::View for ChDirDialog {
             self.navigate_to(&cur_dir, ctx);
             ev.clear();
         }
-    }
-
-    /// Minimum size `{48, 18}`; maximum from the embedded dialog. `calc_bounds` is
-    /// skip-listed so an owner-driven resize routes through this floor (the
-    /// [`FileDialog`]/`EditWindow` pattern).
-    fn size_limits(
-        &self,
-        owner_size: crate::view::Point,
-    ) -> (crate::view::Point, crate::view::Point) {
-        let (_min, max) = crate::view::View::size_limits(&self.dialog, owner_size);
-        (crate::view::Point::new(48, 18), max)
     }
 
     /// The ctx-bearing init hook. Establishes the dialog's internal currency first
@@ -5480,5 +5462,29 @@ mod tests {
             .expect("subdir must be in listing (dirs always included)");
         assert_eq!(dir_rec.attr, FA_DIREC, "directory attr must be FA_DIREC");
         assert_eq!(dir_rec.size, 0, "directory size is 0 in listing");
+    }
+
+    /// The TFileDialog 49×19 floor, reported through the delegated
+    /// `size_limits` (the floor lives on the embedded window via
+    /// `set_min_size`, not in an override). Catches a forgotten
+    /// `set_min_size` in the constructor.
+    #[test]
+    fn file_dialog_size_limits_floor() {
+        let fd = FileDialog::new("*.*", "Open a File", "~N~ame", 0, 100);
+        let (min, max) = crate::view::View::size_limits(&fd, crate::view::Point::new(100, 40));
+        assert_eq!(min, crate::view::Point::new(49, 19), "TFileDialog floor");
+        assert_eq!(
+            max,
+            crate::view::Point::new(100, 40),
+            "max is the owner size"
+        );
+    }
+
+    /// The TChDirDialog 48×18 floor, same mechanism.
+    #[test]
+    fn chdir_dialog_size_limits_floor() {
+        let cd = ChDirDialog::new(0, 100);
+        let (min, _) = crate::view::View::size_limits(&cd, crate::view::Point::new(100, 40));
+        assert_eq!(min, crate::view::Point::new(48, 18), "TChDirDialog floor");
     }
 }
