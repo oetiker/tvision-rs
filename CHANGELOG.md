@@ -12,11 +12,18 @@ moves it into a dated, versioned section when a release is cut.
 
 ### New
 
+### Changed
+
+### Fixed
+
+## 0.10.0 - 2026-07-03
+
+### New
+
 - `Window::set_min_size`/`with_min_size` (also on `Dialog`) — a raisable
   interactive-resize floor (default `Window::MIN_WIN_SIZE`, 16×6). Every clamp
   path (mouse corner drag, keyboard resize, zoom/restore, owner-driven resize)
   reads it through `size_limits` (D16).
-
 ### Changed
 
 ### Fixed
