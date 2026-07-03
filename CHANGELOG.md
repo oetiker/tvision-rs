@@ -12,9 +12,18 @@ moves it into a dated, versioned section when a release is cut.
 
 ### New
 
+- `Window::set_min_size`/`with_min_size` (also on `Dialog`) — a raisable
+  interactive-resize floor (default `Window::MIN_WIN_SIZE`, 16×6). Every clamp
+  path (mouse corner drag, keyboard resize, zoom/restore, owner-driven resize)
+  reads it through `size_limits` (D16).
+
 ### Changed
 
 ### Fixed
+
+- `FileDialog` (49×19), `ChDirDialog` (48×18) and `EditWindow` (24×6) minimum
+  sizes are now enforced during interactive drag-resize; previously the drag
+  read the plain-window 16×6 floor and ignored their `size_limits` overrides.
 
 ## 0.9.0 - 2026-07-03
 

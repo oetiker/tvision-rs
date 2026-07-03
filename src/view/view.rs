@@ -757,7 +757,7 @@ fn range(val: i32, min: i32, max: i32) -> i32 {
 /// trait method would be forwarded by the `#[delegate]` macro to the *inner
 /// group* for wrappers like [`Window`](crate::widgets::window::Window), whose
 /// group has a 0×0 [`size_limits`](View::size_limits), bypassing the window's
-/// 16×6 minimum (the hazard at `window.rs`). As a free fn,
+/// `min_size` floor (16×6 by default) (the hazard at `window.rs`). As a free fn,
 /// [`size_limits`](View::size_limits) dispatches virtually to the wrapper's
 /// override and [`change_bounds`](View::change_bounds) forwards to the group.
 /// The repaint/shadow tail is moot under whole-tree redraw. Backs the desktop's

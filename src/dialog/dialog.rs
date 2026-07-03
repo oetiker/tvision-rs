@@ -2,7 +2,7 @@
 
 use crate::command::Command;
 use crate::event::{Event, Key};
-use crate::view::{Context, DragMode, GrowMode, Rect, View, ViewId};
+use crate::view::{Context, DragMode, GrowMode, Point, Rect, View, ViewId};
 // These are used only by the test module (via `use super::*`).
 #[cfg(test)]
 use crate::view::{DrawCtx, StateFlag, ViewState};
@@ -169,6 +169,12 @@ impl Dialog {
         self.window.set_drag_mode(drag_mode);
     }
 
+    /// Raise the dialog's interactive-resize floor (forwards to the embedded
+    /// [`Window`]; see [`Window::set_min_size`]).
+    pub fn set_min_size(&mut self, min: Point) {
+        self.window.set_min_size(min);
+    }
+
     /// Builder form of [`set_flags`](Self::set_flags).
     pub fn with_flags(mut self, flags: WindowFlags) -> Self {
         self.set_flags(flags);
@@ -190,6 +196,12 @@ impl Dialog {
     /// Builder form of [`set_drag_mode`](Self::set_drag_mode).
     pub fn with_drag_mode(mut self, drag_mode: DragMode) -> Self {
         self.set_drag_mode(drag_mode);
+        self
+    }
+
+    /// Builder form of [`set_min_size`](Self::set_min_size).
+    pub fn with_min_size(mut self, min: Point) -> Self {
+        self.set_min_size(min);
         self
     }
 }
@@ -535,7 +547,23 @@ mod tests {
         assert_eq!(frame.palette(), WindowPalette::Cyan);
     }
 
-    // -- 7. button_row -------------------------------------------------------
+    // -- 7. set_min_size / with_min_size forwarders ----
+
+    /// `set_min_size` forwards to the embedded window: the raised floor is
+    /// visible through the dialog's (delegated) `size_limits`.
+    #[test]
+    fn set_min_size_forwards_to_window() {
+        let mut d = Dialog::new(Rect::new(0, 0, 40, 15), Some("T".into()));
+        d.set_min_size(Point::new(60, 20));
+        let (min, _) = View::size_limits(&d, Point::new(100, 40));
+        assert_eq!(min, Point::new(60, 20), "setter forwards");
+
+        let d2 = Dialog::new(Rect::new(0, 0, 40, 15), None).with_min_size(Point::new(50, 21));
+        let (min2, _) = View::size_limits(&d2, Point::new(100, 40));
+        assert_eq!(min2, Point::new(50, 21), "builder forwards");
+    }
+
+    // -- 8. button_row -------------------------------------------------------
 
     #[test]
     fn button_row_center_places_two_buttons_symmetrically() {
@@ -562,7 +590,7 @@ mod tests {
         assert_eq!((b0.b.x - b0.a.x, b0.b.y - b0.a.y), (10, 2));
     }
 
-    // -- 8. gather_list / scatter_list forwarders ----------------------------
+    // -- 9. gather_list / scatter_list forwarders ----------------------------
 
     #[test]
     fn dialog_gather_scatter_list_round_trips() {

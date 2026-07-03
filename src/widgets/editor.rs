@@ -2832,9 +2832,18 @@ pub(crate) fn editor_mut(v: &mut dyn View) -> Option<&mut Editor> {
 // EditWindow
 // ---------------------------------------------------------------------------
 
+/// The `EditWindow` interactive-resize floor: frame + indicator + scroll bars
+/// + a few text columns. Ports `minEditWinSize` (`teditwnd.cpp:29`).
+pub(crate) const MIN_EDIT_WIN_SIZE: Point = Point::new(24, 6);
+
 /// A [`Window`] hosting a [`FileEditor`] with two scroll bars and an
 /// [`Indicator`]. An embed-and-delegate wrapper over [`Window`]; the constructor
 /// wires the editor to the (initially hidden) scroll bars and indicator by id.
+///
+/// The 24×6 minimum (`minEditWinSize`, `MIN_EDIT_WIN_SIZE`) is pushed into the
+/// embedded window via `set_min_size` at construction (D16), so every clamp
+/// path — including the interactive corner drag — honors it through the
+/// delegated `size_limits`.
 ///
 /// When a close is requested while this window hosts the internal clipboard
 /// editor, the window hides instead of closing. The clipboard editor is never
@@ -2883,6 +2892,10 @@ impl EditWindow {
             None => "Untitled".to_string(),
         };
         let mut window = crate::window::Window::new(bounds, Some(title), number);
+
+        // The TEditWindow::sizeLimits floor, pushed down into the window
+        // (D16): every clamp path incl. the interactive drag reads it.
+        window.set_min_size(MIN_EDIT_WIN_SIZE);
 
         // Edit windows participate in tiling.
         View::state_mut(&mut window).options.tileable = true;
@@ -2935,7 +2948,6 @@ impl EditWindow {
         grabs_focus_on_click,
         select_window_num,
         set_value,
-        size_limits,
         value
     )
 )]
@@ -2989,22 +3001,6 @@ impl View for EditWindow {
                 self.window.set_title(Some(t));
             }
         }
-    }
-
-    /// Return the minimum and maximum size for this window.
-    ///
-    /// The minimum is fixed at 24 columns × 6 rows — enough room for the frame,
-    /// the editor body, the status bar, and at least a few text columns. This
-    /// overrides the plain `Window` floor of 16×6 because the `EditWindow` has
-    /// additional widgets (scroll bars, indicator) that need the extra columns.
-    ///
-    /// `calc_bounds` is excluded from the `#[delegate]` macro's forwarding so that
-    /// a parent-driven resize calls `size_limits` here (the trait default of
-    /// `calc_bounds` delegates to `size_limits`) and therefore respects the 24×6
-    /// floor rather than the window's 16×6 floor.
-    fn size_limits(&self, owner_size: Point) -> (Point, Point) {
-        let (_min, max) = View::size_limits(&self.window, owner_size);
-        (Point::new(24, 6), max)
     }
 }
 

@@ -780,6 +780,40 @@ so the C++ draw code is unchanged.
 
 ---
 
+## D16 — virtual `sizeLimits` floor → settable `min_size` (push-down) · *minor*
+
+**Baseline.** Every interactive clamp path reads the window minimum through a
+**virtual** `sizeLimits` call — `TFrame::dragWindow` calls
+`owner->sizeLimits(min, max)` (`tframe.cpp:138`); `TWindow::zoom`,
+`TView::locate`/`dragView` and group resizing do the same — so a subclass
+override (`TFileDialog` 49×19, `TChDirDialog` 48×18, `TEditWindow`
+`minEditWinSize` 24×6) governs the mouse drag, keyboard resize, and zoom.
+`TWindow::sizeLimits` itself forces `min = minWinSize` ({16,6}, a file-level
+const, `twindow.cpp:30`).
+
+**Deviation.** D2 embed-and-delegate has no upward virtual dispatch: the inner
+`Window` cannot see a composing wrapper's `size_limits`, so wrapper overrides
+were invisible to the drag path (a lost-fidelity bug). Instead the floor is a
+**settable field**: `Window::min_size`, default `Window::MIN_WIN_SIZE` (16×6),
+raised via `set_min_size`/`with_min_size` (surfaced on `Dialog` too). A wrapper
+*pushes its floor down* into the window once at construction instead of the
+clamp paths *pulling* it up through virtual dispatch. `set_min_size` clamps its
+argument up to `MIN_WIN_SIZE` per axis (chrome legibility) — a C++ override
+could in principle go lower; no upstream subclass does. Converted consumers
+keep **no** `size_limits` override; the delegate macro forwards it to the
+embedded window.
+
+**Integration.** `Window::size_limits` returns `(self.min_size, owner max)`;
+`start_drag`, the keyboard-resize capture, `locate` (ZOOM/restore/fullscreen),
+and the `calc_bounds` trait default all read through it, so one field governs
+every clamp. Converted: `FileDialog` (49×19), `ChDirDialog` (48×18),
+`EditWindow` (24×6, `MIN_EDIT_WIN_SIZE`). One seam stays explicit:
+`FileDialog`'s screen-relative resize applies bounds via the raw `ChangeBounds`
+deferred (no clamp), so it clamps to `View::size_limits(self, …).0` inline —
+the C++ `locate()` clamp, performed by hand.
+
+---
+
 ## Vendoring & licensing
 
 - **ratatui** cell-buffer + diff is **copied** (not depended on) and adapted —
@@ -918,6 +952,7 @@ See `docs/superpowers/specs/2026-07-01-active-aware-surfaces-design.md`,
 | `TKey` / `KeyDownEvent` | `event::{Key, KeyModifiers, KeyEvent}` | D1, D4, D5 |
 | `sfFocused` | `state.focused` / `StateFlag::Focused` | D5 |
 | `ofSelectable` / `ofPreProcess` | `options.selectable` / `options.pre_process` | D5 |
+| `minWinSize` / virtual `sizeLimits` override | `Window::MIN_WIN_SIZE` + `set_min_size`/`with_min_size` (push-down floor) | D16 |
 | `growMode` / `dragMode` | `GrowMode` / `DragMode` (struct-of-bools; `gf*`/`dm*`) | D5 |
 | `helpCtx` / `hcNoContext` | `ViewState.help_ctx` / `HelpCtx::NO_CONTEXT` (open newtype) | D1 |
 | `evKeyDown` / `evCommand` | `Event::KeyDown(..)` / `Event::Command(..)` | D4 |

@@ -7150,6 +7150,93 @@ mod tests {
         );
     }
 
+    /// A grow-corner drag honours a raised `min_size`: with the floor lifted
+    /// to 24×8 via `with_min_size`, dragging the corner toward the origin
+    /// stops at 24×8, not the built-in 16×6. (Restores the C++ behavior where
+    /// `TFrame::dragWindow` reads `sizeLimits` virtually.)
+    #[test]
+    fn drag_grow_clamps_to_raised_min_size() {
+        let (mut program, _screen, _clock) = program_with_desktop(80, 25);
+        let id = {
+            let w = Window::new(Rect::new(2, 1, 32, 13), Some("Edit".into()), 1)
+                .with_min_size(Point::new(24, 8));
+            program.group_mut().insert(Box::new(w))
+        };
+        program.with_ctx(|g, ctx| g.set_current(Some(id), SelectMode::Normal, ctx));
+        program.out_events.clear();
+
+        // Grab the bottom-right grow corner: size (30,12), so window-local
+        // (29,11) → absolute (31,12). (Corner rule: pos.y >= h-1 && pos.x >= w-2.)
+        program.out_events.push_back(mouse_down_at(31, 12));
+        program.pump_once();
+        assert!(
+            win_state(&mut program, id).state.dragging,
+            "grow drag started"
+        );
+
+        // Drag far past the minimum: raw size would be ~(2,2).
+        program.out_events.push_back(mouse_move_at(3, 2));
+        program.pump_once();
+        let st = win_state(&mut program, id);
+        assert_eq!(
+            st.size,
+            Point::new(24, 8),
+            "size clamps at the raised floor, not 16×6"
+        );
+
+        // Clean finish.
+        program.out_events.push_back(mouse_up_at(3, 2));
+        program.pump_once();
+        assert!(!win_state(&mut program, id).state.dragging);
+    }
+
+    /// A converted consumer end-to-end: `EditWindow`'s 24×6 floor
+    /// (`minEditWinSize`) now lives on the embedded window via `set_min_size`,
+    /// so a grow-corner drag stops at 24×6 — previously it fell through to the
+    /// plain-window 16×6 because the drag read `Window::size_limits`
+    /// statically.
+    #[test]
+    fn editwindow_drag_grow_honours_min_edit_win_size() {
+        use crate::widgets::EditWindow;
+        let (mut program, _screen, _clock) = program_with_desktop(80, 25);
+        let id = {
+            let w = EditWindow::new(Rect::new(2, 1, 42, 16), None, 1);
+            program.group_mut().insert(Box::new(w))
+        };
+        program.with_ctx(|g, ctx| g.set_current(Some(id), SelectMode::Normal, ctx));
+        // Settle the EditWindow's own nested currency (focusing its FileEditor
+        // child queues a deferred received-focus broadcast that only lands in
+        // `out_events` on the *next* pump's deferred-apply phase — matching the
+        // settle idiom `editwindow_indicator_updates_and_scrollbar_drag_scrolls`
+        // uses). Drain it here so it doesn't eat the drag's `MouseMove` below.
+        for _ in 0..3 {
+            program.pump_once();
+        }
+        program.out_events.clear();
+
+        // Bottom-right grow corner: size (40,15) → window-local (39,14) →
+        // absolute (41,15).
+        program.out_events.push_back(mouse_down_at(41, 15));
+        program.pump_once();
+        assert!(
+            win_state(&mut program, id).state.dragging,
+            "grow drag started"
+        );
+
+        // Drag far past the minimum.
+        program.out_events.push_back(mouse_move_at(3, 2));
+        program.pump_once();
+        let st = win_state(&mut program, id);
+        assert_eq!(
+            st.size,
+            Point::new(24, 6),
+            "EditWindow floor is minEditWinSize 24×6, not 16×6"
+        );
+
+        program.out_events.push_back(mouse_up_at(3, 2));
+        program.pump_once();
+    }
+
     // -- 12. close round-trip ------------------------------------------------
 
     /// `cmClose` on a `wfClose` window removes it from the tree (the deferred
