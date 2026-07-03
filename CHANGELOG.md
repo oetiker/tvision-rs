@@ -12,7 +12,26 @@ moves it into a dated, versioned section when a release is cut.
 
 ### New
 
+- `SurfaceRoles` + `DrawCtx::content_surface` — the shared three-surface
+  selection rule (`owner_active` recede x self-focus well-vs-surface x
+  selectability) every focusable content widget now uses, plus the two new
+  role triples it introduces: `Role::ListSurface` (`ListViewer` family) and
+  `Role::OutlineSurface` (`Outline`). Themes can now distinguish the focused
+  widget among focusable siblings (e.g. dim the unfocused list in a two-list
+  shuttle, or the field when a dialog button takes focus).
+
 ### Changed
+
+- **Breaking:** `InputLine::set_self_focus_surface` / `with_self_focus_surface`
+  removed. The three-surface selection (`Normal`/`Surface`/`Inactive`) they
+  opted `InputLine` into is now the **default** for every focusable content
+  widget (`InputLine`, the `ListViewer` family, `Outline`) — there is no flag
+  to opt into it because it is unconditional. Migration: delete the call — the
+  behavior is now the default. Zero visual change under `classic_blue` (every
+  role triple collapses to one colour there); themes that give `*Surface` a
+  distinct colour will see wider sibling-dimming than before.
+- **Breaking:** `ListRoles` gained a `surface` field (the middle role of the
+  new triple) — breaking for any literal `ListRoles { .. }` construction.
 
 ### Fixed
 

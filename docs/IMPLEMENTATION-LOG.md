@@ -5,6 +5,65 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## Focus-aware content surface generalization: three-surface rule as the default (2026-07-03)
+
+The v0.8.0 `InputLine::with_self_focus_surface` opt-in (previous entry below)
+was a one-off fix for a real problem — `owner_active` is a per-*group* signal,
+so it can't tell which of several focusable widgets in one pane is *the*
+focused one, only whether the whole pane is active. The same gap turned up a
+second time in a `ListViewer` two-list shuttle (both lists share
+`owner_active`, so both stayed bright regardless of which list was focused).
+Two widgets independently rediscovering the same fix was the signal to
+generalize it into a framework rule rather than grow a third opt-in.
+
+**Decision (Option A, default-on)** — recorded in
+`docs/superpowers/specs/2026-07-03-focusable-content-surface-generalization-design.md`:
+every focusable content widget now selects among three surfaces
+(`*Normal`/`*Surface`/`*Inactive`) **unconditionally**, not behind a flag.
+Rejected Option B (keep C++ uniformity as the default, add a per-widget opt-in
+like `InputLine`'s) because the flag is structurally redundant with the theme —
+classic per-window uniformity is already preserved by `classic_blue` collapsing
+every triple to one colour, so a widget-side flag would be a second switch on
+the same intent, and a theme role that only does something if some caller also
+flipped a builder is a trap for theme authors. With Option A, **the theme is
+the opt-in**: it does something the moment (and only the moment) a theme gives
+`*Surface` a distinct colour.
+
+**What landed, per commit:**
+- `84039aa` design spec decided (Option A); `a236fc7` draft; `f5caf57`
+  implementation plan.
+- `4e9c7ce` **Foundation:** `SurfaceRoles` (theme.rs) + `DrawCtx::content_surface`
+  (view/context.rs) — the one shared rule (`!owner_active → inactive;
+  self_focused || !selectable → normal; else → surface`) every widget now
+  calls instead of hand-rolling. Two new roles, `Role::ListSurface` /
+  `Role::OutlineSurface` (indices 78/79, appended so nothing renumbers);
+  `classic_blue` wires both to their `*Normal` colour.
+- `01f6461` **InputLine:** removed the v0.8.0 `set_self_focus_surface` /
+  `with_self_focus_surface` methods and the `self_focus` field outright (no
+  deprecated no-op — a flag whose `false` arm does nothing would lie); `draw`
+  now always calls the shared helper.
+- `119c692` **ListViewer family:** `ListRoles` grew from a quintet to a sextet
+  (new `surface` field — breaking for literal `ListRoles { .. }`
+  construction); row surface selection now goes through
+  `DrawCtx::content_surface`; added a non-selectable-list fixture proving the
+  non-selectable rule (never `Surface`, even in an active pane).
+- `af99ba1` **Outline:** same conversion — `OutlineNormal`/`OutlineSurface`/
+  `OutlineInactive` via the shared helper.
+- `8e263fa` **Tests:** `tests/content_surface.rs` — the motivating two-list-
+  and-a-button shuttle fixture, snapshotted through the real `Group` focus
+  chain across three focus states (list A focused, button focused, pane
+  inactive), plus the single-focusable-pane-never-hits-`Surface` invariant.
+
+**Verification:** the whole feature is a zero-pixel-change under `classic_blue`
+— no `.snap` file was touched anywhere in the branch, confirming every role
+triple still collapses to its `Normal` colour by default; the new behavior is
+only observable under a theme that assigns `*Surface` a distinct colour.
+
+**Breaking, ships in 0.9.0:** `InputLine::set_self_focus_surface` /
+`with_self_focus_surface` are gone (migration: delete the call, the behavior
+is now the default) and `ListRoles` gained a field. See `CHANGELOG.md` and the
+updated PORTING-GUIDE deviation note ("Active-aware surfaces").
+
 ## Focus-aware surfaces for InputLine and Outline (2026-07-01)
 
 Two widgets now signal keyboard focus through their background surface, for the
