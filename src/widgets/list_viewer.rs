@@ -53,9 +53,10 @@
 //! # Colors
 //!
 //! Each list role is a [`Role`]: [`Role::ListNormal`] /
-//! [`Role::ListInactive`] / [`Role::ListFocused`] / [`Role::ListSelected`]
-//! / [`Role::ListDivider`]. A subclass that wanted a different palette surfaces a
-//! different [`ListRoles`] quintet from [`ListViewer::list_roles`].
+//! [`Role::ListInactive`] / [`Role::ListSurface`] / [`Role::ListFocused`] /
+//! [`Role::ListSelected`] / [`Role::ListDivider`]. A subclass that wanted a
+//! different palette surfaces a different [`ListRoles`] sextet from
+//! [`ListViewer::list_roles`].
 //!
 //! # Resizing
 //!
@@ -77,7 +78,7 @@
 use crate::capture::TrackMask;
 use crate::command::Command;
 use crate::event::{Event, Key, KeyEvent, ctrl_to_arrow};
-use crate::theme::Role;
+use crate::theme::{Role, SurfaceRoles};
 use crate::view::{Context, DrawCtx, Point, StateFlag, View, ViewId, ViewState};
 
 /// The empty-list placeholder text.
@@ -236,22 +237,27 @@ impl ListViewerState {
 }
 
 // ---------------------------------------------------------------------------
-// ListRoles — the per-class color quintet
+// ListRoles — the per-class color sextet
 // ---------------------------------------------------------------------------
 
-/// The five [`Role`]s that [`draw`] maps its color matrix through.
+/// The six [`Role`]s that [`draw`] maps its color matrix through.
 ///
 /// To recolor a list widget, override [`ListViewer::list_roles`] and return a
 /// custom `ListRoles` with different role values. The fields map directly to
-/// the five drawing cases: a normal item in an active / inactive list, the
-/// focused cursor item, a selected (multi-select) item, and the inter-column
-/// divider. The constant [`ListRoles::LIST_VIEWER`] holds the base quintet.
+/// the six drawing cases: a normal item in an active / inactive / surface
+/// list, the focused cursor item, a selected (multi-select) item, and the
+/// inter-column divider. The constant [`ListRoles::LIST_VIEWER`] holds the
+/// base sextet.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ListRoles {
-    /// A normal item of an owner-active list (also the `<empty>` fill).
+    /// A normal item of an owner-active, self-focused (or non-selectable)
+    /// list (also the `<empty>` fill).
     pub normal: Role,
     /// A normal item when the owning pane is inactive.
     pub inactive: Role,
+    /// The middle content surface: active pane, a selectable sibling holds
+    /// focus.
+    pub surface: Role,
     /// The focused (cursor) item, shown when this list is the focused control.
     pub focused: Role,
     /// A selected item.
@@ -265,6 +271,7 @@ impl ListRoles {
     pub const LIST_VIEWER: ListRoles = ListRoles {
         normal: Role::ListNormal,
         inactive: Role::ListInactive,
+        surface: Role::ListSurface,
         focused: Role::ListFocused,
         selected: Role::ListSelected,
         divider: Role::ListDivider,
@@ -310,10 +317,10 @@ pub trait ListViewer: View {
         String::new()
     }
 
-    /// The five color roles [`draw`] uses for this list's color matrix.
+    /// The six color roles [`draw`] uses for this list's color matrix.
     ///
     /// Override to recolor the whole list. Return a [`ListRoles`] struct with
-    /// different [`Role`] values for any of the five slots; the base
+    /// different [`Role`] values for any of the six slots; the base
     /// implementation returns [`ListRoles::LIST_VIEWER`]. A history viewer, for
     /// example, overrides this to use its own lighter palette.
     fn list_roles(&self) -> ListRoles {
@@ -975,13 +982,16 @@ fn draw_highlighted(
 /// list widgets; calls back into [`get_text`](ListViewer::get_text) /
 /// [`is_selected`](ListViewer::is_selected).
 ///
-/// Draws the two-axis color matrix — the row surface (normal/inactive) tracks
+/// Draws the two-axis color matrix — the row surface (the three-surface rule:
+/// normal/surface/inactive, see
+/// [`DrawCtx::content_surface`](crate::view::DrawCtx::content_surface)) tracks
 /// [`DrawCtx::owner_active`](crate::view::DrawCtx::owner_active) (is the owning
-/// pane focused?), while the current-item highlight (focused/selected) tracks
-/// this list's own `state.focused` (is *this* list the focused control?) — the
-/// per-cell item/column layout, the `indent` column-skip (the cached
-/// horizontal-bar value), the `<empty>` placeholder, the `│` divider, and the
-/// focused-cell cursor.
+/// pane focused?) crossed with this list's own focus and selectability, while
+/// the current-item highlight (focused/selected) tracks this list's own
+/// `state.focused` (is *this* list the focused control?) — the per-cell
+/// item/column layout, the `indent` column-skip (the cached horizontal-bar
+/// value), the `<empty>` placeholder, the `│` divider, and the focused-cell
+/// cursor.
 ///
 /// Also caches `abs_origin` for the mouse-track capture.
 ///
@@ -996,16 +1006,21 @@ pub fn draw<L: ListViewer + ?Sized>(this: &mut L, ctx: &mut DrawCtx) {
     this.lv_mut().abs_origin = ctx.origin();
     let lv = this.lv();
     let st = &lv.state.state;
-    let owner_active = ctx.owner_active(); // surface axis: is my pane focused?
     let list_focused = st.focused; // highlight axis: am I the focused list?
 
-    // Color matrix via the class's role quintet (list_roles).
+    // Color matrix via the class's role sextet (list_roles).
     let roles = this.list_roles();
-    let normal = ctx.style(if owner_active {
-        roles.normal
-    } else {
-        roles.inactive
-    });
+    // Surface axis: the three-surface rule (owner_active x own-focus x
+    // selectability) — see `DrawCtx::content_surface`.
+    let normal = ctx.content_surface(
+        SurfaceRoles {
+            normal: roles.normal,
+            surface: roles.surface,
+            inactive: roles.inactive,
+        },
+        list_focused,
+        lv.state.options.selectable,
+    );
     let selected = ctx.style(roles.selected);
     let focused_color = if list_focused {
         Some(ctx.style(roles.focused))
@@ -2065,48 +2080,111 @@ mod tests {
         insta::assert_snapshot!(render(&mut fake, 16, 3));
     }
 
-    // -- active-aware surfaces: two-axis draw (Task 3) -----------------------
+    // -- active-aware surfaces: three-surface draw (Task 3) ------------------
     //
     // The single `selected && active` predicate is split into two independent
-    // axes: the row SURFACE (`ctx.owner_active()` — is my owning pane the
-    // focused one?) and the item HIGHLIGHT (`state.focused` — am I, this
-    // specific list, the focused control?). These three tests prove each axis
-    // in isolation, then the real end-to-end splitter/shuttle scenario.
+    // axes: the row SURFACE (the three-surface rule — `ctx.owner_active()`
+    // crossed with this list's own focus and selectability, see
+    // `DrawCtx::content_surface`) and the item HIGHLIGHT (`state.focused` —
+    // am I, this specific list, the focused control?). These tests prove each
+    // axis in isolation, then the real end-to-end splitter/shuttle scenario.
 
-    /// Surface axis: with a theme where `ListNormal != ListInactive`, the same
-    /// list draws its row background differently depending solely on
-    /// `ctx.owner_active()` — the list's own state never changes.
+    /// Row background at item index 1 of a 2-item list — never the cursor
+    /// item (index 0, which the base `is_selected` always marks) and never
+    /// the highlight-axis focused cell, so it isolates the row SURFACE color.
+    fn surface_bg_at(theme: &Theme, owner_active: bool, list_focused: bool) -> crate::color::Color {
+        let mut l = FakeList::new(Rect::new(0, 0, 10, 2), 1, items(2), None, None);
+        l.lv.state.state.selected = true;
+        l.lv.state.state.active = true;
+        l.lv.state.state.focused = list_focused;
+        let bounds = l.state().get_bounds();
+        let mut buf = Buffer::new(10, 2);
+        let mut dc = DrawCtx::new(&mut buf, theme, bounds, bounds.a);
+        dc.set_owner_active(owner_active);
+        l.draw(&mut dc);
+        buf.get(1, 1).style().bg
+    }
+
+    /// Surface axis: with a theme where `ListNormal`/`ListSurface`/
+    /// `ListInactive` are all distinct, a selectable list's row surface
+    /// follows the three-surface rule: `owner_active == false` recedes to
+    /// `ListInactive` regardless of the list's own focus; within an active
+    /// pane, the list's own `state.focused` picks well (`ListNormal`) vs.
+    /// surface (`ListSurface`, "a selectable sibling holds focus").
     #[test]
     fn surface_axis_tracks_owner_active_not_own_state() {
         use crate::color::{Color, Style};
 
         let mut theme = Theme::classic_blue();
-        // Distinct from ListNormal's fg=0x0/bg=0x3 so the two renders differ.
+        // classic_blue collapses ListSurface onto ListNormal — override both
+        // non-normal roles here so all three differ and each state paints a
+        // distinct color.
+        theme.set_style(
+            Role::ListSurface,
+            Style::new(Color::bios_rgb(0xA), Color::bios_rgb(0x5)),
+        );
         theme.set_style(
             Role::ListInactive,
             Style::new(Color::bios_rgb(0xE), Color::bios_rgb(0x4)),
         );
+        let normal_bg = theme.style(Role::ListNormal).bg;
+        let surface_bg = theme.style(Role::ListSurface).bg;
+        let inactive_bg = theme.style(Role::ListInactive).bg;
+        assert!(
+            normal_bg != surface_bg && surface_bg != inactive_bg && normal_bg != inactive_bg,
+            "test theme must distinguish all three roles"
+        );
 
-        let render_with = |owner_active: bool| {
+        // owner_active == false → inactive, regardless of the list's own focus.
+        assert_eq!(surface_bg_at(&theme, false, true), inactive_bg);
+        assert_eq!(surface_bg_at(&theme, false, false), inactive_bg);
+
+        // owner_active == true, list focused → the well.
+        assert_eq!(surface_bg_at(&theme, true, true), normal_bg);
+
+        // owner_active == true, list unfocused, selectable → the pane surface.
+        assert_eq!(surface_bg_at(&theme, true, false), surface_bg);
+    }
+
+    /// Non-selectable fixture: a list with `options.selectable = false` can
+    /// never win (or lose) a focus contest, so it always stays the well in an
+    /// active pane — never `ListSurface` — and still recedes to `ListInactive`
+    /// in an inactive pane.
+    #[test]
+    fn non_selectable_list_never_shows_surface() {
+        use crate::color::{Color, Style};
+
+        let mut theme = Theme::classic_blue();
+        theme.set_style(
+            Role::ListSurface,
+            Style::new(Color::bios_rgb(0xA), Color::bios_rgb(0x5)),
+        );
+        theme.set_style(
+            Role::ListInactive,
+            Style::new(Color::bios_rgb(0xE), Color::bios_rgb(0x4)),
+        );
+        let normal_bg = theme.style(Role::ListNormal).bg;
+        let inactive_bg = theme.style(Role::ListInactive).bg;
+
+        let bg_at = |owner_active: bool, list_focused: bool| {
             let mut l = FakeList::new(Rect::new(0, 0, 10, 2), 1, items(2), None, None);
-            // The list's OWN state is held constant across both renders: only
-            // `owner_active` (a draw-context input, not list state) varies.
             l.lv.state.state.selected = true;
             l.lv.state.state.active = true;
+            l.lv.state.state.focused = list_focused;
+            l.lv.state.options.selectable = false;
             let bounds = l.state().get_bounds();
             let mut buf = Buffer::new(10, 2);
             let mut dc = DrawCtx::new(&mut buf, &theme, bounds, bounds.a);
             dc.set_owner_active(owner_active);
             l.draw(&mut dc);
-            crate::screen::snapshot::snapshot(&buf, None)
+            buf.get(1, 1).style().bg
         };
 
-        let active_pane = render_with(true);
-        let inactive_pane = render_with(false);
-        assert_ne!(
-            active_pane, inactive_pane,
-            "row surface must track ctx.owner_active(), not the list's own state"
-        );
+        // Active pane: never ListSurface, regardless of own focus.
+        assert_eq!(bg_at(true, false), normal_bg);
+        assert_eq!(bg_at(true, true), normal_bg);
+        // Inactive pane: still recedes to ListInactive.
+        assert_eq!(bg_at(false, false), inactive_bg);
     }
 
     /// Highlight axis: with `ctx.owner_active()` held `true` both times (the
