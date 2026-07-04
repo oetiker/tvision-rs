@@ -117,16 +117,38 @@ pub struct InputLine {
     /// as one regardless of its byte or column size.
     pub max_chars: i32,
     /// Cursor position, a **byte** offset into `data`.
+    ///
+    /// Direct writes are supported — see [`cursor_request`](View::cursor_request)
+    /// for how this feeds the screen cursor. Direct writes do **not** scroll
+    /// the caret into view, though — use [`set_cursor_pos`](Self::set_cursor_pos)
+    /// for that.
     pub cur_pos: i32,
     /// Horizontal scroll offset, a **display column** (see module docs: NOT a
     /// byte offset).
+    ///
+    /// Direct writes are supported — see [`cursor_request`](View::cursor_request)
+    /// for how this feeds the screen cursor. Direct writes do **not** scroll
+    /// the caret into view, though — use [`set_cursor_pos`](Self::set_cursor_pos)
+    /// for that.
     pub first_pos: i32,
     /// Selection start, a **byte** offset into `data`.
+    ///
+    /// Direct writes are supported and take effect immediately — nothing is
+    /// cached. Note this does not move `cur_pos` or scroll the field; pair
+    /// with a `cur_pos` write if the caret should track the selection.
     pub sel_start: i32,
     /// Selection end, a **byte** offset into `data`.
+    ///
+    /// Direct writes are supported and take effect immediately — nothing is
+    /// cached. Note this does not move `cur_pos` or scroll the field; pair
+    /// with a `cur_pos` write if the caret should track the selection.
     pub sel_end: i32,
     /// The fixed end of a keyboard/mouse block extension, a **byte** offset.
-    pub anchor: i32,
+    ///
+    /// Private, matching C++ `TInputLine::anchor`; move the caret through
+    /// [`set_cursor_pos`](Self::set_cursor_pos) or the key/mouse handling
+    /// instead of poking it directly.
+    anchor: i32,
     /// The optional input validator, or `None` when the field is unconstrained.
     ///
     /// A [`Validator`] can filter individual keystrokes (`is_valid_input`),
@@ -227,7 +249,7 @@ impl InputLine {
             ..Default::default()
         };
 
-        let mut il = InputLine {
+        InputLine {
             state,
             data: String::new(),
             max_len,
@@ -247,9 +269,7 @@ impl InputLine {
             abs_origin: Point::new(0, 0),
             tracking: false,
             tracking_drag: false,
-        };
-        il.sync_cursor();
-        il
+        }
     }
 
     /// Convenience constructor with no validator and the default byte-limit mode.
@@ -295,12 +315,54 @@ impl InputLine {
         }
     }
 
-    /// Store the screen-cursor position on [`ViewState::cursor`] so the loop's
-    /// cursor reset can read it before redraw, splitting the cursor placement
-    /// out of `draw`.
-    fn sync_cursor(&mut self) {
-        let x = self.displayed_pos(self.cur_pos) - self.first_pos + 1;
-        self.state.set_cursor(x, 0);
+    /// Clamp `first_pos` so `cur_pos`'s display column stays inside the visible
+    /// window — pulls the scroll left/right as needed. Shared by the
+    /// keyboard-editing tail, `paste_text`, and `set_cursor_pos`; matches C++
+    /// `TInputLine`'s repeated `firstPos` clamp bracketing it into
+    /// `[curWidth - size.x + 2, curWidth]`.
+    fn scroll_cursor_into_view(&mut self) {
+        let cur_width = self.displayed_pos(self.cur_pos);
+        if self.first_pos > cur_width {
+            self.first_pos = cur_width;
+        }
+        let i = cur_width - self.state.size.x + 2;
+        if self.first_pos < i {
+            self.first_pos = i;
+        }
+    }
+
+    /// Move the caret to byte offset `pos`, collapsing any selection and
+    /// scrolling the field so the caret is visible.
+    ///
+    /// `pos` is clamped to `[0, data.len()]`; if the clamped offset does not
+    /// land on a `char` boundary it snaps down to the previous one (the same
+    /// boundary-snap idiom `check_valid` and [`View::set_value`] already use
+    /// when clamping to `max_len`).
+    ///
+    /// This is a tvision-rs extension: C++ `TInputLine` has no public setter
+    /// for an arbitrary caret position.
+    pub fn set_cursor_pos(&mut self, pos: i32) {
+        let mut cut = pos.clamp(0, self.data.len() as i32) as usize;
+        while cut > 0 && !self.data.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        self.cur_pos = cut as i32;
+        self.sel_start = 0;
+        self.sel_end = 0;
+        self.anchor = self.cur_pos;
+        self.scroll_cursor_into_view();
+    }
+
+    /// Move the caret to the start of the field. Extension — see
+    /// [`set_cursor_pos`](Self::set_cursor_pos).
+    pub fn home(&mut self) {
+        self.set_cursor_pos(0);
+    }
+
+    /// Move the caret to the end of the field. Extension — see
+    /// [`set_cursor_pos`](Self::set_cursor_pos).
+    pub fn end(&mut self) {
+        self.set_cursor_pos(self.data.len() as i32);
     }
 
     // -- selection / deletion (byte offsets) -------------------------------
@@ -351,9 +413,11 @@ impl InputLine {
     /// where the viewport position should be left as-is.
     ///
     /// This method does **not** trigger a redraw on its own — the event loop
-    /// redraws the whole tree. It does update the screen cursor via
-    /// [`sync_cursor`](InputLine::sync_cursor). Callers that also need to
-    /// refresh cut/copy/paste command graying call `update_commands` separately.
+    /// redraws the whole tree. The screen cursor needs no separate update: it
+    /// is derived fresh from `cur_pos`/`first_pos` via
+    /// [`cursor_request`](View::cursor_request) on the next pump. Callers that
+    /// also need to refresh cut/copy/paste command graying call
+    /// `update_commands` separately.
     pub fn select_all(&mut self, enable: bool, scroll: bool) {
         self.sel_start = 0;
         if enable {
@@ -366,7 +430,6 @@ impl InputLine {
         if scroll {
             self.first_pos = (self.displayed_pos(self.cur_pos) - self.state.size.x + 2).max(0);
         }
-        self.sync_cursor();
     }
 
     /// True only when this field is both active and selected. Command
@@ -500,15 +563,7 @@ impl InputLine {
         self.sel_start = 0;
         self.sel_end = 0;
         // firstPos scroll-follow (column arithmetic).
-        let cur_width = self.displayed_pos(self.cur_pos);
-        if self.first_pos > cur_width {
-            self.first_pos = cur_width;
-        }
-        let i = cur_width - self.state.size.x + 2;
-        if self.first_pos < i {
-            self.first_pos = i;
-        }
-        self.sync_cursor();
+        self.scroll_cursor_into_view();
         self.check_valid(true);
     }
 
@@ -551,7 +606,6 @@ impl InputLine {
             self.check_valid(true);
             self.sel_start = 0;
             self.sel_end = 0;
-            self.sync_cursor();
         }
     }
 
@@ -703,6 +757,24 @@ impl View for InputLine {
         Some(self)
     }
 
+    /// The screen-cursor column, derived fresh from `cur_pos`/`first_pos` on
+    /// every call — the port of C++ `TInputLine::draw`'s tail
+    /// `setCursor(displayedPos(curPos)-firstPos+1, 0)`, which re-derives the
+    /// cursor every paint rather than caching it. Because this recomputes from
+    /// the live fields instead of reading a cache, direct writes to `cur_pos`/
+    /// `first_pos` are always reflected on the next pump. Mirrors the base
+    /// [`View::cursor_request`] focus/visibility gate.
+    fn cursor_request(&self) -> Option<Point> {
+        if self.state.state.focused && self.state.state.cursor_vis {
+            Some(Point::new(
+                self.displayed_pos(self.cur_pos) - self.first_pos + 1,
+                0,
+            ))
+        } else {
+            None
+        }
+    }
+
     /// Render the field: background fill, scrolled text, scroll arrows at the
     /// edges when the content overflows, and the selection highlight.
     ///
@@ -716,9 +788,9 @@ impl View for InputLine {
     /// re-attributed) in the selected style at the correct scroll offset — the
     /// visible glyphs of the scrolled window, not the raw head of the selection.
     ///
-    /// The screen cursor position is **not** set here; it is computed separately
-    /// by [`sync_cursor`](InputLine::sync_cursor) before each redraw so the event
-    /// loop can place the cursor without going through the draw path.
+    /// The screen cursor position is **not** set here; cursor placement lives
+    /// in [`cursor_request`](View::cursor_request), called by the event loop
+    /// before each redraw.
     fn draw(&mut self, ctx: &mut DrawCtx) {
         // Cache absolute origin for the mouse-tracking capture: the
         // MouseTrackCapture converts absolute mouse coords to field-local via
@@ -868,7 +940,6 @@ impl View for InputLine {
                         );
                     }
                 }
-                self.sync_cursor();
                 ev.clear();
             }
 
@@ -894,7 +965,6 @@ impl View for InputLine {
                     self.cur_pos = self.mouse_pos(&m);
                     self.adjust_select_block();
                 }
-                self.sync_cursor();
                 ev.clear();
             }
 
@@ -910,7 +980,6 @@ impl View for InputLine {
                 // Drag-select: move the cursor to the mouse and re-order the block.
                 self.cur_pos = self.mouse_pos(&m);
                 self.adjust_select_block();
-                self.sync_cursor();
                 ev.clear();
             }
 
@@ -1029,15 +1098,7 @@ impl View for InputLine {
                 }
 
                 // firstPos scroll-follow (column arithmetic).
-                let cur_width = self.displayed_pos(self.cur_pos);
-                if self.first_pos > cur_width {
-                    self.first_pos = cur_width;
-                }
-                let i = cur_width - self.state.size.x + 2;
-                if self.first_pos < i {
-                    self.first_pos = i;
-                }
-                self.sync_cursor();
+                self.scroll_cursor_into_view();
                 ev.clear();
             }
 
@@ -1765,6 +1826,7 @@ mod tests {
     fn scroll_follow_ascii() {
         // width 6 (so text area is cols 1..6 = 5 columns).
         let mut il = field(6, "");
+        il.state.state.focused = true; // cursor_request gates on focused
         for c in "abcdefgh".chars() {
             let mut ev = char_key(c);
             send_key(&mut il, &mut ev);
@@ -1774,7 +1836,7 @@ mod tests {
         // cur_width = 8. firstPos clamp: i = cur_width - size.x + 2 = 8-6+2 = 4.
         assert_eq!(il.first_pos, 4, "firstPos follows the cursor (column)");
         // cursor screen col = displayedPos(curPos) - firstPos + 1 = 8-4+1 = 5.
-        assert_eq!(il.state.cursor.x, 5);
+        assert_eq!(il.cursor_request(), Some(Point::new(5, 0)));
     }
 
     /// DISCRIMINATING multibyte scroll-follow: distinguishes the column-vs-byte
@@ -1784,6 +1846,7 @@ mod tests {
     fn scroll_follow_wide_glyphs_is_columns_not_bytes() {
         // size.x = 6 → text area 5 columns. "中" is width 2, len 3 bytes.
         let mut il = field(6, "");
+        il.state.state.focused = true; // cursor_request gates on focused
         for _ in 0..4 {
             let mut ev = char_key('中');
             send_key(&mut il, &mut ev);
@@ -1801,9 +1864,87 @@ mod tests {
         );
         // cursor screen col = displayedPos(curPos) - firstPos + 1 = 8 - 4 + 1 = 5.
         assert_eq!(
-            il.state.cursor.x, 5,
+            il.cursor_request(),
+            Some(Point::new(5, 0)),
             "cursor column = displayedPos(curPos) - firstPos + 1"
         );
+    }
+
+    // -- cursor_request / set_cursor_pos (direct-write desync regression) ---
+
+    /// REGRESSION: writing `cur_pos`/`first_pos` directly (bypassing any
+    /// setter) must be reflected on the very next `cursor_request` — there is
+    /// no cached cursor to desync, since it is derived fresh every call.
+    #[test]
+    fn cursor_request_reflects_direct_field_writes() {
+        let mut il = field(12, "hello world");
+        il.state.state.focused = true;
+        il.select_all(true, true);
+        il.cur_pos = 0;
+        il.first_pos = 0;
+        assert_eq!(il.cursor_request(), Some(Point::new(1, 0)));
+    }
+
+    #[test]
+    fn set_cursor_pos_collapses_selection() {
+        let mut il = field(12, "hello world");
+        il.state.state.focused = true;
+        il.sel_start = 2;
+        il.sel_end = 7;
+        il.first_pos = 0;
+        il.set_cursor_pos(3);
+        assert_eq!(il.cur_pos, 3);
+        assert_eq!(il.sel_start, 0);
+        assert_eq!(il.sel_end, 0);
+        assert_eq!(
+            il.cursor_request(),
+            Some(Point::new(4, 0)),
+            "col = displayedPos(3) - first_pos(0) + 1"
+        );
+    }
+
+    #[test]
+    fn set_cursor_pos_clamps_past_end() {
+        let mut il = field(12, "abc");
+        il.set_cursor_pos(100);
+        assert_eq!(il.cur_pos, 3, "clamped to data.len()");
+    }
+
+    #[test]
+    fn set_cursor_pos_scrolls_into_view_when_offscreen_right() {
+        // width 6 (text area is 5 columns).
+        let mut il = field(6, "abcdefgh");
+        il.first_pos = 0;
+        il.set_cursor_pos(8); // end of data
+        // cur_width = displayedPos(8) = 8; i = 8 - 6 + 2 = 4.
+        assert_eq!(
+            il.first_pos, 4,
+            "first_pos scrolled so the caret stays visible"
+        );
+        assert!(
+            il.displayed_pos(il.cur_pos) - il.first_pos < il.state.size.x - 1,
+            "caret column must stay within the visible window"
+        );
+    }
+
+    /// No panic when the requested offset lands mid-grapheme; it snaps down to
+    /// the previous `char` boundary.
+    #[test]
+    fn set_cursor_pos_snaps_off_boundary_to_previous_boundary() {
+        // bytes: a(1) ä(2, offsets 1..3) €(3, offsets 3..6).
+        let mut il = field(12, "aä€");
+        il.set_cursor_pos(2); // inside the 2-byte 'ä'
+        assert_eq!(il.cur_pos, 1, "snapped down to the boundary before 'ä'");
+    }
+
+    #[test]
+    fn home_end_smoke() {
+        let mut il = field(12, "hello");
+        il.cur_pos = 2;
+        il.home();
+        assert_eq!(il.cur_pos, 0);
+        il.end();
+        assert_eq!(il.cur_pos, 5);
     }
 
     // -- mouse single-shot --------------------------------------------------
