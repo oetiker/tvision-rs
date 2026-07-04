@@ -34,11 +34,21 @@ broke the write-fields-then-redraw contract.
 - Two-stage subagent review (spec-compliance, then code-quality); regression
   test = the reported scenario (direct field writes after `select_all`).
 
-Noted for follow-up, not landed: `Editor` has the mirror-image gap — its
+Also landed in the same PR: `Editor` had the mirror-image gap — its
 C++-public caret API (`setCurPtr`/`setSelect`/`scrollTo`/`trackCursor`) was
-ported faithfully but left private; exposing it needs `ctx`-taking wrappers
-ending in `flush_if_unlocked` (our `update()` can't flush eagerly like C++
-because `do_update` needs `&mut Context` for the scrollbar broker).
+ported faithfully but left private. Exposed it following the
+`insert_text_core`/`insert_text` precedent already in the file: the four
+methods renamed to `set_cur_ptr_core`/`set_select_core`/`scroll_to_core`/
+`track_cursor_core` (context-free, no flush), each with a new public wrapper
+of the C++-faithful name (`set_cur_ptr`/`set_select`/`scroll_to`/
+`track_cursor`) that is core + `flush_if_unlocked(ctx)` — the `ctx` parameter
+is needed because publishing the cursor/scroll-bar params goes through the
+pump's broker, the same reason `insert_text`/`apply_scroll_delta` already take
+one. Also published `SM_EXTEND`/`SM_DOUBLE`/`SM_TRIPLE` (the `select_mode`
+flags), kept as a plain `u8` bit word rather than converted to a
+struct-of-bools — a deliberate non-conversion, since `set_cur_ptr` combines
+them with bitwise arithmetic at every call site and C++ itself uses a `ushort`
+flag word there.
 
 ## Focus-aware content surface generalization: three-surface rule as the default (2026-07-03)
 
