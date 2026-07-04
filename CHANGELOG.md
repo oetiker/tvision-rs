@@ -12,12 +12,19 @@ moves it into a dated, versioned section when a release is cut.
 
 ### New
 
+### Changed
+
+### Fixed
+
+## 0.11.0 - 2026-07-04
+
+### New
+
 - `InputLine::set_cursor_pos`/`home`/`end` for arbitrary caret positioning with
   scroll-into-view.
 - `Editor::set_select`/`set_cur_ptr`/`scroll_to`/`track_cursor` — the C++-public
   caret/selection/scroll API is now public (`ctx`-taking, flushing), plus the
   `SM_EXTEND`/`SM_DOUBLE`/`SM_TRIPLE` select-mode constants.
-
 ### Changed
 
 - **Breaking:** `InputLine::anchor` is now private (matches C++; use `set_cursor_pos`).
