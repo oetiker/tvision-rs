@@ -73,12 +73,23 @@ const UF_LINE: u8 = 0x02;
 /// Repaint the whole view.
 const UF_VIEW: u8 = 0x04;
 
-/// Extend the current selection to the new cursor position.
-const SM_EXTEND: u8 = 0x01;
-/// Word-granular selection (double-click).
-const SM_DOUBLE: u8 = 0x02;
-/// Line-granular selection (triple-click).
-const SM_TRIPLE: u8 = 0x04;
+// ---------------------------------------------------------------------------
+// select-mode flags — the `select_mode` argument of `Editor::set_cur_ptr`
+//
+// Kept as plain `u8` bits rather than a struct-of-bools: `set_cur_ptr` combines
+// these with bitwise arithmetic (`sm | SM_EXTEND`, `select_mode & SM_DOUBLE`)
+// at every call site, mirroring C++'s `ushort` flag word — a deliberate
+// non-conversion so the signature stays call-site-compatible with that
+// arithmetic.
+// ---------------------------------------------------------------------------
+
+/// Extend the current selection to the new cursor position, instead of
+/// collapsing it to a point at `p`.
+pub const SM_EXTEND: u8 = 0x01;
+/// Word-granular selection (double-click): snap both ends to word boundaries.
+pub const SM_DOUBLE: u8 = 0x02;
+/// Line-granular selection (triple-click): snap both ends to line boundaries.
+pub const SM_TRIPLE: u8 = 0x04;
 
 // The search-option flags. `pub(crate)` (the `editor` module is private and only
 // `Editor`/`Encoding`/`LineEnding` are re-exported; `search()` takes a plain
@@ -1006,7 +1017,10 @@ impl Editor {
     /// Set the selection to `[new_start, new_end)` and place the cursor at the
     /// start endpoint when `cur_start`, else the end. Moving the gap to the chosen
     /// endpoint is the load-bearing operation.
-    fn set_select(&mut self, new_start: usize, new_end: usize, cur_start: bool) {
+    ///
+    /// Context-free (no flush); the public, flushing wrapper is
+    /// [`set_select`](Self::set_select).
+    fn set_select_core(&mut self, new_start: usize, new_end: usize, cur_start: bool) {
         let p = if cur_start { new_start } else { new_end };
 
         let mut flags = UF_UPDATE;
@@ -1049,7 +1063,10 @@ impl Editor {
 
     /// Move the cursor to `p`, optionally extending the selection (and snapping to
     /// word/line granularity per `select_mode`).
-    fn set_cur_ptr(&mut self, mut p: usize, select_mode: u8) {
+    ///
+    /// Context-free (no flush); the public, flushing wrapper is
+    /// [`set_cur_ptr`](Self::set_cur_ptr).
+    fn set_cur_ptr_core(&mut self, mut p: usize, select_mode: u8) {
         let mut anchor = if (select_mode & SM_EXTEND) == 0 {
             p
         } else if self.cur_ptr == self.sel_start {
@@ -1066,7 +1083,7 @@ impl Editor {
                 p = self.prev_line(self.next_line(p));
                 anchor = self.next_line(self.prev_line(anchor));
             }
-            self.set_select(p, anchor, true);
+            self.set_select_core(p, anchor, true);
         } else {
             if (select_mode & SM_DOUBLE) != 0 {
                 p = self.next_word(p);
@@ -1075,7 +1092,7 @@ impl Editor {
                 p = self.next_line(p);
                 anchor = self.prev_line(self.next_line(anchor));
             }
-            self.set_select(anchor, p, false);
+            self.set_select_core(anchor, p, false);
         }
     }
 
@@ -1088,7 +1105,7 @@ impl Editor {
     /// Collapse the selection to the cursor.
     fn hide_select(&mut self) {
         self.selecting = false;
-        self.set_select(self.cur_ptr, self.cur_ptr, false);
+        self.set_select_core(self.cur_ptr, self.cur_ptr, false);
     }
 
     /// Flip overwrite mode and the block-cursor flag.
@@ -1107,7 +1124,7 @@ impl Editor {
         };
         self.update_flags |= UF_VIEW;
         let cur_start = self.cur_ptr < self.sel_end;
-        self.set_select(self.sel_start, self.sel_end, cur_start);
+        self.set_select_core(self.sel_start, self.sel_end, cur_start);
     }
 
     // -- insertion / deletion -----------------------------------------------
@@ -1251,9 +1268,9 @@ impl Editor {
         if self.has_selection() && del_select {
             self.delete_select();
         } else {
-            self.set_select(self.cur_ptr, end_ptr, true);
+            self.set_select_core(self.cur_ptr, end_ptr, true);
             self.delete_select();
-            self.set_select(start_ptr, self.cur_ptr, false);
+            self.set_select_core(start_ptr, self.cur_ptr, false);
             self.delete_select();
         }
     }
@@ -1327,9 +1344,9 @@ impl Editor {
                 || !((hit != 0 && is_word_char(self.buf_char(hit - 1)))
                     || (hit + nlen != self.buf_len && is_word_char(self.buf_char(hit + nlen))));
             if whole_ok {
-                self.set_select(hit, hit + nlen, false);
+                self.set_select_core(hit, hit + nlen, false);
                 let center = !self.cursor_visible();
-                self.track_cursor(center);
+                self.track_cursor_core(center);
                 return true;
             } else {
                 pos = hit + 1;
@@ -1345,7 +1362,10 @@ impl Editor {
     }
 
     /// Set the scroll offset (clamped to the content extent) and flag a redraw.
-    fn scroll_to(&mut self, x: i32, y: i32) {
+    ///
+    /// Context-free (no flush); the public, flushing wrapper is
+    /// [`scroll_to`](Self::scroll_to).
+    fn scroll_to_core(&mut self, x: i32, y: i32) {
         let x = 0.max(x.min(self.limit.x - self.state.size.x));
         let y = 0.max(y.min(self.limit.y - self.state.size.y));
         if x != self.delta.x || y != self.delta.y {
@@ -1364,25 +1384,93 @@ impl Editor {
             self.delta.x + last.x - mouse.x,
             self.delta.y + last.y - mouse.y,
         );
-        self.scroll_to(d.x, d.y);
+        self.scroll_to_core(d.x, d.y);
         self.track = Some(EditorTrack::Pan { last: mouse });
         self.flush_if_unlocked(ctx);
     }
 
     /// Scroll so the cursor is visible (centering it when `center`).
-    fn track_cursor(&mut self, center: bool) {
+    ///
+    /// Context-free (no flush); the public, flushing wrapper is
+    /// [`track_cursor`](Self::track_cursor).
+    fn track_cursor_core(&mut self, center: bool) {
         if center {
-            self.scroll_to(
+            self.scroll_to_core(
                 self.cur_pos.x - self.state.size.x + 1,
                 self.cur_pos.y - self.state.size.y / 2,
             );
         } else {
-            self.scroll_to(
+            self.scroll_to_core(
                 (self.cur_pos.x - self.state.size.x + 1).max(self.delta.x.min(self.cur_pos.x)),
                 (self.cur_pos.y - self.state.size.y + 1).max(self.delta.y.min(self.cur_pos.y)),
             );
         }
     }
+
+    // -- public caret/selection/scroll API (C++-public) ----------------------
+
+    /// Set the selection to `[start, end)` and place the cursor at the `start`
+    /// endpoint when `cur_start`, else the `end` endpoint, then publish the
+    /// new cursor/selection state.
+    ///
+    /// # Turbo Vision heritage
+    ///
+    /// Ports `TEditor::setSelect`, which C++ exposes publicly. The `ctx`
+    /// parameter is the tvision-rs deviation already established by
+    /// [`insert_text`](Self::insert_text)/[`apply_scroll_delta`](Self::apply_scroll_delta):
+    /// publishing the cursor and scroll-bar params needs a `Context` to reach
+    /// the pump's broker. For a context-free call (no flush) use the internal
+    /// `set_select_core`.
+    pub fn set_select(&mut self, start: usize, end: usize, cur_start: bool, ctx: &mut Context) {
+        self.set_select_core(start, end, cur_start);
+        self.flush_if_unlocked(ctx);
+    }
+
+    /// Move the cursor to byte offset `p`, optionally extending the selection
+    /// (and snapping to word/line granularity per `select_mode`), then
+    /// publish.
+    ///
+    /// This does **not** scroll the cursor into view on its own — call
+    /// [`track_cursor`](Self::track_cursor) afterward if the new position
+    /// might be offscreen, exactly as the C++ call sites do.
+    ///
+    /// # Turbo Vision heritage
+    ///
+    /// Ports `TEditor::setCurPtr`, which C++ exposes publicly. See
+    /// [`set_select`](Self::set_select) for why this takes a `ctx`. For a
+    /// context-free call (no flush) use the internal `set_cur_ptr_core`.
+    pub fn set_cur_ptr(&mut self, p: usize, select_mode: u8, ctx: &mut Context) {
+        self.set_cur_ptr_core(p, select_mode);
+        self.flush_if_unlocked(ctx);
+    }
+
+    /// Set the scroll offset to `(x, y)`, clamped to the content extent, and
+    /// publish the new scroll-bar params.
+    ///
+    /// # Turbo Vision heritage
+    ///
+    /// Ports `TEditor::scrollTo`, which C++ exposes publicly. See
+    /// [`set_select`](Self::set_select) for why this takes a `ctx`. For a
+    /// context-free call (no flush) use the internal `scroll_to_core`.
+    pub fn scroll_to(&mut self, x: i32, y: i32, ctx: &mut Context) {
+        self.scroll_to_core(x, y);
+        self.flush_if_unlocked(ctx);
+    }
+
+    /// Scroll so the cursor is visible, centering it when `center`, and
+    /// publish the new scroll-bar params.
+    ///
+    /// # Turbo Vision heritage
+    ///
+    /// Ports `TEditor::trackCursor`, which C++ exposes publicly. See
+    /// [`set_select`](Self::set_select) for why this takes a `ctx`. For a
+    /// context-free call (no flush) use the internal `track_cursor_core`.
+    pub fn track_cursor(&mut self, center: bool, ctx: &mut Context) {
+        self.track_cursor_core(center);
+        self.flush_if_unlocked(ctx);
+    }
+
+    // -- scroll-bar broker apply hook (tvision-rs seam, not a C++ port) ------
 
     /// Adopt new scroll offsets read from the scroll bars (applied by the pump).
     ///
@@ -1406,6 +1494,8 @@ impl Editor {
         self.flush_if_unlocked(ctx);
     }
 
+    // -- external text insertion (C++-public: TEditor::insertText) ----------
+
     /// Insert `text` at the cursor, optionally leaving the inserted bytes selected.
     ///
     /// Use this to inject text from the outside (clipboard paste, template fill,
@@ -1417,7 +1507,7 @@ impl Editor {
         self.lock();
         self.insert_text_core(text, select_text);
         let center = !self.cursor_visible();
-        self.track_cursor(center);
+        self.track_cursor_core(center);
         self.unlock(ctx);
     }
 
@@ -1864,7 +1954,7 @@ impl View for Editor {
                         // :580-581 — setCurPtr(getMousePtr(where),
                         // selectMode); selectMode |= smExtend.
                         let ptr = self.get_mouse_ptr(m.position);
-                        self.set_cur_ptr(ptr, sm);
+                        self.set_cur_ptr_core(ptr, sm);
                         self.track = Some(EditorTrack::Select {
                             select_mode: sm | SM_EXTEND,
                         });
@@ -1980,7 +2070,7 @@ impl View for Editor {
                 // Without an id (uninserted) the press stays single-shot.
                 self.lock();
                 let ptr = self.get_mouse_ptr(m.position);
-                self.set_cur_ptr(ptr, select_mode);
+                self.set_cur_ptr_core(ptr, select_mode);
                 self.unlock(ctx);
                 if let Some(id) = self.state.id() {
                     self.track = Some(EditorTrack::Select {
@@ -2009,7 +2099,7 @@ impl View for Editor {
                     Some(EditorTrack::Select { select_mode: sm }) => {
                         self.lock();
                         let ptr = self.get_mouse_ptr(m.position);
-                        self.set_cur_ptr(ptr, sm);
+                        self.set_cur_ptr_core(ptr, sm);
                         self.track = Some(EditorTrack::Select {
                             select_mode: sm | SM_EXTEND,
                         });
@@ -2044,9 +2134,9 @@ impl View for Editor {
                         if mouse.y >= self.state.size.y {
                             d.y += 1;
                         }
-                        self.scroll_to(d.x, d.y);
+                        self.scroll_to_core(d.x, d.y);
                         let ptr = self.get_mouse_ptr(mouse);
-                        self.set_cur_ptr(ptr, sm);
+                        self.set_cur_ptr_core(ptr, sm);
                         self.track = Some(EditorTrack::Select {
                             select_mode: sm | SM_EXTEND,
                         });
@@ -2099,7 +2189,7 @@ impl View for Editor {
                         _ => unreachable!(),
                     };
                     self.insert_text_core(&bytes, false);
-                    self.track_cursor(center_cursor);
+                    self.track_cursor_core(center_cursor);
                     self.unlock(ctx);
                 } else {
                     return;
@@ -2138,7 +2228,7 @@ impl View for Editor {
                             self.unlock(ctx);
                             return;
                         }
-                        self.track_cursor(center_cursor);
+                        self.track_cursor_core(center_cursor);
                         self.unlock(ctx);
                     }
                 }
@@ -2322,31 +2412,35 @@ impl Editor {
             Command::PASTE => self.clip_paste(ctx),
             Command::UNDO => self.undo(),
             Command::CLEAR => self.delete_select(),
-            Command::CHAR_LEFT => self.set_cur_ptr(self.prev_char(self.cur_ptr), select_mode),
-            Command::CHAR_RIGHT => self.set_cur_ptr(self.next_char(self.cur_ptr), select_mode),
-            Command::WORD_LEFT => self.set_cur_ptr(self.prev_word(self.cur_ptr), select_mode),
-            Command::WORD_RIGHT => self.set_cur_ptr(self.next_word(self.cur_ptr), select_mode),
+            Command::CHAR_LEFT => self.set_cur_ptr_core(self.prev_char(self.cur_ptr), select_mode),
+            Command::CHAR_RIGHT => self.set_cur_ptr_core(self.next_char(self.cur_ptr), select_mode),
+            Command::WORD_LEFT => self.set_cur_ptr_core(self.prev_word(self.cur_ptr), select_mode),
+            Command::WORD_RIGHT => self.set_cur_ptr_core(self.next_word(self.cur_ptr), select_mode),
             Command::LINE_START => {
                 let p = if self.auto_indent {
                     self.indented_line_start(self.cur_ptr)
                 } else {
                     self.line_start(self.cur_ptr)
                 };
-                self.set_cur_ptr(p, select_mode);
+                self.set_cur_ptr_core(p, select_mode);
             }
-            Command::LINE_END => self.set_cur_ptr(self.line_end(self.cur_ptr), select_mode),
-            Command::LINE_UP => self.set_cur_ptr(self.line_move(self.cur_ptr, -1), select_mode),
-            Command::LINE_DOWN => self.set_cur_ptr(self.line_move(self.cur_ptr, 1), select_mode),
-            Command::PAGE_UP => self.set_cur_ptr(
+            Command::LINE_END => self.set_cur_ptr_core(self.line_end(self.cur_ptr), select_mode),
+            Command::LINE_UP => {
+                self.set_cur_ptr_core(self.line_move(self.cur_ptr, -1), select_mode)
+            }
+            Command::LINE_DOWN => {
+                self.set_cur_ptr_core(self.line_move(self.cur_ptr, 1), select_mode)
+            }
+            Command::PAGE_UP => self.set_cur_ptr_core(
                 self.line_move(self.cur_ptr, -(self.state.size.y - 1)),
                 select_mode,
             ),
-            Command::PAGE_DOWN => self.set_cur_ptr(
+            Command::PAGE_DOWN => self.set_cur_ptr_core(
                 self.line_move(self.cur_ptr, self.state.size.y - 1),
                 select_mode,
             ),
-            Command::TEXT_START => self.set_cur_ptr(0, select_mode),
-            Command::TEXT_END => self.set_cur_ptr(self.buf_len, select_mode),
+            Command::TEXT_START => self.set_cur_ptr_core(0, select_mode),
+            Command::TEXT_END => self.set_cur_ptr_core(self.buf_len, select_mode),
             Command::NEW_LINE => self.new_line(),
             Command::BACK_SPACE => {
                 self.delete_range(self.prev_char(self.cur_ptr), self.cur_ptr, true)
@@ -2374,8 +2468,8 @@ impl Editor {
             Command::HIDE_SELECT => self.hide_select(),
             Command::INDENT_MODE => self.auto_indent = !self.auto_indent,
             Command::SELECT_ALL => {
-                self.set_cur_ptr(0, select_mode);
-                self.set_cur_ptr(self.buf_len, select_mode | SM_EXTEND);
+                self.set_cur_ptr_core(0, select_mode);
+                self.set_cur_ptr_core(self.buf_len, select_mode | SM_EXTEND);
             }
             _ => return false,
         }
@@ -3086,7 +3180,7 @@ mod tests {
 
         // Move cursor to start, then insert — exercises the gap memmove on the
         // physical buffer (text after the gap).
-        e.set_cur_ptr(0, 0);
+        e.set_cur_ptr_core(0, 0);
         assert_eq!(e.cur_ptr, 0);
         insert(&mut e, "XY");
         assert_eq!(text(&e), "XYhello");
@@ -3100,7 +3194,7 @@ mod tests {
     fn insert_move_left_insert_again() {
         let mut e = ed();
         insert(&mut e, "abcdef");
-        e.set_cur_ptr(3, 0); // gap moves to between 'c' and 'd'
+        e.set_cur_ptr_core(3, 0); // gap moves to between 'c' and 'd'
         assert_eq!(e.cur_ptr, 3);
         check_invariant(&e);
         insert(&mut e, "--");
@@ -3116,7 +3210,7 @@ mod tests {
         let mut e = ed();
         insert(&mut e, "hello world");
         // Select "hello " (0..6): cursor at 6, anchor at 0.
-        e.set_select(0, 6, false); // cur at selEnd=6
+        e.set_select_core(0, 6, false); // cur at selEnd=6
         assert!(e.has_selection());
         e.delete_select();
         assert_eq!(text(&e), "world");
@@ -3152,7 +3246,7 @@ mod tests {
     fn search_finds_from_cursor() {
         let mut e = ed();
         insert(&mut e, "the cat sat on the mat");
-        e.set_cur_ptr(0, 0);
+        e.set_cur_ptr_core(0, 0);
         assert!(e.search("cat", 0));
         assert_eq!(e.sel_start, 4);
         assert_eq!(e.sel_end, 7);
@@ -3162,7 +3256,7 @@ mod tests {
     fn search_case_insensitive_default() {
         let mut e = ed();
         insert(&mut e, "Hello World");
-        e.set_cur_ptr(0, 0);
+        e.set_cur_ptr_core(0, 0);
         assert!(e.search("world", 0), "default search is case-insensitive");
         assert_eq!(e.sel_start, 6);
     }
@@ -3171,7 +3265,7 @@ mod tests {
     fn search_case_sensitive_rejects_wrong_case() {
         let mut e = ed();
         insert(&mut e, "Hello World");
-        e.set_cur_ptr(0, 0);
+        e.set_cur_ptr_core(0, 0);
         assert!(!e.search("world", EF_CASE_SENSITIVE));
     }
 
@@ -3179,7 +3273,7 @@ mod tests {
     fn search_whole_word_rejects_substring() {
         let mut e = ed();
         insert(&mut e, "category cat");
-        e.set_cur_ptr(0, 0);
+        e.set_cur_ptr_core(0, 0);
         // Whole-word "cat" must skip "category" and match the standalone "cat".
         assert!(e.search("cat", EF_WHOLE_WORDS_ONLY));
         assert_eq!(e.sel_start, 9, "matched the standalone 'cat' at 9");
@@ -3189,7 +3283,7 @@ mod tests {
     fn search_whole_word_no_match() {
         let mut e = ed();
         insert(&mut e, "category");
-        e.set_cur_ptr(0, 0);
+        e.set_cur_ptr_core(0, 0);
         assert!(!e.search("cat", EF_WHOLE_WORDS_ONLY));
     }
 
@@ -3202,7 +3296,7 @@ mod tests {
         // A real cursor move establishes an undo checkpoint (setSelect's gap move
         // zeroes the ins/del counts), so the next insert is the only thing undo
         // reverts. (A no-op move does NOT checkpoint — faithful to C++.)
-        e.set_cur_ptr(0, 0);
+        e.set_cur_ptr_core(0, 0);
         let before_cur = e.cur_ptr;
         e.insert_text_core(b"XYZ", false);
         assert_eq!(text(&e), "XYZabc");
@@ -3219,8 +3313,8 @@ mod tests {
     fn undo_after_forward_delete_of_existing_text() {
         let mut e = ed();
         insert(&mut e, "hello world");
-        e.set_cur_ptr(0, 0); // checkpoint: ins_count → 0
-        e.set_select(0, 6, false); // cursor at sel_end=6, selects "hello "
+        e.set_cur_ptr_core(0, 0); // checkpoint: ins_count → 0
+        e.set_select_core(0, 6, false); // cursor at sel_end=6, selects "hello "
         e.delete_select(); // del_len = 6 - 0 = 6 → hits the memmove
         assert_eq!(text(&e), "world");
         check_invariant(&e);
@@ -3238,7 +3332,7 @@ mod tests {
         let mut e = ed();
         insert(&mut e, "hello");
         // Delete "ello" via backspace-like range delete with undo.
-        e.set_select(1, 5, true); // cur at selStart=1
+        e.set_select_core(1, 5, true); // cur at selStart=1
         e.delete_select();
         assert_eq!(text(&e), "h");
         e.undo();
@@ -3261,7 +3355,7 @@ mod tests {
     fn del_char_deletes_next() {
         let mut e = ed();
         insert(&mut e, "abc");
-        e.set_cur_ptr(0, 0);
+        e.set_cur_ptr_core(0, 0);
         e.delete_range(e.cur_ptr, e.next_char(e.cur_ptr), true);
         assert_eq!(text(&e), "bc");
         check_invariant(&e);
@@ -3271,7 +3365,7 @@ mod tests {
     fn del_word_deletes_to_next_word() {
         let mut e = ed();
         insert(&mut e, "foo bar baz");
-        e.set_cur_ptr(0, 0);
+        e.set_cur_ptr_core(0, 0);
         // delWord deletes up to the next word boundary (the space after "foo").
         e.delete_range(e.cur_ptr, e.next_word(e.cur_ptr), false);
         assert_eq!(text(&e), " bar baz");
@@ -3283,7 +3377,7 @@ mod tests {
         let mut e = ed();
         insert(&mut e, "line1\nline2\nline3");
         // Put the cursor on line2.
-        e.set_cur_ptr(8, 0);
+        e.set_cur_ptr_core(8, 0);
         e.delete_range(e.line_start(e.cur_ptr), e.next_line(e.cur_ptr), false);
         assert_eq!(text(&e), "line1\nline3");
         check_invariant(&e);
@@ -3293,7 +3387,7 @@ mod tests {
     fn del_start_deletes_to_line_start() {
         let mut e = ed();
         insert(&mut e, "abcdef");
-        e.set_cur_ptr(3, 0);
+        e.set_cur_ptr_core(3, 0);
         // cmDelStart: deleteRange(lineStart, curPtr, False).
         e.delete_range(e.line_start(e.cur_ptr), e.cur_ptr, false);
         assert_eq!(text(&e), "def");
@@ -3304,7 +3398,7 @@ mod tests {
     fn del_end_deletes_to_line_end() {
         let mut e = ed();
         insert(&mut e, "abcdef");
-        e.set_cur_ptr(3, 0);
+        e.set_cur_ptr_core(3, 0);
         // cmDelEnd: deleteRange(curPtr, lineEnd, False).
         e.delete_range(e.cur_ptr, e.line_end(e.cur_ptr), false);
         assert_eq!(text(&e), "abc");
@@ -3345,11 +3439,11 @@ mod tests {
         let mut e = ed();
         insert(&mut e, "abcdef\nghijkl\nmnopqr");
         // Cursor at column 3 of last line.
-        e.set_cur_ptr(0, 0);
-        e.set_cur_ptr(3, 0); // col 3 line 0
+        e.set_cur_ptr_core(0, 0);
+        e.set_cur_ptr_core(3, 0); // col 3 line 0
         assert_eq!(e.cur_pos, Point::new(3, 0));
         let p = e.line_move(e.cur_ptr, 1);
-        e.set_cur_ptr(p, 0);
+        e.set_cur_ptr_core(p, 0);
         assert_eq!(e.cur_pos.y, 1);
         assert_eq!(e.cur_pos.x, 3, "column preserved across line move");
     }
@@ -3358,7 +3452,7 @@ mod tests {
     fn word_navigation() {
         let mut e = ed();
         insert(&mut e, "foo bar");
-        e.set_cur_ptr(0, 0);
+        e.set_cur_ptr_core(0, 0);
         // nextWord stops at the first word boundary — the space after "foo" (3).
         assert_eq!(e.next_word(0), 3, "next word boundary is the space at 3");
         // prevWord from end → start of "bar" (4).
@@ -3543,7 +3637,7 @@ mod tests {
         let _g = crate::keymap::GlobalKeymapGuard::new(crate::keymap::Keymap::word_star());
         let mut e = ed();
         insert(&mut e, "foo bar");
-        e.set_cur_ptr(0, 0);
+        e.set_cur_ptr_core(0, 0);
         let mut cx = Cx::new();
         let ctrl_del = crate::event::KeyEvent::new(
             crate::event::Key::Delete,
@@ -3585,7 +3679,7 @@ mod tests {
     fn overwrite_mode_replaces_char() {
         let mut e = ed();
         insert(&mut e, "abc");
-        e.set_cur_ptr(1, 0); // between 'a' and 'b'
+        e.set_cur_ptr_core(1, 0); // between 'a' and 'b'
         e.toggle_ins_mode(); // overwrite on
         assert!(e.overwrite);
         let len_before = e.buf_len;
@@ -3626,13 +3720,89 @@ mod tests {
         check_invariant(&e);
     }
 
+    // -- public caret/selection/scroll API (core + flush) --------------------
+
+    /// The whole point of the ctx+flush shape: after the public `set_cur_ptr`,
+    /// `state().cursor` already reflects the new position — `do_update` ran as
+    /// part of the call, so there is no desync window to fall into.
+    #[test]
+    fn public_set_cur_ptr_moves_and_publishes_cursor() {
+        let mut e = ed();
+        insert(&mut e, "hello world");
+        let mut cx = Cx::new();
+        {
+            let mut ctx = cx.ctx();
+            e.set_cur_ptr(3, 0, &mut ctx);
+        }
+        assert_eq!(e.cur_ptr, 3);
+        assert_eq!(e.state.cursor, Point::new(3, 0), "do_update ran via flush");
+    }
+
+    /// `cur_start` picks which end of the new selection the cursor lands on.
+    #[test]
+    fn public_set_select_places_cursor_at_chosen_end() {
+        let mut e = ed();
+        insert(&mut e, "hello world");
+
+        let mut cx = Cx::new();
+        {
+            let mut ctx = cx.ctx();
+            e.set_select(0, 6, true, &mut ctx); // cur_start: cursor at the START
+        }
+        assert_eq!((e.sel_start, e.sel_end), (0, 6));
+        assert_eq!(e.cur_ptr, 0);
+
+        let mut cx = Cx::new();
+        {
+            let mut ctx = cx.ctx();
+            e.set_select(0, 6, false, &mut ctx); // cursor at the END
+        }
+        assert_eq!(e.cur_ptr, 6);
+    }
+
+    /// `scroll_to` adopts the new offset and publishes the cursor relative to it.
+    #[test]
+    fn public_scroll_to_updates_delta_and_publishes() {
+        let mut e = tall_ed();
+        give_id(&mut e);
+        e.set_cur_ptr_core(21, 0); // start of "line03" (7 bytes/line × 3)
+        assert_eq!(e.cur_pos.y, 3);
+
+        let mut cx = Cx::new();
+        {
+            let mut ctx = cx.ctx();
+            e.scroll_to(0, 3, &mut ctx);
+        }
+        assert_eq!(e.delta.y, 3);
+        assert_eq!(
+            e.state.cursor.y, 0,
+            "cursor republished relative to the new scroll offset (line 3 - delta 3)"
+        );
+    }
+
+    /// `track_cursor` scrolls an offscreen cursor back into view.
+    #[test]
+    fn public_track_cursor_scrolls_offscreen_cursor_into_view() {
+        let mut e = tall_ed();
+        give_id(&mut e);
+        e.set_cur_ptr_core(e.buf_len, 0); // last line, offscreen in a 10-row view
+        assert!(!e.cursor_visible(), "cursor starts offscreen");
+
+        let mut cx = Cx::new();
+        {
+            let mut ctx = cx.ctx();
+            e.track_cursor(false, &mut ctx);
+        }
+        assert!(e.cursor_visible(), "track_cursor scrolled it into view");
+    }
+
     // -- clipboard broker (deferred ops) -------------------------------------
 
     #[test]
     fn clip_copy_queues_set_clipboard() {
         let mut e = ed();
         insert(&mut e, "hello");
-        e.set_select(0, 5, false);
+        e.set_select_core(0, 5, false);
         let mut cx = Cx::new();
         {
             let mut ctx = cx.ctx();
@@ -3710,7 +3880,7 @@ mod tests {
         let mut e = Editor::new(Rect::new(0, 0, 12, 4), None, None, None, 1024);
         insert(&mut e, "hello\nworld");
         // Select "ello" on line 0.
-        e.set_select(1, 5, false);
+        e.set_select_core(1, 5, false);
 
         let (backend, screen) = HeadlessBackend::new(12, 4);
         let mut r = Renderer::new(Box::new(backend));
@@ -3914,7 +4084,7 @@ mod tests {
         let mut fe = untitled_fe();
         fe.editor.set_text(&vec![b'a'; 0x1000]); // one full page; gap_len == 0
         assert_eq!(fe.editor.buf_size, 0x1000);
-        fe.editor.set_cur_ptr(0x800, 0); // cursor in the middle (n becomes 0x800)
+        fe.editor.set_cur_ptr_core(0x800, 0); // cursor in the middle (n becomes 0x800)
         insert(&mut fe.editor, "Z"); // forces set_buf_size(0x1001) -> grow
 
         let mut expected = vec![b'a'; 0x800];
@@ -4497,7 +4667,7 @@ mod tests {
         let mut e = ed();
         let text: String = (0..15).map(|i| format!("line{i:02}\n")).collect();
         insert(&mut e, &text);
-        e.set_cur_ptr(0, 0);
+        e.set_cur_ptr_core(0, 0);
         e
     }
 
@@ -4637,7 +4807,7 @@ mod tests {
     fn track_auto_above_edge_scrolls_then_extends() {
         let mut e = tall_ed();
         give_id(&mut e);
-        e.scroll_to(0, 3); // viewport starts at line 3
+        e.scroll_to_core(0, 3); // viewport starts at line 3
 
         // Down on view row 2 = buffer line 5 (offset 35).
         let mut cx = Cx::new();
@@ -4915,7 +5085,7 @@ mod tests {
     fn track_through_file_editor_delegation() {
         let mut fe = FileEditor::new(Rect::new(0, 0, 40, 10), None, None, None, None);
         fe.editor.insert_text_core(b"hello world", false);
-        fe.editor.set_cur_ptr(0, 0);
+        fe.editor.set_cur_ptr_core(0, 0);
         let id = ViewId::next();
         fe.editor.state.id = Some(id);
 
@@ -5114,7 +5284,7 @@ mod tests {
         let mut a = ed();
         insert(&mut a, "hello");
         // Select the "hello" content.
-        a.set_select(0, 5, false);
+        a.set_select_core(0, 5, false);
         let data = a.selection_bytes();
         assert_eq!(data, b"hello");
 
@@ -5153,7 +5323,7 @@ mod tests {
         let fake_clipboard_id = ViewId::next();
         let mut e = ed();
         insert(&mut e, "hello");
-        e.set_select(0, 5, false);
+        e.set_select_core(0, 5, false);
         let mut cx = Cx::new();
         {
             let mut ctx = cx.ctx();
@@ -5216,7 +5386,7 @@ mod tests {
         // Give it a selection (so it WOULD enable CUT/COPY/CLEAR if it weren't a clipboard).
         e.state.state.active = true;
         insert(&mut e, "abc");
-        e.set_select(0, 3, false);
+        e.set_select_core(0, 3, false);
         let mut cx = Cx::new();
         {
             let mut ctx = cx.ctx();

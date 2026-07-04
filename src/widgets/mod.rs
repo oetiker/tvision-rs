@@ -39,7 +39,9 @@ pub use button::{Button, ButtonFlags};
 pub use cluster::{CheckBoxes, Cluster, ClusterKind, MultiCheckBoxes, RadioButtons};
 pub(crate) use editor::EF_DO_REPLACE;
 pub(crate) use editor::editor_mut;
-pub use editor::{EditWindow, Editor, Encoding, FileEditor, LineEnding, Memo};
+pub use editor::{
+    EditWindow, Editor, Encoding, FileEditor, LineEnding, Memo, SM_DOUBLE, SM_EXTEND, SM_TRIPLE,
+};
 pub use history::{
     HistoryViewer, HistoryWindow, THistory, clear_history, history_add, history_count, history_str,
 };

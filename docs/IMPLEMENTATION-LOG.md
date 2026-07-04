@@ -5,6 +5,51 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## InputLine cursor desync: derive in cursor_request, not a mutation-time cache (2026-07-04)
+
+The edaptor consumer reported that writing `InputLine`'s public caret fields
+directly (`cur_pos`, `first_pos`, …) left the hardware cursor stranded — spec in
+`docs/superpowers/specs/2026-07-04-inputline-caret-cursor-desync-design.md`.
+Investigated against the C++ and confirmed a **porting deviation, not a TV
+design issue**: `TInputLine::draw()` ends with
+`setCursor(displayedPos(curPos)-firstPos+1, 0)`, re-deriving the cursor every
+paint — that draw-time resync is precisely what makes the C++ public
+`curPos`/`firstPos` fields safe to write. Our port had swapped it for a
+mutation-time `sync_cursor()` cache (motivated by the pump reading the cursor
+*before* render, so a draw-time write would land a frame late), which silently
+broke the write-fields-then-redraw contract.
+
+**What landed** (`6aa3264`, PR #16):
+- `View::cursor_request` override on `InputLine` deriving the cursor fresh from
+  `cur_pos`/`first_pos` — the pump calls it right before every render, so this
+  is the faithful home for the C++ draw tail; `sync_cursor()` and all eight
+  call sites deleted.
+- Shared C++ `firstPos` scroll-follow tail factored into
+  `scroll_cursor_into_view()` (keyboard path, `paste_text`, new setter).
+- Extensions: `set_cursor_pos(pos)` (clamp, char-boundary snap, selection
+  collapse per the C++ non-shift tail, scroll-into-view) + `home()`/`end()` —
+  C++ has no arbitrary-caret setter; edaptor's homing workaround becomes
+  `home()`.
+- **Breaking:** `anchor` privatized (private in C++ too).
+- Two-stage subagent review (spec-compliance, then code-quality); regression
+  test = the reported scenario (direct field writes after `select_all`).
+
+Also landed in the same PR: `Editor` had the mirror-image gap — its
+C++-public caret API (`setCurPtr`/`setSelect`/`scrollTo`/`trackCursor`) was
+ported faithfully but left private. Exposed it following the
+`insert_text_core`/`insert_text` precedent already in the file: the four
+methods renamed to `set_cur_ptr_core`/`set_select_core`/`scroll_to_core`/
+`track_cursor_core` (context-free, no flush), each with a new public wrapper
+of the C++-faithful name (`set_cur_ptr`/`set_select`/`scroll_to`/
+`track_cursor`) that is core + `flush_if_unlocked(ctx)` — the `ctx` parameter
+is needed because publishing the cursor/scroll-bar params goes through the
+pump's broker, the same reason `insert_text`/`apply_scroll_delta` already take
+one. Also published `SM_EXTEND`/`SM_DOUBLE`/`SM_TRIPLE` (the `select_mode`
+flags), kept as a plain `u8` bit word rather than converted to a
+struct-of-bools — a deliberate non-conversion, since `set_cur_ptr` combines
+them with bitwise arithmetic at every call site and C++ itself uses a `ushort`
+flag word there.
+
 ## Focus-aware content surface generalization: three-surface rule as the default (2026-07-03)
 
 The v0.8.0 `InputLine::with_self_focus_surface` opt-in (previous entry below)

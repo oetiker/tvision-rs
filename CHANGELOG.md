@@ -12,9 +12,22 @@ moves it into a dated, versioned section when a release is cut.
 
 ### New
 
+- `InputLine::set_cursor_pos`/`home`/`end` for arbitrary caret positioning with
+  scroll-into-view.
+- `Editor::set_select`/`set_cur_ptr`/`scroll_to`/`track_cursor` — the C++-public
+  caret/selection/scroll API is now public (`ctx`-taking, flushing), plus the
+  `SM_EXTEND`/`SM_DOUBLE`/`SM_TRIPLE` select-mode constants.
+
 ### Changed
 
+- **Breaking:** `InputLine::anchor` is now private (matches C++; use `set_cursor_pos`).
+
 ### Fixed
+
+- The screen cursor no longer desyncs when `InputLine` caret fields
+  (`cur_pos`, `first_pos`, `sel_start`, `sel_end`) are written directly — the
+  cursor is now derived fresh via `cursor_request` on every pump, matching
+  C++ `TInputLine::draw` behavior.
 
 ## 0.10.0 - 2026-07-03
 
