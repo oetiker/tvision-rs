@@ -5,6 +5,41 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## InputLine cursor desync: derive in cursor_request, not a mutation-time cache (2026-07-04)
+
+The edaptor consumer reported that writing `InputLine`'s public caret fields
+directly (`cur_pos`, `first_pos`, …) left the hardware cursor stranded — spec in
+`docs/superpowers/specs/2026-07-04-inputline-caret-cursor-desync-design.md`.
+Investigated against the C++ and confirmed a **porting deviation, not a TV
+design issue**: `TInputLine::draw()` ends with
+`setCursor(displayedPos(curPos)-firstPos+1, 0)`, re-deriving the cursor every
+paint — that draw-time resync is precisely what makes the C++ public
+`curPos`/`firstPos` fields safe to write. Our port had swapped it for a
+mutation-time `sync_cursor()` cache (motivated by the pump reading the cursor
+*before* render, so a draw-time write would land a frame late), which silently
+broke the write-fields-then-redraw contract.
+
+**What landed** (`6aa3264`, PR #16):
+- `View::cursor_request` override on `InputLine` deriving the cursor fresh from
+  `cur_pos`/`first_pos` — the pump calls it right before every render, so this
+  is the faithful home for the C++ draw tail; `sync_cursor()` and all eight
+  call sites deleted.
+- Shared C++ `firstPos` scroll-follow tail factored into
+  `scroll_cursor_into_view()` (keyboard path, `paste_text`, new setter).
+- Extensions: `set_cursor_pos(pos)` (clamp, char-boundary snap, selection
+  collapse per the C++ non-shift tail, scroll-into-view) + `home()`/`end()` —
+  C++ has no arbitrary-caret setter; edaptor's homing workaround becomes
+  `home()`.
+- **Breaking:** `anchor` privatized (private in C++ too).
+- Two-stage subagent review (spec-compliance, then code-quality); regression
+  test = the reported scenario (direct field writes after `select_all`).
+
+Noted for follow-up, not landed: `Editor` has the mirror-image gap — its
+C++-public caret API (`setCurPtr`/`setSelect`/`scrollTo`/`trackCursor`) was
+ported faithfully but left private; exposing it needs `ctx`-taking wrappers
+ending in `flush_if_unlocked` (our `update()` can't flush eagerly like C++
+because `do_update` needs `&mut Context` for the scrollbar broker).
+
 ## Focus-aware content surface generalization: three-surface rule as the default (2026-07-03)
 
 The v0.8.0 `InputLine::with_self_focus_surface` opt-in (previous entry below)
