@@ -12,11 +12,18 @@ moves it into a dated, versioned section when a release is cut.
 
 ### New
 
+### Changed
+
+### Fixed
+
+## 0.12.0 - 2026-07-06
+
+### New
+
 - `ListViewer::set_find_query` — host-callable find-query setter so an external
   text source (e.g. an `InputLine` above the list) can drive the list's
   incremental find without the list being focused. `clear_find` is now
   `set_find_query("")`.
-
 ### Changed
 
 ### Fixed
