@@ -658,12 +658,20 @@ fn find_route_key<L: ListViewer + ?Sized>(
     }
 }
 
-/// Common tail after the query changes: broadcast the change (self as `source`,
-/// mirroring `select_item` / `ScrollBar`), run the self-filter hook, consume.
-fn find_after_change<L: ListViewer + ?Sized>(this: &mut L, ev: &mut Event, ctx: &mut Context) {
+/// The shared find-query change tail: broadcast the change (this list as
+/// `source`, mirroring `select_item` / `ScrollBar`) and run the self-filter hook.
+/// Reused by the keystroke path (`find_after_change`, which also consumes the
+/// event) and the host-callable path (`set_find_query` / `clear_find`, which have
+/// no event to consume).
+fn find_notify<L: ListViewer + ?Sized>(this: &mut L, ctx: &mut Context) {
     let source = this.lv().state.id();
     ctx.broadcast(Command::LIST_FIND_CHANGED, source);
     this.on_query_changed(ctx);
+}
+
+/// Keystroke-path tail: the shared `find_notify` plus consuming the key event.
+fn find_after_change<L: ListViewer + ?Sized>(this: &mut L, ev: &mut Event, ctx: &mut Context) {
+    find_notify(this, ctx);
     ev.clear();
 }
 
