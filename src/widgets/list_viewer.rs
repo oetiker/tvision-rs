@@ -393,7 +393,8 @@ pub trait ListViewer: View {
 
     /// Hook fired after the find query changes (default: no-op). A self-filtering
     /// concrete widget overrides it to re-derive its visible rows from its
-    /// source. Called by the shared `handle_event` and by [`Self::clear_find`].
+    /// source. Called by the shared `handle_event` and by [`Self::set_find_query`]
+    /// (including [`Self::clear_find`]).
     fn on_query_changed(&mut self, _ctx: &mut Context) {}
 }
 
