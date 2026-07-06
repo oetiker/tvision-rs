@@ -1271,4 +1271,94 @@ mod tests {
         }
         assert!(lb.lv.focused <= 1, "focus clamped into the narrowed range");
     }
+
+    #[test]
+    fn set_find_query_narrows_like_typed_query() {
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred = vec![];
+        let mut lb =
+            ListBox::new(Rect::new(0, 0, 14, 5), 1, None, None).with_find(FindMode::Filter);
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            lb.new_list(
+                vec![
+                    "apple".into(),
+                    "banana".into(),
+                    "grape".into(),
+                    "orange".into(),
+                ],
+                &mut ctx,
+            );
+        }
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            lb.set_find_query("an", &mut ctx);
+        }
+        assert_eq!(
+            lb.lv.range, 2,
+            "set_find_query narrows via on_query_changed"
+        );
+        assert_eq!(lb.get_text(0), "banana");
+        assert_eq!(lb.get_text(1), "orange", "insertion order preserved");
+
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            lb.set_find_query("", &mut ctx);
+        }
+        assert_eq!(
+            lb.lv.range, 4,
+            "empty set_find_query restores the full source"
+        );
+        assert_eq!(lb.get_text(0), "apple");
+    }
+
+    #[test]
+    fn typed_and_set_find_query_reach_identical_state() {
+        let src: Vec<String> = vec![
+            "apple".into(),
+            "banana".into(),
+            "grape".into(),
+            "orange".into(),
+        ];
+
+        // Path A: reach "an" by keystrokes.
+        let mut out_a = VecDeque::new();
+        let mut timers_a = crate::timer::TimerQueue::new();
+        let mut deferred_a = vec![];
+        let mut lb_a =
+            ListBox::new(Rect::new(0, 0, 14, 5), 1, None, None).with_find(FindMode::Filter);
+        {
+            let mut ctx = make_ctx(&mut out_a, &mut timers_a, &mut deferred_a);
+            lb_a.new_list(src.clone(), &mut ctx);
+        }
+        for c in ['a', 'n'] {
+            let mut ev = key_ev(Key::Char(c));
+            let mut ctx = make_ctx(&mut out_a, &mut timers_a, &mut deferred_a);
+            lb_a.handle_event(&mut ev, &mut ctx);
+        }
+
+        // Path B: reach "an" by set_find_query.
+        let mut out_b = VecDeque::new();
+        let mut timers_b = crate::timer::TimerQueue::new();
+        let mut deferred_b = vec![];
+        let mut lb_b =
+            ListBox::new(Rect::new(0, 0, 14, 5), 1, None, None).with_find(FindMode::Filter);
+        {
+            let mut ctx = make_ctx(&mut out_b, &mut timers_b, &mut deferred_b);
+            lb_b.new_list(src.clone(), &mut ctx);
+        }
+        {
+            let mut ctx = make_ctx(&mut out_b, &mut timers_b, &mut deferred_b);
+            lb_b.set_find_query("an", &mut ctx);
+        }
+
+        // Identical query, find_query(), and narrowed view.
+        assert_eq!(lb_a.find_query(), lb_b.find_query(), "same find_query()");
+        assert_eq!(lb_a.lv.query, lb_b.lv.query, "same raw query");
+        assert_eq!(lb_a.lv.range, lb_b.lv.range, "same narrowed range");
+        let rows_a: Vec<String> = (0..lb_a.lv.range).map(|i| lb_a.get_text(i)).collect();
+        let rows_b: Vec<String> = (0..lb_b.lv.range).map(|i| lb_b.get_text(i)).collect();
+        assert_eq!(rows_a, rows_b, "same visible rows");
+    }
 }

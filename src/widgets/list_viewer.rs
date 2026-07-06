@@ -366,22 +366,35 @@ pub trait ListViewer: View {
         }
     }
 
-    /// Clear the find query — the host-callable Esc equivalent. No-op when find
-    /// is `Off` or the query is already empty; otherwise fires
-    /// [`Command::LIST_FIND_CHANGED`] and runs [`Self::on_query_changed`].
-    fn clear_find(&mut self, ctx: &mut Context) {
-        if self.lv().find_mode == FindMode::Off || self.lv().query.is_empty() {
+    /// Set the find query from an external source — e.g. a host `InputLine` that
+    /// owns the text and drives an unfocused list's incremental find (a combobox).
+    /// The mirror image of typed find, minus the keystrokes: a whole-string setter
+    /// because a text source always holds the complete string.
+    ///
+    /// No-op when find mode is [`FindMode::Off`] or the query is unchanged;
+    /// otherwise replaces the query, fires [`Command::LIST_FIND_CHANGED`] (source =
+    /// this list) and runs [`Self::on_query_changed`] — the same change tail
+    /// keystroke find runs. Passing `""` is exactly [`Self::clear_find`] reached
+    /// through the same door, so a host need not special-case the empty field.
+    fn set_find_query(&mut self, query: &str, ctx: &mut Context) {
+        if self.lv().find_mode == FindMode::Off || self.lv().query == query {
             return;
         }
-        self.lv_mut().query.clear();
-        let source = self.lv().state.id();
-        ctx.broadcast(Command::LIST_FIND_CHANGED, source);
-        self.on_query_changed(ctx);
+        self.lv_mut().query = query.to_string();
+        find_notify(self, ctx);
+    }
+
+    /// Clear the find query — the host-callable Esc equivalent. Equivalent to
+    /// `set_find_query("", ctx)`: no-op when find is `Off` or already empty,
+    /// else fires [`Command::LIST_FIND_CHANGED`] and runs [`Self::on_query_changed`].
+    fn clear_find(&mut self, ctx: &mut Context) {
+        self.set_find_query("", ctx);
     }
 
     /// Hook fired after the find query changes (default: no-op). A self-filtering
     /// concrete widget overrides it to re-derive its visible rows from its
-    /// source. Called by the shared `handle_event` and by [`Self::clear_find`].
+    /// source. Called by the shared `handle_event` and by [`Self::set_find_query`]
+    /// (including [`Self::clear_find`]).
     fn on_query_changed(&mut self, _ctx: &mut Context) {}
 }
 
@@ -658,12 +671,20 @@ fn find_route_key<L: ListViewer + ?Sized>(
     }
 }
 
-/// Common tail after the query changes: broadcast the change (self as `source`,
-/// mirroring `select_item` / `ScrollBar`), run the self-filter hook, consume.
-fn find_after_change<L: ListViewer + ?Sized>(this: &mut L, ev: &mut Event, ctx: &mut Context) {
+/// The shared find-query change tail: broadcast the change (this list as
+/// `source`, mirroring `select_item` / `ScrollBar`) and run the self-filter hook.
+/// Reused by the keystroke path (`find_after_change`, which also consumes the
+/// event) and the host-callable path (`set_find_query` / `clear_find`, which have
+/// no event to consume).
+fn find_notify<L: ListViewer + ?Sized>(this: &mut L, ctx: &mut Context) {
     let source = this.lv().state.id();
     ctx.broadcast(Command::LIST_FIND_CHANGED, source);
     this.on_query_changed(ctx);
+}
+
+/// Keystroke-path tail: the shared `find_notify` plus consuming the key event.
+fn find_after_change<L: ListViewer + ?Sized>(this: &mut L, ev: &mut Event, ctx: &mut Context) {
+    find_notify(this, ctx);
     ev.clear();
 }
 
@@ -2732,6 +2753,121 @@ mod tests {
         assert_eq!(fake.find_query(), Some("ab"));
         fake.lv.find_mode = FindMode::Off;
         assert_eq!(fake.find_query(), None, "Off overrides a non-empty query");
+    }
+
+    // -- set_find_query (external find input) ---------------------------------
+
+    /// Count LIST_FIND_CHANGED broadcasts in an out-queue, and return the last
+    /// broadcast's `source` if any.
+    fn find_broadcasts(out: &VecDeque<Event>) -> (usize, Option<ViewId>) {
+        let mut count = 0;
+        let mut last_source = None;
+        for e in out.iter() {
+            if let Event::Broadcast { command, source } = e
+                && *command == Command::LIST_FIND_CHANGED
+            {
+                count += 1;
+                last_source = *source;
+            }
+        }
+        (count, last_source)
+    }
+
+    #[test]
+    fn set_find_query_sets_query_and_broadcasts_once() {
+        let mut fake = FakeList::new(Rect::new(0, 0, 10, 5), 1, items(3), None, None);
+        fake.lv.find_mode = FindMode::Highlight;
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred = vec![];
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            fake.set_find_query("ab", &mut ctx);
+        }
+        assert_eq!(fake.find_query(), Some("ab"), "query is set");
+        let (count, source) = find_broadcasts(&out);
+        assert_eq!(count, 1, "exactly one LIST_FIND_CHANGED");
+        assert_eq!(source, fake.state().id(), "source = this list's id");
+    }
+
+    #[test]
+    fn set_find_query_same_text_is_a_noop() {
+        let mut fake = FakeList::new(Rect::new(0, 0, 10, 5), 1, items(3), None, None);
+        fake.lv.find_mode = FindMode::Highlight;
+        fake.lv.query = "ab".into();
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred = vec![];
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            fake.set_find_query("ab", &mut ctx);
+        }
+        assert_eq!(fake.lv.query, "ab", "unchanged");
+        assert_eq!(
+            find_broadcasts(&out).0,
+            0,
+            "no broadcast on the change guard"
+        );
+    }
+
+    #[test]
+    fn set_find_query_empty_clears_like_clear_find() {
+        let mut fake = FakeList::new(Rect::new(0, 0, 10, 5), 1, items(3), None, None);
+        fake.lv.find_mode = FindMode::Highlight;
+        fake.lv.query = "ab".into();
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred = vec![];
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            fake.set_find_query("", &mut ctx);
+        }
+        assert_eq!(fake.find_query(), None, "empty query reads as None");
+        assert_eq!(fake.lv.query, "", "query emptied");
+        assert_eq!(find_broadcasts(&out).0, 1, "empties and notifies once");
+    }
+
+    #[test]
+    fn set_find_query_off_mode_is_total_noop() {
+        let mut fake = FakeList::new(Rect::new(0, 0, 10, 5), 1, items(3), None, None);
+        // find_mode defaults to Off.
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred = vec![];
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            fake.set_find_query("x", &mut ctx);
+        }
+        assert_eq!(fake.lv.query, "", "Off: query untouched");
+        assert_eq!(find_broadcasts(&out).0, 0, "Off: no broadcast");
+    }
+
+    #[test]
+    fn clear_find_delegates_to_set_find_query() {
+        let mut fake = FakeList::new(Rect::new(0, 0, 10, 5), 1, items(3), None, None);
+        fake.lv.find_mode = FindMode::Highlight;
+        fake.lv.query = "ab".into();
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred = vec![];
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            fake.clear_find(&mut ctx);
+        }
+        assert_eq!(fake.find_query(), None, "clear_find still empties");
+        assert_eq!(find_broadcasts(&out).0, 1, "clear_find still notifies once");
+
+        // Already-empty clear_find is a no-op (the folded guard still holds).
+        out.clear();
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            fake.clear_find(&mut ctx);
+        }
+        assert_eq!(
+            find_broadcasts(&out).0,
+            0,
+            "already-empty clear_find is a no-op"
+        );
     }
 
     #[test]
