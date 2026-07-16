@@ -180,6 +180,16 @@ pub struct InputLine {
     /// edge-auto-scroll branch (mask: auto only). Distinguishes which loop
     /// body to execute in the `MouseAuto` arm.
     tracking_drag: bool,
+    /// Whether the field selects its whole content when it gains focus.
+    ///
+    /// `true` (the default) matches Turbo Vision's `TInputLine`, where becoming
+    /// selected selects all so the first keystroke replaces the value. Set it
+    /// `false` (via [`set_select_all_on_focus`](InputLine::set_select_all_on_focus))
+    /// to suppress that select-all on focus **gain** — the caret and any existing
+    /// selection are left untouched and typing inserts rather than replacing.
+    /// Focus **loss** still clears the selection either way. Useful for
+    /// pre-filled or derived fields where select-all-then-type is surprising.
+    pub select_all_on_focus: bool,
 }
 
 impl InputLine {
@@ -269,6 +279,7 @@ impl InputLine {
             abs_origin: Point::new(0, 0),
             tracking: false,
             tracking_drag: false,
+            select_all_on_focus: true,
         }
     }
 
@@ -293,6 +304,17 @@ impl InputLine {
     /// assigned the new one.
     pub fn set_validator(&mut self, validator: Option<Box<dyn crate::validate::Validator>>) {
         self.validator = validator;
+    }
+
+    /// Enable or disable select-all on focus gain (default enabled).
+    ///
+    /// With `true` (the Turbo Vision default) the field selects its whole content
+    /// when it becomes focused, so the first keystroke replaces it. With `false`
+    /// the field keeps its caret and any existing selection on focus gain and
+    /// typing inserts at the caret — the field still clears its selection on focus
+    /// loss. See [`select_all_on_focus`](InputLine::select_all_on_focus).
+    pub fn set_select_all_on_focus(&mut self, enable: bool) {
+        self.select_all_on_focus = enable;
     }
 
     // -- geometry helpers (byte ↔ column) ----------------------------------
@@ -1169,7 +1191,12 @@ impl View for InputLine {
             );
         }
         if flag == StateFlag::Selected || (flag == StateFlag::Active && self.state.state.selected) {
-            self.select_all(enable, false);
+            // `select_all_on_focus == false` suppresses the select-all on focus
+            // GAIN (`enable == true`) but still clears the selection on focus
+            // LOSS (`enable == false`), so a drag-selection never lingers.
+            if self.select_all_on_focus || !enable {
+                self.select_all(enable, false);
+            }
         }
         // Command graying: if the enable condition changed, push the
         // enable/disable updates.
@@ -2067,6 +2094,42 @@ mod tests {
         assert_eq!(il.sel_start, 0);
         assert_eq!(il.sel_end, 5, "selectAll on becoming selected");
         assert_eq!(il.cur_pos, 5);
+    }
+
+    #[test]
+    fn set_state_opt_out_does_not_select_all_on_focus() {
+        let mut il = field(12, "hello");
+        il.set_select_all_on_focus(false);
+        il.sel_start = 0;
+        il.sel_end = 0;
+        il.cur_pos = 0;
+        il.state.state.selected = false;
+        with_ctx(|ctx| il.set_state(StateFlag::Selected, true, ctx));
+        assert!(il.state.state.selected, "still becomes selected (focused)");
+        assert_eq!(
+            il.sel_end, 0,
+            "opted out: no select-all on focus gain (selection untouched)"
+        );
+        assert_eq!(
+            il.cur_pos, 0,
+            "opted out: caret not moved to end on focus gain"
+        );
+    }
+
+    #[test]
+    fn set_state_opt_out_still_clears_selection_on_focus_loss() {
+        let mut il = field(12, "hello");
+        il.set_select_all_on_focus(false);
+        // A pre-existing (e.g. drag) selection while focused.
+        il.state.state.selected = true;
+        il.sel_start = 1;
+        il.sel_end = 4;
+        with_ctx(|ctx| il.set_state(StateFlag::Selected, false, ctx));
+        assert!(!il.state.state.selected);
+        assert_eq!(
+            il.sel_end, 0,
+            "focus loss clears the selection even when opted out of select-all-on-focus"
+        );
     }
 
     // -- drag-select tracking (evMouseMove | evMouseAuto) ---------------------
