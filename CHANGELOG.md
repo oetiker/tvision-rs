@@ -12,6 +12,14 @@ moves it into a dated, versioned section when a release is cut.
 
 ### New
 
+- `InputLine::select_all_on_focus` (default `true`) with a
+  `set_select_all_on_focus()` setter. When set to `false`, the field no longer
+  selects its whole content on focus **gain** (the Turbo Vision default) — the
+  caret and any existing selection are left as-is and typing inserts rather than
+  replacing. Focus **loss** still clears the selection. Lets hosts opt out of the
+  select-all-then-replace behaviour for pre-filled or derived fields without
+  per-site caret workarounds.
+
 ### Changed
 
 ### Fixed
