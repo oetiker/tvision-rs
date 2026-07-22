@@ -12,9 +12,32 @@ moves it into a dated, versioned section when a release is cut.
 
 ### New
 
+- `text::cstrlen` — display width of a `~`-marked control string, ignoring the
+  hotkey markers (the companion to `text::width`). Promoted from the byte-identical
+  private copies in `Button` and `StatusLine`; useful to anyone laying out around
+  a control-string label.
+- `dialog::ButtonLayout` (`Classic` / `Uniform` / `Ragged`) and
+  `Dialog::set_button_layout` — choose how `button_row` sizes its faces. `Classic`
+  (the default) keeps the fixed classic width; `Uniform` grows every face to the
+  widest label; `Ragged` sizes each face to its own label. The enum is
+  `#[non_exhaustive]`.
+- `Dialog::set_button_min_width` — the minimum button face width: a floor in the
+  `Uniform`/`Ragged` layouts, and the *exact* width in `Classic` (where the
+  minimum is also the maximum). Defaults to `STD_BUTTON`, so nothing changes
+  unless set.
+
 ### Changed
 
+- `Dialog::button_row` respects the new `ButtonLayout` and minimum. The default is
+  `Classic` at `STD_BUTTON`, so **existing dialogs render byte-for-byte
+  identically** — the feature is purely opt-in.
+
 ### Fixed
+
+- A button label longer than six columns can now render correctly instead of hard
+  against its drop shadow: opt a dialog into `ButtonLayout::Uniform` (or `Ragged`)
+  before calling `button_row`. Labels such as "Discard" or "Keep editing"
+  previously had to be laid out by hand.
 
 ## 0.12.1 - 2026-07-17
 

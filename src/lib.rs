@@ -103,11 +103,11 @@ pub use command::{Command, CommandSet};
 pub use data::FieldValue;
 pub use desktop::{Background, Desktop};
 pub use dialog::{
-    BUTTON_GAP, BUTTON_ROW_FROM_BOTTOM, ButtonRowAlign, CD_HELP_BUTTON, CD_NO_LOAD_DIR, CD_NORMAL,
-    ChDirDialog, ColorPicker, Dialog, DirCollection, DirEntry, DirListBox, FA_DIREC,
-    FD_CLEAR_BUTTON, FD_HELP_BUTTON, FD_NO_LOAD_DIR, FD_OK_BUTTON, FD_OPEN_BUTTON,
-    FD_REPLACE_BUTTON, FileCollection, FileDialog, FileInfoPane, FileInputLine, FileList,
-    MARGIN_LEFT, MARGIN_RIGHT, MARGIN_TOP, MessageBoxButtons, MessageBoxKind, STD_BUTTON,
+    BUTTON_GAP, BUTTON_ROW_FROM_BOTTOM, ButtonLayout, ButtonRowAlign, CD_HELP_BUTTON,
+    CD_NO_LOAD_DIR, CD_NORMAL, ChDirDialog, ColorPicker, Dialog, DirCollection, DirEntry,
+    DirListBox, FA_DIREC, FD_CLEAR_BUTTON, FD_HELP_BUTTON, FD_NO_LOAD_DIR, FD_OK_BUTTON,
+    FD_OPEN_BUTTON, FD_REPLACE_BUTTON, FileCollection, FileDialog, FileInfoPane, FileInputLine,
+    FileList, MARGIN_LEFT, MARGIN_RIGHT, MARGIN_TOP, MessageBoxButtons, MessageBoxKind, STD_BUTTON,
     SearchRec, Tab, search_rec_compare,
 };
 pub use event::{

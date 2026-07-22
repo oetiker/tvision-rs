@@ -54,8 +54,8 @@ pub use filedlg::{
     SearchRec, search_rec_compare,
 };
 pub use layout::{
-    BUTTON_GAP, BUTTON_ROW_FROM_BOTTOM, ButtonRowAlign, MARGIN_LEFT, MARGIN_RIGHT, MARGIN_TOP,
-    STD_BUTTON,
+    BUTTON_GAP, BUTTON_ROW_FROM_BOTTOM, ButtonLayout, ButtonRowAlign, MARGIN_LEFT, MARGIN_RIGHT,
+    MARGIN_TOP, STD_BUTTON,
 };
 pub use msgbox::{MessageBoxButtons, MessageBoxKind};
 pub(crate) use msgbox::{build_input_box, build_message_box};

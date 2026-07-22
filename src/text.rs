@@ -91,6 +91,19 @@ pub fn width(text: &str) -> usize {
     text.graphemes(true).map(grapheme_columns).sum()
 }
 
+/// Display width of a *control string* — a label whose `~` markers delimit the
+/// hotkey letter and occupy no columns themselves (`"~O~K"` is 2 wide).
+///
+/// This is the measure the widgets that draw control strings (buttons, menus,
+/// the status line) centre and size with, so anything laying out around such a
+/// label must use it rather than [`width`], which would count the `~` markers.
+pub fn cstrlen(text: &str) -> i32 {
+    text.chars()
+        .filter(|&c| c != '~')
+        .map(|c| unicode_width::UnicodeWidthChar::width(c).unwrap_or(1) as i32)
+        .sum()
+}
+
 /// Width + grapheme metrics of `text`.
 pub fn measure(text: &str) -> TextMetrics {
     let mut m = TextMetrics::default();
