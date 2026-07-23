@@ -1149,6 +1149,23 @@ impl View for InputLine {
                 }
             }
 
+            // -- bracketed paste ------------------------------------------------
+            // A terminal paste (middle-click, Shift-Ctrl-V, an X primary-selection
+            // paste) arrives as an `Event::Paste` once bracketed paste is enabled.
+            // The `Command::PASTE` arm above only reaches text through the async
+            // clipboard broker (OS clipboard / internal buffer); this is the
+            // terminal handing us the bytes directly, so insert them the same way
+            // the deferred `InputLinePaste` broker does — via `paste_text`, which
+            // replaces any selection and clamps to `max_len`. The `Editor` widget
+            // already handles `Event::Paste`; without this arm a single-line field
+            // silently dropped every terminal paste. Only reached when selected
+            // (the outer guard returns otherwise).
+            Event::Paste(text) => {
+                let text = std::mem::take(text);
+                self.paste_text(&text);
+                ev.clear();
+            }
+
             _ => {}
         }
 
@@ -2532,6 +2549,38 @@ mod tests {
             "paste clamped to max_len: only 1 char fits"
         );
         assert_eq!(il.cur_pos, 4);
+    }
+
+    /// A terminal bracketed paste (`Event::Paste`) inserts at the cursor and is
+    /// consumed — the regression fix for single-line fields silently dropping
+    /// every terminal paste (middle-click / Shift-Ctrl-V) that the `Editor`
+    /// already handled. Also proves it replaces an active selection.
+    #[test]
+    fn bracketed_paste_event_inserts_and_consumes() {
+        // Insert at the cursor (which `field` places at end).
+        let mut il = field(20, "abc");
+        let mut ev = Event::Paste("XYZ".to_string());
+        with_ctx(|ctx| il.handle_event(&mut ev, ctx));
+        assert_eq!(il.data, "abcXYZ", "bracketed paste inserts at the cursor");
+        assert!(ev.is_nothing(), "the paste event is consumed");
+
+        // Replace an active selection.
+        let mut il = field(20, "hello world");
+        il.sel_start = 6;
+        il.sel_end = 11;
+        let mut ev = Event::Paste("Rust".to_string());
+        with_ctx(|ctx| il.handle_event(&mut ev, ctx));
+        assert_eq!(
+            il.data, "hello Rust",
+            "bracketed paste replaces the selection"
+        );
+
+        // An unselected field ignores the paste (the outer guard).
+        let mut il = field(20, "abc");
+        il.state.state.selected = false;
+        let mut ev = Event::Paste("XYZ".to_string());
+        with_ctx(|ctx| il.handle_event(&mut ev, ctx));
+        assert_eq!(il.data, "abc", "an unselected field drops the paste");
     }
 
     /// Cut without a selection is a no-op data-wise but the event IS consumed.
