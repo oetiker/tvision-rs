@@ -54,16 +54,7 @@ use crate::status::StatusDef;
 use crate::theme::Role;
 use crate::view::{Context, DrawCtx, Point, Rect, View, ViewState};
 
-/// Display width of a `~`-marked control string, **ignoring** the `~` markers
-/// (they are hotkey delimiters, not printed columns). A per-module copy mirroring
-/// [`menu_bar`](crate::menu::menu_bar)'s, using the same `UnicodeWidthChar`
-/// primitive so widths match the rest of the renderer.
-fn cstrlen(s: &str) -> i32 {
-    s.chars()
-        .filter(|&c| c != '~')
-        .map(|c| unicode_width::UnicodeWidthChar::width(c).unwrap_or(1) as i32)
-        .sum()
-}
+use crate::text::cstrlen;
 
 /// The hint separator drawn before the hint text: a vertical bar `│` (U+2502)
 /// followed by a space. Drawn as plain text, not a `~`-marked control string.

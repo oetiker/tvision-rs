@@ -27,6 +27,13 @@ pub struct Dialog {
     /// The embedded window. The dialog *is-a* window: its state, draw, frame, and
     /// most event routing are the window's.
     window: Window,
+    /// How [`button_row`](Self::button_row) sizes its faces. Default
+    /// [`ButtonLayout::Classic`], so existing dialogs are byte-for-byte unchanged.
+    button_layout: crate::dialog::ButtonLayout,
+    /// The minimum button face width — a floor in the autosize layouts, and the
+    /// exact width in [`Classic`](crate::dialog::ButtonLayout::Classic). Defaults
+    /// to [`STD_BUTTON`](crate::dialog::STD_BUTTON)'s width.
+    button_min_width: i32,
 }
 
 impl Dialog {
@@ -65,7 +72,35 @@ impl Dialog {
         window.set_grow_mode(GrowMode::default());
         // The gray dialog color scheme; propagates to the frame child.
         window.set_palette(WindowPalette::Gray);
-        Dialog { window }
+        Dialog {
+            window,
+            button_layout: crate::dialog::ButtonLayout::Classic,
+            button_min_width: crate::dialog::STD_BUTTON.x,
+        }
+    }
+
+    /// Choose how [`button_row`](Self::button_row) sizes its faces (default
+    /// [`Classic`](crate::dialog::ButtonLayout::Classic)).
+    ///
+    /// Leave it Classic — the default — and every face is the fixed minimum
+    /// width, exactly as before, so no existing dialog changes. Switch to
+    /// [`Uniform`](crate::dialog::ButtonLayout::Uniform) or
+    /// [`Ragged`](crate::dialog::ButtonLayout::Ragged) when a row carries labels
+    /// longer than the minimum ("Discard", "Keep editing"), which would otherwise
+    /// render hard against the drop shadow. Call before `button_row`.
+    pub fn set_button_layout(&mut self, layout: crate::dialog::ButtonLayout) {
+        self.button_layout = layout;
+    }
+
+    /// Set the minimum button face width — a floor in the
+    /// [`Uniform`](crate::dialog::ButtonLayout::Uniform)/[`Ragged`](crate::dialog::ButtonLayout::Ragged)
+    /// layouts, and the *exact* width in
+    /// [`Classic`](crate::dialog::ButtonLayout::Classic) (where the minimum is
+    /// also the maximum). Defaults to [`STD_BUTTON`](crate::dialog::STD_BUTTON)'s
+    /// width; raise it for wider fixed faces, e.g. to match a house style. Call
+    /// before [`button_row`](Self::button_row).
+    pub fn set_button_min_width(&mut self, width: i32) {
+        self.button_min_width = width;
     }
 
     /// Insert a child view into the dialog's embedded window/group.
@@ -99,24 +134,53 @@ impl Dialog {
         self.window.scatter_list(record, ctx);
     }
 
-    /// Insert a conventional button row: standard 10×2 buttons,
+    /// Insert a conventional button row: 10×2 buttons,
     /// [`BUTTON_GAP`](crate::dialog::BUTTON_GAP) apart, top edge at
     /// `height - BUTTON_ROW_FROM_BOTTOM`. `align` centers or right-groups the row.
     /// Returns the inserted ids in the given order.
+    ///
+    /// Face widths follow the dialog's [`ButtonLayout`](crate::dialog::ButtonLayout)
+    /// and minimum (see [`set_button_layout`](Self::set_button_layout) /
+    /// [`set_button_min_width`](Self::set_button_min_width)); the default is
+    /// `Classic` at [`STD_BUTTON`], i.e. every face a fixed 10 columns. Switch to
+    /// `Uniform` or `Ragged` for labels longer than the minimum ("Discard", "Keep
+    /// editing"), which would otherwise render hard against the drop shadow.
     pub fn button_row(
         &mut self,
         buttons: &[(&str, Command, crate::widgets::ButtonFlags)],
         align: crate::dialog::ButtonRowAlign,
     ) -> Vec<ViewId> {
-        use crate::dialog::ButtonRowAlign;
-        use crate::dialog::layout::{BUTTON_GAP, BUTTON_ROW_FROM_BOTTOM, MARGIN_RIGHT, STD_BUTTON};
+        use crate::dialog::layout::{
+            BUTTON_GAP, BUTTON_ROW_FROM_BOTTOM, MARGIN_RIGHT, STD_BUTTON, button_face_width,
+        };
+        use crate::dialog::{ButtonLayout, ButtonRowAlign};
         use crate::widgets::Button;
         let size = self.state().size;
         let n = buttons.len() as i32;
         if n == 0 {
             return Vec::new();
         }
-        let span = n * STD_BUTTON.x + (n - 1) * BUTTON_GAP;
+        let min = self.button_min_width;
+        // Per-button face widths, floored at the minimum. Classic ignores the
+        // labels entirely (min is both floor and ceiling); Uniform shares the
+        // widest natural face; Ragged sizes each face to its own label.
+        let widths: Vec<i32> = match self.button_layout {
+            ButtonLayout::Classic => buttons.iter().map(|_| min).collect(),
+            ButtonLayout::Uniform => {
+                let w = buttons
+                    .iter()
+                    .map(|(t, _, _)| button_face_width(t))
+                    .max()
+                    .unwrap_or(min)
+                    .max(min);
+                buttons.iter().map(|_| w).collect()
+            }
+            ButtonLayout::Ragged => buttons
+                .iter()
+                .map(|(t, _, _)| button_face_width(t).max(min))
+                .collect(),
+        };
+        let span: i32 = widths.iter().sum::<i32>() + (n - 1) * BUTTON_GAP;
         let left = match align {
             ButtonRowAlign::Center => (size.x - span) / 2,
             ButtonRowAlign::Right => size.x - MARGIN_RIGHT - span,
@@ -124,15 +188,15 @@ impl Dialog {
         let top = size.y - BUTTON_ROW_FROM_BOTTOM;
         let mut ids = Vec::with_capacity(buttons.len());
         let mut x = left;
-        for (title, command, flags) in buttons {
+        for ((title, command, flags), w) in buttons.iter().zip(&widths) {
             let b = Button::new(
-                Rect::new(x, top, x + STD_BUTTON.x, top + STD_BUTTON.y),
+                Rect::new(x, top, x + w, top + STD_BUTTON.y),
                 title,
                 *command,
                 *flags,
             );
             ids.push(self.insert_child(Box::new(b)));
-            x += STD_BUTTON.x + BUTTON_GAP;
+            x += w + BUTTON_GAP;
         }
         ids
     }
@@ -648,5 +712,117 @@ mod tests {
             "right edge at w - MARGIN_RIGHT"
         );
         assert_eq!(d.child_mut(ids[0]).unwrap().state().get_bounds().a.x, 16);
+    }
+
+    /// `Uniform`: a row carrying a label too wide for the standard face widens
+    /// every button to one shared width, stays right-grouped against the margin,
+    /// and keeps the gap — so the long label renders with its padding column
+    /// instead of butting against the drop shadow.
+    #[test]
+    fn button_row_uniform_widens_every_button_to_the_widest_label() {
+        let mut d = Dialog::new(Rect::new(0, 0, 60, 12), Some("D".into()));
+        d.set_button_layout(crate::dialog::ButtonLayout::Uniform);
+        let ids = d.button_row(
+            &[
+                ("~R~e-create", Command::YES, ButtonFlags::new()),
+                ("~D~iscard", Command::NO, ButtonFlags::new()),
+                ("~K~eep editing", Command::CANCEL, ButtonFlags::new()),
+            ],
+            ButtonRowAlign::Right,
+        );
+        let bounds: Vec<_> = ids
+            .iter()
+            .map(|id| d.child_mut(*id).unwrap().state().get_bounds())
+            .collect();
+        // "Keep editing" is 12 columns → face 16, shared by all three.
+        for b in &bounds {
+            assert_eq!(b.b.x - b.a.x, 16, "every button takes the widest face");
+        }
+        assert_eq!(bounds[2].b.x, 58, "still right-grouped at w - MARGIN_RIGHT");
+        assert_eq!(bounds[1].a.x, bounds[0].a.x + 16 + 2, "face + BUTTON_GAP");
+        assert_eq!(bounds[2].a.x, bounds[1].a.x + 16 + 2);
+    }
+
+    /// `Ragged`: each button sized to its own label, so faces differ within the
+    /// row. The span still sums the varying widths and stays right-grouped.
+    #[test]
+    fn button_row_ragged_sizes_each_button_to_its_own_label() {
+        let mut d = Dialog::new(Rect::new(0, 0, 60, 12), Some("D".into()));
+        d.set_button_layout(crate::dialog::ButtonLayout::Ragged);
+        let ids = d.button_row(
+            &[
+                ("~O~K", Command::OK, ButtonFlags::new()),
+                ("~K~eep editing", Command::CANCEL, ButtonFlags::new()),
+            ],
+            ButtonRowAlign::Right,
+        );
+        let w0 = {
+            let b = d.child_mut(ids[0]).unwrap().state().get_bounds();
+            b.b.x - b.a.x
+        };
+        let w1 = {
+            let b = d.child_mut(ids[1]).unwrap().state().get_bounds();
+            b.b.x - b.a.x
+        };
+        // "OK" (2 cols) floors at STD_BUTTON = 10; "Keep editing" (12) → 16.
+        assert_eq!(w0, 10, "short label floored at the minimum");
+        assert_eq!(w1, 16, "long label sized to itself");
+        let b1 = d.child_mut(ids[1]).unwrap().state().get_bounds();
+        assert_eq!(b1.b.x, 58, "row still ends at w - MARGIN_RIGHT");
+    }
+
+    /// `Classic` (the default) ignores labels entirely: even a long one keeps the
+    /// fixed minimum face, so existing dialogs are byte-for-byte unchanged. This
+    /// is the backward-compat guarantee that lets the feature ship as additive.
+    #[test]
+    fn button_row_classic_keeps_the_fixed_minimum_face() {
+        let mut d = Dialog::new(Rect::new(0, 0, 60, 12), Some("D".into()));
+        // No set_button_layout call — default Classic at STD_BUTTON.
+        let ids = d.button_row(
+            &[("~K~eep editing", Command::CANCEL, ButtonFlags::new())],
+            ButtonRowAlign::Right,
+        );
+        let b = d.child_mut(ids[0]).unwrap().state().get_bounds();
+        assert_eq!(
+            b.b.x - b.a.x,
+            10,
+            "Classic keeps the fixed STD_BUTTON width regardless of label"
+        );
+    }
+
+    /// The minimum width is a floor in the autosize layouts and the exact width
+    /// in Classic. Raising it past a label's natural face widens Classic faces and
+    /// lifts short faces in Ragged/Uniform.
+    #[test]
+    fn button_min_width_raises_the_floor_and_is_exact_in_classic() {
+        // Classic: min is also max — a short label gets the raised fixed width.
+        let mut d = Dialog::new(Rect::new(0, 0, 60, 12), Some("D".into()));
+        d.set_button_min_width(14);
+        let ids = d.button_row(
+            &[("~O~K", Command::OK, ButtonFlags::new())],
+            ButtonRowAlign::Right,
+        );
+        let b = d.child_mut(ids[0]).unwrap().state().get_bounds();
+        assert_eq!(
+            b.b.x - b.a.x,
+            14,
+            "Classic uses the minimum as the exact width"
+        );
+
+        // Uniform: a min above the widest natural face lifts every button to it.
+        let mut d = Dialog::new(Rect::new(0, 0, 60, 12), Some("D".into()));
+        d.set_button_layout(crate::dialog::ButtonLayout::Uniform);
+        d.set_button_min_width(20);
+        let ids = d.button_row(
+            &[
+                ("~O~K", Command::OK, ButtonFlags::new()),
+                ("~D~iscard", Command::NO, ButtonFlags::new()),
+            ],
+            ButtonRowAlign::Right,
+        );
+        for id in ids {
+            let b = d.child_mut(id).unwrap().state().get_bounds();
+            assert_eq!(b.b.x - b.a.x, 20, "min above the natural face wins");
+        }
     }
 }

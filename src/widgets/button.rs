@@ -564,19 +564,7 @@ impl View for Button {
     }
 }
 
-/// Display width of a `~`-marked control string, **ignoring** the `~` markers
-/// (which are not printed columns).
-///
-/// Zero-alloc: iterates chars, skips `~`, and sums each char's display width.
-/// Uses `UnicodeWidthChar` directly — the same primitive that `crate::text` uses
-/// — so behavior is identical for all inputs, including consecutive or trailing
-/// `~`.
-fn cstrlen(s: &str) -> i32 {
-    s.chars()
-        .filter(|&c| c != '~')
-        .map(|c| unicode_width::UnicodeWidthChar::width(c).unwrap_or(1) as i32)
-        .sum()
-}
+use crate::text::cstrlen;
 
 // ---------------------------------------------------------------------------
 // Tests

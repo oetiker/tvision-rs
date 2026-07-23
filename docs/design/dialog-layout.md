@@ -61,6 +61,26 @@ Standard buttons are [`STD_BUTTON`](crate::dialog::STD_BUTTON) = 10 columns × 2
 Row 2 is the drop shadow, so the visual label occupies only row 1. Adjacent
 buttons are [`BUTTON_GAP`](crate::dialog::BUTTON_GAP) = 2 columns apart.
 
+A button draws its title starting at column 2 and its drop shadow at `width - 1`,
+so a label of `n` columns needs a face of `n + 4` to keep one blank column before
+the shadow — anything longer than six columns renders hard against it at the
+classic 10. `button_row` handles this through a per-dialog
+[`ButtonLayout`](crate::dialog::ButtonLayout) and a configurable minimum
+([`set_button_min_width`](crate::dialog::Dialog::set_button_min_width), default
+`STD_BUTTON`):
+
+- **`Classic`** (the default) — every face is exactly the minimum width; the
+  minimum is both floor and ceiling, so labels never widen a face. Existing
+  dialogs are byte-for-byte unchanged.
+- **`Uniform`** — every face shares one width, the widest label's `n + 4`, floored
+  at the minimum. A uniform row whose long labels still fit.
+- **`Ragged`** — each face sized to its own label's `n + 4`, floored at the
+  minimum. The tightest footprint, at the cost of even widths.
+
+Conventional labels never notice: "Cancel" is 6 columns, `6 + 4 = 10 =
+STD_BUTTON`, so `Classic`/`Uniform`/`Ragged` all agree on 10 for them — which is
+where the classic metric comes from.
+
 Use [`Dialog::button_row`](crate::dialog::Dialog::button_row) to add a row with
 consistent metrics:
 
@@ -92,9 +112,16 @@ row's centre at the dialog's centre column —
 button `MARGIN_RIGHT` from the right frame —  
 `left = width - MARGIN_RIGHT - span`.
 
+In both, `span` is `sum(face widths) + (n - 1) * BUTTON_GAP` — a single shared
+width times `n` in `Classic`/`Uniform`, or the sum of the individual faces in
+`Ragged`.
+
 Both alignments put the top edge at `height - BUTTON_ROW_FROM_BOTTOM` (= `height - 3`).
 The method returns a `Vec<ViewId>` in declaration order so you can reach the
 inserted buttons by id if needed.
+
+Size the dialog with the row in mind: a three-button row of long labels needs
+`3 * face + 2 * BUTTON_GAP + 2 * MARGIN_RIGHT` columns of width.
 
 ---
 
