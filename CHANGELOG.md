@@ -12,6 +12,14 @@ moves it into a dated, versioned section when a release is cut.
 
 ### New
 
+### Changed
+
+### Fixed
+
+## 0.13.0 - 2026-07-23
+
+### New
+
 - `text::cstrlen` — display width of a `~`-marked control string, ignoring the
   hotkey markers (the companion to `text::width`). Promoted from the byte-identical
   private copies in `Button` and `StatusLine`; useful to anyone laying out around
@@ -25,7 +33,6 @@ moves it into a dated, versioned section when a release is cut.
   `Uniform`/`Ragged` layouts, and the *exact* width in `Classic` (where the
   minimum is also the maximum). Defaults to `STD_BUTTON`, so nothing changes
   unless set.
-
 ### Changed
 
 - `Dialog::button_row` respects the new `ButtonLayout` and minimum. The default is
