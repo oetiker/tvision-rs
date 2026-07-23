@@ -16,13 +16,16 @@ moves it into a dated, versioned section when a release is cut.
 
 ### Fixed
 
+## 0.13.1 - 2026-07-23
+
+### Fixed
+
 - `InputLine` now handles `Event::Paste`, so a terminal bracketed paste
   (middle-click, Shift-Ctrl-V, an X primary-selection paste) inserts at the
   cursor — replacing any selection and clamping to `max_len` — instead of being
   silently dropped. `Editor` already handled bracketed paste; single-line fields
   did not, so terminal pastes into them did nothing. The `Command::PASTE`
   (OS-clipboard / internal-buffer) path is unchanged.
-
 ## 0.13.0 - 2026-07-23
 
 ### New
