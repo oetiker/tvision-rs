@@ -190,6 +190,12 @@ pub struct InputLine {
     /// Focus **loss** still clears the selection either way. Useful for
     /// pre-filled or derived fields where select-all-then-type is surprising.
     pub select_all_on_focus: bool,
+    /// Echo character painted in place of the real text when set. `None` = plain
+    /// field. `data`/`value()` always hold the real text; masking is draw-only.
+    /// Assumes width-1 graphemes (passwords): one echo char per `char`.
+    pub mask: Option<char>,
+    /// Transient: when true, the real text is painted despite `mask` (reveal).
+    pub reveal: bool,
 }
 
 impl InputLine {
@@ -280,6 +286,8 @@ impl InputLine {
             tracking: false,
             tracking_drag: false,
             select_all_on_focus: true,
+            mask: None,
+            reveal: false,
         }
     }
 
@@ -315,6 +323,38 @@ impl InputLine {
     /// loss. See [`select_all_on_focus`](InputLine::select_all_on_focus).
     pub fn set_select_all_on_focus(&mut self, enable: bool) {
         self.select_all_on_focus = enable;
+    }
+
+    /// Set (or clear) the echo character. `Some(ch)` masks the display with `ch`;
+    /// `None` restores the plain field. The stored value is unaffected.
+    pub fn set_mask(&mut self, mask: Option<char>) {
+        self.mask = mask;
+    }
+
+    /// Momentarily show the real text despite `mask` (password reveal). Ignored
+    /// when the field is not masked.
+    pub fn set_reveal(&mut self, reveal: bool) {
+        self.reveal = reveal;
+    }
+
+    /// Whether the display is currently masked (masked and not revealed).
+    ///
+    /// `#[allow(dead_code)]`: not wired into `draw`/clipboard yet — that lands
+    /// in Task 2/3 of the masking plan, which will call this and remove the
+    /// allow.
+    #[allow(dead_code)]
+    fn masking(&self) -> bool {
+        self.mask.is_some() && !self.reveal
+    }
+
+    /// The echo string for `s`: the mask char once per `char`. Only called while
+    /// `masking()` is true, so `self.mask` is `Some`.
+    ///
+    /// `#[allow(dead_code)]`: see `masking` above — draw wiring lands in Task 2.
+    #[allow(dead_code)]
+    fn echo_of(&self, s: &str) -> String {
+        let ch = self.mask.unwrap_or('•');
+        std::iter::repeat_n(ch, s.chars().count()).collect()
     }
 
     // -- geometry helpers (byte ↔ column) ----------------------------------
@@ -2793,5 +2833,19 @@ mod tests {
         il.state.state.focused = false;
         il.state.options.selectable = false;
         assert_eq!(fill_bg(&mut il, &theme, true), normal_bg);
+    }
+
+    #[test]
+    fn mask_helpers_track_state_and_echo() {
+        let mut il = InputLine::with_limit(Rect::new(0, 0, 10, 1), 64);
+        assert!(!il.masking(), "unmasked by default");
+        il.set_mask(Some('•'));
+        assert!(il.masking(), "masking once a mask char is set");
+        assert_eq!(il.echo_of("abc"), "•••", "one echo char per char");
+        il.set_reveal(true);
+        assert!(!il.masking(), "reveal suspends masking");
+        il.set_reveal(false);
+        il.set_mask(None);
+        assert!(!il.masking(), "clearing the mask disables masking");
     }
 }
