@@ -142,8 +142,8 @@ pub use widgets::{CheckBoxes, Cluster, ClusterKind, MultiCheckBoxes, RadioButton
 pub use widgets::{Constraints, DividerStyle, Orientation, Splitter};
 pub use widgets::{
     EditWindow, Editor, FindMode, InputLine, LimitMode, ListBox, ListRoles, ListViewer,
-    ListViewerState, RevealEye, RevealEyeConfig, SM_DOUBLE, SM_EXTEND, SM_TRIPLE, ScrollBar,
-    Scroller, SortedListBox,
+    ListViewerState, MaskedInput, RevealEye, RevealEyeConfig, SM_DOUBLE, SM_EXTEND, SM_TRIPLE,
+    ScrollBar, Scroller, SortedListBox,
 };
 pub use widgets::{Encoding, FileEditor, LineEnding, Memo};
 pub use widgets::{
