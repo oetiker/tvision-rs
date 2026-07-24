@@ -305,6 +305,9 @@ impl Command {
     /// `Program` broadcasts this before routing focus away from an input line so
     /// the line's history list is updated even if the user did not press Enter.
     pub const RECORD_HISTORY: Command = Command("tv.record_history");
+    /// Broadcast by a `RevealEye` when its reveal intent changes, so the owning
+    /// `MaskedInput` re-syncs its field's reveal state (source = the eye's id).
+    pub const REVEAL_CHANGED: Command = Command("tv.reveal_changed");
 
     // --- Editor search/replace commands ---
     /// Open the find dialog — handled by `Editor`; bind to Ctrl-Q/F or Ctrl-F.
