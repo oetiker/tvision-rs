@@ -99,6 +99,15 @@ pub const SCREENS: &[Screen] = &[
         settle_ms: 700,
     },
     Screen {
+        name: "masked_input",
+        example: "gallery",
+        args: &["masked_input"],
+        cols: 50,
+        rows: 12,
+        keys: &[],
+        settle_ms: 700,
+    },
+    Screen {
         name: "statictext",
         example: "gallery",
         args: &["statictext"],

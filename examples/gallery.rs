@@ -17,10 +17,11 @@ use std::{env, io};
 use tvision_rs::{
     Button, ButtonFlags, ButtonRowAlign, CD_NORMAL, ChDirDialog, CheckBoxes, Color, ColorPicker,
     Command, Constraints, Context, CrosstermBackend, Desktop, Dialog, EditWindow, Event,
-    FD_OPEN_BUTTON, FileDialog, HistoryWindow, InputLine, Key, KeyEvent, Label, ListBox, Memo,
-    Menu, MenuBar, MenuBox, Node, Outline, OutlineViewer, Program, RadioButtons, Rect, ScrollBar,
-    ScrollBarOptions, Splitter, StaticText, StatusDef, StatusLine, SystemClock, THistory, Tab,
-    Terminal, TextDevice, Theme, View, ViewId, Window, alt, delegate, history_add, ov_update,
+    FD_OPEN_BUTTON, FieldValue, FileDialog, HistoryWindow, InputLine, Key, KeyEvent, Label,
+    ListBox, MaskedInput, Memo, Menu, MenuBar, MenuBox, Node, Outline, OutlineViewer, Program,
+    RadioButtons, Rect, RevealEyeConfig, ScrollBar, ScrollBarOptions, Splitter, StaticText,
+    StatusDef, StatusLine, SystemClock, THistory, Tab, Terminal, TextDevice, Theme, View, ViewId,
+    Window, alt, delegate, history_add, ov_update,
 };
 
 /// How a specimen is shown. Most widgets are leaf controls hosted in a dialog on
@@ -51,6 +52,7 @@ fn specimen(name: &str) -> Option<Specimen> {
         "checkboxes" => OnDesktop(checkboxes),
         "radiobuttons" => OnDesktop(radiobuttons),
         "inputline" => OnDesktop(inputline),
+        "masked_input" => OnDesktop(masked_input),
         "statictext" => OnDesktop(statictext),
         "scrollbar" => OnDesktop(scrollbar),
         "history" => OnDesktop(history),
@@ -79,6 +81,7 @@ const NAMES: &[&str] = &[
     "checkboxes",
     "radiobuttons",
     "inputline",
+    "masked_input",
     "statictext",
     "scrollbar",
     "history",
@@ -254,6 +257,25 @@ fn inputline() -> Box<dyn View> {
     Box::new(dlg)
 }
 // ANCHOR_END: inputline
+
+// ANCHOR: masked_input
+/// A masked password field (`MaskedInput`): the value is shown as bullets while
+/// the real text is kept intact, with a reveal eye in the last column (its own
+/// Tab stop). Press-and-hold the eye, or focus it and press Space, to peek. The
+/// eye glyphs (`⊝` hidden / `◉` revealed) come from the theme.
+fn masked_input() -> Box<dyn View> {
+    let mut dlg = Dialog::new(Rect::new(2, 1, 44, 9), Some("Masked Input".to_string()));
+    let mut mi = MaskedInput::new(Rect::new(10, 3, 40, 4), 64, '•', RevealEyeConfig::default());
+    mi.set_value(FieldValue::Text("s3cr3t".into()));
+    let mi_id = dlg.insert_child(Box::new(mi));
+    dlg.insert_child(Box::new(Label::new(
+        Rect::new(2, 3, 10, 4),
+        "~P~ass:",
+        Some(mi_id),
+    )));
+    Box::new(dlg)
+}
+// ANCHOR_END: masked_input
 
 // ANCHOR: statictext
 /// Static text supports word wrap, left-aligned lines, and the `\x03` prefix
