@@ -12,6 +12,14 @@ moves it into a dated, versioned section when a release is cut.
 
 ### New
 
+### Changed
+
+### Fixed
+
+## 0.14.0 - 2026-07-24
+
+### New
+
 - `InputLine` gains password masking: `set_mask(Some(ch))` paints an echo
   character while `value()` keeps the real text and `set_reveal(bool)`
   momentarily shows it; Cut/Copy never place cleartext on the clipboard while a
@@ -21,7 +29,6 @@ moves it into a dated, versioned section when a release is cut.
   or, when `sticky`, latched reveal). The eye glyphs are theme-controlled
   (`Glyphs::reveal_eye_hidden` / `reveal_eye_revealed`); peek duration and
   sticky mode are set via `RevealEyeConfig`.
-
 ### Changed
 
 ### Fixed
