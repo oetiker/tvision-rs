@@ -23,6 +23,9 @@ impl MaskedInput {
         let h = bounds.b.y - bounds.a.y;
         let mut group = Group::new(bounds);
 
+        // MUST be inserted before the eye: `value()` reads the input
+        // positionally via `gather_data().next()`, which relies on the input
+        // being the first child in the group.
         let mut input = InputLine::with_limit(Rect::new(0, 0, (w - 1).max(1), h), limit);
         input.set_mask(Some(mask));
         let input_id = group.insert(Box::new(input));

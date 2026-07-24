@@ -650,12 +650,13 @@ impl InputLine {
     /// Cut: copy the current selection to the clipboard, then delete it. The
     /// clipboard operation is guarded by the selection test; the cut command is
     /// always consumed regardless of whether a selection existed, which the
-    /// callers handle. While masked (`masking()`), the clipboard write is
-    /// skipped — cleartext must never leave a masked field — but the delete
-    /// still happens.
+    /// callers handle. Whenever a mask is configured (`self.mask.is_some()`),
+    /// the clipboard write is skipped — reveal is for viewing, not
+    /// exfiltrating, so even a revealed masked field must not leak cleartext —
+    /// but the delete still happens unconditionally.
     fn do_cut(&mut self, ctx: &mut Context) {
         if self.sel_start < self.sel_end {
-            if !self.masking() {
+            if self.mask.is_none() {
                 let sel = self.data[self.sel_start as usize..self.sel_end as usize].to_string();
                 ctx.set_clipboard(sel);
             }
@@ -668,10 +669,11 @@ impl InputLine {
     }
 
     /// Copy the current selection to the clipboard, keeping it (the
-    /// `Command::COPY` body). While masked (`masking()`), this is a no-op —
-    /// cleartext must never leave a masked field via the clipboard.
+    /// `Command::COPY` body). Whenever a mask is configured (`self.mask.is_some()`),
+    /// this is a no-op — reveal is for viewing, not exfiltrating, so cleartext
+    /// must never leave a masked field via the clipboard, revealed or not.
     fn do_copy(&mut self, ctx: &mut Context) {
-        if self.sel_start < self.sel_end && !self.masking() {
+        if self.sel_start < self.sel_end && self.mask.is_none() {
             let sel = self.data[self.sel_start as usize..self.sel_end as usize].to_string();
             ctx.set_clipboard(sel);
         }
@@ -2567,6 +2569,42 @@ mod tests {
             clipboard_writes(&deferred2),
             0,
             "masked cut must not write cleartext"
+        );
+        assert_eq!(il.data, "", "cut still deletes the selection");
+    }
+
+    /// A REVEALED masked field must still never leak cleartext to the OS
+    /// clipboard: reveal is for viewing, not exfiltrating. Guard on
+    /// `mask.is_none()` rather than `!masking()`, so `do_copy`/`do_cut` skip
+    /// the clipboard write whenever a mask is configured, revealed or not.
+    #[test]
+    fn revealed_masked_field_still_never_copies_cleartext() {
+        fn clipboard_writes(deferred: &[Deferred]) -> usize {
+            deferred
+                .iter()
+                .filter(|d| matches!(d, Deferred::SetClipboard(_)))
+                .count()
+        }
+
+        let mut il = InputLine::with_limit(Rect::new(0, 0, 20, 1), 64);
+        il.set_value(FieldValue::Text("secret".into()));
+        il.set_mask(Some('•'));
+        il.set_reveal(true);
+        il.select_all(true, false); // select the whole value
+
+        let (_, deferred, ()) = with_ctx_d(|ctx| il.do_copy(ctx));
+        assert_eq!(
+            clipboard_writes(&deferred),
+            0,
+            "revealed masked copy must not write cleartext"
+        );
+
+        // Cut still edits (clears the selection) but writes nothing to the clipboard.
+        let (_, deferred2, ()) = with_ctx_d(|ctx| il.do_cut(ctx));
+        assert_eq!(
+            clipboard_writes(&deferred2),
+            0,
+            "revealed masked cut must not write cleartext"
         );
         assert_eq!(il.data, "", "cut still deletes the selection");
     }
