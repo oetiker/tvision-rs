@@ -338,20 +338,12 @@ impl InputLine {
     }
 
     /// Whether the display is currently masked (masked and not revealed).
-    ///
-    /// `#[allow(dead_code)]`: not wired into `draw`/clipboard yet — that lands
-    /// in Task 2/3 of the masking plan, which will call this and remove the
-    /// allow.
-    #[allow(dead_code)]
     fn masking(&self) -> bool {
         self.mask.is_some() && !self.reveal
     }
 
     /// The echo string for `s`: the mask char once per `char`. Only called while
     /// `masking()` is true, so `self.mask` is `Some`.
-    ///
-    /// `#[allow(dead_code)]`: see `masking` above — draw wiring lands in Task 2.
-    #[allow(dead_code)]
     fn echo_of(&self, s: &str) -> String {
         let ch = self.mask.unwrap_or('•');
         std::iter::repeat_n(ch, s.chars().count()).collect()
@@ -880,12 +872,16 @@ impl View for InputLine {
 
         // Fill the whole row with the background color.
         ctx.fill(Rect::new(0, 0, size.x, 1), ' ', color);
+        // Masked display: echo one char per character (assumes width-1 graphemes,
+        // which passwords are). `self.data` / `value()` stay the real text.
+        let echo = self.masking().then(|| self.echo_of(&self.data));
+        let shown: &str = echo.as_deref().unwrap_or(&self.data);
         // Scrolled text from column 1, offset by first_pos.
         if size.x > 1 {
             // The text window is columns 1..size.x; clip there via a sub-ctx so a
             // glyph cannot spill into col 0 or past the right edge.
             let mut sub = ctx.sub(Rect::new(1, 0, size.x, 1));
-            sub.put_str_part(0, 0, &self.data, self.first_pos, color);
+            sub.put_str_part(0, 0, shown, self.first_pos, color);
         }
 
         // Scroll arrows.
@@ -898,8 +894,9 @@ impl View for InputLine {
 
         // Selection highlight. There is no attr-only paint, so we REDRAW the
         // selected substring in the selected style at its screen column —
-        // byte-identical output.
-        if self.state.state.selected && self.sel_start < self.sel_end {
+        // byte-identical output. Suppressed while masked so no cleartext leaks
+        // (selection still works functionally; only the highlight is hidden).
+        if !self.masking() && self.state.state.selected && self.sel_start < self.sel_end {
             // `l`/`r` are the display columns of the selection ends relative to
             // the scroll window; the highlight covers view columns [l+1 .. r+1).
             let l = (self.displayed_pos(self.sel_start) - self.first_pos).max(0);
@@ -2847,5 +2844,45 @@ mod tests {
         il.set_reveal(false);
         il.set_mask(None);
         assert!(!il.masking(), "clearing the mask disables masking");
+    }
+
+    #[test]
+    fn masked_draw_shows_echo_not_data_and_value_is_real() {
+        use crate::screen::Buffer;
+        use crate::theme::Theme;
+        use crate::view::DrawCtx;
+
+        let mut il = InputLine::with_limit(Rect::new(0, 0, 8, 1), 64);
+        il.set_value(FieldValue::Text("secret".into()));
+        il.set_mask(Some('•'));
+
+        let theme = Theme::classic_blue();
+        let mut buf = Buffer::new(8, 1);
+        {
+            let mut dc = DrawCtx::new(&mut buf, &theme, Rect::new(0, 0, 8, 1), Point::new(0, 0));
+            il.draw(&mut dc);
+        }
+        // Text is painted from column 1. Masked → bullets, never the letters.
+        let row: String = (0..8).map(|x| buf.get(x, 0).symbol()).collect();
+        assert!(row.contains('•'), "masked field paints bullets: {row:?}");
+        assert!(
+            !row.contains('s') && !row.contains('e'),
+            "no cleartext: {row:?}"
+        );
+        // The stored value is still the real password.
+        assert_eq!(il.value(), Some(FieldValue::Text("secret".into())));
+
+        // Revealing paints the real text.
+        il.set_reveal(true);
+        let mut buf2 = Buffer::new(8, 1);
+        {
+            let mut dc = DrawCtx::new(&mut buf2, &theme, Rect::new(0, 0, 8, 1), Point::new(0, 0));
+            il.draw(&mut dc);
+        }
+        let row2: String = (0..8).map(|x| buf2.get(x, 0).symbol()).collect();
+        assert!(
+            row2.contains('s') && row2.contains('e'),
+            "revealed shows real: {row2:?}"
+        );
     }
 }
