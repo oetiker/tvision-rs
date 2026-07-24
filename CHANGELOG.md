@@ -16,6 +16,22 @@ moves it into a dated, versioned section when a release is cut.
 
 ### Fixed
 
+## 0.14.0 - 2026-07-24
+
+### New
+
+- `InputLine` gains password masking: `set_mask(Some(ch))` paints an echo
+  character while `value()` keeps the real text, `set_reveal(bool)` momentarily
+  shows it, and Cut/Copy never place cleartext on the clipboard while masked.
+- New `RevealEye` toggle and `MaskedInput` composite: a masked field with a
+  reveal eye in its last column (mouse press-and-hold to peek; Space for a timed
+  or, when `sticky`, latched reveal). Glyphs and peek duration are configurable
+  via `RevealEyeConfig`.
+
+### Changed
+
+### Fixed
+
 ## 0.13.1 - 2026-07-23
 
 ### Fixed
