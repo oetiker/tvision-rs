@@ -650,11 +650,15 @@ impl InputLine {
     /// Cut: copy the current selection to the clipboard, then delete it. The
     /// clipboard operation is guarded by the selection test; the cut command is
     /// always consumed regardless of whether a selection existed, which the
-    /// callers handle.
+    /// callers handle. While masked (`masking()`), the clipboard write is
+    /// skipped — cleartext must never leave a masked field — but the delete
+    /// still happens.
     fn do_cut(&mut self, ctx: &mut Context) {
         if self.sel_start < self.sel_end {
-            let sel = self.data[self.sel_start as usize..self.sel_end as usize].to_string();
-            ctx.set_clipboard(sel);
+            if !self.masking() {
+                let sel = self.data[self.sel_start as usize..self.sel_end as usize].to_string();
+                ctx.set_clipboard(sel);
+            }
             self.save_state();
             self.delete_select();
             self.check_valid(true);
@@ -664,9 +668,10 @@ impl InputLine {
     }
 
     /// Copy the current selection to the clipboard, keeping it (the
-    /// `Command::COPY` body).
+    /// `Command::COPY` body). While masked (`masking()`), this is a no-op —
+    /// cleartext must never leave a masked field via the clipboard.
     fn do_copy(&mut self, ctx: &mut Context) {
-        if self.sel_start < self.sel_end {
+        if self.sel_start < self.sel_end && !self.masking() {
             let sel = self.data[self.sel_start as usize..self.sel_end as usize].to_string();
             ctx.set_clipboard(sel);
         }
@@ -2530,6 +2535,40 @@ mod tests {
         });
         assert_eq!(clipboard_text, Some("hello"));
         assert_eq!(il.data, data_before, "copy does not modify the field");
+    }
+
+    /// Masked field: neither `do_copy` nor `do_cut` may leak the cleartext value
+    /// to the clipboard (Task 3 of the InputLine-masking plan). Cut still edits
+    /// (deletes the selection) — only the clipboard write is suppressed.
+    #[test]
+    fn masked_copy_and_cut_do_not_leak_cleartext() {
+        fn clipboard_writes(deferred: &[Deferred]) -> usize {
+            deferred
+                .iter()
+                .filter(|d| matches!(d, Deferred::SetClipboard(_)))
+                .count()
+        }
+
+        let mut il = InputLine::with_limit(Rect::new(0, 0, 20, 1), 64);
+        il.set_value(FieldValue::Text("secret".into()));
+        il.set_mask(Some('•'));
+        il.select_all(true, false); // select the whole value
+
+        let (_, deferred, ()) = with_ctx_d(|ctx| il.do_copy(ctx));
+        assert_eq!(
+            clipboard_writes(&deferred),
+            0,
+            "masked copy must not write cleartext"
+        );
+
+        // Cut still edits (clears the selection) but writes nothing to the clipboard.
+        let (_, deferred2, ()) = with_ctx_d(|ctx| il.do_cut(ctx));
+        assert_eq!(
+            clipboard_writes(&deferred2),
+            0,
+            "masked cut must not write cleartext"
+        );
+        assert_eq!(il.data, "", "cut still deletes the selection");
     }
 
     /// cmPaste defers an InputLinePaste with the field's id.
