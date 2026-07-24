@@ -186,21 +186,46 @@ mod tests {
     }
 
     /// Build a fresh `Context` over the given (persistent) `TimerQueue`, run
-    /// `f`, and return the deferred queue plus `f`'s result. `timers` is owned
-    /// by the caller so a test can inspect it (`len()`) after the dispatch —
-    /// there is no `Deferred::SetTimer`; `Context::set_timer`/`kill_timer`
-    /// mutate the injected `TimerQueue` directly (see `Context::set_timer`).
+    /// `f`, and return the posted/broadcast events, the deferred queue, and
+    /// `f`'s result. `timers` is owned by the caller so a test can inspect it
+    /// (`len()`) after the dispatch — there is no `Deferred::SetTimer`;
+    /// `Context::set_timer`/`kill_timer` mutate the injected `TimerQueue`
+    /// directly (see `Context::set_timer`). Mirrors `button.rs`'s
+    /// `with_ctx_d` so tests can assert on both the `REVEAL_CHANGED`
+    /// broadcast and any `Deferred::PushCapture`.
     fn with_ctx<R>(
         timers: &mut TimerQueue,
         f: impl FnOnce(&mut Context) -> R,
-    ) -> (Vec<Deferred>, R) {
+    ) -> (Vec<Event>, Vec<Deferred>, R) {
         let mut out: VecDeque<Event> = VecDeque::new();
         let mut deferred: Vec<Deferred> = Vec::new();
         let r = {
             let mut ctx = Context::new(&mut out, timers, 0, &mut deferred);
             f(&mut ctx)
         };
-        (deferred, r)
+        (out.into_iter().collect(), deferred, r)
+    }
+
+    /// Assert `out` contains exactly one `Command::REVEAL_CHANGED` broadcast,
+    /// sourced from `id`.
+    fn assert_reveal_changed(out: &[Event], id: Option<ViewId>) {
+        let matches: Vec<_> = out
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e,
+                    Event::Broadcast { command, source }
+                        if *command == Command::REVEAL_CHANGED && *source == id
+                )
+            })
+            .collect();
+        assert_eq!(
+            matches.len(),
+            1,
+            "expected exactly one REVEAL_CHANGED broadcast (source={:?}) in {:?}",
+            id,
+            out
+        );
     }
 
     fn mouse_down() -> Event {
@@ -231,52 +256,72 @@ mod tests {
     #[test]
     fn mouse_hold_reveals_until_release() {
         let mut e = eye(false);
+        let id = e.state.id();
         let mut timers = TimerQueue::new();
-        with_ctx(&mut timers, |ctx| {
+        let (out, deferred, ()) = with_ctx(&mut timers, |ctx| {
             let mut d = mouse_down();
             e.handle_event(&mut d, ctx);
         });
         assert!(e.is_revealing(), "press reveals");
-        with_ctx(&mut timers, |ctx| {
+        assert_reveal_changed(&out, id);
+        // A mouse-tracking capture must have been queued, targeting the
+        // eye's own view id (mirrors button.rs's mouse_down_inside_arms_tracking).
+        assert_eq!(deferred.len(), 1, "one capture deferred");
+        assert!(
+            matches!(deferred[0], Deferred::PushCapture(_)),
+            "deferred[0] is PushCapture"
+        );
+        if let Deferred::PushCapture(ref h) = deferred[0] {
+            assert_eq!(h.view(), id, "capture tracks the eye's own id");
+        }
+
+        let (out, _deferred, ()) = with_ctx(&mut timers, |ctx| {
             let mut u = mouse_up();
             e.handle_event(&mut u, ctx);
         });
         assert!(!e.is_revealing(), "release hides");
+        assert_reveal_changed(&out, id);
     }
 
     #[test]
     fn space_non_sticky_arms_a_timed_peek() {
         let mut e = eye(false);
+        let id = e.state.id();
         let mut timers = TimerQueue::new();
-        with_ctx(&mut timers, |ctx| {
+        let (out, _deferred, ()) = with_ctx(&mut timers, |ctx| {
             let mut sp = Event::KeyDown(KeyEvent::from(Key::Char(' ')));
             e.handle_event(&mut sp, ctx);
         });
         assert!(e.is_revealing(), "Space reveals");
         assert_eq!(timers.len(), 1, "a one-shot timer is armed");
+        assert_reveal_changed(&out, id);
 
         // The matching Timer hides it again.
         let tid = e.peek_timer.expect("timer id stored");
-        with_ctx(&mut timers, |ctx| {
+        let (out, _deferred, ()) = with_ctx(&mut timers, |ctx| {
             let mut t = Event::Timer(tid);
             e.handle_event(&mut t, ctx);
         });
         assert!(!e.is_revealing(), "timer expiry hides");
+        assert_reveal_changed(&out, id);
     }
 
     #[test]
     fn space_sticky_toggles() {
         let mut e = eye(true);
+        let id = e.state.id();
         let mut timers = TimerQueue::new();
-        with_ctx(&mut timers, |ctx| {
+        let (out, _deferred, ()) = with_ctx(&mut timers, |ctx| {
             let mut sp = Event::KeyDown(KeyEvent::from(Key::Char(' ')));
             e.handle_event(&mut sp, ctx);
         });
         assert!(e.is_revealing(), "sticky Space latches on");
-        with_ctx(&mut timers, |ctx| {
+        assert_reveal_changed(&out, id);
+        let (out, _deferred, ()) = with_ctx(&mut timers, |ctx| {
             let mut sp = Event::KeyDown(KeyEvent::from(Key::Char(' ')));
             e.handle_event(&mut sp, ctx);
         });
         assert!(!e.is_revealing(), "sticky Space latches off");
+        assert_reveal_changed(&out, id);
     }
 }
