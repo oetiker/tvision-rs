@@ -12,6 +12,16 @@ moves it into a dated, versioned section when a release is cut.
 
 ### New
 
+- `InputLine` gains password masking: `set_mask(Some(ch))` paints an echo
+  character while `value()` keeps the real text and `set_reveal(bool)`
+  momentarily shows it; Cut/Copy never place cleartext on the clipboard while a
+  mask is set (revealed or not).
+- New `RevealEye` toggle and `MaskedInput` composite: a masked field with a
+  reveal eye in its last column (mouse press-and-hold to peek; Space for a timed
+  or, when `sticky`, latched reveal). The eye glyphs are theme-controlled
+  (`Glyphs::reveal_eye_hidden` / `reveal_eye_revealed`); peek duration and
+  sticky mode are set via `RevealEyeConfig`.
+
 ### Changed
 
 ### Fixed

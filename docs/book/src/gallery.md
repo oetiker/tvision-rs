@@ -64,6 +64,20 @@ hot-letter focuses the field.
 {{#rustdoc_include ../../../examples/gallery.rs:inputline}}
 ```
 
+### Masked input
+
+A password field ([`MaskedInput`](apps/controls.md)) that shows its value as
+bullets while keeping the real text intact, with a reveal eye in the last column
+(its own Tab stop). Press-and-hold the eye, or focus it and press Space, to peek;
+Cut/Copy never place the cleartext on the clipboard. The eye glyphs come from the
+theme.
+
+{{#include screens/masked_input.html}}
+
+```rust,ignore
+{{#rustdoc_include ../../../examples/gallery.rs:masked_input}}
+```
+
 ### Input line with history
 
 An input line plus a `THistory` dropdown icon that recalls earlier entries from a

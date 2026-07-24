@@ -190,6 +190,12 @@ pub struct InputLine {
     /// Focus **loss** still clears the selection either way. Useful for
     /// pre-filled or derived fields where select-all-then-type is surprising.
     pub select_all_on_focus: bool,
+    /// Echo character painted in place of the real text when set. `None` = plain
+    /// field. `data`/`value()` always hold the real text; masking is draw-only.
+    /// Assumes width-1 graphemes (passwords): one echo char per `char`.
+    pub mask: Option<char>,
+    /// Transient: when true, the real text is painted despite `mask` (reveal).
+    pub reveal: bool,
 }
 
 impl InputLine {
@@ -280,6 +286,8 @@ impl InputLine {
             tracking: false,
             tracking_drag: false,
             select_all_on_focus: true,
+            mask: None,
+            reveal: false,
         }
     }
 
@@ -315,6 +323,30 @@ impl InputLine {
     /// loss. See [`select_all_on_focus`](InputLine::select_all_on_focus).
     pub fn set_select_all_on_focus(&mut self, enable: bool) {
         self.select_all_on_focus = enable;
+    }
+
+    /// Set (or clear) the echo character. `Some(ch)` masks the display with `ch`;
+    /// `None` restores the plain field. The stored value is unaffected.
+    pub fn set_mask(&mut self, mask: Option<char>) {
+        self.mask = mask;
+    }
+
+    /// Momentarily show the real text despite `mask` (password reveal). Ignored
+    /// when the field is not masked.
+    pub fn set_reveal(&mut self, reveal: bool) {
+        self.reveal = reveal;
+    }
+
+    /// Whether the display is currently masked (masked and not revealed).
+    fn masking(&self) -> bool {
+        self.mask.is_some() && !self.reveal
+    }
+
+    /// The echo string for `s`: the mask char once per `char`. Only called while
+    /// `masking()` is true, so `self.mask` is `Some`.
+    fn echo_of(&self, s: &str) -> String {
+        let ch = self.mask.unwrap_or('•');
+        std::iter::repeat_n(ch, s.chars().count()).collect()
     }
 
     // -- geometry helpers (byte ↔ column) ----------------------------------
@@ -618,11 +650,16 @@ impl InputLine {
     /// Cut: copy the current selection to the clipboard, then delete it. The
     /// clipboard operation is guarded by the selection test; the cut command is
     /// always consumed regardless of whether a selection existed, which the
-    /// callers handle.
+    /// callers handle. Whenever a mask is configured (`self.mask.is_some()`),
+    /// the clipboard write is skipped — reveal is for viewing, not
+    /// exfiltrating, so even a revealed masked field must not leak cleartext —
+    /// but the delete still happens unconditionally.
     fn do_cut(&mut self, ctx: &mut Context) {
         if self.sel_start < self.sel_end {
-            let sel = self.data[self.sel_start as usize..self.sel_end as usize].to_string();
-            ctx.set_clipboard(sel);
+            if self.mask.is_none() {
+                let sel = self.data[self.sel_start as usize..self.sel_end as usize].to_string();
+                ctx.set_clipboard(sel);
+            }
             self.save_state();
             self.delete_select();
             self.check_valid(true);
@@ -632,9 +669,11 @@ impl InputLine {
     }
 
     /// Copy the current selection to the clipboard, keeping it (the
-    /// `Command::COPY` body).
+    /// `Command::COPY` body). Whenever a mask is configured (`self.mask.is_some()`),
+    /// this is a no-op — reveal is for viewing, not exfiltrating, so cleartext
+    /// must never leave a masked field via the clipboard, revealed or not.
     fn do_copy(&mut self, ctx: &mut Context) {
-        if self.sel_start < self.sel_end {
+        if self.sel_start < self.sel_end && self.mask.is_none() {
             let sel = self.data[self.sel_start as usize..self.sel_end as usize].to_string();
             ctx.set_clipboard(sel);
         }
@@ -840,12 +879,16 @@ impl View for InputLine {
 
         // Fill the whole row with the background color.
         ctx.fill(Rect::new(0, 0, size.x, 1), ' ', color);
+        // Masked display: echo one char per character (assumes width-1 graphemes,
+        // which passwords are). `self.data` / `value()` stay the real text.
+        let echo = self.masking().then(|| self.echo_of(&self.data));
+        let shown: &str = echo.as_deref().unwrap_or(&self.data);
         // Scrolled text from column 1, offset by first_pos.
         if size.x > 1 {
             // The text window is columns 1..size.x; clip there via a sub-ctx so a
             // glyph cannot spill into col 0 or past the right edge.
             let mut sub = ctx.sub(Rect::new(1, 0, size.x, 1));
-            sub.put_str_part(0, 0, &self.data, self.first_pos, color);
+            sub.put_str_part(0, 0, shown, self.first_pos, color);
         }
 
         // Scroll arrows.
@@ -858,8 +901,9 @@ impl View for InputLine {
 
         // Selection highlight. There is no attr-only paint, so we REDRAW the
         // selected substring in the selected style at its screen column —
-        // byte-identical output.
-        if self.state.state.selected && self.sel_start < self.sel_end {
+        // byte-identical output. Suppressed while masked so no cleartext leaks
+        // (selection still works functionally; only the highlight is hidden).
+        if !self.masking() && self.state.state.selected && self.sel_start < self.sel_end {
             // `l`/`r` are the display columns of the selection ends relative to
             // the scroll window; the highlight covers view columns [l+1 .. r+1).
             let l = (self.displayed_pos(self.sel_start) - self.first_pos).max(0);
@@ -2495,6 +2539,76 @@ mod tests {
         assert_eq!(il.data, data_before, "copy does not modify the field");
     }
 
+    /// Masked field: neither `do_copy` nor `do_cut` may leak the cleartext value
+    /// to the clipboard (Task 3 of the InputLine-masking plan). Cut still edits
+    /// (deletes the selection) — only the clipboard write is suppressed.
+    #[test]
+    fn masked_copy_and_cut_do_not_leak_cleartext() {
+        fn clipboard_writes(deferred: &[Deferred]) -> usize {
+            deferred
+                .iter()
+                .filter(|d| matches!(d, Deferred::SetClipboard(_)))
+                .count()
+        }
+
+        let mut il = InputLine::with_limit(Rect::new(0, 0, 20, 1), 64);
+        il.set_value(FieldValue::Text("secret".into()));
+        il.set_mask(Some('•'));
+        il.select_all(true, false); // select the whole value
+
+        let (_, deferred, ()) = with_ctx_d(|ctx| il.do_copy(ctx));
+        assert_eq!(
+            clipboard_writes(&deferred),
+            0,
+            "masked copy must not write cleartext"
+        );
+
+        // Cut still edits (clears the selection) but writes nothing to the clipboard.
+        let (_, deferred2, ()) = with_ctx_d(|ctx| il.do_cut(ctx));
+        assert_eq!(
+            clipboard_writes(&deferred2),
+            0,
+            "masked cut must not write cleartext"
+        );
+        assert_eq!(il.data, "", "cut still deletes the selection");
+    }
+
+    /// A REVEALED masked field must still never leak cleartext to the OS
+    /// clipboard: reveal is for viewing, not exfiltrating. Guard on
+    /// `mask.is_none()` rather than `!masking()`, so `do_copy`/`do_cut` skip
+    /// the clipboard write whenever a mask is configured, revealed or not.
+    #[test]
+    fn revealed_masked_field_still_never_copies_cleartext() {
+        fn clipboard_writes(deferred: &[Deferred]) -> usize {
+            deferred
+                .iter()
+                .filter(|d| matches!(d, Deferred::SetClipboard(_)))
+                .count()
+        }
+
+        let mut il = InputLine::with_limit(Rect::new(0, 0, 20, 1), 64);
+        il.set_value(FieldValue::Text("secret".into()));
+        il.set_mask(Some('•'));
+        il.set_reveal(true);
+        il.select_all(true, false); // select the whole value
+
+        let (_, deferred, ()) = with_ctx_d(|ctx| il.do_copy(ctx));
+        assert_eq!(
+            clipboard_writes(&deferred),
+            0,
+            "revealed masked copy must not write cleartext"
+        );
+
+        // Cut still edits (clears the selection) but writes nothing to the clipboard.
+        let (_, deferred2, ()) = with_ctx_d(|ctx| il.do_cut(ctx));
+        assert_eq!(
+            clipboard_writes(&deferred2),
+            0,
+            "revealed masked cut must not write cleartext"
+        );
+        assert_eq!(il.data, "", "cut still deletes the selection");
+    }
+
     /// cmPaste defers an InputLinePaste with the field's id.
     #[test]
     fn b3_paste_defers_input_line_paste_with_id() {
@@ -2793,5 +2907,59 @@ mod tests {
         il.state.state.focused = false;
         il.state.options.selectable = false;
         assert_eq!(fill_bg(&mut il, &theme, true), normal_bg);
+    }
+
+    #[test]
+    fn mask_helpers_track_state_and_echo() {
+        let mut il = InputLine::with_limit(Rect::new(0, 0, 10, 1), 64);
+        assert!(!il.masking(), "unmasked by default");
+        il.set_mask(Some('•'));
+        assert!(il.masking(), "masking once a mask char is set");
+        assert_eq!(il.echo_of("abc"), "•••", "one echo char per char");
+        il.set_reveal(true);
+        assert!(!il.masking(), "reveal suspends masking");
+        il.set_reveal(false);
+        il.set_mask(None);
+        assert!(!il.masking(), "clearing the mask disables masking");
+    }
+
+    #[test]
+    fn masked_draw_shows_echo_not_data_and_value_is_real() {
+        use crate::screen::Buffer;
+        use crate::theme::Theme;
+        use crate::view::DrawCtx;
+
+        let mut il = InputLine::with_limit(Rect::new(0, 0, 8, 1), 64);
+        il.set_value(FieldValue::Text("secret".into()));
+        il.set_mask(Some('•'));
+
+        let theme = Theme::classic_blue();
+        let mut buf = Buffer::new(8, 1);
+        {
+            let mut dc = DrawCtx::new(&mut buf, &theme, Rect::new(0, 0, 8, 1), Point::new(0, 0));
+            il.draw(&mut dc);
+        }
+        // Text is painted from column 1. Masked → bullets, never the letters.
+        let row: String = (0..8).map(|x| buf.get(x, 0).symbol()).collect();
+        assert!(row.contains('•'), "masked field paints bullets: {row:?}");
+        assert!(
+            !row.contains('s') && !row.contains('e'),
+            "no cleartext: {row:?}"
+        );
+        // The stored value is still the real password.
+        assert_eq!(il.value(), Some(FieldValue::Text("secret".into())));
+
+        // Revealing paints the real text.
+        il.set_reveal(true);
+        let mut buf2 = Buffer::new(8, 1);
+        {
+            let mut dc = DrawCtx::new(&mut buf2, &theme, Rect::new(0, 0, 8, 1), Point::new(0, 0));
+            il.draw(&mut dc);
+        }
+        let row2: String = (0..8).map(|x| buf2.get(x, 0).symbol()).collect();
+        assert!(
+            row2.contains('s') && row2.contains('e'),
+            "revealed shows real: {row2:?}"
+        );
     }
 }
