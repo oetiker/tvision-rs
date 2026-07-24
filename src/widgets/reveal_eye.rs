@@ -16,13 +16,11 @@ use crate::timer::TimerId;
 use crate::view::{Context, DrawCtx, View, ViewState};
 use crate::{Event, Options, Point, Rect, Role};
 
-/// Look + behaviour of a [`RevealEye`].
+/// Behaviour of a [`RevealEye`]. The eye glyphs are theme-controlled
+/// (`Glyphs::reveal_eye_hidden` / `reveal_eye_revealed`), so this config carries
+/// only the interaction knobs.
 #[derive(Debug, Clone, Copy)]
 pub struct RevealEyeConfig {
-    /// Glyph shown while the field is hidden. Default `⊝` (U+229D).
-    pub hidden_glyph: char,
-    /// Glyph shown while the field is revealed. Default `◉` (U+25C9).
-    pub revealed_glyph: char,
     /// Timed-peek duration for a non-sticky Space press. Default 1 s.
     pub peek: Duration,
     /// When true, Space toggles a latched reveal instead of a timed peek.
@@ -32,8 +30,6 @@ pub struct RevealEyeConfig {
 impl Default for RevealEyeConfig {
     fn default() -> Self {
         RevealEyeConfig {
-            hidden_glyph: '⊝',
-            revealed_glyph: '◉',
             peek: Duration::from_secs(1),
             sticky: false,
         }
@@ -111,9 +107,9 @@ impl View for RevealEye {
             self.state.options.selectable,
         );
         let glyph = if self.is_revealing() {
-            self.cfg.revealed_glyph
+            ctx.glyphs().reveal_eye_revealed
         } else {
-            self.cfg.hidden_glyph
+            ctx.glyphs().reveal_eye_hidden
         };
         ctx.fill(Rect::new(0, 0, self.state.size.x, 1), ' ', color);
         ctx.put_char(0, 0, glyph, color);
@@ -183,6 +179,48 @@ mod tests {
         e.state_mut().id = Some(ViewId::next());
         e.state_mut().state.selected = true; // stand in for focus in a unit test
         e
+    }
+
+    #[test]
+    fn draw_paints_the_theme_reveal_eye_glyphs() {
+        use crate::screen::Buffer;
+        use crate::theme::Theme;
+        use crate::view::DrawCtx;
+
+        let theme = Theme::classic_blue();
+        let hidden = theme.glyphs().reveal_eye_hidden;
+        let revealed = theme.glyphs().reveal_eye_revealed;
+
+        // Hidden by default: the eye paints the theme's hidden glyph, not a
+        // hardcoded one.
+        let mut e = eye(false);
+        let mut buf = Buffer::new(1, 1);
+        {
+            let mut dc = DrawCtx::new(&mut buf, &theme, Rect::new(0, 0, 1, 1), Point::new(0, 0));
+            e.draw(&mut dc);
+        }
+        let row: String = (0..1).map(|x| buf.get(x, 0).symbol()).collect();
+        assert_eq!(row, hidden.to_string(), "hidden eye paints the theme glyph");
+
+        // While revealing (sticky latched on), it paints the theme's revealed glyph.
+        let mut e2 = eye(true);
+        let mut timers = TimerQueue::new();
+        with_ctx(&mut timers, |ctx| {
+            let mut sp = Event::KeyDown(KeyEvent::from(Key::Char(' ')));
+            e2.handle_event(&mut sp, ctx);
+        });
+        assert!(e2.is_revealing());
+        let mut buf2 = Buffer::new(1, 1);
+        {
+            let mut dc = DrawCtx::new(&mut buf2, &theme, Rect::new(0, 0, 1, 1), Point::new(0, 0));
+            e2.draw(&mut dc);
+        }
+        let row2: String = (0..1).map(|x| buf2.get(x, 0).symbol()).collect();
+        assert_eq!(
+            row2,
+            revealed.to_string(),
+            "revealed eye paints the theme glyph"
+        );
     }
 
     /// Build a fresh `Context` over the given (persistent) `TimerQueue`, run
