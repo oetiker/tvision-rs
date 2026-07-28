@@ -61,6 +61,56 @@ an optional [`Validator`](../api/tvision_rs/validate/trait.Validator.html). Its
 cursor and selection track byte offsets into a real Rust `String`, so multi-byte
 and wide text behave correctly.
 
+### Read-only fields (rstv extension)
+
+`set_read_only(true)` makes a field refuse every change to its text while
+leaving it fully navigable. This is **not** the same as disabling it: a disabled
+view is skipped by focus entirely, so a value too wide for its cell can never be
+scrolled into view, selected, or copied. A read-only field still takes focus,
+moves its caret, scrolls, select-alls and copies — only typing, deleting,
+cutting and pasting are refused.
+
+Each refusal consumes the event and broadcasts `InputLine::READ_ONLY_REJECTED`
+with the field's own `ViewId` as the source, so the owner can tell the user
+*which* field would not budge and why — the widget deliberately says nothing on
+its own, because only the owner knows the reason. Cut and paste are also grayed
+in the command set, so the menu route cannot do what the keyboard route refuses.
+
+```rust
+# use tvision_rs as tv;
+# fn _demo() {
+use tv::widgets::{InputLine, LimitMode};
+
+let mut line = InputLine::new(tv::Rect::new(3, 3, 30, 4), 64, None, LimitMode::MaxBytes);
+line.set_read_only(true); // reachable and copyable, but not editable
+# }
+```
+
+A read-only field is drawn exactly like an editable one. Signalling the
+distinction visually is left to the owner, which knows whether "read-only" means
+server-maintained, computed, or merely not-yet-unlocked.
+
+### Which end of a long value shows (rstv extension)
+
+A value wider than its field can only show one end of itself. `set_value`
+select-alls, so by default the view sits at the **tail** — Turbo Vision's
+behaviour, and the right one for a field whose first keystroke should replace
+the value. It is the wrong one for data whose *front* identifies it, where the
+operator is left reading `…,dc=example,dc=org`.
+
+```rust
+# use tvision_rs as tv;
+# fn _demo(line: &mut tv::widgets::InputLine) {
+use tv::widgets::ValuePosition;
+
+line.set_value_position(ValuePosition::Start); // show the head, caret homed
+# }
+```
+
+This governs `set_value` only — both the plain text path and the
+validator-transfer path. Focus behaviour is separate: see
+`set_select_all_on_focus`.
+
 ## Labels & static text
 
 - [`StaticText`](../api/tvision_rs/widgets/struct.StaticText.html) — a read-only,

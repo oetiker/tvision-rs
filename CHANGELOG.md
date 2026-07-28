@@ -12,6 +12,23 @@ moves it into a dated, versioned section when a release is cut.
 
 ### New
 
+- `InputLine::set_value_position(ValuePosition)` chooses which end of a too-wide
+  value `set_value` leaves on screen. The default (`End`) is Turbo Vision's
+  behaviour — select-all, caret and view at the tail, ready to be replaced by the
+  first keystroke — which strands the operator at `…,dc=example,dc=org` for data
+  whose *front* identifies it. `Start` homes the caret and the view instead, with
+  nothing selected. Governs `set_value` only (both the plain and the
+  validator-transfer path); focus behaviour stays with `set_select_all_on_focus`.
+
+- `InputLine` gains a read-only mode: `set_read_only(true)` refuses every change
+  to the text while the field stays fully navigable — it takes focus, moves its
+  caret, scrolls horizontally, select-alls and copies, unlike a `disabled` field
+  which focus skips entirely (so a value wider than its cell can never be read
+  to its end). Typing, deleting, cutting and both paste routes are refused; each
+  refusal consumes the event and broadcasts `InputLine::READ_ONLY_REJECTED` with
+  the field's `ViewId` as the source, so the owner can say which field refused
+  and why. Cut and paste are grayed in the command set, closing the menu route.
+
 ### Changed
 
 ### Fixed

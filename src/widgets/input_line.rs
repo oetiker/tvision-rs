@@ -81,6 +81,24 @@ pub enum LimitMode {
 // ---------------------------------------------------------------------------
 
 /// A single-line text-entry field.
+/// Where [`View::set_value`] leaves a field: which end of the text is on screen.
+///
+/// A value wider than the field can only show one end of itself. Which end is
+/// the *useful* one depends on the data — the tail of a number being entered,
+/// but the head of a path or a distinguished name, where the front is what
+/// identifies it. See [`InputLine::set_value_position`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum ValuePosition {
+    /// Turbo Vision's behaviour and the default: the whole value is selected and
+    /// the caret sits after it, so the view shows the text's **end** and the
+    /// first keystroke replaces it.
+    #[default]
+    End,
+    /// The caret is homed and nothing is selected, so the view shows the text's
+    /// **start**.
+    Start,
+}
+
 pub struct InputLine {
     /// View state (geometry, flags, cursor) — the composition target.
     pub state: ViewState,
@@ -196,9 +214,25 @@ pub struct InputLine {
     pub mask: Option<char>,
     /// Transient: when true, the real text is painted despite `mask` (reveal).
     pub reveal: bool,
+    /// Whether the field refuses every change to its text while staying fully
+    /// navigable. See [`set_read_only`](InputLine::set_read_only).
+    read_only: bool,
+    /// Which end of a too-wide value `set_value` leaves on screen. See
+    /// [`set_value_position`](InputLine::set_value_position).
+    value_position: ValuePosition,
 }
 
 impl InputLine {
+    /// Broadcast when a read-only field refuses a change, carrying the field's
+    /// own [`ViewId`](crate::ViewId) as the broadcast source so the owner can
+    /// tell *which* field was refused and explain it in its own words.
+    ///
+    /// A broadcast rather than a flag the owner polls: the deferred clipboard
+    /// paste is applied outside any keystroke the owner could poll around, and
+    /// the source id spares the owner any bookkeeping to map a refusal back to a
+    /// field. See [`set_read_only`](InputLine::set_read_only).
+    pub const READ_ONLY_REJECTED: Command = Command::custom("tv.input_line.read_only_rejected");
+
     /// InputLine's surface triple for [`DrawCtx::content_surface`].
     const SURFACE_ROLES: SurfaceRoles = SurfaceRoles {
         normal: Role::InputNormal,
@@ -288,6 +322,8 @@ impl InputLine {
             select_all_on_focus: true,
             mask: None,
             reveal: false,
+            read_only: false,
+            value_position: ValuePosition::End,
         }
     }
 
@@ -323,6 +359,85 @@ impl InputLine {
     /// loss. See [`select_all_on_focus`](InputLine::select_all_on_focus).
     pub fn set_select_all_on_focus(&mut self, enable: bool) {
         self.select_all_on_focus = enable;
+    }
+
+    /// Make the field refuse every change to its text while leaving it fully
+    /// navigable — the "look but don't touch" mode.
+    ///
+    /// This is **orthogonal to `disabled`**. A disabled view is skipped by focus
+    /// entirely, so its value can never be scrolled, selected or copied. A
+    /// read-only field still takes focus, moves its caret, scrolls horizontally,
+    /// select-alls, and copies; only the text is untouchable:
+    ///
+    /// | | `disabled` | `read_only` | plain |
+    /// |---|---|---|---|
+    /// | takes focus | no | **yes** | yes |
+    /// | caret / horizontal scroll | — | **yes** | yes |
+    /// | select + copy | — | **yes** | yes |
+    /// | type / delete / cut / paste | — | **refused** | yes |
+    ///
+    /// Every refused change consumes the event and broadcasts
+    /// [`READ_ONLY_REJECTED`](InputLine::READ_ONLY_REJECTED), so the owner can
+    /// tell the user why the field will not budge. Cut and paste are also grayed
+    /// in the command set, closing the menu route.
+    ///
+    /// Setting this does not change the text, the caret, or the appearance: a
+    /// read-only field is drawn exactly like an editable one, because the owner
+    /// — which knows *why* the field is read-only — is better placed to signal it.
+    pub fn set_read_only(&mut self, read_only: bool) {
+        self.read_only = read_only;
+    }
+
+    /// Whether the field refuses changes. See [`set_read_only`](Self::set_read_only).
+    pub fn is_read_only(&self) -> bool {
+        self.read_only
+    }
+
+    /// Choose which end of the text [`View::set_value`] leaves on screen.
+    ///
+    /// A value wider than the field shows only one end of itself, and the
+    /// Turbo Vision default ([`ValuePosition::End`]) picks the tail: `set_value`
+    /// select-alls, which parks caret and view after the last character, ready
+    /// for the first keystroke to replace the value.
+    ///
+    /// That is wrong for data whose front identifies it — a path, a URL, a
+    /// distinguished name — where the operator is left staring at
+    /// `…,dc=example,dc=org`. [`ValuePosition::Start`] homes the caret and the
+    /// view instead, leaving nothing selected.
+    ///
+    /// This governs `set_value` only. Focus is separate: see
+    /// [`set_select_all_on_focus`](Self::set_select_all_on_focus).
+    pub fn set_value_position(&mut self, position: ValuePosition) {
+        self.value_position = position;
+    }
+
+    /// Which end of the text `set_value` leaves on screen. See
+    /// [`set_value_position`](Self::set_value_position).
+    pub fn value_position(&self) -> ValuePosition {
+        self.value_position
+    }
+
+    /// Apply [`value_position`](Self::value_position) after `set_value` has
+    /// replaced `data`.
+    fn place_loaded_value(&mut self) {
+        match self.value_position {
+            ValuePosition::End => self.select_all(true, true),
+            // `home` collapses the selection, homes the caret, and scrolls the
+            // field fully left.
+            ValuePosition::Start => self.home(),
+        }
+    }
+
+    /// Refuse a change on a read-only field: broadcast
+    /// [`READ_ONLY_REJECTED`](Self::READ_ONLY_REJECTED) naming this field and
+    /// report `true` so the caller drops the mutation. `false` on an editable
+    /// field, where the caller proceeds as usual.
+    fn refuse_change(&self, ctx: &mut Context) -> bool {
+        if !self.read_only {
+            return false;
+        }
+        ctx.broadcast(Self::READ_ONLY_REJECTED, self.state.id());
+        true
     }
 
     /// Set (or clear) the echo character. `Some(ch)` masks the display with `ch`;
@@ -497,15 +612,26 @@ impl InputLine {
     /// Only called when [`can_update_commands`](Self::can_update_commands) holds.
     fn update_commands(&self, ctx: &mut Context) {
         let has_selection = self.sel_start < self.sel_end;
+        // Copy follows the selection either way — a read-only field is meant to
+        // be copied FROM. Cut and paste change the text, so they stay gray while
+        // read-only: the menu route must not do what the keyboard route refuses.
         if has_selection {
-            ctx.enable_command(Command::CUT);
+            if self.read_only {
+                ctx.disable_command(Command::CUT);
+            } else {
+                ctx.enable_command(Command::CUT);
+            }
             ctx.enable_command(Command::COPY);
         } else {
             ctx.disable_command(Command::CUT);
             ctx.disable_command(Command::COPY);
         }
-        // cmPaste is always enabled when this field is active+selected.
-        ctx.enable_command(Command::PASTE);
+        if self.read_only {
+            ctx.disable_command(Command::PASTE);
+        } else {
+            // cmPaste is always enabled when this field is active+selected.
+            ctx.enable_command(Command::PASTE);
+        }
     }
 
     // -- validator save/restore/check --------------------------------------
@@ -581,7 +707,15 @@ impl InputLine {
     /// replacing the selection, clamped so the total byte length does not exceed
     /// the byte cap. Tabs/newlines are replaced with spaces. After insertion the
     /// cursor sits at the end of the pasted text and the selection is cleared.
+    ///
+    /// A no-op on a [read-only](Self::set_read_only) field. Both routes into a
+    /// deferred paste are already refused before they get here, so this is the
+    /// belt to their braces — and it is silent, because without a `Context` it
+    /// cannot broadcast the refusal.
     pub fn paste_text(&mut self, text: &str) {
+        if self.read_only {
+            return;
+        }
         self.save_state();
         // Replace the current selection before inserting.
         self.delete_select();
@@ -691,6 +825,22 @@ impl InputLine {
     /// Apply a resolved editor command within the single-line repertoire.
     /// Returns `true` if handled; `false` means "not ours — let it bubble".
     fn apply_input_command(&mut self, cmd: Command, ctx: &mut Context) -> bool {
+        // Everything that changes the text is refused on a read-only field. The
+        // command is still reported handled, so the event is consumed and does
+        // not bubble on to be interpreted by something else.
+        if matches!(
+            cmd,
+            Command::BACK_SPACE
+                | Command::DEL_WORD_LEFT
+                | Command::DEL_CHAR
+                | Command::DEL_WORD
+                | Command::DEL_LINE
+                | Command::CUT
+                | Command::PASTE
+        ) && self.refuse_change(ctx)
+        {
+            return true;
+        }
         match cmd {
             Command::CHAR_LEFT => {
                 self.cur_pos -= text::prev(&self.data, self.cur_pos as usize) as i32
@@ -1109,6 +1259,15 @@ impl View for InputLine {
                     None => {
                         // Printable insertion: only a plain Char with no ctrl/alt.
                         match ke.key {
+                            Key::Char(c)
+                                if !ke.modifiers.ctrl
+                                    && !ke.modifiers.alt
+                                    && self.refuse_change(ctx) =>
+                            {
+                                // Read-only: swallow the keystroke (and tell the
+                                // owner) instead of inserting it.
+                                let _ = c;
+                            }
                             Key::Char(c) if !ke.modifiers.ctrl && !ke.modifiers.alt => {
                                 // Printable insertion. Tabs/newlines → space (faithful).
                                 let ch = if c == '\t' || c == '\r' || c == '\n' {
@@ -1177,8 +1336,13 @@ impl View for InputLine {
                 // The command is always consumed regardless of whether a
                 // selection exists; the clipboard operation is guarded inside each.
                 match *cmd {
+                    // Cut and paste change the text: refused (and consumed) on a
+                    // read-only field. Copy is always allowed — reading a value
+                    // out is the point of the mode.
                     Command::CUT => {
-                        self.do_cut(ctx);
+                        if !self.refuse_change(ctx) {
+                            self.do_cut(ctx);
+                        }
                         ev.clear();
                     }
                     Command::COPY => {
@@ -1186,7 +1350,9 @@ impl View for InputLine {
                         ev.clear();
                     }
                     Command::PASTE => {
-                        self.do_paste(ctx);
+                        if !self.refuse_change(ctx) {
+                            self.do_paste(ctx);
+                        }
                         ev.clear();
                     }
                     _ => {}
@@ -1206,7 +1372,9 @@ impl View for InputLine {
             // (the outer guard returns otherwise).
             Event::Paste(text) => {
                 let text = std::mem::take(text);
-                self.paste_text(&text);
+                if !self.refuse_change(ctx) {
+                    self.paste_text(&text);
+                }
                 ev.clear();
             }
 
@@ -1329,7 +1497,7 @@ impl View for InputLine {
         // text; otherwise the Text path is used. Select-all runs either way.
         if let Some(text) = self.validator.as_ref().and_then(|val| val.transfer_set(&v)) {
             self.data = text;
-            self.select_all(true, true);
+            self.place_loaded_value();
             return;
         }
         // When transfer is disabled and `v` is `Int` (not `Text`), the body
@@ -1349,7 +1517,7 @@ impl View for InputLine {
                 }
                 s[..cut].to_string()
             };
-            self.select_all(true, true);
+            self.place_loaded_value();
         }
     }
 }
@@ -2961,5 +3129,230 @@ mod tests {
             row2.contains('s') && row2.contains('e'),
             "revealed shows real: {row2:?}"
         );
+    }
+
+    // -- value position -----------------------------------------------------
+
+    #[test]
+    fn set_value_defaults_to_showing_the_end() {
+        // Turbo Vision's behaviour: select-all, caret after the text, view at the
+        // tail — ready for the first keystroke to replace the value.
+        let mut il = field(10, "");
+        il.set_value(FieldValue::Text("cn=admin,dc=example,dc=org".into()));
+        assert_eq!(il.value_position(), ValuePosition::End);
+        assert_eq!(il.cur_pos, il.data.len() as i32, "caret at the end");
+        assert_eq!((il.sel_start, il.sel_end), (0, il.data.len() as i32));
+        assert!(il.first_pos > 0, "the view scrolled to show the tail");
+    }
+
+    #[test]
+    fn value_position_start_shows_the_head_instead() {
+        // For a DN or a path the front is what identifies it.
+        let mut il = field(10, "");
+        il.set_value_position(ValuePosition::Start);
+        il.set_value(FieldValue::Text("cn=admin,dc=example,dc=org".into()));
+        assert_eq!(il.cur_pos, 0, "caret homed");
+        assert_eq!((il.sel_start, il.sel_end), (0, 0), "nothing selected");
+        assert_eq!(il.first_pos, 0, "the view shows the start");
+    }
+
+    #[test]
+    fn value_position_applies_on_the_validator_transfer_path_too() {
+        use crate::validate::RangeValidator;
+        let mut rv = RangeValidator::new(0, 1_000_000);
+        rv.set_transfer(true);
+        let mut il = InputLine::new(
+            Rect::new(0, 0, 4, 1),
+            256,
+            Some(Box::new(rv)),
+            LimitMode::MaxBytes,
+        );
+        il.set_value_position(ValuePosition::Start);
+        il.set_value(FieldValue::Int(123_456));
+        assert_eq!(il.data, "123456");
+        assert_eq!(il.cur_pos, 0, "the typed-transfer path honours it as well");
+        assert_eq!(il.first_pos, 0);
+    }
+
+    // -- read-only mode -----------------------------------------------------
+
+    /// Every `Event::Broadcast` of `READ_ONLY_REJECTED` in `out`, with its source.
+    fn rejections(out: &[Event]) -> Vec<Option<crate::view::ViewId>> {
+        out.iter()
+            .filter_map(|e| match e {
+                Event::Broadcast { command, source }
+                    if *command == InputLine::READ_ONLY_REJECTED =>
+                {
+                    Some(*source)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn read_only_field(width: i32, data: &str) -> (InputLine, crate::view::ViewId) {
+        let (mut il, id) = field_with_id(width, data);
+        il.set_read_only(true);
+        (il, id)
+    }
+
+    #[test]
+    fn read_only_refuses_every_editing_key() {
+        // Each key that would change the text: the value survives, the event is
+        // consumed (so nothing else reinterprets it), and the owner is told.
+        for make in [
+            || key(Key::Backspace),
+            || key(Key::Delete),
+            || ctrl_key(Key::Char('y')), // DEL_LINE — clears the field
+            || char_key('x'),
+        ] {
+            let (mut il, id) = read_only_field(12, "abc");
+            il.cur_pos = 1;
+            let mut ev = make();
+            let (out, ()) = with_ctx(|ctx| il.handle_event(&mut ev, ctx));
+            assert_eq!(il.data, "abc", "read-only text must survive {ev:?}");
+            assert!(ev.is_nothing(), "the refused event is consumed");
+            assert_eq!(
+                rejections(&out),
+                vec![Some(id)],
+                "the owner is told, and which field it was"
+            );
+        }
+    }
+
+    #[test]
+    fn an_editable_field_still_edits() {
+        // Guards against the refusal leaking into normal fields.
+        let (mut il, _) = field_with_id(12, "abc");
+        let mut ev = char_key('x');
+        let (out, ()) = with_ctx(|ctx| il.handle_event(&mut ev, ctx));
+        assert_eq!(il.data, "abcx");
+        assert!(
+            rejections(&out).is_empty(),
+            "no refusal on an editable field"
+        );
+    }
+
+    #[test]
+    fn read_only_allows_caret_movement_and_selection() {
+        let (mut il, _) = read_only_field(12, "hello");
+        il.cur_pos = 5;
+        for (ev_key, want) in [(Key::Left, 4), (Key::Home, 0), (Key::End, 5)] {
+            let mut ev = key(ev_key);
+            let (out, ()) = with_ctx(|ctx| il.handle_event(&mut ev, ctx));
+            assert_eq!(il.cur_pos, want, "{ev_key:?} must still move the caret");
+            assert!(rejections(&out).is_empty(), "movement is not a change");
+        }
+        // Select-all is a selection, not an edit.
+        il.select_all(true, true);
+        assert_eq!((il.sel_start, il.sel_end), (0, 5));
+        assert_eq!(il.data, "hello");
+    }
+
+    #[test]
+    fn read_only_copies_but_refuses_cut_and_paste() {
+        // Copy is the whole point of the mode: a value you cannot edit must
+        // still be one you can take with you.
+        let (mut il, _id) = read_only_field(20, "cn=admin,dc=example");
+        il.state.state.active = true;
+        il.sel_start = 0;
+        il.sel_end = 8;
+        let mut ev = Event::Command(Command::COPY);
+        let (out, deferred, ()) = with_ctx_d(|ctx| il.handle_event(&mut ev, ctx));
+        assert_eq!(
+            deferred.iter().find_map(|d| match d {
+                Deferred::SetClipboard(s) => Some(s.as_str()),
+                _ => None,
+            }),
+            Some("cn=admin"),
+            "copy reaches the clipboard"
+        );
+        assert!(rejections(&out).is_empty(), "copy is not a change");
+
+        // Cut would remove the selection; paste would replace it.
+        let (mut il, _) = read_only_field(20, "cn=admin,dc=example");
+        il.state.state.active = true;
+        il.sel_start = 0;
+        il.sel_end = 8;
+        let mut ev = Event::Command(Command::CUT);
+        let (out, deferred, ()) = with_ctx_d(|ctx| il.handle_event(&mut ev, ctx));
+        assert_eq!(
+            il.data, "cn=admin,dc=example",
+            "cut must not remove anything"
+        );
+        assert!(
+            !deferred
+                .iter()
+                .any(|d| matches!(d, Deferred::SetClipboard(_))),
+            "a refused cut writes nothing to the clipboard either"
+        );
+        assert_eq!(rejections(&out).len(), 1);
+
+        let mut ev = Event::Command(Command::PASTE);
+        let (out, deferred, ()) = with_ctx_d(|ctx| il.handle_event(&mut ev, ctx));
+        assert!(
+            !deferred
+                .iter()
+                .any(|d| matches!(d, Deferred::InputLinePaste(_))),
+            "a refused paste never asks the broker for clipboard text"
+        );
+        assert_eq!(rejections(&out).len(), 1);
+        assert_eq!(il.data, "cn=admin,dc=example");
+    }
+
+    #[test]
+    fn read_only_refuses_a_terminal_paste() {
+        // Bracketed paste hands us the bytes directly — no command to gray.
+        let (mut il, id) = read_only_field(20, "abc");
+        let mut ev = Event::Paste("pasted".to_string());
+        let (out, ()) = with_ctx(|ctx| il.handle_event(&mut ev, ctx));
+        assert_eq!(il.data, "abc");
+        assert!(ev.is_nothing(), "the paste is consumed, not passed on");
+        assert_eq!(rejections(&out), vec![Some(id)]);
+    }
+
+    #[test]
+    fn read_only_paste_text_is_inert() {
+        // The deferred-paste apply arm calls this directly, with no Context to
+        // refuse through — so it must simply do nothing.
+        let (mut il, _) = read_only_field(20, "abc");
+        il.paste_text("pasted");
+        assert_eq!(il.data, "abc");
+    }
+
+    #[test]
+    fn read_only_grays_cut_and_paste_but_not_copy() {
+        let (mut il, _) = read_only_field(20, "hello");
+        il.state.state.active = true;
+        il.sel_start = 0;
+        il.sel_end = 5; // a selection exists: copy is meaningful
+        let (_, deferred, ()) = with_ctx_d(|ctx| il.update_commands(ctx));
+        let enabled: Vec<Command> = deferred
+            .iter()
+            .filter_map(|d| match d {
+                Deferred::EnableCommand(c) => Some(*c),
+                _ => None,
+            })
+            .collect();
+        let disabled: Vec<Command> = deferred
+            .iter()
+            .filter_map(|d| match d {
+                Deferred::DisableCommand(c) => Some(*c),
+                _ => None,
+            })
+            .collect();
+        assert!(enabled.contains(&Command::COPY), "copy stays available");
+        assert!(disabled.contains(&Command::CUT), "cut is grayed");
+        assert!(disabled.contains(&Command::PASTE), "paste is grayed");
+    }
+
+    #[test]
+    fn read_only_is_focusable_where_disabled_is_not() {
+        // The distinction the mode exists for: a disabled field cannot be
+        // reached at all, a read-only one can.
+        let (mut il, _) = read_only_field(12, "abc");
+        assert!(il.has_focusable_leaf(), "a read-only field takes focus");
+        il.state.state.disabled = true;
+        assert!(!il.has_focusable_leaf(), "a disabled field does not");
     }
 }

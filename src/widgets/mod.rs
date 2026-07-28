@@ -48,7 +48,7 @@ pub use history::{
     HistoryViewer, HistoryWindow, THistory, clear_history, history_add, history_count, history_str,
 };
 pub use indicator::Indicator;
-pub use input_line::{InputLine, LimitMode};
+pub use input_line::{InputLine, LimitMode, ValuePosition};
 pub use list_box::{ListBox, SortedListBox};
 pub use list_viewer::{FindMode, ListRoles, ListViewer, ListViewerState};
 pub use masked_input::MaskedInput;
