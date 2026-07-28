@@ -12,6 +12,14 @@ moves it into a dated, versioned section when a release is cut.
 
 ### New
 
+### Changed
+
+### Fixed
+
+## 0.15.0 - 2026-07-28
+
+### New
+
 - `InputLine::set_value_position(ValuePosition)` chooses which end of a too-wide
   value `set_value` leaves on screen. The default (`End`) is Turbo Vision's
   behaviour — select-all, caret and view at the tail, ready to be replaced by the
@@ -28,7 +36,6 @@ moves it into a dated, versioned section when a release is cut.
   refusal consumes the event and broadcasts `InputLine::READ_ONLY_REJECTED` with
   the field's `ViewId` as the source, so the owner can say which field refused
   and why. Cut and paste are grayed in the command set, closing the menu route.
-
 ### Changed
 
 ### Fixed
