@@ -12,6 +12,15 @@ moves it into a dated, versioned section when a release is cut.
 
 ### New
 
+- `InputLine` gains a read-only mode: `set_read_only(true)` refuses every change
+  to the text while the field stays fully navigable — it takes focus, moves its
+  caret, scrolls horizontally, select-alls and copies, unlike a `disabled` field
+  which focus skips entirely (so a value wider than its cell can never be read
+  to its end). Typing, deleting, cutting and both paste routes are refused; each
+  refusal consumes the event and broadcasts `InputLine::READ_ONLY_REJECTED` with
+  the field's `ViewId` as the source, so the owner can say which field refused
+  and why. Cut and paste are grayed in the command set, closing the menu route.
+
 ### Changed
 
 ### Fixed
