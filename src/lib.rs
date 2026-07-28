@@ -143,7 +143,7 @@ pub use widgets::{Constraints, DividerStyle, Orientation, Splitter};
 pub use widgets::{
     EditWindow, Editor, FindMode, InputLine, LimitMode, ListBox, ListRoles, ListViewer,
     ListViewerState, MaskedInput, RevealEye, RevealEyeConfig, SM_DOUBLE, SM_EXTEND, SM_TRIPLE,
-    ScrollBar, Scroller, SortedListBox,
+    ScrollBar, Scroller, SortedListBox, ValuePosition,
 };
 pub use widgets::{Encoding, FileEditor, LineEnding, Memo};
 pub use widgets::{

@@ -81,6 +81,24 @@ pub enum LimitMode {
 // ---------------------------------------------------------------------------
 
 /// A single-line text-entry field.
+/// Where [`View::set_value`] leaves a field: which end of the text is on screen.
+///
+/// A value wider than the field can only show one end of itself. Which end is
+/// the *useful* one depends on the data — the tail of a number being entered,
+/// but the head of a path or a distinguished name, where the front is what
+/// identifies it. See [`InputLine::set_value_position`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum ValuePosition {
+    /// Turbo Vision's behaviour and the default: the whole value is selected and
+    /// the caret sits after it, so the view shows the text's **end** and the
+    /// first keystroke replaces it.
+    #[default]
+    End,
+    /// The caret is homed and nothing is selected, so the view shows the text's
+    /// **start**.
+    Start,
+}
+
 pub struct InputLine {
     /// View state (geometry, flags, cursor) — the composition target.
     pub state: ViewState,
@@ -199,6 +217,9 @@ pub struct InputLine {
     /// Whether the field refuses every change to its text while staying fully
     /// navigable. See [`set_read_only`](InputLine::set_read_only).
     read_only: bool,
+    /// Which end of a too-wide value `set_value` leaves on screen. See
+    /// [`set_value_position`](InputLine::set_value_position).
+    value_position: ValuePosition,
 }
 
 impl InputLine {
@@ -302,6 +323,7 @@ impl InputLine {
             mask: None,
             reveal: false,
             read_only: false,
+            value_position: ValuePosition::End,
         }
     }
 
@@ -369,6 +391,41 @@ impl InputLine {
     /// Whether the field refuses changes. See [`set_read_only`](Self::set_read_only).
     pub fn is_read_only(&self) -> bool {
         self.read_only
+    }
+
+    /// Choose which end of the text [`View::set_value`] leaves on screen.
+    ///
+    /// A value wider than the field shows only one end of itself, and the
+    /// Turbo Vision default ([`ValuePosition::End`]) picks the tail: `set_value`
+    /// select-alls, which parks caret and view after the last character, ready
+    /// for the first keystroke to replace the value.
+    ///
+    /// That is wrong for data whose front identifies it — a path, a URL, a
+    /// distinguished name — where the operator is left staring at
+    /// `…,dc=example,dc=org`. [`ValuePosition::Start`] homes the caret and the
+    /// view instead, leaving nothing selected.
+    ///
+    /// This governs `set_value` only. Focus is separate: see
+    /// [`set_select_all_on_focus`](Self::set_select_all_on_focus).
+    pub fn set_value_position(&mut self, position: ValuePosition) {
+        self.value_position = position;
+    }
+
+    /// Which end of the text `set_value` leaves on screen. See
+    /// [`set_value_position`](Self::set_value_position).
+    pub fn value_position(&self) -> ValuePosition {
+        self.value_position
+    }
+
+    /// Apply [`value_position`](Self::value_position) after `set_value` has
+    /// replaced `data`.
+    fn place_loaded_value(&mut self) {
+        match self.value_position {
+            ValuePosition::End => self.select_all(true, true),
+            // `home` collapses the selection, homes the caret, and scrolls the
+            // field fully left.
+            ValuePosition::Start => self.home(),
+        }
     }
 
     /// Refuse a change on a read-only field: broadcast
@@ -1440,7 +1497,7 @@ impl View for InputLine {
         // text; otherwise the Text path is used. Select-all runs either way.
         if let Some(text) = self.validator.as_ref().and_then(|val| val.transfer_set(&v)) {
             self.data = text;
-            self.select_all(true, true);
+            self.place_loaded_value();
             return;
         }
         // When transfer is disabled and `v` is `Int` (not `Text`), the body
@@ -1460,7 +1517,7 @@ impl View for InputLine {
                 }
                 s[..cut].to_string()
             };
-            self.select_all(true, true);
+            self.place_loaded_value();
         }
     }
 }
@@ -3072,6 +3129,49 @@ mod tests {
             row2.contains('s') && row2.contains('e'),
             "revealed shows real: {row2:?}"
         );
+    }
+
+    // -- value position -----------------------------------------------------
+
+    #[test]
+    fn set_value_defaults_to_showing_the_end() {
+        // Turbo Vision's behaviour: select-all, caret after the text, view at the
+        // tail — ready for the first keystroke to replace the value.
+        let mut il = field(10, "");
+        il.set_value(FieldValue::Text("cn=admin,dc=example,dc=org".into()));
+        assert_eq!(il.value_position(), ValuePosition::End);
+        assert_eq!(il.cur_pos, il.data.len() as i32, "caret at the end");
+        assert_eq!((il.sel_start, il.sel_end), (0, il.data.len() as i32));
+        assert!(il.first_pos > 0, "the view scrolled to show the tail");
+    }
+
+    #[test]
+    fn value_position_start_shows_the_head_instead() {
+        // For a DN or a path the front is what identifies it.
+        let mut il = field(10, "");
+        il.set_value_position(ValuePosition::Start);
+        il.set_value(FieldValue::Text("cn=admin,dc=example,dc=org".into()));
+        assert_eq!(il.cur_pos, 0, "caret homed");
+        assert_eq!((il.sel_start, il.sel_end), (0, 0), "nothing selected");
+        assert_eq!(il.first_pos, 0, "the view shows the start");
+    }
+
+    #[test]
+    fn value_position_applies_on_the_validator_transfer_path_too() {
+        use crate::validate::RangeValidator;
+        let mut rv = RangeValidator::new(0, 1_000_000);
+        rv.set_transfer(true);
+        let mut il = InputLine::new(
+            Rect::new(0, 0, 4, 1),
+            256,
+            Some(Box::new(rv)),
+            LimitMode::MaxBytes,
+        );
+        il.set_value_position(ValuePosition::Start);
+        il.set_value(FieldValue::Int(123_456));
+        assert_eq!(il.data, "123456");
+        assert_eq!(il.cur_pos, 0, "the typed-transfer path honours it as well");
+        assert_eq!(il.first_pos, 0);
     }
 
     // -- read-only mode -----------------------------------------------------

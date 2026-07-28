@@ -90,6 +90,27 @@ A read-only field is drawn exactly like an editable one. Signalling the
 distinction visually is left to the owner, which knows whether "read-only" means
 server-maintained, computed, or merely not-yet-unlocked.
 
+### Which end of a long value shows (rstv extension)
+
+A value wider than its field can only show one end of itself. `set_value`
+select-alls, so by default the view sits at the **tail** — Turbo Vision's
+behaviour, and the right one for a field whose first keystroke should replace
+the value. It is the wrong one for data whose *front* identifies it, where the
+operator is left reading `…,dc=example,dc=org`.
+
+```rust
+# use tvision_rs as tv;
+# fn _demo(line: &mut tv::widgets::InputLine) {
+use tv::widgets::ValuePosition;
+
+line.set_value_position(ValuePosition::Start); // show the head, caret homed
+# }
+```
+
+This governs `set_value` only — both the plain text path and the
+validator-transfer path. Focus behaviour is separate: see
+`set_select_all_on_focus`.
+
 ## Labels & static text
 
 - [`StaticText`](../api/tvision_rs/widgets/struct.StaticText.html) — a read-only,
