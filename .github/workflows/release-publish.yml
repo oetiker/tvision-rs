@@ -9,9 +9,13 @@ name: repo-infra proof - crates.io publish block (D21)
 #
 # Three deliberate differences from the shipped asset, and no others:
 #
-#   1. `on: workflow_dispatch`. The real frame bans workflow_dispatch on
-#      purpose -- publishing must be a consequence of merging a release pull
-#      request. A proof needs a button.
+#   1. `on: push` restricted to this branch. The real frame triggers on a push
+#      to main touching CHANGES.md. workflow_dispatch was tried first and is
+#      not usable here at all: GitHub only offers the Run button for workflows
+#      that already exist on the DEFAULT branch, so dispatching a
+#      branch-only workflow returns
+#        HTTP 404: workflow release-publish.yml not found on the default branch
+#      A push trigger has no such restriction, and is closer to the real thing.
 #   2. `cargo publish ... --dry-run`. This publishes NOTHING. The token
 #      exchange still happens for real, which is the point: it proves the
 #      Trusted Publisher pinned to `release-publish.yml` works.
@@ -26,7 +30,8 @@ name: repo-infra proof - crates.io publish block (D21)
 # fail without the block's reconcile step.
 
 on:
-  workflow_dispatch:
+  push:
+    branches: [repo-infra/proof-crates-io]
 
 permissions:
   contents: write
