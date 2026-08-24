@@ -1,0 +1,149 @@
+name: repo-infra proof - crates.io publish block (D21)
+
+# PROOF HARNESS. Not the file repo-infra installs, and not a template.
+#
+# It exists to run the `publish-crates-io` block on a real runner, against a
+# real Trusted Publisher, before the block is upstreamed -- stage 2 of
+# references/teaching-the-standard.md. It will be deleted; the real file is
+# assembled by repo-infra from a frame, this block and a finalize job.
+#
+# Three deliberate differences from the shipped asset, and no others:
+#
+#   1. `on: workflow_dispatch`. The real frame bans workflow_dispatch on
+#      purpose -- publishing must be a consequence of merging a release pull
+#      request. A proof needs a button.
+#   2. `cargo publish ... --dry-run`. This publishes NOTHING. The token
+#      exchange still happens for real, which is the point: it proves the
+#      Trusted Publisher pinned to `release-publish.yml` works.
+#   3. A stub `publish` job standing in for the frame's, so the block's
+#      `needs:`, its `release_id` guard and its `tag` reference are exercised
+#      exactly as written rather than edited away.
+#
+# The branch itself carries the other half of the fixture: Cargo.toml is bumped
+# to 0.15.1 and Cargo.lock is NOT. That is precisely the state repo-infra
+# produces -- the release pull request bumps version_files by regex and has no
+# Rust toolchain -- and it is the state that makes `cargo publish --locked`
+# fail without the block's reconcile step.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  # Stands in for the frame's `publish` job, which tags and creates the draft
+  # release. Here it only needs to hand the block the three outputs it consumes.
+  publish:
+    name: Stub for the frame's publish job
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: "0.15.1"
+      tag: "v0.15.1"
+      release_id: "0000"
+    steps:
+      - run: echo "standing in for the frame; no tag and no release is created"
+
+  publish-crates-io:
+    name: Publish to crates.io
+    needs: [publish]
+    if: needs.publish.outputs.release_id != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Trusted Publishing (D21): the job's OIDC identity is exchanged for a
+    # short-lived crates.io token, so no repository holds a CRATES_IO_TOKEN.
+    # `id-token: write` is what mints that identity -- without it the exchange
+    # below fails. `contents: read` narrows the frame's workflow-level write.
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      # No ref: on a push event this is the commit the `publish` job just
+      # tagged, which is the commit whose Cargo.toml the release pull request
+      # bumped.
+      - uses: actions/checkout@v7
+
+      # @stable, matching ci-rust. The action publishes no floating major tag;
+      # `stable` is its documented channel selector.
+      - uses: dtolnay/rust-toolchain@stable
+
+      # crates.io pins a Trusted Publisher to a (repository, workflow filename)
+      # pair. The filename half is `release-publish.yml` for every repository
+      # the standard converts -- but a repository that published before it was
+      # converted has its publisher registered against whatever its old
+      # workflow was called, and that pin does NOT follow the rename. Register
+      # a new one per crate before the first converted release.
+      - name: Authenticate to crates.io (Trusted Publishing)
+        id: auth
+        uses: rust-lang/crates-io-auth-action@v1
+
+      # The release pull request bumped Cargo.toml and cannot bump Cargo.lock:
+      # it has no Rust toolchain, and this is the only job that legitimately
+      # does. So at this commit the lock still carries the previous version of
+      # the workspace's own crates, and `cargo publish --locked` would fail on
+      # every release rather than occasionally.
+      #
+      # `--workspace` touches only the workspace's own entries. No dependency is
+      # re-resolved, which is what makes running it at publish time safe.
+      #
+      # Not `--offline`. This job never fetched the registry, so an offline
+      # resolve cannot find a single dependency and dies on the first one.
+      #
+      # And no `|| true`. Swallowing this step's failure is what turned a broken
+      # step into a broken release: mdmost v0.1.1 was tagged with Cargo.toml at
+      # 0.1.1 and Cargo.lock still at 0.1.0, and the publish failed 6 minutes
+      # later.
+      - name: Reconcile Cargo.lock with the bumped version
+        run: |
+          set -euo pipefail
+          cargo update --workspace
+
+          # cargo refuses to publish from a tree with uncommitted changes, and
+          # the step above just rewrote Cargo.lock -- so without this the job
+          # dies with "1 files in the working directory contain changes that
+          # were not yet committed into git", after packaging, every time.
+          #
+          # Commit it locally. The runner is ephemeral and nothing is pushed:
+          # main is protected against direct pushes, which is the standard's own
+          # rule, so this commit exists only to make the tree clean for
+          # packaging. Its one visible consequence is that .cargo_vcs_info.json
+          # in the published crate names a commit that exists nowhere but this
+          # runner.
+          #
+          # Not --allow-dirty, which would also wave through a modified *source*
+          # file and publish something no tag ever pointed at.
+          #
+          # The `if` is a real condition, not a swallowed failure: a re-run
+          # against an already-reconciled lock has nothing to commit, and
+          # `git commit` treats that as an error.
+          if ! git diff --quiet -- Cargo.lock; then
+            git -c user.name='github-actions[bot]' \
+                -c user.email='github-actions[bot]@users.noreply.github.com' \
+                commit -q -m 'Reconcile Cargo.lock for ${{ needs.publish.outputs.tag }}' \
+                -- Cargo.lock
+          fi
+
+      # One invocation for both the single-crate and the workspace case:
+      # --workspace publishes every publishable member in dependency order, so
+      # the standard needs no per-crate list, no ordering configuration and no
+      # hand-rolled wait for the index to propagate. A helper crate opts out
+      # with `publish = false` in its own manifest.
+      #
+      # --locked still earns its keep after the update above: it guards every
+      # *dependency* pin against drift between the tag and the publish. What it
+      # no longer asserts is the workspace's own version, which is exactly the
+      # part the release pull request is authoritative for.
+      - name: Publish
+        run: cargo publish --workspace --locked --dry-run
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+
+      # This add-on deliberately attaches nothing to the draft release and adds
+      # no summary step -- it publishes to an external registry, and `cargo
+      # publish` already names every crate and version it uploaded. Membership
+      # in finalize's generated `needs:` list is what carries the guarantee: if
+      # this job fails the release stays a draft, so a version is never visible
+      # on GitHub while absent from crates.io.
