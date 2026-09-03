@@ -15,3 +15,6 @@ docs/book/book/
 
 # Claude scheduled-tasks lock (session-local churn)
 .claude/scheduled_tasks.lock
+
+# Reference material kept locally, not redistributed with the crate.
+Turbo_Vision_Version_2.0_Programming_Guide_1992.pdf
