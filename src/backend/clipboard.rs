@@ -47,6 +47,20 @@ pub(crate) trait NativeClipboard {
     /// Read the OS clipboard. `None` = unavailable or empty; the chain falls
     /// through to the internal buffer.
     fn get(&mut self) -> Option<String>;
+
+    /// Read the X11/Wayland PRIMARY selection — the one a middle-click pastes.
+    ///
+    /// Defaulted to `None` so a rung on a platform without a PRIMARY selection
+    /// (or one that only speaks CLIPBOARD) needs no implementation.
+    fn get_primary(&mut self) -> Option<String> {
+        None
+    }
+
+    /// Take ownership of the PRIMARY selection and serve `text` from it.
+    /// `false` = this rung cannot (the chain then simply does nothing).
+    fn set_primary(&mut self, _text: &str) -> bool {
+        false
+    }
 }
 
 /// The fallback chain (module docs have the full order).
@@ -124,6 +138,27 @@ impl ClipboardChain {
             Some(self.local.clone())
         }
     }
+
+    /// Read the PRIMARY selection — **native rung only**.
+    ///
+    /// Unlike [`get`](Self::get) there is no internal-buffer fallback and no
+    /// OSC 52: PRIMARY is a display-server concept, so with no display (the SSH
+    /// shape) the honest answer is `None`. Serving the in-app buffer instead
+    /// would make a middle-click paste stale text the user never selected.
+    pub(crate) fn get_primary(&mut self) -> Option<String> {
+        self.native.as_mut().and_then(|n| n.get_primary())
+    }
+
+    /// Publish `text` as the PRIMARY selection — **native rung only**, for the
+    /// same reason as [`get_primary`](Self::get_primary). The internal mirror is
+    /// never written: it backs CLIPBOARD, and a PRIMARY write must not shadow a
+    /// copy the user made deliberately.
+    pub(crate) fn set_primary(&mut self, text: &str) -> bool {
+        self.native
+            .as_mut()
+            .map(|n| n.set_primary(text))
+            .unwrap_or(false)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -166,6 +201,54 @@ impl NativeClipboard for ArboardClipboard {
         // either way the chain falls through.
         self.inner.get_text().ok()
     }
+
+    fn get_primary(&mut self) -> Option<String> {
+        // arboard exposes LinuxClipboardKind on exactly this cfg.
+        #[cfg(all(
+            unix,
+            not(any(target_os = "macos", target_os = "android", target_os = "emscripten"))
+        ))]
+        {
+            use arboard::GetExtLinux as _;
+            self.inner
+                .get()
+                .clipboard(arboard::LinuxClipboardKind::Primary)
+                .text()
+                .ok()
+        }
+        // Every other platform: there is no PRIMARY selection.
+        #[cfg(not(all(
+            unix,
+            not(any(target_os = "macos", target_os = "android", target_os = "emscripten"))
+        )))]
+        {
+            None
+        }
+    }
+
+    fn set_primary(&mut self, _text: &str) -> bool {
+        // arboard exposes LinuxClipboardKind on exactly this cfg.
+        #[cfg(all(
+            unix,
+            not(any(target_os = "macos", target_os = "android", target_os = "emscripten"))
+        ))]
+        {
+            use arboard::SetExtLinux as _;
+            self.inner
+                .set()
+                .clipboard(arboard::LinuxClipboardKind::Primary)
+                .text(_text)
+                .is_ok()
+        }
+        // Every other platform: there is no PRIMARY selection.
+        #[cfg(not(all(
+            unix,
+            not(any(target_os = "macos", target_os = "android", target_os = "emscripten"))
+        )))]
+        {
+            false
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -181,6 +264,9 @@ mod tests {
     struct StubNative {
         accept: bool,
         stored: Option<String>,
+        /// What the display server's PRIMARY selection holds. Independent of
+        /// `stored` — the two selections are separate on X11.
+        primary: Option<String>,
     }
 
     impl NativeClipboard for StubNative {
@@ -200,12 +286,39 @@ mod tests {
                 None
             }
         }
+
+        fn get_primary(&mut self) -> Option<String> {
+            if self.accept {
+                self.primary.clone()
+            } else {
+                None
+            }
+        }
+
+        fn set_primary(&mut self, text: &str) -> bool {
+            if self.accept {
+                self.primary = Some(text.to_string());
+                true
+            } else {
+                false
+            }
+        }
     }
 
     fn chain_with(accept: bool, stored: Option<&str>) -> ClipboardChain {
         ClipboardChain::new(Some(Box::new(StubNative {
             accept,
             stored: stored.map(str::to_string),
+            primary: None,
+        })))
+    }
+
+    /// A chain whose native rung already owns a PRIMARY selection.
+    fn chain_with_primary(accept: bool, primary: Option<&str>) -> ClipboardChain {
+        ClipboardChain::new(Some(Box::new(StubNative {
+            accept,
+            stored: None,
+            primary: primary.map(str::to_string),
         })))
     }
 
@@ -274,5 +387,59 @@ mod tests {
         let mut sink: Vec<u8> = Vec::new();
         assert!(!chain.set("fallback", &mut sink));
         assert_eq!(chain.get().as_deref(), Some("fallback"));
+    }
+
+    // -- PRIMARY selection (X11 middle-click) --------------------------------
+    //
+    // PRIMARY has ONE rung: native. No internal-buffer fallback and no OSC 52 —
+    // it is a display-server concept, and serving stale in-app text over SSH
+    // would be worse than doing nothing.
+
+    #[test]
+    fn get_primary_serves_the_native_rung() {
+        let mut chain = chain_with_primary(true, Some("selected-elsewhere"));
+        assert_eq!(chain.get_primary().as_deref(), Some("selected-elsewhere"));
+    }
+
+    #[test]
+    fn get_primary_never_falls_back_to_the_internal_buffer() {
+        // Native rung has no PRIMARY, but the internal mirror is populated.
+        let mut chain = chain_with_primary(true, None);
+        chain.local = "internal".to_string();
+        assert_eq!(
+            chain.get_primary(),
+            None,
+            "PRIMARY must not serve the internal buffer"
+        );
+        // Proof the mirror really is populated — the CLIPBOARD path still sees it.
+        assert_eq!(chain.get().as_deref(), Some("internal"));
+    }
+
+    #[test]
+    fn get_primary_without_a_native_rung_is_none() {
+        let mut chain = ClipboardChain::new(None);
+        chain.local = "internal".to_string();
+        assert_eq!(chain.get_primary(), None);
+    }
+
+    #[test]
+    fn set_primary_touches_neither_osc52_nor_the_mirror() {
+        let mut chain = chain_with_primary(true, None);
+        assert!(chain.set_primary("owned-by-us"), "native rung took it");
+        assert!(
+            chain.local.is_empty(),
+            "PRIMARY write must not shadow the CLIPBOARD mirror"
+        );
+        assert_eq!(chain.get_primary().as_deref(), Some("owned-by-us"));
+    }
+
+    #[test]
+    fn set_primary_without_a_native_rung_reports_failure() {
+        let mut chain = ClipboardChain::new(None);
+        assert!(!chain.set_primary("nowhere-to-put-it"));
+        assert!(
+            chain.local.is_empty(),
+            "no internal mirror on the PRIMARY path"
+        );
     }
 }
