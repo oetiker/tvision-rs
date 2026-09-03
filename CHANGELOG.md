@@ -12,6 +12,14 @@ moves it into a dated, versioned section when a release is cut.
 
 ### New
 
+### Changed
+
+### Fixed
+
+## 0.16.0 - 2026-09-03
+
+### New
+
 - **X11 middle-click paste (PRIMARY selection).** Middle-clicking an `InputLine`
   now pastes the X11/Wayland PRIMARY selection at the click point, and finishing
   a *mouse* selection publishes it, so select-here/middle-click-there works both
@@ -30,7 +38,6 @@ moves it into a dated, versioned section when a release is cut.
   — the same rule `do_copy`/`do_cut` already apply to the clipboard. Keyboard
   selection deliberately does not publish; shift+arrow would re-take X selection
   ownership on every keystroke.
-
 ### Changed
 
 - **`Editor`: the middle button now carries two gestures, told apart by
