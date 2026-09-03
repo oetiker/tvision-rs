@@ -95,6 +95,32 @@ pub trait Backend {
     /// else `None`.
     fn get_clipboard(&mut self) -> Option<String>;
 
+    /// Read the X11/Wayland PRIMARY selection — what a middle-click pastes.
+    ///
+    /// PRIMARY is a display-server concept, so this has **one** rung: the
+    /// native clipboard. There is no internal-buffer fallback and no OSC 52 —
+    /// with no display (the SSH shape) the honest answer is `None`, and a
+    /// middle-click paste is simply inert. Serving the in-app buffer instead
+    /// would paste stale text the user never selected.
+    ///
+    /// Defaulted to `None` so an existing implementor keeps compiling and
+    /// silently gets the inert behaviour.
+    fn get_primary(&mut self) -> Option<String> {
+        None
+    }
+
+    /// Take ownership of the PRIMARY selection and serve `text` from it, so
+    /// another X client can middle-click-paste what the user selected here.
+    ///
+    /// Returns `false` when there is no PRIMARY selection to own (no display,
+    /// or a platform without one). Same single-rung rule as
+    /// [`get_primary`](Self::get_primary): the internal buffer is never
+    /// written, because it backs CLIPBOARD and must not be shadowed by a
+    /// selection the user merely swept with the mouse.
+    fn set_primary(&mut self, _text: &str) -> bool {
+        false
+    }
+
     /// Suspend the terminal: leave alt-screen and restore normal terminal mode.
     ///
     /// Called by the event loop immediately before the process is suspended

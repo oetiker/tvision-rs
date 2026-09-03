@@ -45,6 +45,10 @@ pub struct HeadlessHandle {
     cursor: Rc<StdCell<Option<(u16, u16)>>>,
     events: Rc<RefCell<VecDeque<Event>>>,
     clipboard: Rc<RefCell<String>>,
+    /// The PRIMARY selection — a second, independent buffer. Separate from
+    /// `clipboard` because X11 keeps the two selections apart, and tests must
+    /// be able to prove a copy did not leak into a middle-click paste.
+    primary: Rc<RefCell<String>>,
     size: Rc<StdCell<(u16, u16)>>,
 }
 
@@ -106,6 +110,24 @@ impl HeadlessHandle {
         *self.clipboard.borrow_mut() = text.to_string();
     }
 
+    /// The backend's PRIMARY selection, or `None` when nothing has been
+    /// selected (empty→`None`, matching [`clipboard`](Self::clipboard)) — lets
+    /// tests assert what a mouse selection published.
+    pub fn primary(&self) -> Option<String> {
+        let prim = self.primary.borrow();
+        if prim.is_empty() {
+            None
+        } else {
+            Some(prim.clone())
+        }
+    }
+
+    /// Seed the PRIMARY selection — stages the "another X client owns a
+    /// selection" state a middle-click paste reads.
+    pub fn set_primary(&self, text: &str) {
+        *self.primary.borrow_mut() = text.to_string();
+    }
+
     /// Simulate a terminal resize.
     ///
     /// Updates the shared size cell and pre-resizes the shared screen buffer so
@@ -149,6 +171,7 @@ impl HeadlessBackend {
             cursor: Rc::new(StdCell::new(None)),
             events: Rc::new(RefCell::new(VecDeque::new())),
             clipboard: Rc::new(RefCell::new(String::new())),
+            primary: Rc::new(RefCell::new(String::new())),
             size: Rc::new(StdCell::new((width, height))),
         };
         let backend = HeadlessBackend {
@@ -202,5 +225,61 @@ impl Backend for HeadlessBackend {
     /// has been written.
     fn get_clipboard(&mut self) -> Option<String> {
         self.shared.clipboard()
+    }
+
+    /// The staged PRIMARY selection — the test fake for a display server that
+    /// already owns one.
+    fn get_primary(&mut self) -> Option<String> {
+        self.shared.primary()
+    }
+
+    /// Record the PRIMARY selection so a test can assert what was published.
+    /// Returns `true`: headless always "owns" the selection successfully.
+    fn set_primary(&mut self, text: &str) -> bool {
+        self.shared.set_primary(text);
+        true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backend::Backend;
+
+    /// The two X selections are independent: a CLIPBOARD copy must not become
+    /// the PRIMARY selection, nor the other way round.
+    #[test]
+    fn primary_and_clipboard_are_separate_buffers() {
+        let (mut backend, handle) = HeadlessBackend::new(10, 2);
+        backend.set_clipboard("copied-with-ctrl-c");
+        backend.set_primary("selected-with-the-mouse");
+
+        assert_eq!(
+            backend.get_clipboard().as_deref(),
+            Some("copied-with-ctrl-c")
+        );
+        assert_eq!(
+            backend.get_primary().as_deref(),
+            Some("selected-with-the-mouse")
+        );
+        assert_eq!(handle.clipboard().as_deref(), Some("copied-with-ctrl-c"));
+        assert_eq!(handle.primary().as_deref(), Some("selected-with-the-mouse"));
+    }
+
+    /// Nothing selected yet → `None`, so a middle-click paste is simply inert.
+    #[test]
+    fn primary_starts_empty() {
+        let (mut backend, handle) = HeadlessBackend::new(10, 2);
+        assert_eq!(backend.get_primary(), None);
+        assert_eq!(handle.primary(), None);
+    }
+
+    /// Tests stage a selection through the handle, the way a real X client
+    /// would have owned it before the app started.
+    #[test]
+    fn handle_seeds_the_primary_selection() {
+        let (mut backend, handle) = HeadlessBackend::new(10, 2);
+        handle.set_primary("staged-by-the-test");
+        assert_eq!(backend.get_primary().as_deref(), Some("staged-by-the-test"));
     }
 }

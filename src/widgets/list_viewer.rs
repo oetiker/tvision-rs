@@ -888,28 +888,27 @@ pub fn handle_event<L: ListViewer + ?Sized>(this: &mut L, ev: &mut Event, ctx: &
             let size_y = this.lv().state.size.y;
             let num_cols = this.lv().num_cols;
 
-            let new_item: i32;
             // charCode == ' ' && focused < range -> selectItem(focused).
-            if matches!(ke.key, Key::Char(' '))
+            let new_item: i32 = if matches!(ke.key, Key::Char(' '))
                 && !ke.modifiers.ctrl
                 && !ke.modifiers.alt
                 && focused < range
             {
                 this.select_item(focused, ctx);
-                new_item = focused;
+                focused
             } else if matches!(ke.key, Key::PageDown) && ke.modifiers.ctrl {
                 // kbCtrlPgDn -> last item. Matched on the decomposed key
                 // (PageDown + ctrl) BEFORE ctrl_to_arrow, which would otherwise
                 // see no Char to remap and pass PageDown through as a plain page
                 // jump.
-                new_item = range - 1;
+                range - 1
             } else if matches!(ke.key, Key::PageUp) && ke.modifiers.ctrl {
                 // kbCtrlPgUp -> first item.
-                new_item = 0;
+                0
             } else {
                 // ctrlToArrow(keyCode) — the WordStar Ctrl-letter nav aliases.
                 let mapped = ctrl_to_arrow(ke);
-                new_item = match mapped.key {
+                match mapped.key {
                     Key::Up => focused - 1,
                     Key::Down => focused + 1,
                     // Left/Right only navigate when there is more than one column;
@@ -922,8 +921,8 @@ pub fn handle_event<L: ListViewer + ?Sized>(this: &mut L, ev: &mut Event, ctx: &
                     Key::Home => this.lv().top_item,
                     Key::End => this.lv().top_item + (size_y * num_cols) - 1,
                     _ => return, // default (incl. single-col Left/Right): return.
-                };
-            }
+                }
+            };
             focus_item_num(this, new_item, ctx);
             ev.clear();
         }

@@ -360,6 +360,16 @@ impl Backend for CrosstermBackend {
         self.clipboard.get()
     }
 
+    /// Read the PRIMARY selection — native rung only (see the trait docs).
+    fn get_primary(&mut self) -> Option<String> {
+        self.clipboard.get_primary()
+    }
+
+    /// Own the PRIMARY selection — native rung only (see the trait docs).
+    fn set_primary(&mut self, text: &str) -> bool {
+        self.clipboard.set_primary(text)
+    }
+
     fn suspend(&mut self) {
         restore_terminal(); // idempotent teardown (already used in Drop)
     }

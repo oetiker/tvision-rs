@@ -813,6 +813,25 @@ impl InputLine {
         }
     }
 
+    /// Publish the current selection as the X11/Wayland PRIMARY selection, so
+    /// another client can middle-click-paste it.
+    ///
+    /// Called only when a **mouse** selection completes. Keyboard selection does
+    /// not publish: shift+arrow would re-take X selection ownership on every
+    /// keystroke for no real gain.
+    ///
+    /// Whenever a mask is configured (`self.mask.is_some()`) this is a no-op —
+    /// the same rule as [`do_copy`](Self::do_copy): reveal is for viewing, not
+    /// exfiltrating, so a masked field must never publish cleartext, revealed or
+    /// not. Read-only is deliberately NOT a guard here: read-only blocks writing
+    /// into the field, not reading out of it.
+    fn publish_primary(&self, ctx: &mut Context) {
+        if self.sel_start < self.sel_end && self.mask.is_none() {
+            let sel = self.data[self.sel_start as usize..self.sel_end as usize].to_string();
+            ctx.set_primary(sel);
+        }
+    }
+
     /// Request an async paste via the broker (the `Command::PASTE` body).
     fn do_paste(&mut self, ctx: &mut Context) {
         if let Some(id) = self.state.id() {
@@ -1112,7 +1131,23 @@ impl View for InputLine {
             Event::MouseDown(m) => {
                 let m = *m;
                 let delta = self.mouse_delta(&m);
-                if self.can_scroll(delta) {
+                if m.buttons.middle {
+                    // X11 middle-click paste. FIRST in the chain on purpose: a
+                    // middle-click on an edge column must paste, not start the
+                    // edge auto-scroll, and it arms no tracking loop — this is a
+                    // one-shot gesture, not a drag. `paste_text` calls
+                    // `save_state` itself once the pump delivers the text.
+                    if !self.refuse_change(ctx)
+                        && let Some(id) = self.state.id()
+                    {
+                        self.cur_pos = self.mouse_pos(&m);
+                        // The paste lands AT the click, replacing nothing.
+                        self.sel_start = 0;
+                        self.sel_end = 0;
+                        self.anchor = self.cur_pos;
+                        ctx.request_input_line_paste_primary(id);
+                    }
+                } else if self.can_scroll(delta) {
                     // Edge auto-scroll: first iteration steps first_pos by delta.
                     self.first_pos += delta;
                     // Arm auto-only repeat.
@@ -1133,6 +1168,7 @@ impl View for InputLine {
                     // to True (dialogs.h:177), so double-click selects-all AND
                     // scrolls the end into view. No tracking loop for this branch.
                     self.select_all(true, true);
+                    self.publish_primary(ctx);
                 } else {
                     // C++ tinputli.cpp:324-338 — drag-select loop.
                     // First iteration: `anchor = mousePos(event); curPos = mousePos(event);
@@ -1202,6 +1238,12 @@ impl View for InputLine {
             // -- Mouse up — post-loop (tracking ends). Guarded by `tracking`
             // (MouseUp is not mask-gated in Group::wants).
             Event::MouseUp(_) if self.tracking => {
+                if self.tracking_drag {
+                    // The sweep is over — publish it. A plain click (no sweep)
+                    // leaves sel_start == sel_end, so this is a no-op there and
+                    // does not clobber the user's selection with "".
+                    self.publish_primary(ctx);
+                }
                 self.tracking = false;
                 self.tracking_drag = false;
                 ev.clear();
@@ -1613,6 +1655,20 @@ mod tests {
             position: Point::new(x, y),
             buttons: MouseButtons {
                 left: true,
+                ..Default::default()
+            },
+            flags: MouseEventFlags::default(),
+            wheel: MouseWheel::None,
+            modifiers: KeyModifiers::default(),
+        })
+    }
+
+    /// A middle-button press — the X11 paste gesture.
+    fn middle_down_at(x: i32, y: i32) -> Event {
+        Event::MouseDown(MouseEvent {
+            position: Point::new(x, y),
+            buttons: MouseButtons {
+                middle: true,
                 ..Default::default()
             },
             flags: MouseEventFlags::default(),
@@ -3354,5 +3410,229 @@ mod tests {
         assert!(il.has_focusable_leaf(), "a read-only field takes focus");
         il.state.state.disabled = true;
         assert!(!il.has_focusable_leaf(), "a disabled field does not");
+    }
+
+    // -- X11 PRIMARY selection (middle-click paste) ---------------------------
+    //
+    // Middle-click pastes the PRIMARY selection at the click point; completing a
+    // MOUSE selection publishes it. Keyboard selection deliberately does not
+    // publish — it would re-take X ownership on every arrow key.
+
+    fn primary_pastes(deferred: &[Deferred]) -> Vec<crate::view::ViewId> {
+        deferred
+            .iter()
+            .filter_map(|d| match d {
+                Deferred::InputLinePastePrimary(i) => Some(*i),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn primary_writes(deferred: &[Deferred]) -> Vec<String> {
+        deferred
+            .iter()
+            .filter_map(|d| match d {
+                Deferred::SetPrimary(t) => Some(t.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Middle-click puts the caret where you clicked, then asks the pump for the
+    /// PRIMARY selection. Column 6 → byte 5 (`mouse_pos`: col - 1 at first_pos 0).
+    #[test]
+    fn middle_click_defers_a_primary_paste_at_the_clicked_column() {
+        let (mut il, id) = field_with_id(20, "hello world");
+        let mut ev = middle_down_at(6, 0);
+        let (_, deferred, ()) = with_ctx_d(|ctx| il.handle_event(&mut ev, ctx));
+
+        assert!(ev.is_nothing(), "middle click is consumed");
+        assert_eq!(il.cur_pos, 5, "caret lands where the click was");
+        assert_eq!(primary_pastes(&deferred), vec![id]);
+    }
+
+    /// Middle-click is a one-shot paste, not the start of a drag: it must not
+    /// arm the drag-select tracking loop the left button uses.
+    #[test]
+    fn middle_click_arms_no_drag_tracking() {
+        let (mut il, _id) = field_with_id(20, "hello world");
+        let mut ev = middle_down_at(6, 0);
+        with_ctx_d(|ctx| il.handle_event(&mut ev, ctx));
+
+        assert!(!il.tracking, "no tracking armed");
+        assert!(!il.tracking_drag, "no drag branch armed");
+    }
+
+    /// The paste replaces nothing: an existing selection is dropped and the text
+    /// lands at the click point, matching how X11 text widgets behave.
+    #[test]
+    fn middle_click_clears_any_existing_selection() {
+        let (mut il, _id) = field_with_id(20, "hello world");
+        il.select_all(true, false);
+        assert!(
+            il.sel_start < il.sel_end,
+            "precondition: something selected"
+        );
+
+        let mut ev = middle_down_at(3, 0);
+        with_ctx_d(|ctx| il.handle_event(&mut ev, ctx));
+
+        assert_eq!(il.sel_start, il.sel_end, "selection dropped");
+    }
+
+    /// Middle-click on an EDGE column still pastes — it must not be swallowed by
+    /// the edge auto-scroll branch that the left button uses there.
+    #[test]
+    fn middle_click_on_the_edge_column_still_pastes() {
+        let (mut il, id) = field_with_id(20, "hello world");
+        let mut ev = middle_down_at(0, 0);
+        let (_, deferred, ()) = with_ctx_d(|ctx| il.handle_event(&mut ev, ctx));
+
+        assert!(ev.is_nothing(), "consumed at the edge too");
+        assert!(!il.tracking, "no edge auto-scroll armed");
+        assert_eq!(primary_pastes(&deferred), vec![id]);
+    }
+
+    /// Finishing a drag-select publishes the swept text as the PRIMARY
+    /// selection, so another X client can middle-click-paste it.
+    #[test]
+    fn finishing_a_drag_select_publishes_the_primary_selection() {
+        let (mut il, _id) = field_with_id(20, "hello world");
+        // Down at col 2 (byte 1) …
+        let mut ev = mouse_down_at(2, 0);
+        with_ctx_d(|ctx| il.handle_event(&mut ev, ctx));
+        // … drag to col 5 (byte 4) …
+        let mut ev = mouse_move_at(5, 0);
+        with_ctx_d(|ctx| il.handle_event(&mut ev, ctx));
+        // … and release.
+        let mut ev = mouse_up_at(5, 0);
+        let (_, deferred, ()) = with_ctx_d(|ctx| il.handle_event(&mut ev, ctx));
+
+        assert_eq!(
+            primary_writes(&deferred),
+            vec!["ell".to_string()],
+            "the swept bytes 1..4 of \"hello world\""
+        );
+    }
+
+    /// A release that selected nothing (a plain click) publishes nothing —
+    /// otherwise every click would clobber the user's selection with "".
+    #[test]
+    fn a_click_without_a_sweep_publishes_no_primary_selection() {
+        let (mut il, _id) = field_with_id(20, "hello world");
+        let mut ev = mouse_down_at(4, 0);
+        with_ctx_d(|ctx| il.handle_event(&mut ev, ctx));
+        let mut ev = mouse_up_at(4, 0);
+        let (_, deferred, ()) = with_ctx_d(|ctx| il.handle_event(&mut ev, ctx));
+
+        assert!(primary_writes(&deferred).is_empty());
+    }
+
+    /// Double-click selects all, and that is a mouse selection too.
+    #[test]
+    fn double_click_select_all_publishes_the_primary_selection() {
+        let (mut il, _id) = field_with_id(20, "hello");
+        let mut ev = Event::MouseDown(MouseEvent {
+            position: Point::new(3, 0),
+            buttons: MouseButtons {
+                left: true,
+                ..Default::default()
+            },
+            flags: MouseEventFlags {
+                double_click: true,
+                ..Default::default()
+            },
+            wheel: MouseWheel::None,
+            modifiers: KeyModifiers::default(),
+        });
+        let (_, deferred, ()) = with_ctx_d(|ctx| il.handle_event(&mut ev, ctx));
+
+        assert_eq!(primary_writes(&deferred), vec!["hello".to_string()]);
+    }
+
+    /// THE SECURITY RULE. A masked field must never publish cleartext to
+    /// PRIMARY — revealed or not — exactly as `do_copy`/`do_cut` already refuse
+    /// the CLIPBOARD. Middle-click paste INTO a masked field is still fine; it
+    /// is only the outbound direction that leaks.
+    #[test]
+    fn a_masked_field_never_publishes_the_primary_selection() {
+        let mut il = InputLine::with_limit(Rect::new(0, 0, 20, 1), 64);
+        il.state.id = Some(crate::view::ViewId::next());
+        il.state.state.selected = true;
+        il.set_value(FieldValue::Text("secret".into()));
+        il.set_mask(Some('\u{2022}'));
+        il.set_reveal(true); // even revealed
+
+        let mut ev = mouse_down_at(1, 0);
+        with_ctx_d(|ctx| il.handle_event(&mut ev, ctx));
+        let mut ev = mouse_move_at(6, 0);
+        with_ctx_d(|ctx| il.handle_event(&mut ev, ctx));
+        let mut ev = mouse_up_at(6, 0);
+        let (_, deferred, ()) = with_ctx_d(|ctx| il.handle_event(&mut ev, ctx));
+
+        assert!(
+            il.sel_start < il.sel_end,
+            "precondition: a selection exists"
+        );
+        assert!(
+            primary_writes(&deferred).is_empty(),
+            "revealed masked field must not leak cleartext to PRIMARY"
+        );
+    }
+
+    /// A read-only field refuses a middle-click paste the same way it refuses
+    /// cmPaste — and broadcasts the refusal, so the owner can beep.
+    #[test]
+    fn a_read_only_field_refuses_a_middle_click_paste() {
+        let (mut il, id) = read_only_field(20, "locked");
+        let mut ev = middle_down_at(3, 0);
+        let (out, deferred, ()) = with_ctx_d(|ctx| il.handle_event(&mut ev, ctx));
+
+        assert!(ev.is_nothing(), "still consumed — the gesture was ours");
+        assert!(
+            primary_pastes(&deferred).is_empty(),
+            "no PRIMARY paste requested"
+        );
+        assert_eq!(rejections(&out), vec![Some(id)], "refusal broadcast");
+    }
+
+    /// Read-only blocks writing INTO the field, not reading OUT of it: sweeping
+    /// a selection in a read-only field still publishes PRIMARY (that is the
+    /// point of read-only — "navigable and copyable, but not editable").
+    #[test]
+    fn a_read_only_field_still_publishes_its_mouse_selection() {
+        let (mut il, _id) = read_only_field(20, "hello world");
+        let mut ev = mouse_down_at(2, 0);
+        with_ctx_d(|ctx| il.handle_event(&mut ev, ctx));
+        let mut ev = mouse_move_at(5, 0);
+        with_ctx_d(|ctx| il.handle_event(&mut ev, ctx));
+        let mut ev = mouse_up_at(5, 0);
+        let (_, deferred, ()) = with_ctx_d(|ctx| il.handle_event(&mut ev, ctx));
+
+        assert_eq!(primary_writes(&deferred), vec!["ell".to_string()]);
+    }
+
+    /// Keyboard selection is deliberately NOT published: shift+arrow would
+    /// re-take X selection ownership on every keystroke.
+    #[test]
+    fn keyboard_selection_does_not_publish_the_primary_selection() {
+        let (mut il, _id) = field_with_id(20, "hello world");
+        il.cur_pos = 0;
+        il.sel_start = 0;
+        il.sel_end = 0;
+        let mut ev = Event::KeyDown(KeyEvent::new(
+            Key::Right,
+            KeyModifiers {
+                shift: true,
+                ..Default::default()
+            },
+        ));
+        let (_, deferred, ()) = with_ctx_d(|ctx| il.handle_event(&mut ev, ctx));
+
+        assert!(
+            il.sel_start < il.sel_end,
+            "precondition: shift+Right selected"
+        );
+        assert!(primary_writes(&deferred).is_empty());
     }
 }

@@ -130,6 +130,14 @@ enum EditorTrack {
     Pan {
         /// The previous tick's view-local mouse position.
         last: Point,
+        /// Whether the pointer has actually moved since the press.
+        ///
+        /// The middle button carries two gestures, told apart by movement: a
+        /// press released where it started is the X11 middle-click paste; a
+        /// press that moves is the pan. So the press arms `moved: false` and
+        /// runs no pan body — which is what the C++ `while (mouseEvent(...))`
+        /// loop does anyway (teditor1.cpp:540-551).
+        moved: bool,
     },
 }
 
@@ -1379,14 +1387,32 @@ impl Editor {
     /// since the previous tick) and remember the new position, never touching the
     /// cursor or selection. The pan does not take an update lock, so the scroll's
     /// view-repaint flushes immediately, which `flush_if_unlocked` mirrors.
-    fn pan_tick(&mut self, last: Point, mouse: Point, ctx: &mut Context) {
+    fn pan_tick(&mut self, last: Point, moved: bool, mouse: Point, ctx: &mut Context) {
         let d = Point::new(
             self.delta.x + last.x - mouse.x,
             self.delta.y + last.y - mouse.y,
         );
         self.scroll_to_core(d.x, d.y);
-        self.track = Some(EditorTrack::Pan { last: mouse });
+        // An auto-repeat at the held position has `mouse == last` — a no-op
+        // scroll, and NOT movement: holding the button still then releasing is
+        // still a paste, not a zero-distance pan.
+        self.track = Some(EditorTrack::Pan {
+            last: mouse,
+            moved: moved || mouse != last,
+        });
         self.flush_if_unlocked(ctx);
+    }
+
+    /// Publish the current selection as the X11/Wayland PRIMARY selection, so
+    /// another client can middle-click-paste it. The twin of
+    /// [`InputLine::publish_primary`](crate::widgets::InputLine); called only
+    /// when a **mouse** selection completes.
+    fn publish_primary(&self, ctx: &mut Context) {
+        if self.has_selection()
+            && let Ok(text) = String::from_utf8(self.selection_bytes())
+        {
+            ctx.set_primary(text);
+        }
     }
 
     /// Scroll so the cursor is visible (centering it when `center`).
@@ -1963,8 +1989,8 @@ impl View for Editor {
                     // The pan loop's mask is evMouse (teditor1.cpp:542),
                     // which includes evMouseWheel: a wheel tick runs the
                     // same scroll-by-mouse-delta body (:543-548).
-                    Some(EditorTrack::Pan { last }) => {
-                        self.pan_tick(last, m.position, ctx);
+                    Some(EditorTrack::Pan { last, moved }) => {
+                        self.pan_tick(last, moved, m.position, ctx);
                     }
                     None => return, // untracked wheel — fall through
                 }
@@ -2040,7 +2066,10 @@ impl View for Editor {
                     // (uninserted) there is nothing to track — the press is a
                     // no-op, like the C++ loop with no further events.
                     if let Some(id) = self.state.id() {
-                        self.track = Some(EditorTrack::Pan { last: m.position });
+                        self.track = Some(EditorTrack::Pan {
+                            last: m.position,
+                            moved: false,
+                        });
                         ctx.start_mouse_track(
                             id,
                             self.abs_origin,
@@ -2106,7 +2135,9 @@ impl View for Editor {
                         self.unlock(ctx);
                     }
                     // Pan body (teditor1.cpp:543-548).
-                    Some(EditorTrack::Pan { last }) => self.pan_tick(last, m.position, ctx),
+                    Some(EditorTrack::Pan { last, moved }) => {
+                        self.pan_tick(last, moved, m.position, ctx)
+                    }
                     None => unreachable!("guarded by track.is_some()"),
                 }
             }
@@ -2145,7 +2176,9 @@ impl View for Editor {
                     // Pan body (teditor1.cpp:543-548): an auto at the held
                     // position has lastMouse == mouse — a no-op scroll,
                     // faithful to the C++ evMouse-masked loop.
-                    Some(EditorTrack::Pan { last }) => self.pan_tick(last, m.position, ctx),
+                    Some(EditorTrack::Pan { last, moved }) => {
+                        self.pan_tick(last, moved, m.position, ctx)
+                    }
                     None => unreachable!("guarded by track.is_some()"),
                 }
             }
@@ -2155,6 +2188,18 @@ impl View for Editor {
             // mask-gated in Group::wants, so a stray, untracked up must fall
             // through unconsumed.
             Event::MouseUp(_) if self.track.is_some() => {
+                match self.track {
+                    // A middle press that never moved is the X11 paste gesture,
+                    // not a zero-distance pan.
+                    Some(EditorTrack::Pan { moved: false, .. }) => {
+                        if let Some(id) = self.state.id() {
+                            ctx.request_editor_paste_primary(id);
+                        }
+                    }
+                    // A completed sweep publishes what it swept.
+                    Some(EditorTrack::Select { .. }) => self.publish_primary(ctx),
+                    _ => {}
+                }
                 self.track = None;
             }
             Event::KeyDown(k) => {
@@ -4925,7 +4970,8 @@ mod tests {
         assert_eq!(
             e.track,
             Some(EditorTrack::Pan {
-                last: Point::new(5, 5)
+                last: Point::new(5, 5),
+                moved: false,
             }),
             "pan track armed with lastMouse"
         );
@@ -4968,7 +5014,9 @@ mod tests {
         assert_eq!(
             e.track,
             Some(EditorTrack::Pan {
-                last: Point::new(3, 4)
+                last: Point::new(3, 4),
+                // A real move: this is a pan, so a release here must not paste.
+                moved: true,
             }),
             "lastMouse updated"
         );
@@ -5437,5 +5485,169 @@ mod tests {
         assert_eq!(e.find_str(), "needle");
         assert_eq!(e.replace_str(), "thread");
         assert_eq!(e.editor_flags(), 0x000F | EF_DO_REPLACE);
+    }
+
+    // -- X11 PRIMARY selection: middle-click pastes, middle-drag pans ---------
+    //
+    // The middle button is overloaded. The two gestures are told apart by
+    // MOVEMENT: a press that releases where it started is the X11 paste; a press
+    // that moves is the Turbo Vision pan (teditor1.cpp:540-551). Pan therefore
+    // starts one event later than it used to, which no user can perceive.
+
+    fn primary_pastes(deferred: &[Deferred]) -> Vec<ViewId> {
+        deferred
+            .iter()
+            .filter_map(|d| match d {
+                Deferred::EditorPastePrimary(i) => Some(*i),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn primary_writes(deferred: &[Deferred]) -> Vec<String> {
+        deferred
+            .iter()
+            .filter_map(|d| match d {
+                Deferred::SetPrimary(t) => Some(t.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Press and release without moving = the paste gesture.
+    #[test]
+    fn middle_click_without_movement_pastes_the_primary_selection() {
+        let mut e = tall_ed();
+        let id = give_id(&mut e);
+        let delta_before = e.delta;
+
+        let mut cx = Cx::new();
+        let mut ev = middle_down_at(5, 5);
+        {
+            let mut ctx = cx.ctx();
+            e.handle_event(&mut ev, &mut ctx);
+        }
+        let mut ev = mouse_up_at(5, 5);
+        {
+            let mut ctx = cx.ctx();
+            e.handle_event(&mut ev, &mut ctx);
+        }
+
+        assert_eq!(primary_pastes(&cx.deferred), vec![id]);
+        assert_eq!(e.delta, delta_before, "a paste click must not scroll");
+        assert_eq!(e.track, None, "track released");
+    }
+
+    /// Press, move, release = the pan gesture, and NO paste.
+    #[test]
+    fn middle_drag_pans_and_does_not_paste() {
+        let mut e = tall_ed();
+        let _id = give_id(&mut e);
+
+        let mut cx = Cx::new();
+        let mut ev = middle_down_at(5, 5);
+        {
+            let mut ctx = cx.ctx();
+            e.handle_event(&mut ev, &mut ctx);
+        }
+        let mut ev = mouse_move_at(5, 3);
+        {
+            let mut ctx = cx.ctx();
+            e.handle_event(&mut ev, &mut ctx);
+        }
+        let delta_after_move = e.delta;
+        let mut ev = mouse_up_at(5, 3);
+        {
+            let mut ctx = cx.ctx();
+            e.handle_event(&mut ev, &mut ctx);
+        }
+
+        assert!(
+            primary_pastes(&cx.deferred).is_empty(),
+            "a drag is a pan, not a paste"
+        );
+        assert_ne!(delta_after_move, Point::new(0, 0), "the move panned");
+    }
+
+    /// An auto-repeat tick at the HELD position is not movement — the C++ pan
+    /// loop treats it as a no-op scroll, so a press held still then released is
+    /// still a paste.
+    #[test]
+    fn an_auto_tick_at_the_held_position_is_not_movement() {
+        let mut e = tall_ed();
+        let id = give_id(&mut e);
+
+        let mut cx = Cx::new();
+        let mut ev = middle_down_at(5, 5);
+        {
+            let mut ctx = cx.ctx();
+            e.handle_event(&mut ev, &mut ctx);
+        }
+        let mut ev = mouse_auto_at(5, 5);
+        {
+            let mut ctx = cx.ctx();
+            e.handle_event(&mut ev, &mut ctx);
+        }
+        let mut ev = mouse_up_at(5, 5);
+        {
+            let mut ctx = cx.ctx();
+            e.handle_event(&mut ev, &mut ctx);
+        }
+
+        assert_eq!(primary_pastes(&cx.deferred), vec![id]);
+    }
+
+    /// Finishing a left-button sweep publishes the swept text as PRIMARY.
+    #[test]
+    fn finishing_a_drag_select_publishes_the_primary_selection() {
+        let mut e = tall_ed();
+        let _id = give_id(&mut e);
+
+        let mut cx = Cx::new();
+        let mut ev = mouse_down_at(0, 0);
+        {
+            let mut ctx = cx.ctx();
+            e.handle_event(&mut ev, &mut ctx);
+        }
+        let mut ev = mouse_move_at(3, 0);
+        {
+            let mut ctx = cx.ctx();
+            e.handle_event(&mut ev, &mut ctx);
+        }
+        assert!(
+            e.has_selection(),
+            "precondition: the sweep selected something"
+        );
+        let expected = String::from_utf8(e.selection_bytes()).unwrap();
+
+        let mut ev = mouse_up_at(3, 0);
+        {
+            let mut ctx = cx.ctx();
+            e.handle_event(&mut ev, &mut ctx);
+        }
+
+        assert_eq!(primary_writes(&cx.deferred), vec![expected]);
+    }
+
+    /// A click that selects nothing publishes nothing — otherwise every click
+    /// would clobber the user's selection with "".
+    #[test]
+    fn a_click_without_a_sweep_publishes_no_primary_selection() {
+        let mut e = tall_ed();
+        let _id = give_id(&mut e);
+
+        let mut cx = Cx::new();
+        let mut ev = mouse_down_at(2, 0);
+        {
+            let mut ctx = cx.ctx();
+            e.handle_event(&mut ev, &mut ctx);
+        }
+        let mut ev = mouse_up_at(2, 0);
+        {
+            let mut ctx = cx.ctx();
+            e.handle_event(&mut ev, &mut ctx);
+        }
+
+        assert!(primary_writes(&cx.deferred).is_empty());
     }
 }

@@ -12,7 +12,33 @@ moves it into a dated, versioned section when a release is cut.
 
 ### New
 
+- **X11 middle-click paste (PRIMARY selection).** Middle-clicking an `InputLine`
+  now pastes the X11/Wayland PRIMARY selection at the click point, and finishing
+  a *mouse* selection publishes it, so select-here/middle-click-there works both
+  ways with other applications. `Editor` gets the same paste. New
+  `Backend::get_primary` / `Backend::set_primary` (both **defaulted**, so an
+  existing `Backend` implementor keeps compiling and simply gets the inert
+  behaviour), backed by `arboard`'s `LinuxClipboardKind::Primary`.
+
+  PRIMARY has **one** rung — the native clipboard. There is no internal-buffer
+  fallback and no OSC 52: with no display (the SSH shape) `get_primary` returns
+  `None` and a middle click is inert, because pasting stale in-app text the user
+  never selected is worse than doing nothing. Over SSH, shift+middle-click still
+  works — the terminal does its own paste and it arrives as `Event::Paste`.
+
+  A **masked** `InputLine` never publishes cleartext to PRIMARY, revealed or not
+  — the same rule `do_copy`/`do_cut` already apply to the clipboard. Keyboard
+  selection deliberately does not publish; shift+arrow would re-take X selection
+  ownership on every keystroke.
+
 ### Changed
+
+- **`Editor`: the middle button now carries two gestures, told apart by
+  movement.** A middle press released where it started pastes the PRIMARY
+  selection; a middle press that moves pans, exactly as before. The pan
+  therefore begins one event later, which is imperceptible — and matches the C++
+  `while (mouseEvent(...))` loop, whose press already ran no body
+  (`teditor1.cpp:540-551`). `EditorTrack::Pan` gained a `moved` flag.
 
 ### Fixed
 

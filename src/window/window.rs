@@ -2443,6 +2443,48 @@ mod tests {
         assert!(parent.find_mut(id).unwrap().state().state.dragging);
     }
 
+    /// THE COLLISION TEST. The middle button means "move the window" to a
+    /// bordered `Window` and "paste the PRIMARY selection" to an `InputLine`.
+    /// Only ordering keeps them apart: the window's drag detection runs AFTER
+    /// group delegation and fires only on a still-live `MouseDown`, which the
+    /// child has already consumed. Pin that, so nobody "simplifies" the drag
+    /// check to the front of `handle_event` and silently breaks middle-click
+    /// paste in every dialog field.
+    #[test]
+    fn middle_click_on_a_child_input_line_does_not_move_the_window() {
+        let mut parent = Group::new(Rect::new(0, 0, 80, 25));
+        let mut w = Window::new(Rect::new(2, 1, 22, 9), Some("Edit".into()), 1);
+        // A one-row field well inside the frame (window-local coords).
+        let field = crate::widgets::InputLine::with_limit(Rect::new(2, 3, 18, 4), 64);
+        let field_id = w.insert_child(Box::new(field));
+        let id = parent.insert(Box::new(w));
+
+        let mut out = VecDeque::new();
+        let mut timers = TimerQueue::new();
+        let mut deferred: Vec<crate::view::Deferred> = Vec::new();
+        let mut ev = mouse_down_middle(5, 3); // on the field, inside the border
+        {
+            let mut ctx = Context::new(&mut out, &mut timers, 0, &mut deferred);
+            ctx.set_owner_size(Point::new(80, 25));
+            parent
+                .find_mut(id)
+                .expect("window resolves")
+                .handle_event(&mut ev, &mut ctx);
+        }
+
+        assert!(
+            !parent.find_mut(id).unwrap().state().state.dragging,
+            "the window must NOT start a move drag"
+        );
+        assert!(
+            deferred.iter().any(|d| matches!(
+                d,
+                crate::view::Deferred::InputLinePastePrimary(i) if *i == field_id
+            )),
+            "the field asked for a PRIMARY paste instead"
+        );
+    }
+
     // -- 12. move_grow unit tests (pure fn) -----------------------------------
 
     /// `move_grow` must use `min(max())`, NOT `clamp()`. The classic TV inversion
