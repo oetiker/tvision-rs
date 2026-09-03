@@ -1,6 +1,6 @@
 # `ListViewer` external find-query input — design spec
 
-> **Status:** draft, pending review. **Date:** 2026-07-06.
+> **Status:** approved; slated for the **0.12** release. **Date:** 2026-07-06.
 > **Type:** rstv-original *extension*, layered on the
 > [incremental find-and-highlight](2026-06-30-listviewer-incremental-find-design.md)
 > feature. That spec gave the list an opt-in `query` that its **own** keystroke
