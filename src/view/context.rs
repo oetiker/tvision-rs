@@ -355,6 +355,20 @@ pub enum Deferred {
     /// the **view-tree** family + the backend (same as
     /// [`EditorPaste`](Self::EditorPaste)).
     InputLinePaste(ViewId),
+    /// **Publish text as the X11/Wayland PRIMARY selection.** The pump calls
+    /// `renderer.backend_mut().set_primary(&s)`. Emitted when the user finishes
+    /// a *mouse* selection, so another X client can middle-click-paste it.
+    /// Backend-only, like [`SetClipboard`](Self::SetClipboard).
+    SetPrimary(String),
+    /// **Paste the PRIMARY selection into an input line** — the X11
+    /// middle-click gesture. Same broker shape as
+    /// [`InputLinePaste`](Self::InputLinePaste), but reads
+    /// `get_primary()` instead of `get_clipboard()`. A `None` read (no display,
+    /// nothing selected) makes the paste a no-op.
+    InputLinePastePrimary(ViewId),
+    /// **Paste the PRIMARY selection into an editor** — the editor half of the
+    /// middle-click gesture. See [`InputLinePastePrimary`](Self::InputLinePastePrimary).
+    EditorPastePrimary(ViewId),
 
     // -- the payload-carrying-broadcast (file-focused) broker --
     /// **Resolve a file-focused broadcast's directory-entry payload** (the file
@@ -1609,6 +1623,26 @@ impl<'a> Context<'a> {
     /// [`InputLine::paste_text`](crate::widgets::InputLine::paste_text).
     pub fn request_input_line_paste(&mut self, id: ViewId) {
         self.deferred.push(Deferred::InputLinePaste(id));
+    }
+
+    /// Publish `text` as the PRIMARY selection — **deferred**
+    /// ([`Deferred::SetPrimary`]). Call this when a *mouse* selection completes;
+    /// keyboard selection deliberately does not publish (it would re-take X
+    /// selection ownership on every arrow key).
+    pub fn set_primary(&mut self, text: String) {
+        self.deferred.push(Deferred::SetPrimary(text));
+    }
+
+    /// Request the input line `id` paste the PRIMARY selection — **deferred**
+    /// ([`Deferred::InputLinePastePrimary`]). The X11 middle-click gesture.
+    pub fn request_input_line_paste_primary(&mut self, id: ViewId) {
+        self.deferred.push(Deferred::InputLinePastePrimary(id));
+    }
+
+    /// Request the editor `id` paste the PRIMARY selection — **deferred**
+    /// ([`Deferred::EditorPastePrimary`]).
+    pub fn request_editor_paste_primary(&mut self, id: ViewId) {
+        self.deferred.push(Deferred::EditorPastePrimary(id));
     }
 
     /// Re-queue a **raw event** into the loop's event queue.

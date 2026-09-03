@@ -2663,6 +2663,35 @@ impl Program {
                                     il.paste_text(&t);
                                 }
                             }
+                            // -- the PRIMARY-selection (X11 middle-click) brokers --
+                            //
+                            // Same shape as the two clipboard brokers above, but
+                            // reading `get_primary()`. A `None` read is the normal
+                            // "no display / nothing selected" case, and the paste
+                            // silently does nothing — see `Backend::get_primary`.
+                            Deferred::SetPrimary(s) => {
+                                renderer.backend_mut().set_primary(&s);
+                            }
+                            Deferred::InputLinePastePrimary(id) => {
+                                let txt = renderer.backend_mut().get_primary();
+                                if let Some(t) = txt
+                                    && let Some(il) = group
+                                        .find_mut(id)
+                                        .and_then(|view| view.as_any_mut())
+                                        .and_then(|a| a.downcast_mut::<crate::widgets::InputLine>())
+                                {
+                                    il.paste_text(&t);
+                                }
+                            }
+                            Deferred::EditorPastePrimary(id) => {
+                                let txt = renderer.backend_mut().get_primary();
+                                if let Some(t) = txt
+                                    && let Some(ed) =
+                                        group.find_mut(id).and_then(crate::widgets::editor_mut)
+                                {
+                                    ed.insert_text(t.as_bytes(), false, &mut ctx);
+                                }
+                            }
                             // -- the internal-clipboard TEditor broker -----
                             //
                             // Three variants: register, receive (copy into
