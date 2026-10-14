@@ -222,6 +222,11 @@ pub enum Role {
     /// blue on cyan (`0x31`), resolved from `cpListViewer[5]=0x1D →
     /// cpGrayDialog[29]=0x3C → cpAppColor[60]=0x31`.
     ListDivider,
+    /// The column-label row of a [`Table`](crate::widgets::Table), including
+    /// the sort marker. A tvision-rs-native role with no C++ palette ancestor
+    /// (Turbo Vision has no table); in `classic_blue` it is yellow on blue
+    /// (`0x1E`), a header bar that stands apart from the cyan list rows.
+    TableHeader,
     /// Error feedback — for widgets or dialogs that need to highlight an error
     /// state. In `classic_blue` this is white on red (`0x4F`). This is a
     /// tvision-rs-native role with no C++ palette ancestor.
@@ -495,7 +500,7 @@ pub enum Role {
 }
 
 /// Number of [`Role`] variants — the fixed length of [`Theme`]'s style array.
-pub(crate) const ROLE_COUNT: usize = 80;
+pub(crate) const ROLE_COUNT: usize = 81;
 
 /// All role variants in index order (appended families grouped semantically) — used by the theme editor.
 pub(crate) const ALL: [Role; ROLE_COUNT] = [
@@ -579,6 +584,7 @@ pub(crate) const ALL: [Role; ROLE_COUNT] = [
     Role::HistorySides,
     Role::HistoryViewerNormal,
     Role::HistoryViewerFocused,
+    Role::TableHeader,
 ];
 
 impl Role {
@@ -615,6 +621,7 @@ impl Role {
             Role::ListFocused => "ListFocused",
             Role::ListSelected => "ListSelected",
             Role::ListDivider => "ListDivider",
+            Role::TableHeader => "TableHeader",
             Role::Error => "Error",
             Role::Warning => "Warning",
             Role::Info => "Info",
@@ -755,6 +762,7 @@ impl Role {
             Role::HistoryViewerFocused => 74,
             Role::ListSurface => 78,
             Role::OutlineSurface => 79,
+            Role::TableHeader => 80,
         }
     }
 }
@@ -1139,6 +1147,7 @@ impl Theme {
         set(&mut styles, Role::ListFocused, 0xF, 0x2); // white on green (chain: cpListViewer[3]=0x1B → cpGrayDialog[27]=0x3A → cpAppColor[58]=0x2F)
         set(&mut styles, Role::ListSelected, 0xE, 0x3); // yellow on cyan (chain: cpListViewer[4]=0x1C → cpGrayDialog[28]=0x3B → cpAppColor[59]=0x3E)
         set(&mut styles, Role::ListDivider, 0x1, 0x3); // blue on cyan (chain: cpListViewer[5]=0x1D → cpGrayDialog[29]=0x3C → cpAppColor[60]=0x31)
+        set(&mut styles, Role::TableHeader, 0xE, 0x1); // yellow on blue (tvision-rs-native: the Table column-label row)
 
         // Feedback family — tvision-rs-native roles (no inherited chain).
         set(&mut styles, Role::Error, 0xF, 0x4); // white on red

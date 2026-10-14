@@ -293,6 +293,26 @@ impl Command {
     /// broadcast — a parent filters on `source` to drive an external search
     /// (e.g. submit an async query and re-feed results).
     pub const LIST_FIND_CHANGED: Command = Command("tv.list_find_changed");
+    /// A [`Table`](crate::widgets::Table)'s sort order changed through the user
+    /// (a header click or [`TABLE_SORT_NEXT`](Self::TABLE_SORT_NEXT) /
+    /// [`TABLE_SORT_FLIP`](Self::TABLE_SORT_FLIP)); `source` is the table's
+    /// `ViewId`. Read the new order with `Table::sort_spec`.
+    pub const TABLE_SORT_CHANGED: Command = Command("tv.table_sort_changed");
+    /// A multi-select [`Table`](crate::widgets::Table)'s set of marked rows
+    /// changed through the user (Space or a double-click toggled a row);
+    /// `source` is the table's `ViewId`. Read the set with
+    /// `Table::selected_keys`.
+    pub const TABLE_SELECTION_CHANGED: Command = Command("tv.table_selection_changed");
+    /// Sort a focused [`Table`](crate::widgets::Table) by the next visible
+    /// column, ascending (wrapping; with no sort yet, the first visible
+    /// column). The table binds no key to it: an app maps a key to this
+    /// command (status line or keymap) if it wants keyboard sorting.
+    pub const TABLE_SORT_NEXT: Command = Command("tv.table_sort_next");
+    /// Flip the sort direction of a focused [`Table`](crate::widgets::Table)
+    /// on its current sort column (with no sort yet: sort the first visible
+    /// column ascending). Unbound by default, like
+    /// [`TABLE_SORT_NEXT`](Self::TABLE_SORT_NEXT).
+    pub const TABLE_SORT_FLIP: Command = Command("tv.table_sort_flip");
     /// The terminal size changed — broadcast by `Program` after a SIGWINCH /
     /// crossterm resize event; all views resize in response.
     ///
