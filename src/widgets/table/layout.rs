@@ -110,7 +110,9 @@ pub fn layout_widths(cols: &[ColumnSpec], avail: i32) -> Vec<i32> {
         .iter()
         .map(|c| if c.hidden { 0 } else { c.width.max(0) })
         .collect();
-    let visible = cols.iter().filter(|c| !c.hidden).count() as i32;
+    // A visible column of width 0 renders nothing and gets no separator
+    // (as in `join_cells` / `column_at`), so it does not count here either.
+    let visible = cols.iter().filter(|c| !c.hidden && c.width > 0).count() as i32;
     let budget = avail - (visible - 1).max(0);
     if visible == 0 || budget <= 0 {
         return vec![0; cols.len()];
@@ -238,7 +240,8 @@ pub fn column_at(widths: &[i32], x: i32) -> Option<usize> {
 }
 
 /// The display order of `model` sorted by column `col`: model row indices,
-/// stable for ties (equal keys keep model order in both directions).
+/// stable for ties (equal keys keep model order in both directions). Numbers
+/// come before text in both directions.
 pub fn sort_order(model: &dyn TableModel, col: usize, dir: SortDir) -> Vec<usize> {
     let keys: Vec<_> = (0..model.row_count())
         .map(|r| model.sort_key(r, col))
@@ -246,9 +249,10 @@ pub fn sort_order(model: &dyn TableModel, col: usize, dir: SortDir) -> Vec<usize
     let mut order: Vec<usize> = (0..keys.len()).collect();
     order.sort_by(|&a, &b| {
         let ord = keys[a].compare(&keys[b]);
+        // Descending reverses within a kind only: numbers stay before text.
         match dir {
-            SortDir::Asc => ord,
-            SortDir::Desc => ord.reverse(),
+            SortDir::Desc if keys[a].same_kind(&keys[b]) => ord.reverse(),
+            _ => ord,
         }
     });
     order
@@ -396,9 +400,23 @@ mod tests {
     }
 
     #[test]
-    fn numbers_sort_before_text() {
-        let m = model(&[&["n/a"], &["10"], &["9"]]);
-        assert_eq!(sort_order(&m, 0, SortDir::Asc), [2, 1, 0]);
+    fn numbers_sort_before_text_in_both_directions() {
+        let m = model(&[&["n/a"], &["10"], &["9"], &["abc"]]);
+        assert_eq!(sort_order(&m, 0, SortDir::Asc), [2, 1, 3, 0]);
+        assert_eq!(
+            sort_order(&m, 0, SortDir::Desc),
+            [1, 2, 0, 3],
+            "descending reverses within each kind, numbers still first"
+        );
+    }
+
+    #[test]
+    fn zero_width_visible_columns_get_no_separator() {
+        // 5 + 5 + one separator = 11: the zero-width B must not eat a cell.
+        let cols = [col("A", 5), col("B", 0), col("C", 5)];
+        assert_eq!(layout_widths(&cols, 11), vec![5, 0, 5]);
+        let m = model(&[&["a", "b", "c"]]);
+        assert_eq!(text::width(&format_line(&m, 0, &[5, 0, 5], &cols)), 11);
     }
 
     /// A model whose display text is not its sort key (the tvdocker

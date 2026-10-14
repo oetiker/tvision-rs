@@ -42,8 +42,11 @@ impl fmt::Display for RowKey {
 
 /// The value a column sorts by.
 ///
-/// Numbers sort before text; two numbers compare numerically (a NaN sorts
-/// after every other number), two texts compare as strings.
+/// Numbers sort before text in **both** directions (a descending sort
+/// reverses numbers among themselves and texts among themselves, never the
+/// two groups). Two numbers compare numerically, two texts as strings. Only
+/// finite numbers come out of [`parse`](Self::parse); a NaN that a model
+/// supplies itself sorts after every other number.
 #[derive(Clone, Debug, PartialEq)]
 pub enum SortKey {
     /// A numeric key — `"10.2"` sorts after `"9.9"`.
@@ -53,12 +56,21 @@ pub enum SortKey {
 }
 
 impl SortKey {
-    /// Parse `cell` (trimmed) as a number; fall back to the text itself.
+    /// Parse `cell` (trimmed) as a finite number; anything else, including
+    /// `"nan"`, `"inf"` and `"infinity"`, stays text.
     pub fn parse(cell: &str) -> SortKey {
         match cell.trim().parse::<f64>() {
-            Ok(n) => SortKey::Num(n),
-            Err(_) => SortKey::Text(cell.to_string()),
+            Ok(n) if n.is_finite() => SortKey::Num(n),
+            _ => SortKey::Text(cell.to_string()),
         }
+    }
+
+    /// Whether both keys are of the same kind (both numbers or both text).
+    pub fn same_kind(&self, other: &SortKey) -> bool {
+        matches!(
+            (self, other),
+            (SortKey::Num(_), SortKey::Num(_)) | (SortKey::Text(_), SortKey::Text(_))
+        )
     }
 
     /// The total sort order: numbers before text, numbers by value, text by
@@ -182,6 +194,9 @@ mod tests {
         assert_eq!(SortKey::parse("-3"), SortKey::Num(-3.0));
         assert_eq!(SortKey::parse("10.2%"), SortKey::Text("10.2%".into()));
         assert_eq!(SortKey::parse(""), SortKey::Text(String::new()));
+        for t in ["nan", "NaN", "inf", "-inf", "infinity", "Infinity"] {
+            assert_eq!(SortKey::parse(t), SortKey::Text(t.into()), "{t} is text");
+        }
     }
 
     #[test]
