@@ -12,6 +12,12 @@ moves it into a dated, versioned section when a release is cut.
 
 ### New
 
+- **`Table` widget.** A sortable multi-column list with a click-to-sort header,
+  single or multi selection, hidden columns and per-row text colours; the
+  focused row and the marked rows stay on the same record when rows are
+  reloaded or re-sorted. Adapted from tvdocker (MIT, by supertorpe).
+- **Common app patterns** page in the guide: focus, resize, cursor, help
+  context and key routing, modal results, background work, double-click.
 - **Dialogs opened from a view return their field values.** A view that opens a
   dialog with `Context::request_exec_view` now receives the dialog's field values
   in `set_modal_data` (an ordered `FieldValue::List`), unless the dialog was

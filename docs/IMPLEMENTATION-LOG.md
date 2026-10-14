@@ -5,6 +5,56 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## tvdocker feedback: double-click, modal data-back, delegate guard, Table (2026-10-15)
+
+The author of tvdocker (github.com/supertorpe/tvdocker, a Docker TUI on
+tvision-rs 0.16) reported eight places where they had to work around the
+framework. Each was checked against the code before any work started.
+
+**What landed** (branch `fix/tvdocker-feedback`, each piece two-stage reviewed):
+- **Double/triple click** (`08374bf`, `d85dea4`): nothing ever set
+  `MouseEventFlags::double_click`/`triple_click` on live events, so every
+  double-click feature worked only in tests. `MouseClickState` next to
+  `MouseAutoState` ports `TEventQueue::getMouseEvent` (clear flags, same
+  buttons + cell within `doubleDelay`, double→triple→neither), only on
+  backend-polled events. `Program::set_double_delay_ms` = the public C++ static.
+  Known backend-model gap (noted in code): crossterm reports a press per button
+  even while another is held.
+- **Modal data-back** (`1df57d2`, `e7266a9`): `request_exec_view` now hands the
+  modal's `value()` to `requester.set_modal_data` on any non-CANCEL close (the
+  C++ `execView != cmCancel → getData` idiom), before `set_modal_answer`.
+  `RouteModalAnswer` gained `deliver_data` (false for message boxes). `Dialog::value()`
+  now returns `gather_list()` (= `TGroup::getData`).
+- **`#[delegate]` one-ViewState guard** (`e0b42e4`, `5fe502d`, `dd6e187`): the
+  tvdocker "focused never reaches my leaf" report was not a propagation bug: its
+  `Table` returned its own `st` from `state()` while the macro forwarded
+  `set_state`, `calc_bounds`, … to the inner scroller's state. The macro now
+  rejects a `state`/`state_mut` body other than `self.<field>.state()` (parens /
+  invisible groups peeled); the plain forwarder stays legal because downstream
+  code writes it often.
+- **App patterns page** (`0d90728`): `docs/book/src/apps/patterns.md` answers the
+  remaining questions (focus, resize via `change_bounds`, cursor, help ctx +
+  status-line pre-routing, modal results, async drain, double-click, factories).
+  Dead `Command::SCREEN_CHANGED` removed (C++ consumes `cmScreenChanged` inside
+  `TProgram::getEvent`; apps never see it).
+- **`Table` extension** (`ed06247`..`151c5b4`, spec
+  `docs/specs/2026-10-14-table-widget.md`): adapted from tvdocker's table (MIT)
+  but rebuilt as a `Group` of a `TableHeader` leaf and a `ListViewer` body, one
+  `ViewState` each. `TableModel`/`VecModel`, `ColumnSpec`, click-to-sort,
+  single/multi selection keyed by `RowKey` across reloads, `value()` as key(s),
+  `TABLE_*` commands, `Role::TableHeader`, new defaulted `ListViewer::item_role`.
+  Table, header and body share one `Rc<RefCell>` block (ColorPicker precedent).
+  The bar is published on `set_state` (activation) and on `set_model`.
+
+**Gate on the integrated branch:** 1551 tests (1491 lib), clippy, fmt, examples.
+
+**Found, not fixed (offered to the user):** `on_bounds_changed` is skipped on
+grow-mode cascades (list/scroller bars go stale after a resize); `Program` has
+no post/broadcast, while the `set_on_idle` rustdoc and `event-loop.md` claim it;
+cursor not clipped to view/owner/siblings (C++ `TVCursor`); menu-bar
+accelerators may fire during a modal (unverified); ~120 broken intra-doc links
+under `RUSTDOCFLAGS=-D warnings`; committed book screens may be stale.
+
 ## InputLine cursor desync: derive in cursor_request, not a mutation-time cache (2026-07-04)
 
 The edaptor consumer reported that writing `InputLine`'s public caret fields

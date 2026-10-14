@@ -15,6 +15,22 @@
 > rebuild). When something lands: add an IMPLEMENTATION-LOG section and update
 > this file.
 
+## Current state (2026-10-15) — tvdocker feedback on `fix/tvdocker-feedback`
+
+Branch `fix/tvdocker-feedback` (not yet merged; PR pending) carries the
+response to the tvdocker author's report: live double/triple clicks,
+`request_exec_view` data-back, the `#[delegate]` one-ViewState guard, the
+"Common app patterns" book page, and the new `Table` extension
+(`src/widgets/table/`). Narrative + open findings: the 2026-10-15 entry in
+`docs/IMPLEMENTATION-LOG.md`.
+
+**Next candidates (user to choose):** call `on_bounds_changed` (or the list /
+scroller re-publish) on grow-mode cascades; a way for the idle hook to post
+events (and fix the docs that claim one exists); cursor clipping
+(`TVCursor`); check menu accelerators during a modal; the ~120 broken
+intra-doc links; tvdocker's `LogView` and an `InputLine` placeholder +
+Ctrl+U/Ctrl+W as further extensions.
+
 ## Current state (2026-06-20) — ✅ DATA-MOVEMENT EFFORT MERGED TO MAIN
 
 **The data-movement effort (Phases 1–5) + tcv polish is now MERGED to `main`**
