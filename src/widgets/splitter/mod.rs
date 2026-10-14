@@ -4,7 +4,7 @@ use crate::capture::TrackMask;
 use crate::event::Event;
 use crate::junction::{Edge, Junction, JunctionMark, Weight, divider_junction};
 use crate::theme::Role;
-use crate::view::{Context, DrawCtx, Group, GrowMode, Point, Rect, View, ViewId, ViewState};
+use crate::view::{Context, DrawCtx, Group, GrowMode, Point, Rect, View, ViewId};
 
 pub use layout::{Constraints, Orientation};
 use layout::{Slot, relax_weight, solve};
@@ -722,13 +722,6 @@ impl Splitter {
 
 #[crate::delegate(to = group)]
 impl View for Splitter {
-    fn state(&self) -> &ViewState {
-        self.group.state()
-    }
-    fn state_mut(&mut self) -> &mut ViewState {
-        self.group.state_mut()
-    }
-
     fn draw(&mut self, ctx: &mut DrawCtx) {
         self.abs_origin = ctx.origin();
         self.group.draw(ctx);
@@ -811,6 +804,7 @@ mod divider_tests {
     use crate::backend::{HeadlessBackend, Renderer};
     use crate::screen::Buffer;
     use crate::theme::{Role, Theme};
+    use crate::view::ViewState;
 
     // Minimal fill view for snapshot tests.
     struct Fill(char, ViewState);
@@ -1059,6 +1053,7 @@ mod view_tests {
     use crate::backend::{HeadlessBackend, Renderer};
     use crate::screen::Buffer;
     use crate::theme::{Role, Theme};
+    use crate::view::ViewState;
 
     struct Fill(char, ViewState);
     impl Fill {

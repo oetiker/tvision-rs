@@ -144,6 +144,15 @@ impl View for MyTerminal {
 }
 ```
 
+Do not return a `ViewState` of your own from `state`/`state_mut` in a
+`#[delegate]` impl: the inner field owns
+the view's one `ViewState`, and every forwarded method (`set_state`,
+`change_bounds`, `calc_bounds`, ...) works on it. A `state` that returns a field
+of your wrapper would be a second state those methods ignore: the view would
+receive keys while `state().state.focused` stays `false`. The macro rejects such
+an override at compile time (a plain `self.scroller.state()` forwarder is
+accepted, but redundant).
+
 The attribute reads the trait name from the `impl Trait for Type` line and the
 field from `to = <field>`; it never needs the method list spelled out. A
 `skip(method, …)` clause leaves a named method at its **trait default** instead
