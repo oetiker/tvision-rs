@@ -80,6 +80,15 @@ const MOUSE_AUTO_DELAY_MS: u64 = 440;
 /// The value is two legacy 55 ms timer ticks (**110 ms**).
 const MOUSE_AUTO_PERIOD_MS: u64 = 110;
 
+/// Double-click interval, in ms: a press that repeats the previous press (same
+/// buttons, same cell) at most this long after it counts as a double (then
+/// triple) click.
+///
+/// # Turbo Vision heritage
+/// Ports `TEventQueue::doubleDelay` (`tevent.cpp`): 8 legacy 55 ms timer ticks
+/// (8 × 55 ms = **440 ms**).
+const DOUBLE_DELAY_MS: u64 = 440;
+
 // ---------------------------------------------------------------------------
 // MouseAutoState — the global evMouseAuto synthesizer
 // ---------------------------------------------------------------------------
@@ -155,6 +164,56 @@ impl MouseAutoState {
         } else {
             None
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// MouseClickState — the global double/triple-click synthesizer
+// ---------------------------------------------------------------------------
+
+/// The pump's click-count state: sets [`MouseEventFlags::double_click`] /
+/// [`MouseEventFlags::triple_click`](crate::event::MouseEventFlags) on a real
+/// [`Event::MouseDown`] that repeats the previous press (same buttons, same
+/// cell) within [`DOUBLE_DELAY_MS`].
+///
+/// The cycle is single → double → triple → single: a fourth quick press gets
+/// neither flag, and the fifth is a double again. A press whose flags a backend
+/// already set is left as is (it still becomes the reference press), so a
+/// backend that reports its own click count keeps it.
+///
+/// # Turbo Vision heritage
+/// Ports the `downMouse` / `downTicks` / `doubleDelay` slice of
+/// `TEventQueue::getMouseEvent` (`tevent.cpp`).
+#[derive(Debug, Default)]
+struct MouseClickState {
+    /// The previous press with its final flags (`downMouse`) and its clock
+    /// time in ms (`downTicks`). `None` = no press seen yet.
+    down: Option<(crate::event::MouseEvent, u64)>,
+}
+
+impl MouseClickState {
+    /// Set the click-count flags on a real press from the backend, and record
+    /// it as the reference for the next press.
+    fn observe(&mut self, ev: &mut Event, now: u64) {
+        let Event::MouseDown(m) = ev else {
+            return;
+        };
+        if !(m.buttons.left || m.buttons.right || m.buttons.middle) {
+            return;
+        }
+        if !(m.flags.double_click || m.flags.triple_click)
+            && let Some((down, ticks)) = &self.down
+            && m.buttons == down.buttons
+            && m.position == down.position
+            && now.saturating_sub(*ticks) <= DOUBLE_DELAY_MS
+        {
+            if !(down.flags.double_click || down.flags.triple_click) {
+                m.flags.double_click = true;
+            } else if down.flags.double_click {
+                m.flags.triple_click = true;
+            }
+        }
+        self.down = Some((*m, now));
     }
 }
 
@@ -349,6 +408,9 @@ pub struct Program {
     /// held, idle pump passes synthesize [`Event::MouseAuto`] on the 440 ms /
     /// 110 ms cadence (see [`MouseAutoState`]).
     mouse_auto: MouseAutoState,
+    /// The global double/triple-click synthesizer: flags a real press that
+    /// repeats the previous one within 440 ms (see [`MouseClickState`]).
+    mouse_clicks: MouseClickState,
     /// `Some(cmd)` ends the (modal) loop with that command as its result.
     end_state: Option<Command>,
     /// Set on an enable/disable change; the changed command set is broadcast once
@@ -602,6 +664,7 @@ impl Program {
             status_line,
             fullscreen: None,
             mouse_auto: MouseAutoState::default(),
+            mouse_clicks: MouseClickState::default(),
             end_state: None,
             command_set_changed: true, // first idle pump broadcasts cmCommandSetChanged so startup-disabled buttons self-gray
             pending_modal: None,
@@ -2023,6 +2086,7 @@ impl Program {
             status_line,
             fullscreen,
             mouse_auto,
+            mouse_clicks,
             end_state,
             command_set_changed,
             pending_modal,
@@ -2105,9 +2169,16 @@ impl Program {
         //    mouse-auto jitter below to +20 ms — the same wake cadence C++ runs
         //    its getMouseEvent checks on. No shorter wait is needed.
         let timeout = event_wait_timeout(timers, now);
+        //    A press polled from the backend gets its double/triple-click
+        //    flags here (see MouseClickState); a queued event is not a device
+        //    event and is never counted — C++ getEvent hands `pending` out
+        //    without passing through getMouseEvent.
         let ev = match out_events.pop_front() {
             Some(e) => Some(e),
-            None => renderer.backend_mut().poll_event(timeout),
+            None => renderer.backend_mut().poll_event(timeout).map(|mut e| {
+                mouse_clicks.observe(&mut e, now);
+                e
+            }),
         };
 
         // 3b. The evMouseAuto synthesizer (see MouseAutoState): a real
@@ -6020,6 +6091,195 @@ mod tests {
             "a probe without event_mask.mouse_auto receives no autos"
         );
         // (The opted-in case is covered by mouse_auto_fires_at_delay_then_period.)
+    }
+
+    // -- the global double/triple-click synthesizer -----------------------
+
+    /// Click once (raw MouseDown + MouseUp from the backend) at `(x, y)` at
+    /// clock time `t`, and return the flags of the MouseDown the probe saw.
+    fn click_flags(
+        program: &mut Program,
+        handle: &HeadlessHandle,
+        clock: &ManualClock,
+        log: &Rc<RefCell<Vec<Event>>>,
+        down: Event,
+        t: u64,
+    ) -> crate::event::MouseEventFlags {
+        clock.set(t);
+        log.borrow_mut().clear();
+        let pos = match &down {
+            Event::MouseDown(m) => m.position,
+            _ => unreachable!("click_flags takes a MouseDown"),
+        };
+        handle.push_event(down);
+        program.pump_once();
+        pump_until_quiet(program);
+        handle.push_event(mouse_up_at(pos.x, pos.y));
+        program.pump_once();
+        pump_until_quiet(program);
+        let downs: Vec<_> = log
+            .borrow()
+            .iter()
+            .filter_map(|e| match e {
+                Event::MouseDown(m) => Some(m.flags),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(downs.len(), 1, "the probe sees exactly one MouseDown");
+        downs[0]
+    }
+
+    /// [`auto_probe_program`] with the probe selected by a priming click at
+    /// clock 0 (the select-on-click swallows a first press on an unselected
+    /// view), on a cell no test clicks.
+    fn click_probe_program() -> (
+        Program,
+        HeadlessHandle,
+        Rc<ManualClock>,
+        Rc<RefCell<Vec<Event>>>,
+    ) {
+        let (mut program, handle, clock, log) = auto_probe_program(false);
+        handle.push_event(mouse_down_at(9, 3));
+        program.pump_once();
+        pump_until_quiet(&mut program);
+        handle.push_event(mouse_up_at(9, 3));
+        program.pump_once();
+        pump_until_quiet(&mut program);
+        (program, handle, clock, log)
+    }
+
+    fn right_down_at(x: i32, y: i32) -> Event {
+        Event::MouseDown(MouseEvent {
+            position: Point::new(x, y),
+            buttons: MouseButtons {
+                right: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+    }
+
+    /// Same cell, same button, within 440 ms: the 2nd press is a double
+    /// click, the 3rd a triple, the 4th neither, the 5th a double again —
+    /// the `meDoubleClick`/`meTripleClick` cycle of `getMouseEvent`.
+    #[test]
+    fn click_count_double_triple_then_restart() {
+        let (mut program, handle, clock, log) = click_probe_program();
+        let (p, h, c, l) = (&mut program, &handle, &*clock, &log);
+        let f1 = click_flags(p, h, c, l, mouse_down_at(2, 1), 1000);
+        assert!(!f1.double_click && !f1.triple_click, "1st press: no flag");
+        let f2 = click_flags(p, h, c, l, mouse_down_at(2, 1), 1200);
+        assert!(f2.double_click && !f2.triple_click, "2nd press: double");
+        let f3 = click_flags(p, h, c, l, mouse_down_at(2, 1), 1400);
+        assert!(!f3.double_click && f3.triple_click, "3rd press: triple");
+        let f4 = click_flags(p, h, c, l, mouse_down_at(2, 1), 1600);
+        assert!(!f4.double_click && !f4.triple_click, "4th press: neither");
+        let f5 = click_flags(p, h, c, l, mouse_down_at(2, 1), 1800);
+        assert!(f5.double_click && !f5.triple_click, "5th press: double");
+    }
+
+    /// The 440 ms window is inclusive (`ev.what - downTicks <= doubleDelay`);
+    /// one ms more is a fresh single click.
+    #[test]
+    fn click_count_respects_double_delay() {
+        let (mut program, handle, clock, log) = click_probe_program();
+        let (p, h, c, l) = (&mut program, &handle, &*clock, &log);
+        click_flags(p, h, c, l, mouse_down_at(2, 1), 1000);
+        let f = click_flags(p, h, c, l, mouse_down_at(2, 1), 1440);
+        assert!(f.double_click, "exactly 440 ms later is still a double");
+        let f = click_flags(p, h, c, l, mouse_down_at(2, 1), 1881);
+        assert!(
+            !f.double_click && !f.triple_click,
+            "441 ms after the last press is a single click"
+        );
+    }
+
+    /// A press on a different cell or with a different button is a fresh
+    /// single click (and becomes the new reference press).
+    #[test]
+    fn click_count_needs_same_cell_and_button() {
+        let (mut program, handle, clock, log) = click_probe_program();
+        let (p, h, c, l) = (&mut program, &handle, &*clock, &log);
+        click_flags(p, h, c, l, mouse_down_at(2, 1), 1000);
+        let f = click_flags(p, h, c, l, mouse_down_at(3, 1), 1100);
+        assert!(!f.double_click, "a different cell is no double click");
+        let f = click_flags(p, h, c, l, right_down_at(3, 1), 1200);
+        assert!(!f.double_click, "a different button is no double click");
+        let f = click_flags(p, h, c, l, right_down_at(3, 1), 1300);
+        assert!(f.double_click, "the reference press moved to the last one");
+    }
+
+    /// A flag the backend already set is kept, and counts as the reference
+    /// press for the next one (a backend double → our triple).
+    #[test]
+    fn click_count_keeps_backend_flags() {
+        let (mut program, handle, clock, log) = click_probe_program();
+        let (p, h, c, l) = (&mut program, &handle, &*clock, &log);
+        let pre = Event::MouseDown(MouseEvent {
+            position: Point::new(2, 1),
+            buttons: MouseButtons {
+                left: true,
+                ..Default::default()
+            },
+            flags: crate::event::MouseEventFlags {
+                double_click: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        let f = click_flags(p, h, c, l, pre, 1000);
+        assert!(f.double_click, "a backend-set double click is kept");
+        let f = click_flags(p, h, c, l, mouse_down_at(2, 1), 1100);
+        assert!(f.triple_click, "the next press continues to a triple");
+    }
+
+    /// End-to-end: two raw clicks on a window's title row (not on an icon)
+    /// zoom the window, through the frame's `double_click` arm.
+    #[test]
+    fn raw_double_click_on_title_bar_zooms_window() {
+        let (mut program, handle, clock) = program_with_desktop(80, 25);
+        let win_id = desktop_concrete(&mut program).insert_view(Box::new(Window::new(
+            Rect::new(10, 5, 40, 15),
+            Some("W".into()),
+            1,
+        )));
+        for _ in 0..3 {
+            program.pump_once();
+        }
+        let before = program
+            .group_mut()
+            .find_mut(win_id)
+            .unwrap()
+            .state()
+            .get_bounds();
+
+        // Title row of the window is absolute y = 5 + desktop top.
+        let desktop_id = program.desktop.unwrap();
+        let desktop_top = program
+            .group_mut()
+            .find_mut(desktop_id)
+            .unwrap()
+            .state()
+            .get_bounds()
+            .a
+            .y;
+        let (x, y) = (20, 5 + desktop_top);
+        for t in [1000, 1200] {
+            clock.set(t);
+            handle.push_event(mouse_down_at(x, y));
+            program.pump_once();
+            pump_until_quiet(&mut program);
+            handle.push_event(mouse_up_at(x, y));
+            program.pump_once();
+            pump_until_quiet(&mut program);
+        }
+        let after = program
+            .group_mut()
+            .find_mut(win_id)
+            .unwrap()
+            .state()
+            .get_bounds();
+        assert_ne!(before, after, "a raw double click on the title zooms");
     }
 
     #[test]

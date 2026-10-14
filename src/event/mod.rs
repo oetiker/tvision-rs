@@ -227,20 +227,23 @@ pub struct MouseButtons {
 /// The magiblot `eventFlags: ushort` bitmask (`meMouseMoved = 0x01`,
 /// `meDoubleClick = 0x02`, `meTripleClick = 0x04`) becomes a struct-of-bools
 /// extending the 1992 guide's single `Double: Boolean` field.
-/// The 1992 guide's `DoubleDelay: Word` global (double-click interval in
-/// 1/18.2 s DOS timer ticks) has no equivalent: the double-click interval is
-/// determined by the OS/terminal and delivered by crossterm; it cannot be
-/// overridden at application level.
+/// The click count is computed by the event loop, as in magiblot's
+/// `TEventQueue::getMouseEvent`: a press with the same buttons on the same
+/// cell as the previous press, at most 440 ms later (the 1992 guide's
+/// `DoubleDelay` of 8 ticks × 55 ms), is a double click; the next such press is
+/// a triple click; the one after that is a single click again. The interval
+/// is a fixed constant, not an application setting.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MouseEventFlags {
-    /// This press completed a double click (two clicks within the platform
-    /// double-click interval).
+    /// This press completed a double click (the second press with the same
+    /// buttons on the same cell within 440 ms).
     ///
     /// Check this flag in a [`Event::MouseDown`] handler to distinguish a
-    /// double-click from a single click. The timing interval is OS-defined and
-    /// delivered pre-computed by the crossterm backend.
+    /// double-click from a single click. The event loop sets it on every
+    /// backend; a backend may also set it itself.
     pub double_click: bool,
-    /// This press completed a triple click.
+    /// This press completed a triple click (the press after a double click,
+    /// same buttons, same cell, within 440 ms).
     pub triple_click: bool,
     /// The mouse moved since the last event.
     pub mouse_moved: bool,
