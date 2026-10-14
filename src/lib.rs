@@ -137,6 +137,9 @@ pub use view::{
 pub use widgets::Indicator;
 pub use widgets::PageStack;
 pub use widgets::TabBar;
+pub use widgets::{
+    Align, ColumnSpec, RowKey, SelectionMode, SortDir, SortKey, Table, TableModel, VecModel,
+};
 pub use widgets::{Button, ButtonFlags};
 pub use widgets::{CheckBoxes, Cluster, ClusterKind, MultiCheckBoxes, RadioButtons};
 pub use widgets::{Constraints, DividerStyle, Orientation, Splitter};

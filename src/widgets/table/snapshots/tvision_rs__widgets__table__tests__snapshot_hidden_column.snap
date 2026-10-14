@@ -1,0 +1,25 @@
+---
+source: src/widgets/table/tests.rs
+expression: "fx.render(W as u16, H as u16)"
+---
+size: 31x6
+cursor: hidden
+text:
+| ID   STATE      CPU           |
+| a1   running   12.5           |
+| b2   exited       0           |
+| c3   running   3.25           |
+| d4   paused     100           |
+|                               |
+attr:
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb|
+|ccccccccccccccccccccccccccccccc|
+|ccccccccccccccccccccccccccccccc|
+|ccccccccccccccccccccccccccccccc|
+|ccccccccccccccccccccccccccccccc|
+legend:
+  . default
+  a fg=RGB(255,255,85) bg=RGB(0,0,170)
+  b fg=RGB(255,255,255) bg=RGB(0,170,0)
+  c fg=RGB(0,0,0) bg=RGB(0,170,170)

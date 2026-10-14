@@ -35,6 +35,7 @@ mod scroller;
 pub mod splitter;
 mod static_text;
 mod tab_bar;
+pub mod table;
 pub mod terminal;
 
 pub use button::{Button, ButtonFlags};
@@ -60,4 +61,7 @@ pub use scroller::Scroller;
 pub use splitter::{Constraints, DividerStyle, Orientation, Splitter};
 pub use static_text::{Label, ParamText, StaticText};
 pub use tab_bar::TabBar;
+pub use table::{
+    Align, ColumnSpec, RowKey, SelectionMode, SortDir, SortKey, Table, TableModel, VecModel,
+};
 pub use terminal::{Terminal, TextDevice};
