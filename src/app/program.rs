@@ -80,9 +80,10 @@ const MOUSE_AUTO_DELAY_MS: u64 = 440;
 /// The value is two legacy 55 ms timer ticks (**110 ms**).
 const MOUSE_AUTO_PERIOD_MS: u64 = 110;
 
-/// Double-click interval, in ms: a press that repeats the previous press (same
-/// buttons, same cell) at most this long after it counts as a double (then
-/// triple) click.
+/// Default double-click interval, in ms: a press that repeats the previous
+/// press (same buttons, same cell) at most this long after it counts as a
+/// double (then triple) click. Apps tune it with
+/// [`Program::set_double_delay_ms`].
 ///
 /// # Turbo Vision heritage
 /// Ports `TEventQueue::doubleDelay` (`tevent.cpp`): 8 legacy 55 ms timer ticks
@@ -123,6 +124,10 @@ struct MouseAutoState {
 impl MouseAutoState {
     /// Bookkeeping on every *real* picked event (queue or backend), BEFORE
     /// dispatch mutates/localizes it.
+    ///
+    /// Backend model gap: crossterm reports a Down per button even while
+    /// another button is held, so any MouseDown counts as a press here, unlike
+    /// the C++ `buttons != 0 && lastMouse.buttons == 0`.
     fn observe(&mut self, ev: &Event, now: u64) {
         match ev {
             // A press with a REAL button arms (re-arms) the delay —
@@ -171,41 +176,63 @@ impl MouseAutoState {
 // MouseClickState — the global double/triple-click synthesizer
 // ---------------------------------------------------------------------------
 
-/// The pump's click-count state: sets [`MouseEventFlags::double_click`] /
-/// [`MouseEventFlags::triple_click`](crate::event::MouseEventFlags) on a real
+/// The pump's click-count state: sets
+/// [`double_click`](crate::event::MouseEventFlags::double_click) /
+/// [`triple_click`](crate::event::MouseEventFlags::triple_click) on a real
 /// [`Event::MouseDown`] that repeats the previous press (same buttons, same
-/// cell) within [`DOUBLE_DELAY_MS`].
+/// cell) within `double_delay_ms` (default [`DOUBLE_DELAY_MS`]).
 ///
 /// The cycle is single → double → triple → single: a fourth quick press gets
-/// neither flag, and the fifth is a double again. A press whose flags a backend
-/// already set is left as is (it still becomes the reference press), so a
-/// backend that reports its own click count keeps it.
+/// neither flag, and the fifth is a double again. Flags a backend set on the
+/// press are cleared first, so the count is always the loop's own.
 ///
 /// # Turbo Vision heritage
 /// Ports the `downMouse` / `downTicks` / `doubleDelay` slice of
 /// `TEventQueue::getMouseEvent` (`tevent.cpp`).
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct MouseClickState {
-    /// The previous press with its final flags (`downMouse`) and its clock
-    /// time in ms (`downTicks`). `None` = no press seen yet.
-    down: Option<(crate::event::MouseEvent, u64)>,
+    /// The previous press with its final flags (`downMouse`). `None` = no
+    /// press seen yet.
+    down_mouse: Option<crate::event::MouseEvent>,
+    /// Clock time of the previous press, in ms (`downTicks`).
+    down_ms: u64,
+    /// The double-click interval, in ms (`doubleDelay`).
+    double_delay_ms: u64,
+}
+
+impl Default for MouseClickState {
+    fn default() -> Self {
+        MouseClickState {
+            down_mouse: None,
+            down_ms: 0,
+            double_delay_ms: DOUBLE_DELAY_MS,
+        }
+    }
 }
 
 impl MouseClickState {
     /// Set the click-count flags on a real press from the backend, and record
     /// it as the reference for the next press.
     fn observe(&mut self, ev: &mut Event, now: u64) {
+        // Backend model gap: crossterm reports a Down per button even while
+        // another button is held, so any MouseDown is a "press" here, unlike
+        // the C++ `buttons != 0 && lastMouse.buttons == 0`.
         let Event::MouseDown(m) = ev else {
             return;
         };
         if !(m.buttons.left || m.buttons.right || m.buttons.middle) {
             return;
         }
-        if !(m.flags.double_click || m.flags.triple_click)
-            && let Some((down, ticks)) = &self.down
+        // `ev.mouse.eventFlags = 0` (tevent.cpp): the count is the loop's own.
+        m.flags.double_click = false;
+        m.flags.triple_click = false;
+        // A clock that went backwards is no repeat (the C++ unsigned tick
+        // difference wraps to a huge value).
+        if let Some(down) = &self.down_mouse
             && m.buttons == down.buttons
             && m.position == down.position
-            && now.saturating_sub(*ticks) <= DOUBLE_DELAY_MS
+            && now >= self.down_ms
+            && now - self.down_ms <= self.double_delay_ms
         {
             if !(down.flags.double_click || down.flags.triple_click) {
                 m.flags.double_click = true;
@@ -213,7 +240,8 @@ impl MouseClickState {
                 m.flags.triple_click = true;
             }
         }
-        self.down = Some((*m, now));
+        self.down_mouse = Some(*m);
+        self.down_ms = now;
     }
 }
 
@@ -409,7 +437,8 @@ pub struct Program {
     /// 110 ms cadence (see [`MouseAutoState`]).
     mouse_auto: MouseAutoState,
     /// The global double/triple-click synthesizer: flags a real press that
-    /// repeats the previous one within 440 ms (see [`MouseClickState`]).
+    /// repeats the previous one within the double-click interval (see
+    /// [`MouseClickState`]).
     mouse_clicks: MouseClickState,
     /// `Some(cmd)` ends the (modal) loop with that command as its result.
     end_state: Option<Command>,
@@ -808,6 +837,30 @@ impl Program {
     /// including during modal `execute()` loops.
     pub fn set_on_idle(&mut self, f: impl FnMut(&mut Program) + 'static) {
         self.on_idle = Some(Box::new(f));
+    }
+
+    /// The double-click interval, in ms: a mouse press with the same buttons
+    /// on the same cell at most this long after the previous press is flagged
+    /// [`double_click`](crate::event::MouseEventFlags::double_click) (then
+    /// [`triple_click`](crate::event::MouseEventFlags::triple_click)).
+    /// Default 440 ms.
+    ///
+    /// # Turbo Vision heritage
+    /// Reads `TEventQueue::doubleDelay` (`tevent.cpp`), kept in 55 ms ticks
+    /// there.
+    pub fn double_delay_ms(&self) -> u64 {
+        self.mouse_clicks.double_delay_ms
+    }
+
+    /// Set the double-click interval, in ms (see
+    /// [`double_delay_ms`](Self::double_delay_ms)). A mouse-settings dialog
+    /// calls this.
+    ///
+    /// # Turbo Vision heritage
+    /// Writes `TEventQueue::doubleDelay`, the public static tvdemo's mouse
+    /// dialog tunes (`mousedlg.cpp`).
+    pub fn set_double_delay_ms(&mut self, ms: u64) {
+        self.mouse_clicks.double_delay_ms = ms;
     }
 
     /// Thin test accessor over [`resolve_shell_msg`]: returns the same string
@@ -2170,13 +2223,15 @@ impl Program {
         //    its getMouseEvent checks on. No shorter wait is needed.
         let timeout = event_wait_timeout(timers, now);
         //    A press polled from the backend gets its double/triple-click
-        //    flags here (see MouseClickState); a queued event is not a device
-        //    event and is never counted — C++ getEvent hands `pending` out
-        //    without passing through getMouseEvent.
+        //    flags here (see MouseClickState), timestamped by a clock re-read
+        //    after the poll returned, so the wait does not skew the interval;
+        //    a queued event is not a device event and is never counted — C++
+        //    getEvent hands `pending` out without passing through
+        //    getMouseEvent.
         let ev = match out_events.pop_front() {
             Some(e) => Some(e),
             None => renderer.backend_mut().poll_event(timeout).map(|mut e| {
-                mouse_clicks.observe(&mut e, now);
+                mouse_clicks.observe(&mut e, clock.now_ms());
                 e
             }),
         };
@@ -6209,10 +6264,22 @@ mod tests {
         assert!(f.double_click, "the reference press moved to the last one");
     }
 
-    /// A flag the backend already set is kept, and counts as the reference
-    /// press for the next one (a backend double → our triple).
+    /// Two clean single clicks 441 ms apart stay single clicks.
     #[test]
-    fn click_count_keeps_backend_flags() {
+    fn click_count_single_then_late_single() {
+        let (mut program, handle, clock, log) = click_probe_program();
+        let (p, h, c, l) = (&mut program, &handle, &*clock, &log);
+        let f = click_flags(p, h, c, l, mouse_down_at(2, 1), 1000);
+        assert!(!f.double_click && !f.triple_click, "1st press: single");
+        let f = click_flags(p, h, c, l, mouse_down_at(2, 1), 1441);
+        assert!(!f.double_click && !f.triple_click, "441 ms later: single");
+    }
+
+    /// Flags a backend set on a press are cleared before counting
+    /// (`ev.mouse.eventFlags = 0`): a backend "double" on a first press is a
+    /// single click, and the next quick press is a double, not a triple.
+    #[test]
+    fn click_count_clears_backend_flags() {
         let (mut program, handle, clock, log) = click_probe_program();
         let (p, h, c, l) = (&mut program, &handle, &*clock, &log);
         let pre = Event::MouseDown(MouseEvent {
@@ -6223,20 +6290,86 @@ mod tests {
             },
             flags: crate::event::MouseEventFlags {
                 double_click: true,
+                triple_click: true,
                 ..Default::default()
             },
             ..Default::default()
         });
         let f = click_flags(p, h, c, l, pre, 1000);
-        assert!(f.double_click, "a backend-set double click is kept");
+        assert!(
+            !f.double_click && !f.triple_click,
+            "backend flags are cleared"
+        );
         let f = click_flags(p, h, c, l, mouse_down_at(2, 1), 1100);
-        assert!(f.triple_click, "the next press continues to a triple");
+        assert!(f.double_click && !f.triple_click, "next press: double");
     }
 
-    /// End-to-end: two raw clicks on a window's title row (not on an icon)
-    /// zoom the window, through the frame's `double_click` arm.
+    /// A clock that went backwards is no repeat (C++: the unsigned tick
+    /// difference wraps, so the press is a single click).
     #[test]
-    fn raw_double_click_on_title_bar_zooms_window() {
+    fn click_count_clock_backwards_is_single() {
+        let (mut program, handle, clock, log) = click_probe_program();
+        let (p, h, c, l) = (&mut program, &handle, &*clock, &log);
+        click_flags(p, h, c, l, mouse_down_at(2, 1), 1000);
+        let f = click_flags(p, h, c, l, mouse_down_at(2, 1), 900);
+        assert!(!f.double_click, "an earlier timestamp is no double click");
+    }
+
+    /// A queued MouseDown (not from the backend) is neither counted nor
+    /// moves the reference press.
+    #[test]
+    fn click_count_ignores_queued_press() {
+        let (mut program, handle, clock, log) = click_probe_program();
+        let (p, h, c, l) = (&mut program, &handle, &*clock, &log);
+        click_flags(p, h, c, l, mouse_down_at(2, 1), 1000);
+
+        // A queued press on another cell, inside the interval.
+        clock.set(1100);
+        log.borrow_mut().clear();
+        p.out_events.push_back(mouse_down_at(5, 2));
+        p.pump_once();
+        pump_until_quiet(p);
+        let queued: Vec<_> = log
+            .borrow()
+            .iter()
+            .filter_map(|e| match e {
+                Event::MouseDown(m) => Some(m.flags),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(queued.len(), 1, "the probe sees the queued press");
+        assert!(!queued[0].double_click, "a queued press is not counted");
+        p.out_events.push_back(mouse_up_at(5, 2));
+        p.pump_once();
+        pump_until_quiet(p);
+
+        // The reference is still the backend press at (2, 1).
+        let f = click_flags(p, h, c, l, mouse_down_at(2, 1), 1200);
+        assert!(
+            f.double_click,
+            "the queued press did not move the reference"
+        );
+    }
+
+    /// `set_double_delay_ms` widens (or narrows) the double-click interval.
+    #[test]
+    fn click_count_double_delay_is_tunable() {
+        let (mut program, handle, clock, log) = click_probe_program();
+        assert_eq!(program.double_delay_ms(), 440, "default interval");
+        program.set_double_delay_ms(1000);
+        let (p, h, c, l) = (&mut program, &handle, &*clock, &log);
+        click_flags(p, h, c, l, mouse_down_at(2, 1), 1000);
+        let f = click_flags(p, h, c, l, mouse_down_at(2, 1), 2000);
+        assert!(f.double_click, "1000 ms is inside a 1000 ms interval");
+        p.set_double_delay_ms(100);
+        let f = click_flags(p, h, c, l, mouse_down_at(2, 1), 2101);
+        assert!(!f.triple_click, "101 ms is outside a 100 ms interval");
+    }
+
+    /// Two raw clicks on a window's title row (not on an icon), `gap_ms`
+    /// apart. Returns the window bounds before and after, and the desktop
+    /// extent (the zoomed size).
+    fn title_double_click(gap_ms: u64) -> (Rect, Rect, Rect) {
         let (mut program, handle, clock) = program_with_desktop(80, 25);
         let win_id = desktop_concrete(&mut program).insert_view(Box::new(Window::new(
             Rect::new(10, 5, 40, 15),
@@ -6253,18 +6386,16 @@ mod tests {
             .state()
             .get_bounds();
 
-        // Title row of the window is absolute y = 5 + desktop top.
         let desktop_id = program.desktop.unwrap();
-        let desktop_top = program
+        let desktop = program
             .group_mut()
             .find_mut(desktop_id)
             .unwrap()
             .state()
-            .get_bounds()
-            .a
-            .y;
-        let (x, y) = (20, 5 + desktop_top);
-        for t in [1000, 1200] {
+            .get_bounds();
+        // Title row of the window: window-local y 5 + desktop top.
+        let (x, y) = (20, 5 + desktop.a.y);
+        for t in [1000, 1000 + gap_ms] {
             clock.set(t);
             handle.push_event(mouse_down_at(x, y));
             program.pump_once();
@@ -6279,7 +6410,25 @@ mod tests {
             .unwrap()
             .state()
             .get_bounds();
-        assert_ne!(before, after, "a raw double click on the title zooms");
+        let extent = Rect::new(0, 0, desktop.b.x - desktop.a.x, desktop.b.y - desktop.a.y);
+        (before, after, extent)
+    }
+
+    /// End-to-end: two raw clicks on a window's title row 200 ms apart zoom
+    /// the window to the desktop extent, through the frame's `double_click`
+    /// arm.
+    #[test]
+    fn raw_double_click_on_title_bar_zooms_window() {
+        let (before, after, extent) = title_double_click(200);
+        assert_ne!(before, extent, "the window starts unzoomed");
+        assert_eq!(after, extent, "a raw double click on the title zooms");
+    }
+
+    /// End-to-end negative: the same two clicks 441 ms apart do not zoom.
+    #[test]
+    fn raw_slow_clicks_on_title_bar_do_not_zoom() {
+        let (before, after, _) = title_double_click(441);
+        assert_eq!(before, after, "two slow clicks do not zoom");
     }
 
     #[test]

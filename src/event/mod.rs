@@ -231,19 +231,20 @@ pub struct MouseButtons {
 /// `TEventQueue::getMouseEvent`: a press with the same buttons on the same
 /// cell as the previous press, at most 440 ms later (the 1992 guide's
 /// `DoubleDelay` of 8 ticks × 55 ms), is a double click; the next such press is
-/// a triple click; the one after that is a single click again. The interval
-/// is a fixed constant, not an application setting.
+/// a triple click; the one after that is a single click again. Apps tune the
+/// interval with [`Program::set_double_delay_ms`](crate::app::Program::set_double_delay_ms).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MouseEventFlags {
     /// This press completed a double click (the second press with the same
-    /// buttons on the same cell within 440 ms).
+    /// buttons on the same cell within the double-click interval, default
+    /// 440 ms).
     ///
     /// Check this flag in a [`Event::MouseDown`] handler to distinguish a
-    /// double-click from a single click. The event loop sets it on every
-    /// backend; a backend may also set it itself.
+    /// double-click from a single click. The event loop computes it for every
+    /// backend; a flag a backend sets itself is overwritten.
     pub double_click: bool,
     /// This press completed a triple click (the press after a double click,
-    /// same buttons, same cell, within 440 ms).
+    /// same buttons, same cell, within the double-click interval).
     pub triple_click: bool,
     /// The mouse moved since the last event.
     pub mouse_moved: bool,
