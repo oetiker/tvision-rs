@@ -293,12 +293,6 @@ impl Command {
     /// broadcast — a parent filters on `source` to drive an external search
     /// (e.g. submit an async query and re-feed results).
     pub const LIST_FIND_CHANGED: Command = Command("tv.list_find_changed");
-    /// The terminal size changed — broadcast by `Program` after a SIGWINCH /
-    /// crossterm resize event; all views resize in response.
-    ///
-    /// Most views do not need to handle this directly; the framework resizes the
-    /// view tree automatically.
-    pub const SCREEN_CHANGED: Command = Command("tv.screen_changed");
     /// Record the current input-line value into its history list — handled by
     /// `InputLine` when it loses focus.
     ///
