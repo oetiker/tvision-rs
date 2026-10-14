@@ -116,6 +116,24 @@ query and highlight or self-filter while focused — see
 {{#rustdoc_include ../../../examples/gallery.rs:listbox}}
 ```
 
+### Table
+
+A tvision-rs extension (Turbo Vision has no table): a column header over a
+scrolling row list. Rows come from a `TableModel` (`VecModel` for plain
+strings) and carry a stable `RowKey`, so focus and the marked rows follow the
+record through a re-sort or a `set_model` reload. Click a column label to sort
+by it, click again to flip; numbers sort numerically. Columns shrink widest
+first to fit (never below `min_width`), cut text with `…`, and can be hidden.
+In `SelectionMode::Multi`, Space or a double-click marks a row. The table
+broadcasts `TABLE_SORT_CHANGED`, `TABLE_SELECTION_CHANGED` and, in single
+mode, `LIST_ITEM_SELECTED`, each with the table's id as `source`; its value is
+the focused key (single) or the list of marked keys (multi). Keyboard sorting
+is opt-in: bind keys to `TABLE_SORT_NEXT` / `TABLE_SORT_FLIP`.
+
+```rust,ignore
+{{#rustdoc_include ../../../examples/gallery.rs:table}}
+```
+
 ### Outline
 
 A collapsible tree viewer built from a `Node` tree, with horizontal and vertical

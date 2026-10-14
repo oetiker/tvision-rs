@@ -16,12 +16,12 @@ use std::{env, io};
 
 use tvision_rs::{
     Button, ButtonFlags, ButtonRowAlign, CD_NORMAL, ChDirDialog, CheckBoxes, Color, ColorPicker,
-    Command, Constraints, Context, CrosstermBackend, Desktop, Dialog, EditWindow, Event,
-    FD_OPEN_BUTTON, FieldValue, FileDialog, HistoryWindow, InputLine, Key, KeyEvent, Label,
+    ColumnSpec, Command, Constraints, Context, CrosstermBackend, Desktop, Dialog, EditWindow,
+    Event, FD_OPEN_BUTTON, FieldValue, FileDialog, HistoryWindow, InputLine, Key, KeyEvent, Label,
     ListBox, MaskedInput, Memo, Menu, MenuBar, MenuBox, Node, Outline, OutlineViewer, Program,
-    RadioButtons, Rect, RevealEyeConfig, ScrollBar, ScrollBarOptions, Splitter, StaticText,
-    StatusDef, StatusLine, SystemClock, THistory, Tab, Terminal, TextDevice, Theme, View, ViewId,
-    Window, alt, delegate, history_add, ov_update,
+    RadioButtons, Rect, RevealEyeConfig, RowKey, ScrollBar, ScrollBarOptions, SelectionMode,
+    Splitter, StaticText, StatusDef, StatusLine, SystemClock, THistory, Tab, Table, Terminal,
+    TextDevice, Theme, VecModel, View, ViewId, Window, alt, delegate, history_add, ov_update,
 };
 
 /// How a specimen is shown. Most widgets are leaf controls hosted in a dialog on
@@ -64,6 +64,7 @@ fn specimen(name: &str) -> Option<Specimen> {
         "splitter" => OnDesktop(splitter),
         "editor" => OnDesktop(editor),
         "listbox" => OnDesktop(listbox),
+        "table" => OnDesktop(table),
         "terminal" => OnDesktop(terminal),
         "outline" => OnDesktop(outline),
         "filedialog" => Modal(filedialog),
@@ -93,6 +94,7 @@ const NAMES: &[&str] = &[
     "splitter",
     "editor",
     "listbox",
+    "table",
     "terminal",
     "outline",
     "filedialog",
@@ -581,6 +583,49 @@ fn listbox() -> Box<dyn View> {
     Box::new(ListBoxShowcase::new())
 }
 // ANCHOR_END: listbox
+
+// ANCHOR: table
+/// A multi-select `Table` with a vertical scroll bar. Click a column label to
+/// sort (again to flip), Space marks a row. Rows are keyed by their ID so focus
+/// and marks follow the record through a re-sort or a `set_model` reload. No
+/// wrapper view is needed: the table publishes its range to the bar itself.
+/// The bar spans the rows only, not the header.
+fn table() -> Box<dyn View> {
+    let mut dlg = Dialog::new(Rect::new(2, 1, 50, 15), Some("Table".to_string()));
+    let vsb_id = dlg.insert_child(Box::new(ScrollBar::new(Rect::new(45, 3, 46, 12))));
+    let rows = [
+        ["web", "nginx", "running", "12.5"],
+        ["db", "postgres", "running", "31.0"],
+        ["cache", "redis", "exited", "0"],
+        ["queue", "rabbitmq", "running", "4.25"],
+        ["mail", "postfix", "paused", "0.5"],
+        ["search", "opensearch", "running", "48.0"],
+        ["backup", "restic", "exited", "0"],
+        ["proxy", "haproxy", "running", "2.0"],
+        ["metrics", "prometheus", "running", "9.75"],
+        ["logs", "loki", "running", "6.5"],
+    ];
+    let keys = rows.iter().map(|r| RowKey::from(r[0])).collect();
+    let rows = rows
+        .iter()
+        .map(|r| r.iter().map(|s| s.to_string()).collect())
+        .collect();
+    let table = Table::new(
+        Rect::new(2, 2, 45, 12),
+        vec![
+            ColumnSpec::new("Name", 8),
+            ColumnSpec::new("Image", 11),
+            ColumnSpec::new("State", 8),
+            ColumnSpec::new("CPU %", 6).right(),
+        ],
+        Some(vsb_id),
+    )
+    .with_model(Box::new(VecModel::new(rows).with_keys(keys)))
+    .with_selection_mode(SelectionMode::Multi);
+    dlg.insert_child(Box::new(table));
+    Box::new(dlg)
+}
+// ANCHOR_END: table
 
 // ANCHOR: terminal
 /// A `Terminal` widget initialized on the first event tick and seeded with two
