@@ -83,6 +83,45 @@ trait's own default body. This exists to make migration **behaviour-preserving**
 (see below). A `skip(name)` whose `name` is not a method of the trait is a hard
 error — a typo can't silently turn into a forward.
 
+### Pitfall: one ViewState
+
+The delegate field owns the view's `ViewState`, and the macro always forwards
+`state`/`state_mut` to it. Every other forwarded method (`set_state`,
+`size_limits`, `calc_bounds`, `change_bounds`, `focus_to_edge`, `cursor_request`,
+`draw`, ...) also works on `self.<field>.state()`. If the impl overrides
+`state`/`state_mut` to return a `ViewState` of the outer type, the view has two
+states: the owner reads the outer one, but `StateFlag::Focused`, grow-mode and
+resize math land on the inner one. The view then receives keys while
+`state().state.focused` stays `false`.
+
+The macro rejects this at compile time, spanned on the offending `fn`:
+
+```text
+#[delegate(to = inner)]: the delegate field owns the ViewState; overriding `state`
+here gives the view a second ViewState that every forwarded method (set_state,
+change_bounds, calc_bounds, ...) ignores (only the plain forwarder
+`self.inner.state()` is accepted here). Either drop the override and keep the
+state in `inner`, or implement View by hand without #[delegate].
+```
+
+The one accepted override is the plain forwarder: a body that is exactly the
+single expression `self.<field>.state()` / `self.<field>.state_mut()` (token
+match on the `to` field). It is the code the macro would generate, so it shares
+the one ViewState; it is redundant and worth dropping, but downstream code has
+many such sites, and rejecting them would break builds without fixing a bug.
+Parentheses and the invisible group a `macro_rules!` `$x:expr` fragment leaves
+are peeled first, so `(self.inner).state()` and macro-generated forwarders pass.
+Anything else (`&self.st`, a different field, extra statements, `return ...;`,
+`&*...`) is rejected.
+
+`skip(state)` / `skip(state_mut)` is always an error: both are required methods,
+so a skip could only leave the impl incomplete. Doc-tests on the
+`tvision_rs::delegate` re-export guard the rule (passing examples for the
+accepted forwarder, plain and parenthesised; `compile_fail` for an override and
+for a skip). The skip example only documents the rule: rustc rejects it anyway
+(E0046), the macro just gives a clearer message. Unit tests in
+`tvision-rs-macros` cover the matcher, including the invisible-group case.
+
 ### Path resolution works under any consumer alias
 
 Generated forwarder signatures name crate types (`ViewState`, `DrawCtx`, `Point`,

@@ -35,6 +35,7 @@
 - [Keyboard & key mapping](apps/keyboard.md)
 - [Theming & colors](apps/theming.md)
 - [Text editing](apps/text-editing.md)
+- [Common app patterns](apps/patterns.md)
 
 # Widget Gallery
 

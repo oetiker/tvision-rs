@@ -313,12 +313,6 @@ impl Command {
     /// column ascending). Unbound by default, like
     /// [`TABLE_SORT_NEXT`](Self::TABLE_SORT_NEXT).
     pub const TABLE_SORT_FLIP: Command = Command("tv.table_sort_flip");
-    /// The terminal size changed — broadcast by `Program` after a SIGWINCH /
-    /// crossterm resize event; all views resize in response.
-    ///
-    /// Most views do not need to handle this directly; the framework resizes the
-    /// view tree automatically.
-    pub const SCREEN_CHANGED: Command = Command("tv.screen_changed");
     /// Record the current input-line value into its history list — handled by
     /// `InputLine` when it loses focus.
     ///
