@@ -18,11 +18,24 @@ mod specs;
 ///   than forwarding — use when a delegating type intentionally inherits the
 ///   default instead of the inner field's behavior.
 ///
+/// # Pitfall: one ViewState
+///
+/// The delegate field owns the view's `ViewState`. Every forwarded method
+/// (`set_state`, `change_bounds`, `calc_bounds`, `focus_to_edge`, ...) works on
+/// `self.<field>.state()`. A `state`/`state_mut` override that returns a field
+/// of the outer type gives the view a second `ViewState` that those methods
+/// never touch: `StateFlag::Focused` lands on the inner state, so the outer
+/// `state().state.focused` stays `false` while the view receives keys. The
+/// macro therefore rejects such an override, and `skip(state)` /
+/// `skip(state_mut)`. Keep the state in the delegate field, or implement the
+/// trait by hand without `#[delegate]`.
+///
 /// # Errors
 ///
 /// Emits a compile error if `to` is missing or duplicated, if the macro is on a
 /// plain `impl` (not `impl Trait for Type`), if the trait is not a known
-/// delegatable trait, or if a `skip(...)` name is not a method of that trait.
+/// delegatable trait, if a `skip(...)` name is not a method of that trait, or if
+/// a `View` impl provides or skips `state`/`state_mut`.
 #[proc_macro_attribute]
 pub fn delegate(attr: TokenStream, item: TokenStream) -> TokenStream {
     let args = syn::parse_macro_input!(attr as DelegateArgs);
@@ -87,6 +100,10 @@ fn tvision_rs_path() -> TokenStream2 {
     quote! { ::#ident }
 }
 
+/// `View` accessors a `#[delegate]` impl must never provide or skip: the
+/// delegate field owns the one ViewState.
+const STATE_ACCESSORS: [&str; 2] = ["state", "state_mut"];
+
 fn expand(args: DelegateArgs, mut item_impl: ItemImpl) -> syn::Result<TokenStream2> {
     let trait_path = item_impl.trait_.as_ref().ok_or_else(|| {
         syn::Error::new_spanned(
@@ -101,6 +118,55 @@ fn expand(args: DelegateArgs, mut item_impl: ItemImpl) -> syn::Result<TokenStrea
         .expect("an impl trait path has at least one segment")
         .ident
         .to_string();
+
+    // One ViewState: the delegate field owns it. A local `state`/`state_mut`
+    // would give the outer view a second ViewState that every forwarded method
+    // (set_state, change_bounds, calc_bounds, ...) ignores, so focus and geometry
+    // silently land on the inner view. Reject it rather than expand into that.
+    if trait_ident == "View" {
+        let field = &args.field;
+        let mut err: Option<syn::Error> = None;
+        for it in &item_impl.items {
+            if let ImplItem::Fn(f) = it
+                && STATE_ACCESSORS.contains(&f.sig.ident.to_string().as_str())
+            {
+                let e = syn::Error::new_spanned(
+                    &f.sig.ident,
+                    format!(
+                        "#[delegate(to = {field})]: the delegate field owns the ViewState; \
+                         overriding `{name}` here gives the view a second ViewState that every \
+                         forwarded method (set_state, change_bounds, calc_bounds, ...) ignores. \
+                         Either drop the override and keep the state in `{field}`, or implement \
+                         View by hand without #[delegate].",
+                        name = f.sig.ident
+                    ),
+                );
+                match &mut err {
+                    Some(acc) => acc.combine(e),
+                    None => err = Some(e),
+                }
+            }
+        }
+        for s in &args.skip {
+            if STATE_ACCESSORS.contains(&s.to_string().as_str()) {
+                let e = syn::Error::new(
+                    s.span(),
+                    format!(
+                        "#[delegate(to = {field})]: `skip({s})` is not allowed; `{s}` is a \
+                         required View method and must forward to the delegate field, which \
+                         owns the ViewState"
+                    ),
+                );
+                match &mut err {
+                    Some(acc) => acc.combine(e),
+                    None => err = Some(e),
+                }
+            }
+        }
+        if let Some(e) = err {
+            return Err(e);
+        }
+    }
 
     let provided: std::collections::HashSet<String> = item_impl
         .items

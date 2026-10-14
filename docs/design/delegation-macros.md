@@ -83,6 +83,32 @@ trait's own default body. This exists to make migration **behaviour-preserving**
 (see below). A `skip(name)` whose `name` is not a method of the trait is a hard
 error — a typo can't silently turn into a forward.
 
+### Pitfall: one ViewState
+
+The delegate field owns the view's `ViewState`, and the macro always forwards
+`state`/`state_mut` to it. Every other forwarded method (`set_state`,
+`size_limits`, `calc_bounds`, `change_bounds`, `focus_to_edge`, `cursor_request`,
+`draw`, ...) also works on `self.<field>.state()`. If the impl overrides
+`state`/`state_mut` to return a `ViewState` of the outer type, the view has two
+states: the owner reads the outer one, but `StateFlag::Focused`, grow-mode and
+resize math land on the inner one. The view then receives keys while
+`state().state.focused` stays `false`.
+
+The macro rejects this at compile time, spanned on the offending `fn`:
+
+```text
+#[delegate(to = inner)]: the delegate field owns the ViewState; overriding `state`
+here gives the view a second ViewState that every forwarded method (set_state,
+change_bounds, calc_bounds, ...) ignores. Either drop the override and keep the
+state in `inner`, or implement View by hand without #[delegate].
+```
+
+`skip(state)` / `skip(state_mut)` is also an error: both are required methods,
+so a skip could only leave the impl incomplete. A hand-written override that
+returns `self.<field>.state()` is the same code the macro generates; drop it.
+The `compile_fail` doc-tests on the `tvision_rs::delegate` re-export guard the
+rule.
+
 ### Path resolution works under any consumer alias
 
 Generated forwarder signatures name crate types (`ViewState`, `DrawCtx`, `Point`,
