@@ -165,6 +165,23 @@ pub use timer::{Clock, ManualClock, SystemClock, TimerId, TimerQueue};
 /// }
 /// ```
 ///
+/// Parentheses around the receiver are accepted too:
+///
+/// ```
+/// use tvision_rs::{Group, View, ViewState, delegate};
+///
+/// struct Panel {
+///     group: Group,
+/// }
+///
+/// #[delegate(to = group)]
+/// impl View for Panel {
+///     fn state(&self) -> &ViewState {
+///         (self.group).state()
+///     }
+/// }
+/// ```
+///
 /// Any other `state`/`state_mut` body is a compile error: it would be a second
 /// `ViewState` that every forwarded method ignores.
 ///
@@ -187,7 +204,9 @@ pub use timer::{Clock, ManualClock, SystemClock, TimerId, TimerQueue};
 /// }
 /// ```
 ///
-/// `skip(state)` / `skip(state_mut)` is rejected for the same reason:
+/// `skip(state)` / `skip(state_mut)` is rejected for the same reason. This
+/// example documents the rule; rustc would reject it anyway (E0046, missing
+/// required trait item), so the macro's check only gives a clearer message:
 ///
 /// ```compile_fail
 /// use tvision_rs::{Group, View, delegate};

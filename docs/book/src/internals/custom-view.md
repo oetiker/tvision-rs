@@ -144,7 +144,8 @@ impl View for MyTerminal {
 }
 ```
 
-Do not write `state`/`state_mut` in a `#[delegate]` impl: the inner field owns
+Do not return a `ViewState` of your own from `state`/`state_mut` in a
+`#[delegate]` impl: the inner field owns
 the view's one `ViewState`, and every forwarded method (`set_state`,
 `change_bounds`, `calc_bounds`, ...) works on it. A `state` that returns a field
 of your wrapper would be a second state those methods ignore: the view would

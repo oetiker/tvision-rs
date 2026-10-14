@@ -109,15 +109,20 @@ const STATE_ACCESSORS: [&str; 2] = ["state", "state_mut"];
 
 /// True if `f`'s body is exactly `self.<field>.<f's own name>()` — the same
 /// forwarder the macro would generate. Such an override is redundant but
-/// shares the delegate field's ViewState, so it is accepted.
+/// shares the delegate field's ViewState, so it is accepted. Parentheses and
+/// the invisible group a `macro_rules!` `$x:expr` fragment leaves are peeled
+/// at each level; anything else (`return ...;`, `&*...`) does not match.
 fn is_plain_forwarder(f: &syn::ImplItemFn, field: &Ident) -> bool {
-    let [syn::Stmt::Expr(syn::Expr::MethodCall(call), None)] = f.block.stmts.as_slice() else {
+    let [syn::Stmt::Expr(body, None)] = f.block.stmts.as_slice() else {
         return false;
     };
-    let syn::Expr::Field(recv) = &*call.receiver else {
+    let syn::Expr::MethodCall(call) = peel(body) else {
         return false;
     };
-    let syn::Expr::Path(base) = &*recv.base else {
+    let syn::Expr::Field(recv) = peel(&call.receiver) else {
+        return false;
+    };
+    let syn::Expr::Path(base) = peel(&recv.base) else {
         return false;
     };
     call.method == f.sig.ident
@@ -129,6 +134,17 @@ fn is_plain_forwarder(f: &syn::ImplItemFn, field: &Ident) -> bool {
         && base.attrs.is_empty()
         && base.qself.is_none()
         && base.path.is_ident("self")
+}
+
+/// Strip `( ... )` and invisible (`Delimiter::None`) groups around `e`.
+fn peel(mut e: &syn::Expr) -> &syn::Expr {
+    loop {
+        match e {
+            syn::Expr::Paren(p) if p.attrs.is_empty() => e = &p.expr,
+            syn::Expr::Group(g) if g.attrs.is_empty() => e = &g.expr,
+            _ => return e,
+        }
+    }
 }
 
 fn expand(args: DelegateArgs, mut item_impl: ItemImpl) -> syn::Result<TokenStream2> {
@@ -163,7 +179,8 @@ fn expand(args: DelegateArgs, mut item_impl: ItemImpl) -> syn::Result<TokenStrea
                     format!(
                         "#[delegate(to = {field})]: the delegate field owns the ViewState; \
                          overriding `{name}` here gives the view a second ViewState that every \
-                         forwarded method (set_state, change_bounds, calc_bounds, ...) ignores. \
+                         forwarded method (set_state, change_bounds, calc_bounds, ...) ignores \
+                         (only the plain forwarder `self.{field}.{name}()` is accepted here). \
                          Either drop the override and keep the state in `{field}`, or implement \
                          View by hand without #[delegate].",
                         name = f.sig.ident
@@ -235,4 +252,58 @@ fn expand(args: DelegateArgs, mut item_impl: ItemImpl) -> syn::Result<TokenStrea
         }
     }
     Ok(quote! { #item_impl })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proc_macro2::{Delimiter, Group, TokenTree};
+
+    fn accepts(f: TokenStream2) -> bool {
+        let f: syn::ImplItemFn = syn::parse2(f).unwrap();
+        is_plain_forwarder(&f, &Ident::new("group", Span::call_site()))
+    }
+
+    /// An invisible group, as a `macro_rules!` `$x:expr` substitution leaves it.
+    fn invisible(ts: TokenStream2) -> TokenTree {
+        TokenTree::Group(Group::new(Delimiter::None, ts))
+    }
+
+    #[test]
+    fn plain_and_wrapped_forwarders_are_accepted() {
+        assert!(accepts(
+            quote! { fn state(&self) -> &ViewState { self.group.state() } }
+        ));
+        assert!(accepts(
+            quote! { fn state(&self) -> &ViewState { (self.group).state() } }
+        ));
+        let body = invisible(quote! { self.group.state() });
+        assert!(accepts(quote! { fn state(&self) -> &ViewState { #body } }));
+        let recv = invisible(quote! { self.group });
+        assert!(accepts(
+            quote! { fn state_mut(&mut self) -> &mut ViewState { #recv.state_mut() } }
+        ));
+    }
+
+    #[test]
+    fn other_bodies_are_rejected() {
+        assert!(!accepts(
+            quote! { fn state(&self) -> &ViewState { &self.st } }
+        ));
+        assert!(!accepts(
+            quote! { fn state(&self) -> &ViewState { self.other.state() } }
+        ));
+        assert!(!accepts(
+            quote! { fn state(&self) -> &ViewState { self.group.state_mut() } }
+        ));
+        assert!(!accepts(
+            quote! { fn state(&self) -> &ViewState { return self.group.state(); } }
+        ));
+        assert!(!accepts(
+            quote! { fn state(&self) -> &ViewState { &*self.group.state() } }
+        ));
+        assert!(!accepts(
+            quote! { fn state(&self) -> &ViewState { x(); self.group.state() } }
+        ));
+    }
 }

@@ -99,7 +99,8 @@ The macro rejects this at compile time, spanned on the offending `fn`:
 ```text
 #[delegate(to = inner)]: the delegate field owns the ViewState; overriding `state`
 here gives the view a second ViewState that every forwarded method (set_state,
-change_bounds, calc_bounds, ...) ignores. Either drop the override and keep the
+change_bounds, calc_bounds, ...) ignores (only the plain forwarder
+`self.inner.state()` is accepted here). Either drop the override and keep the
 state in `inner`, or implement View by hand without #[delegate].
 ```
 
@@ -108,12 +109,18 @@ single expression `self.<field>.state()` / `self.<field>.state_mut()` (token
 match on the `to` field). It is the code the macro would generate, so it shares
 the one ViewState; it is redundant and worth dropping, but downstream code has
 many such sites, and rejecting them would break builds without fixing a bug.
-Anything else (`&self.st`, a different field, extra statements) is rejected.
+Parentheses and the invisible group a `macro_rules!` `$x:expr` fragment leaves
+are peeled first, so `(self.inner).state()` and macro-generated forwarders pass.
+Anything else (`&self.st`, a different field, extra statements, `return ...;`,
+`&*...`) is rejected.
 
 `skip(state)` / `skip(state_mut)` is always an error: both are required methods,
 so a skip could only leave the impl incomplete. Doc-tests on the
-`tvision_rs::delegate` re-export guard the rule (one passing example for the
-accepted forwarder, `compile_fail` for an override and for a skip).
+`tvision_rs::delegate` re-export guard the rule (passing examples for the
+accepted forwarder, plain and parenthesised; `compile_fail` for an override and
+for a skip). The skip example only documents the rule: rustc rejects it anyway
+(E0046), the macro just gives a clearer message. Unit tests in
+`tvision-rs-macros` cover the matcher, including the invisible-group case.
 
 ### Path resolution works under any consumer alias
 
