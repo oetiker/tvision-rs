@@ -23,6 +23,11 @@ moves it into a dated, versioned section when a release is cut.
 
 ### Changed
 
+- **`#[delegate]` refuses a second `ViewState`.** A `#[delegate(to = field)]`
+  impl whose `state`/`state_mut` returns anything but `self.field.state()` /
+  `self.field.state_mut()` no longer compiles. Such a view looked unfocused
+  while it received keys, and resizing used the wrong size; keep the state in
+  the delegate field or implement `View` by hand.
 - `Dialog::value()` now returns the dialog's whole record (all its data fields as
   an ordered `FieldValue::List`) instead of nothing.
 
