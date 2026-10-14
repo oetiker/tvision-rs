@@ -12,9 +12,27 @@ moves it into a dated, versioned section when a release is cut.
 
 ### New
 
+- **Dialogs opened from a view return their field values.** A view that opens a
+  dialog with `Context::request_exec_view` now receives the dialog's field values
+  in `set_modal_data` (an ordered `FieldValue::List`), unless the dialog was
+  cancelled; the close command still follows in `set_modal_answer`. A form or a
+  picker no longer needs an `Rc<RefCell<…>>` shared with its caller.
+- **Adjustable double-click interval.** `Program::set_double_delay_ms` changes how
+  fast two clicks must follow each other to count as a double-click (default
+  440 ms).
+
 ### Changed
 
+- `Dialog::value()` now returns the dialog's whole record (all its data fields as
+  an ordered `FieldValue::List`) instead of nothing.
+
 ### Fixed
+
+- **Double- and triple-clicks now work in real terminals.** Before, they only
+  worked in tests: a double-click on a window title now zooms the window, and a
+  double-click picks an entry in a list, history or file dialog. In the editor a
+  double-click selects a word and a triple-click a line; in an input line a
+  double-click selects all text.
 
 ## 0.16.0 - 2026-09-03
 

@@ -69,9 +69,9 @@ narrative is in `docs/IMPLEMENTATION-LOG.md`.
   never `&mut Program`). The pump stashes the boxed modal into `pending_modal` with
   the existing `RouteModalAnswer` completion; no new `ModalCompletion` variant, no
   downcast. `tcv`'s Info box is now a real custom `Dialog` built by `build_info_dialog`
-  and launched via `request_exec_view`. Data-back `FieldValue` path deliberately
-  deferred (result is the close command only; reason recorded on `request_exec_view`
-  doc, §3.4/§2.1). Gate: 1279 lib tests, clippy, fmt, examples green.
+  and launched via `request_exec_view`. Data-back `FieldValue` path was deferred
+  here and later built (2026-10, tvdocker feedback): a non-CANCEL close hands the
+  modal's `value()` to `requester.set_modal_data` before `set_modal_answer`. Gate: 1279 lib tests, clippy, fmt, examples green.
   Also in this stack (tcv example polish): the mock catalog was enriched to 72
   entries for livelier incremental search; a user-directed scrollbar fix
   (`8c64e98`) wakes the `DirBox` v-bar (publish range+steps post-insert via a
@@ -108,7 +108,6 @@ The **data-movement stack (Phases 1–5) is now feature-complete on the branch.*
 **Deferred follow-ons (recorded, not dropped):** `inventory`-collected
 `Program::self_check()` + per-component `data_self_check` (needs a dependency
 decision — spec §3.5/§6.7); `MultiCheckBoxes::value()` → `Bits` for coherence;
-the ExecView data-back `FieldValue` path (see `request_exec_view` doc, §3.4/§2.1);
 the ship-as-is Minors in the SDD ledger.
 
 **Disposition (user):** MERGED to `main` on 2026-06-20 per explicit user call
