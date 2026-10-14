@@ -28,6 +28,9 @@ moves it into a dated, versioned section when a release is cut.
   `self.field.state_mut()` no longer compiles. Such a view looked unfocused
   while it received keys, and resizing used the wrong size; keep the state in
   the delegate field or implement `View` by hand.
+- `Command::SCREEN_CHANGED` is removed: nothing ever sent it. To react to a
+  terminal resize, override `View::change_bounds` (see the new "Common app
+  patterns" page in the guide).
 - `Dialog::value()` now returns the dialog's whole record (all its data fields as
   an ordered `FieldValue::List`) instead of nothing.
 
