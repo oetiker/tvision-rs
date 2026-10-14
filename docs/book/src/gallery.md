@@ -130,6 +130,8 @@ mode, `LIST_ITEM_SELECTED`, each with the table's id as `source`; its value is
 the focused key (single) or the list of marked keys (multi). Keyboard sorting
 is opt-in: bind keys to `TABLE_SORT_NEXT` / `TABLE_SORT_FLIP`.
 
+{{#include screens/table.html}}
+
 ```rust,ignore
 {{#rustdoc_include ../../../examples/gallery.rs:table}}
 ```
