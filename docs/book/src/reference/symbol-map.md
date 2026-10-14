@@ -110,7 +110,7 @@ See [Palettes & glyphs → Theme/Role](../port/theme.md),
 | C++ Turbo Vision | tvision-rs (Rust) | notes |
 | ---------------- | -------------- | ----- |
 | `execView` (from a `Program`/`Application` method) | [`Program::exec_view_with`](../api/tvision_rs/app/struct.Program.html#method.exec_view_with) | result returned by value from an `extract` closure |
-| `execView` (from within a view's `handleEvent`) | `Context::request_exec_view` | queues `Deferred::OpenModal`; close command routed to `requester` via `View::set_modal_answer` |
+| `execView` (from within a view's `handleEvent`) | `Context::request_exec_view` | queues `Deferred::OpenModal`; record (`getData`) routed to `requester` via `View::set_modal_data` unless cancelled, close command via `View::set_modal_answer` |
 | `dragView` / press-tracking | capture-stack handlers | see [The event loop](../internals/event-loop.md) |
 | `getData` / `setData` / `dataSize` | typed `value` / `set_value` | currency is [`FieldValue`](../api/tvision_rs/data/enum.FieldValue.html) |
 

@@ -93,10 +93,11 @@ let chosen: Option<Color> = program.exec_view_with(Box::new(dialog), |modal, cmd
 Call `ctx.request_exec_view(view, requester, then_command)` instead; this queues
 `Deferred::OpenModal` and returns immediately. The pump picks it up on the same
 turn, runs the modal through the existing single-loop machinery, and on close
-delivers the **close command** to `requester` via `View::set_modal_answer(Command)`
-(the requester overrides this to react). A typed data-back path — delivering the
-modal's `value()` as a `FieldValue` via `View::set_modal_data` — is a documented
-future extension; see [Data-back path](../port/modal.md#data-back-path).
+delivers, in this order, the modal's **record** (`value()`, for a `Dialog` its
+gathered `FieldValue::List`) via `View::set_modal_data` (skipped when the close
+command is `Command::CANCEL`) and the **close command** via
+`View::set_modal_answer(Command)`; the requester overrides the hooks it needs.
+See [Getting the data back](../port/modal.md#getting-the-data-back).
 
 ## What stays separate, on purpose
 
