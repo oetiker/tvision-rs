@@ -75,7 +75,7 @@ use std::rc::Rc;
 use crate::command::Command;
 use crate::data::FieldValue;
 use crate::event::Event;
-use crate::view::{Context, Group, Rect, View, ViewId};
+use crate::view::{Context, Group, Rect, StateFlag, View, ViewId};
 use crate::widgets::list_viewer;
 
 use body::{TableBody, TableHeader};
@@ -211,19 +211,11 @@ impl Table {
     /// Builder: the initial rows (no [`Context`] needed; the table publishes
     /// them to its scroll bar on its first event).
     pub fn with_model(mut self, model: Box<dyn TableModel>) -> Self {
-        let len = {
-            let mut d = self.data.borrow_mut();
-            d.model = model;
-            d.reorder();
-            d.prune_selection();
-            d.focused = 0;
-            d.order.len() as i32
-        };
+        let idx = self.load_model(model);
         // The rows draw right away; the bar learns the range on publish.
-        let lv = self.body_mut().lv_state();
-        lv.range = len;
-        lv.focused = 0;
-        lv.top_item = 0;
+        let len = self.data.borrow().order.len();
+        self.body_mut().lv_state().range = len as i32;
+        self.place_focus(idx.min(len.saturating_sub(1)));
         self.needs_publish = true;
         self
     }
@@ -249,16 +241,21 @@ impl Table {
     /// sort is re-applied, marks of vanished rows are dropped, and the scroll
     /// bar's range is updated. Does not broadcast.
     pub fn set_model(&mut self, model: Box<dyn TableModel>, ctx: &mut Context) {
-        let key = self.focused_key();
-        let idx = {
-            let mut d = self.data.borrow_mut();
-            let old = d.focused;
-            d.model = model;
-            d.reorder();
-            d.prune_selection();
-            key.and_then(|k| d.display_of(&k)).unwrap_or(old)
-        };
+        let idx = self.load_model(model);
         self.publish(idx, ctx);
+    }
+
+    /// Swap in `model`, re-apply the sort and prune the marks; return the
+    /// display row focus should land on: the focused key's new position, else
+    /// the old position (the caller clamps it).
+    fn load_model(&mut self, model: Box<dyn TableModel>) -> usize {
+        let key = self.focused_key();
+        let mut d = self.data.borrow_mut();
+        let old = d.focused;
+        d.model = model;
+        d.reorder();
+        d.prune_selection();
+        key.and_then(|k| d.display_of(&k)).unwrap_or(old)
     }
 
     /// Publish the range and the scroll steps to the bar, then focus display
@@ -472,6 +469,15 @@ impl Table {
 
 #[crate::delegate(to = group)]
 impl View for Table {
+    /// Publish the rows to the scroll bar if that is still pending, then let
+    /// the group fan the flag out. The owner sends `Active` to every child
+    /// when its window or dialog activates, so a table publishes even when no
+    /// event ever reaches it (another control holds focus).
+    fn set_state(&mut self, flag: StateFlag, enable: bool, ctx: &mut Context) {
+        self.ensure_published(ctx);
+        self.group.set_state(flag, enable, ctx);
+    }
+
     fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
         self.ensure_published(ctx);
         if let Event::Command(command) = *ev {

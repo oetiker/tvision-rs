@@ -336,9 +336,11 @@ pub trait ListViewer: View {
     }
 
     /// An optional per-item [`Role`] for a **normal** row — one that is neither
-    /// the focused cursor item nor selected. `None` (the default) keeps the
-    /// list's surface colour. A table uses it to tint a whole row (a dimmed or
-    /// an error row); the focused and selected colours always win over it.
+    /// the focused cursor item nor selected. Only the role's **foreground** is
+    /// used: the row keeps the list's surface background, so a tinted row
+    /// still reads as part of the list. `None` (the default) keeps the plain
+    /// surface colour. A table uses it to tint a whole row (a dimmed or an
+    /// error row); the focused and selected colours always win over it.
     fn item_role(&self, _item: i32) -> Option<Role> {
         None
     }
@@ -1086,7 +1088,10 @@ pub fn draw<L: ListViewer + ?Sized>(this: &mut L, ctx: &mut DrawCtx) {
             } else if item < range
                 && let Some(role) = this.item_role(item)
             {
-                ctx.style(role)
+                crate::color::Style {
+                    fg: ctx.style(role).fg,
+                    ..normal
+                }
             } else {
                 normal
             };

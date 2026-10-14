@@ -14,6 +14,12 @@ use super::{SelectionMode, Shared};
 /// leaves column 0 of every row blank, and the header lines up with it.
 const TEXT_X: i32 = 1;
 
+/// The multi-mode mark drawn in column 0 (the gutter the list viewer leaves
+/// blank) of a marked row — the checked marker of
+/// [`CheckBoxes`](crate::widgets::CheckBoxes). The theme has no check glyph;
+/// the cluster hard-codes the same character.
+const MARK: char = 'X';
+
 /// The width available to the columns in a view `size_x` wide.
 fn text_width(size_x: i32) -> i32 {
     (size_x - TEXT_X).max(0)
@@ -102,6 +108,32 @@ impl TableBody {
         }
     }
 
+    /// Draw [`MARK`] in the gutter of every visible marked row, so a mark
+    /// stays visible on the focused row too (whose colour hides the
+    /// selected colour). Colour per cell as the shared draw chose it.
+    fn draw_marks(&self, ctx: &mut DrawCtx) {
+        let roles = self.list_roles();
+        let focused_style = ctx.style(roles.focused);
+        let selected_style = ctx.style(roles.selected);
+        let lv = &self.lv;
+        let list_focused = lv.state.state.focused;
+        for y in 0..lv.state.size.y {
+            let item = lv.top_item + y;
+            if item >= lv.range {
+                break;
+            }
+            if !self.is_selected(item) {
+                continue;
+            }
+            let style = if list_focused && item == lv.focused {
+                focused_style
+            } else {
+                selected_style
+            };
+            ctx.put_char(0, y, MARK, style);
+        }
+    }
+
     /// Mutable access to the list-viewer state, for the table's focus moves.
     pub(super) fn lv_state(&mut self) -> &mut ListViewerState {
         &mut self.lv
@@ -184,6 +216,9 @@ impl View for TableBody {
             text_width(self.lv.state.size.x),
         );
         list_viewer::draw(self, ctx);
+        if self.data.borrow().mode == SelectionMode::Multi {
+            self.draw_marks(ctx);
+        }
     }
 
     fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {

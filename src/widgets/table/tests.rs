@@ -189,34 +189,63 @@ fn focus_reaches_the_body() {
     assert!(!fx.t().body_mut().lv().state.state.focused);
 }
 
-#[test]
-fn first_event_publishes_range_and_steps_to_the_bar() {
-    let mut mint = Group::new(Rect::new(0, 0, 4, 4));
-    let bar = mint.insert(Box::new(Group::new(Rect::new(0, 0, 1, 1))));
-    let mut fx = Fixture::new(
-        Table::new(Rect::new(0, 0, W, H), columns(), Some(bar)).with_model(model(&ROWS)),
-    );
+/// The `max` and `page_step` the deferred queue sends to scroll bar `bar`.
+fn bar_params(deferred: &[Deferred], bar: ViewId) -> (Option<i32>, Option<i32>) {
+    let max = deferred.iter().find_map(|d| match d {
+        Deferred::ScrollBarSetParams { id, max, .. } if *id == bar => *max,
+        _ => None,
+    });
+    let page = deferred.iter().find_map(|d| match d {
+        Deferred::ScrollBarSetParams { id, page_step, .. } if *id == bar => *page_step,
+        _ => None,
+    });
+    (max, page)
+}
+
+/// Run `f` with a throwaway context; return the deferred effects it queued.
+fn deferred_of(f: impl FnOnce(&mut Context)) -> Vec<Deferred> {
     let mut out = VecDeque::new();
     let mut timers = TimerQueue::new();
     let mut deferred: Vec<Deferred> = vec![];
     {
         let mut ctx = Context::new(&mut out, &mut timers, 0, &mut deferred);
-        let mut ev = Event::Broadcast {
-            command: Command::COMMAND_SET_CHANGED,
-            source: None,
-        };
-        fx.t().handle_event(&mut ev, &mut ctx);
+        f(&mut ctx);
     }
-    let max = deferred.iter().find_map(|d| match d {
-        Deferred::ScrollBarSetParams { id, max, .. } if *id == bar => *max,
-        _ => None,
-    });
-    assert_eq!(max, Some(3), "range 0..=3 for four rows");
-    let page = deferred.iter().find_map(|d| match d {
-        Deferred::ScrollBarSetParams { id, page_step, .. } if *id == bar => *page_step,
-        _ => None,
-    });
-    assert_eq!(page, Some(H - 1 - 1), "page step = body height - 1");
+    deferred
+}
+
+#[test]
+fn activation_publishes_range_and_steps_to_the_bar_without_any_event() {
+    let mut mint = Group::new(Rect::new(0, 0, 4, 4));
+    let bar = mint.insert(Box::new(Group::new(Rect::new(0, 0, 1, 1))));
+    let mut owner = Group::new(Rect::new(0, 0, 60, 20));
+    owner.insert(Box::new(
+        Table::new(Rect::new(0, 0, W, H), columns(), Some(bar)).with_model(model(&ROWS)),
+    ));
+    // No event reaches the table: its owner only activates (as a window or a
+    // dialog does when another control holds focus).
+    let deferred = deferred_of(|ctx| owner.set_state(StateFlag::Active, true, ctx));
+    assert_eq!(
+        bar_params(&deferred, bar),
+        (Some(3), Some(H - 1 - 1)),
+        "range 0..=3 for four rows; page step = body height - 1"
+    );
+}
+
+#[test]
+fn set_model_on_a_live_table_republishes_the_range() {
+    let mut mint = Group::new(Rect::new(0, 0, 4, 4));
+    let bar = mint.insert(Box::new(Group::new(Rect::new(0, 0, 1, 1))));
+    let mut fx = Fixture::new(
+        Table::new(Rect::new(0, 0, W, H), columns(), Some(bar)).with_model(model(&ROWS)),
+    );
+    let m = model(&ROWS[..2]);
+    let deferred = deferred_of(|ctx| fx.t().set_model(m, ctx));
+    assert_eq!(
+        bar_params(&deferred, bar).0,
+        Some(1),
+        "range 0..=1 for two rows"
+    );
 }
 
 #[test]
@@ -584,7 +613,7 @@ fn snapshot_multi_selected() {
     fx.key(Key::Down);
     fx.key(Key::Down);
     fx.key(Key::Char(' '));
-    fx.key(Key::Down);
+    // Focus stays on the marked c3: its mark must show on the focused colour.
     insta::assert_snapshot!(fx.render(W as u16, H as u16));
 }
 
