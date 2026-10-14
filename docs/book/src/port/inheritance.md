@@ -92,8 +92,10 @@ group)]`) reuse their inner view this way.
 > `ViewState` of the outer type would be a second state that every forwarded
 > method (`set_state`, `change_bounds`, `calc_bounds`, ...) ignores: the focus
 > flag and the geometry would land on the inner view. The macro rejects such an
-> override, and `skip(state)` / `skip(state_mut)`, with a compile error. Keep the
-> state in the delegate field, or implement `View` by hand without `#[delegate]`.
+> override, and `skip(state)` / `skip(state_mut)`, with a compile error. It
+> accepts only the plain forwarder `self.<field>.state()`, which is redundant.
+> Keep the state in the delegate field, or implement `View` by hand without
+> `#[delegate]`.
 
 > **When you add a `View` method, add its forwarder too.** The macro keeps a
 > hand-maintained mirror of `trait View`. A missing *required* method fails to

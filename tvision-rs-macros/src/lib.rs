@@ -26,16 +26,19 @@ mod specs;
 /// of the outer type gives the view a second `ViewState` that those methods
 /// never touch: `StateFlag::Focused` lands on the inner state, so the outer
 /// `state().state.focused` stays `false` while the view receives keys. The
-/// macro therefore rejects such an override, and `skip(state)` /
-/// `skip(state_mut)`. Keep the state in the delegate field, or implement the
-/// trait by hand without `#[delegate]`.
+/// macro therefore rejects a `state`/`state_mut` override unless its body is
+/// exactly `self.<field>.state()` / `self.<field>.state_mut()` (the forwarder
+/// it would generate anyway, so redundant but harmless). It also rejects
+/// `skip(state)` / `skip(state_mut)`. Keep the state in the delegate field, or
+/// implement the trait by hand without `#[delegate]`.
 ///
 /// # Errors
 ///
 /// Emits a compile error if `to` is missing or duplicated, if the macro is on a
 /// plain `impl` (not `impl Trait for Type`), if the trait is not a known
 /// delegatable trait, if a `skip(...)` name is not a method of that trait, or if
-/// a `View` impl provides or skips `state`/`state_mut`.
+/// a `View` impl skips `state`/`state_mut` or provides one whose body is not
+/// the plain forwarder `self.<field>.state()` / `self.<field>.state_mut()`.
 #[proc_macro_attribute]
 pub fn delegate(attr: TokenStream, item: TokenStream) -> TokenStream {
     let args = syn::parse_macro_input!(attr as DelegateArgs);
@@ -104,6 +107,30 @@ fn tvision_rs_path() -> TokenStream2 {
 /// delegate field owns the one ViewState.
 const STATE_ACCESSORS: [&str; 2] = ["state", "state_mut"];
 
+/// True if `f`'s body is exactly `self.<field>.<f's own name>()` — the same
+/// forwarder the macro would generate. Such an override is redundant but
+/// shares the delegate field's ViewState, so it is accepted.
+fn is_plain_forwarder(f: &syn::ImplItemFn, field: &Ident) -> bool {
+    let [syn::Stmt::Expr(syn::Expr::MethodCall(call), None)] = f.block.stmts.as_slice() else {
+        return false;
+    };
+    let syn::Expr::Field(recv) = &*call.receiver else {
+        return false;
+    };
+    let syn::Expr::Path(base) = &*recv.base else {
+        return false;
+    };
+    call.method == f.sig.ident
+        && call.args.is_empty()
+        && call.turbofish.is_none()
+        && call.attrs.is_empty()
+        && recv.attrs.is_empty()
+        && matches!(&recv.member, syn::Member::Named(m) if m == field)
+        && base.attrs.is_empty()
+        && base.qself.is_none()
+        && base.path.is_ident("self")
+}
+
 fn expand(args: DelegateArgs, mut item_impl: ItemImpl) -> syn::Result<TokenStream2> {
     let trait_path = item_impl.trait_.as_ref().ok_or_else(|| {
         syn::Error::new_spanned(
@@ -129,6 +156,7 @@ fn expand(args: DelegateArgs, mut item_impl: ItemImpl) -> syn::Result<TokenStrea
         for it in &item_impl.items {
             if let ImplItem::Fn(f) = it
                 && STATE_ACCESSORS.contains(&f.sig.ident.to_string().as_str())
+                && !is_plain_forwarder(f, field)
             {
                 let e = syn::Error::new_spanned(
                     &f.sig.ident,

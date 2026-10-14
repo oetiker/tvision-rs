@@ -144,8 +144,29 @@ pub use timer::{Clock, ManualClock, SystemClock, TimerId, TimerQueue};
 /// assert_eq!(p.state().get_bounds(), Rect::new(0, 0, 10, 5));
 /// ```
 ///
-/// Overriding `state` (or `state_mut`) is a compile error: the override would
-/// be a second `ViewState` that every forwarded method ignores.
+/// A hand-written `state`/`state_mut` is accepted only when its body is the
+/// forwarder the macro would generate anyway. It is redundant; leave it out:
+///
+/// ```
+/// use tvision_rs::{Group, View, ViewState, delegate};
+///
+/// struct Panel {
+///     group: Group,
+/// }
+///
+/// #[delegate(to = group)]
+/// impl View for Panel {
+///     fn state(&self) -> &ViewState {
+///         self.group.state()
+///     }
+///     fn state_mut(&mut self) -> &mut ViewState {
+///         self.group.state_mut()
+///     }
+/// }
+/// ```
+///
+/// Any other `state`/`state_mut` body is a compile error: it would be a second
+/// `ViewState` that every forwarded method ignores.
 ///
 /// ```compile_fail
 /// use tvision_rs::{Group, View, ViewState, delegate};

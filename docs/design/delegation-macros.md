@@ -103,11 +103,17 @@ change_bounds, calc_bounds, ...) ignores. Either drop the override and keep the
 state in `inner`, or implement View by hand without #[delegate].
 ```
 
-`skip(state)` / `skip(state_mut)` is also an error: both are required methods,
-so a skip could only leave the impl incomplete. A hand-written override that
-returns `self.<field>.state()` is the same code the macro generates; drop it.
-The `compile_fail` doc-tests on the `tvision_rs::delegate` re-export guard the
-rule.
+The one accepted override is the plain forwarder: a body that is exactly the
+single expression `self.<field>.state()` / `self.<field>.state_mut()` (token
+match on the `to` field). It is the code the macro would generate, so it shares
+the one ViewState; it is redundant and worth dropping, but downstream code has
+many such sites, and rejecting them would break builds without fixing a bug.
+Anything else (`&self.st`, a different field, extra statements) is rejected.
+
+`skip(state)` / `skip(state_mut)` is always an error: both are required methods,
+so a skip could only leave the impl incomplete. Doc-tests on the
+`tvision_rs::delegate` re-export guard the rule (one passing example for the
+accepted forwarder, `compile_fail` for an override and for a skip).
 
 ### Path resolution works under any consumer alias
 
