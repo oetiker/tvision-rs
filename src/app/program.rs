@@ -5531,14 +5531,35 @@ mod tests {
         }
     }
 
-    /// Insert a [`ModalResultRecorder`], request a small input dialog (one
-    /// `InputLine`, no buttons) as a view-launched modal, queue `input` behind a
-    /// benign broadcast, and drive `pump_and_drive` (bounded). Optionally removes
-    /// the requester from the tree before the modal runs. Returns the log.
-    fn run_input_dialog_modal(input: Vec<Event>, remove_requester: bool) -> Vec<Delivered> {
-        use crate::dialog::Dialog;
+    /// A small input dialog: one `InputLine`, no buttons (closes on a posted
+    /// command, Esc or the close box).
+    fn input_dialog() -> crate::dialog::Dialog {
         use crate::widgets::{InputLine, LimitMode};
+        let mut dialog =
+            crate::dialog::Dialog::new(Rect::new(20, 8, 50, 14), Some("Name".to_string()));
+        dialog.insert_child(Box::new(InputLine::new(
+            Rect::new(2, 2, 26, 3),
+            32,
+            None,
+            LimitMode::MaxBytes,
+        )));
+        dialog
+    }
 
+    /// Insert a [`ModalResultRecorder`], request [`input_dialog`] as a
+    /// view-launched modal, queue `input` behind a benign broadcast, and drive
+    /// `pump_and_drive` (bounded). Optionally removes the requester from the tree
+    /// before the modal runs. Returns the log.
+    fn run_input_dialog_modal(input: Vec<Event>, remove_requester: bool) -> Vec<Delivered> {
+        run_requested_modal(Box::new(input_dialog()), input, remove_requester)
+    }
+
+    /// [`run_input_dialog_modal`] with a caller-supplied modal.
+    fn run_requested_modal(
+        modal: Box<dyn View>,
+        input: Vec<Event>,
+        remove_requester: bool,
+    ) -> Vec<Delivered> {
         let (mut program, _handle, _clock) = program_with_desktop(80, 25);
         let log = Rc::new(RefCell::new(Vec::new()));
         let requester = program.group_mut().insert(Box::new(ModalResultRecorder {
@@ -5547,16 +5568,9 @@ mod tests {
         }));
         program.out_events.clear();
 
-        let mut dialog = Dialog::new(Rect::new(20, 8, 50, 14), Some("Name".to_string()));
-        dialog.insert_child(Box::new(InputLine::new(
-            Rect::new(2, 2, 26, 3),
-            32,
-            None,
-            LimitMode::MaxBytes,
-        )));
         program.with_ctx(|_g, ctx| {
             ctx.request_exec_view(
-                Box::new(dialog),
+                modal,
                 requester,
                 Some(Command::custom("test.exec_view.data")),
             );
@@ -5575,6 +5589,60 @@ mod tests {
         }
         assert!(program.pending_modal.is_none(), "the modal closed");
         log.take()
+    }
+
+    /// A dialog wrapper whose `value()` stays at the trait default `None` (a
+    /// modal that carries no transferable data).
+    struct NoValueDialog {
+        dialog: crate::dialog::Dialog,
+    }
+    #[crate::delegate(to = dialog, skip(value))]
+    impl View for NoValueDialog {}
+
+    /// YES and NO are non-cancel closes: the record is delivered, then the answer.
+    #[test]
+    fn request_exec_view_yes_and_no_deliver_record() {
+        use crate::data::FieldValue;
+        for cmd in [Command::YES, Command::NO] {
+            let log = run_input_dialog_modal(vec![key(Key::Char('z')), Event::Command(cmd)], false);
+            assert_eq!(
+                log,
+                vec![
+                    Delivered::Data(FieldValue::List(vec![FieldValue::Text("z".into())])),
+                    Delivered::Answer(cmd),
+                ],
+                "{cmd:?} delivers data then answer"
+            );
+        }
+    }
+
+    /// A modal whose `value()` is `None` delivers only the answer, even on OK.
+    #[test]
+    fn request_exec_view_valueless_modal_delivers_answer_only() {
+        let modal = NoValueDialog {
+            dialog: input_dialog(),
+        };
+        let log = run_requested_modal(
+            Box::new(modal),
+            vec![key(Key::Char('q')), Event::Command(Command::OK)],
+            false,
+        );
+        assert_eq!(log, vec![Delivered::Answer(Command::OK)]);
+    }
+
+    /// The close box (`Command::CLOSE` on a modal window re-posts CANCEL) and
+    /// Esc (the dialog posts CANCEL) both end the modal with CANCEL: the
+    /// requester gets the CANCEL answer and no record.
+    #[test]
+    fn request_exec_view_close_box_and_esc_cancel_without_data() {
+        for close in [Event::Command(Command::CLOSE), key(Key::Esc)] {
+            let log = run_input_dialog_modal(vec![key(Key::Char('w')), close.clone()], false);
+            assert_eq!(
+                log,
+                vec![Delivered::Answer(Command::CANCEL)],
+                "{close:?} cancels without data"
+            );
+        }
     }
 
     /// The data arm: on a non-cancel close the pump gathers the modal's record

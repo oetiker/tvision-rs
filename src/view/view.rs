@@ -910,6 +910,13 @@ pub trait View {
     /// `ScrollBar` returns `FieldValue::Int`). The base returns `None` — a bare
     /// view carries nothing. Controls that don't participate (buttons, labels)
     /// simply leave the base in place.
+    ///
+    /// A [`Dialog`](crate::dialog::Dialog) answers with its **whole gathered
+    /// record** ([`Dialog::gather_list`](crate::dialog::Dialog::gather_list), an
+    /// ordered [`FieldValue::List`](crate::data::FieldValue::List)); that is what
+    /// a [`Context::request_exec_view`] modal hands back via
+    /// [`set_modal_data`](View::set_modal_data). (`Window` and `Group` still
+    /// return `None`.)
     fn value(&self) -> Option<FieldValue> {
         None
     }
@@ -925,8 +932,23 @@ pub trait View {
 
     /// Deliver a finished modal's **typed result record** to the view that
     /// launched it. Defaulted no-op; a launcher view overrides it to load the
-    /// result the pump read out of the modal's fields (each via [`View::value`])
-    /// and packed into an ordered [`FieldValue::List`](crate::data::FieldValue::List).
+    /// record. Two producers call it:
+    ///
+    /// * [`Context::request_exec_view`]: on a non-[`Command::CANCEL`] close the
+    ///   record is the **whole modal's** [`value()`](View::value) (for a
+    ///   [`Dialog`](crate::dialog::Dialog), its gathered ordered
+    ///   [`FieldValue::List`](crate::data::FieldValue::List)), delivered before
+    ///   [`set_modal_answer`](View::set_modal_answer);
+    /// * framework completions (the Editor's Find/Replace) that read selected
+    ///   fields by id and pack them into a `FieldValue::List` themselves.
+    ///
+    /// The method does not say which modal the record came from, so an override
+    /// that matches on record **shape** alone can misread a record from a
+    /// different form with the same shape. A type that embeds or delegates to a
+    /// view with such an override (e.g. [`Editor`](crate::widgets::Editor)) and
+    /// launches its own forms via `request_exec_view` must override
+    /// `set_modal_data` itself, handle its own records, and forward only the
+    /// ones meant for the inner view.
     ///
     /// Distinct from [`set_value`](View::set_value): `set_value` carries a view's
     /// **own** field/document data (e.g. the editor's text), whereas
