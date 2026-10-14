@@ -470,10 +470,11 @@ pub enum Deferred {
     /// `&mut Context`, never `&mut Program`) requests an arbitrary custom modal
     /// be run. The pump moves `view` into the loop-owned `pending_modal` slot with
     /// a `RouteModalAnswer` completion; the outer `pump_and_drive` runs it via the
-    /// existing single-loop `exec_view` machinery, then delivers the modal's close
-    /// command to `requester` (via
-    /// [`View::set_modal_answer`](crate::view::View::set_modal_answer)) and
-    /// re-injects `then_command`. The view-launched sibling of
+    /// existing single-loop `exec_view` machinery, then delivers the modal's
+    /// record (on a non-cancel close, via
+    /// [`View::set_modal_data`](crate::view::View::set_modal_data)) and its close
+    /// command (via [`View::set_modal_answer`](crate::view::View::set_modal_answer))
+    /// to `requester` and re-injects `then_command`. The view-launched sibling of
     /// [`Program::exec_view_with`](crate::app::Program::exec_view_with).
     ///
     /// Queued by [`Context::request_exec_view`]. The boxed view is owned by the
@@ -1475,24 +1476,46 @@ impl<'a> Context<'a> {
     }
 
     /// Request a generic view-launched modal (ExecView): run `view` as a modal,
-    /// then deliver its close command to `requester` (via
-    /// [`View::set_modal_answer`](crate::view::View::set_modal_answer)) and
-    /// re-inject `then_command`. The view-launched counterpart of
+    /// then hand its result back to `requester` and re-inject `then_command`.
+    /// The view-launched counterpart of
     /// [`Program::exec_view_with`](crate::app::Program::exec_view_with)
     /// (which a view cannot call — a view holds only `&mut Context`, never
     /// `&mut Program`). Queues [`Deferred::OpenModal`].
     ///
-    /// `then_command` is `None` for a fire-and-forget modal (e.g. a read-only info
-    /// dialog). To act on the result, the `requester` overrides
-    /// [`View::set_modal_answer`](crate::view::View::set_modal_answer) to cache
-    /// the close command and acts on `then_command` when it is re-posted.
+    /// When the modal closes with command `c`, the pump, while the modal is still
+    /// in the tree:
     ///
-    /// **Data-back path deliberately not built:** the result is the close command
-    /// only (via `RouteModalAnswer` → `set_modal_answer`). A future input-dialog
-    /// consumer that needs the modal's typed `value()` back would add a generic data
-    /// arm (read `modal_id.value()` → `requester.set_modal_data(…)`); no current
-    /// consumer needs it (the tcv Info box is read-only), so it is not shipped
-    /// untested (spec §3.4/§2.1).
+    /// 1. if `c != Command::CANCEL` and the modal's
+    ///    [`View::value`](crate::view::View::value) is `Some(record)`, calls
+    ///    `requester.set_modal_data(record)` — for a
+    ///    [`Dialog`](crate::dialog::Dialog) (or a type delegating `value` to one)
+    ///    the record is its [`gather_list`](crate::dialog::Dialog::gather_list);
+    /// 2. calls `requester.set_modal_answer(c)`;
+    /// 3. re-posts `then_command`, where the requester acts with a full `ctx`.
+    ///
+    /// This is C++ `if (execView(d) != cmCancel) d->getData(&rec);` split across
+    /// the two hooks. A requester removed while the modal ran receives nothing
+    /// (both deliveries resolve by id and drop silently). `then_command` is `None`
+    /// for a fire-and-forget modal (e.g. a read-only info dialog).
+    ///
+    /// ```rust,ignore
+    /// // In the launcher's handle_event:
+    /// let mut d = Dialog::new(Rect::new(0, 0, 40, 8), Some("Rename".into()));
+    /// d.insert_child(Box::new(InputLine::new(Rect::new(2, 2, 36, 3), 64, None, LimitMode::MaxBytes)));
+    /// // ... plus OK / Cancel buttons (`d.button_row(…)`).
+    /// let me = self.state().id().expect("launcher is in the tree");
+    /// ctx.request_exec_view(Box::new(d), me, Some(CM_RENAME_DONE));
+    ///
+    /// // In the launcher's View impl:
+    /// fn set_modal_data(&mut self, data: FieldValue) {
+    ///     if let FieldValue::List(v) = data
+    ///         && let Some(FieldValue::Text(name)) = v.into_iter().next()
+    ///     {
+    ///         self.pending_name = Some(name);
+    ///     }
+    /// }
+    /// // ... and on CM_RENAME_DONE: take `pending_name` and act on it.
+    /// ```
     pub fn request_exec_view(
         &mut self,
         view: Box<dyn crate::view::View>,

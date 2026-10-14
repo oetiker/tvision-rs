@@ -86,7 +86,9 @@ press-tracking are handlers, not loops. `execView` from a `Program` method
 becomes [`Program::exec_view_with`](../api/tvision_rs/app/struct.Program.html#method.exec_view_with)
 (result by value); `execView` from within a view becomes `Context::request_exec_view`
 (queues `Deferred::OpenModal`; reuses the existing `pending_modal` +
-`RouteModalAnswer` machinery; close command routed back via `set_modal_answer`).
+`RouteModalAnswer` machinery; the modal's record is routed back via
+`set_modal_data` unless the close command is `Command::CANCEL`, then the close
+command via `set_modal_answer`).
 → [Modal execView](../port/modal.md)
 
 ### D10 · Data transfer → typed value protocol {#d10}

@@ -2394,6 +2394,15 @@ impl View for Editor {
     /// Replace shape. `flags` is pre-masked by the completion (and already carries
     /// or clears `EF_DO_REPLACE`); stored as the low 16 bits. Other shapes are
     /// ignored (typed-model drop, like [`set_value`](View::set_value)).
+    ///
+    /// **Shape collision:** the match is on record shape only. A view that
+    /// embeds or delegates to `Editor` and opens its own form via
+    /// [`Context::request_exec_view`](crate::view::Context::request_exec_view)
+    /// would, if that form gathers to `[Text, Bits]` (an `InputLine` plus
+    /// `CheckBoxes`) or `[Text, Text, Bits]`, have it overwrite `find_str`,
+    /// `replace_str` and the editor flags. Such a wrapper overrides
+    /// `set_modal_data` itself and forwards to the editor only the Find/Replace
+    /// records.
     fn set_modal_data(&mut self, data: crate::data::FieldValue) {
         use crate::data::FieldValue;
         if let FieldValue::List(items) = data {

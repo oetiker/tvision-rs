@@ -46,7 +46,7 @@ How you launch a modal depends on **what calls it**:
 | Caller | Launch method | Result delivery |
 |--------|---------------|-----------------|
 | A `Program` / `Application` method | [`Program::exec_view_with`](../api/tvision_rs/app/struct.Program.html#method.exec_view_with) | returned by value from the `extract` closure |
-| A `View` (inside `handle_event`) | `Context::request_exec_view` | close command routed to `requester` via `View::set_modal_answer`; optional `then_command` re-injected |
+| A `View` (inside `handle_event`) | `Context::request_exec_view` | record via `View::set_modal_data` (not on cancel), then close command via `View::set_modal_answer`, both to `requester`; optional `then_command` re-injected |
 
 A view holds only `&mut Context`, never `&mut Program`, so it cannot call
 `exec_view_with` inline. Calling `ctx.request_exec_view(view, requester,
@@ -108,7 +108,7 @@ fn open_info(&mut self, ctx: &mut Context) {
 
 `request_exec_view` queues `Deferred::OpenModal`. The pump picks it up at the
 bottom of the same turn, stashes the boxed `Dialog` into `pending_modal` with a
-`RouteModalAnswer { answer_to: id, then_command: None }` completion, and runs it
+`RouteModalAnswer { answer_to: id, then_command: None, deliver_data: true }` completion, and runs it
 via the existing single-loop machinery. When the user presses OK (which posts
 `Command::CANCEL` — the read-only-info convention: dismiss = `cmCancel`) the
 pump delivers that command to `DirBox` via `set_modal_answer`. The base default
@@ -116,13 +116,33 @@ for `set_modal_answer` silently discards the command, which is correct here —
 the Info box is read-only and `then_command` is `None`, so no follow-up action
 is needed.
 
-### Data-back path
+### Getting the data back
 
-The result is the close command only. A future input dialog that needs the
-modal's typed `FieldValue` result back would override `set_modal_answer` on the
-requester to cache the command, then read `modal_id.value()` (or call
-`requester.set_modal_data(...)`) on the `then_command` re-injection. That path
-is not built today because no current consumer needs it.
+C++ reads an input dialog's record after the modal returns:
+`if (deskTop->execView(d) != cmCancel) d->getData(&rec);`. `request_exec_view`
+does the same split across two hooks on the requester. When the modal closes
+with command `c`, the pump, while the modal is still in the tree:
+
+1. if `c != Command::CANCEL` and the modal's `View::value()` is `Some(record)`,
+   calls `requester.set_modal_data(record)`. A `Dialog` (and any type that
+   delegates `value` to one) returns its `gather_list()`: the ordered
+   `FieldValue::List` of its data-bearing controls, the typed image of `getData`;
+2. calls `requester.set_modal_answer(c)`;
+3. re-posts `then_command`.
+
+The hooks carry no `Context`, so the requester caches what it receives and acts
+when `then_command` arrives in its `handle_event`. A requester that was removed
+while the modal ran receives nothing.
+
+```rust,ignore
+fn set_modal_data(&mut self, data: FieldValue) {
+    if let FieldValue::List(fields) = data
+        && let Some(FieldValue::Text(name)) = fields.into_iter().next()
+    {
+        self.pending_name = Some(name); // used on the then_command
+    }
+}
+```
 
 ## Ending a modal (execView)
 

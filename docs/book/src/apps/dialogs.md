@@ -193,6 +193,12 @@ ordered `FieldValue::List` and update its own state. The editor's Find/Replace
 modals follow this pattern: the pump reads the text field as `FieldValue::Text`
 and the options cluster as `FieldValue::Bits`, then calls `editor.set_modal_data(List([Text, Bits]))`.
 
+A modal you launch yourself with `Context::request_exec_view` gets the same
+delivery without a custom completion: on a non-cancel close the pump reads the
+modal's `value()` (for a `Dialog`, its gathered `FieldValue::List`) and calls
+`requester.set_modal_data(record)` before `set_modal_answer(command)` (see
+[Getting the data back](../port/modal.md#getting-the-data-back)).
+
 Note that `set_modal_data` is distinct from `set_value`: `set_value` carries a
 view's *own* document or field data (the D10 scatter path); `set_modal_data`
 carries a *modal's result* collected by the pump on the launcher's behalf.
