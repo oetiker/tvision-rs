@@ -1,0 +1,21 @@
+---
+source: src/widgets/table/tests.rs
+expression: "fx.render(16, 4)"
+---
+size: 16x4
+cursor: hidden
+text:
+| AME       STATE|
+|  本 語 テ …  runni|
+| scii      exite|
+|                |
+attr:
+|aaaaaaaaaaaaaaaa|
+|bbbb.bb.bb.bbbbbbbb|
+|cccccccccccccccc|
+|cccccccccccccccc|
+legend:
+  . default
+  a fg=RGB(255,255,85) bg=RGB(0,0,170)
+  b fg=RGB(255,255,255) bg=RGB(0,170,0)
+  c fg=RGB(0,0,0) bg=RGB(0,170,170)

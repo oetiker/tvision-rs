@@ -110,6 +110,27 @@ pub enum ClusterKind {
     },
 }
 
+/// The [`CheckBoxes`] marker chars: unchecked, checked.
+const CHECK_MARKS: [char; 2] = [' ', 'X'];
+
+/// The [`CheckBoxes`] box without its padding — `[ ]`, or `[X]` when
+/// `checked` — for other widgets that draw a check box in a cell (the
+/// multi-select [`Table`](crate::widgets::Table)).
+pub(crate) fn check_box(checked: bool) -> String {
+    let icon = ClusterKind::CheckBoxes.icon().trim();
+    // The marker slot is the cell between the brackets (col+2 of the padded icon).
+    icon.chars()
+        .enumerate()
+        .map(|(i, c)| {
+            if i == 1 {
+                CHECK_MARKS[checked as usize]
+            } else {
+                c
+            }
+        })
+        .collect()
+}
+
 impl ClusterKind {
     /// The box icon string (with the embedded marker slot at col+2).
     fn icon(&self) -> &'static str {
@@ -792,7 +813,7 @@ impl Cluster {
     fn marker_char(&self, item: i32) -> char {
         let idx = self.multi_mark(item);
         match &self.kind {
-            ClusterKind::CheckBoxes => [' ', 'X'].get(idx).copied().unwrap_or(' '),
+            ClusterKind::CheckBoxes => CHECK_MARKS.get(idx).copied().unwrap_or(' '),
             ClusterKind::RadioButtons => [' ', '\u{2022}'].get(idx).copied().unwrap_or(' '),
             ClusterKind::MultiCheckBoxes { states, .. } => states.chars().nth(idx).unwrap_or(' '),
         }

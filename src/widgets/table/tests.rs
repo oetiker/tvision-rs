@@ -94,6 +94,12 @@ impl Fixture {
             .collect()
     }
 
+    /// Run `f` on the table; return the deferred effects it queued.
+    fn with_deferred(&mut self, f: impl FnOnce(&mut Table, &mut Context)) -> Vec<Deferred> {
+        let t = self.t();
+        deferred_of(|ctx| f(t, ctx))
+    }
+
     /// Run `f` on the table.
     fn with(&mut self, f: impl FnOnce(&mut Table, &mut Context)) -> Broadcasts {
         let id = self.id;
@@ -189,13 +195,14 @@ fn focus_reaches_the_body() {
     assert!(!fx.t().body_mut().lv().state.state.focused);
 }
 
-/// The `max` and `page_step` the deferred queue sends to scroll bar `bar`.
+/// The `max` and `page_step` the deferred queue leaves on scroll bar `bar`
+/// (the last request wins, as when the pump applies them in order).
 fn bar_params(deferred: &[Deferred], bar: ViewId) -> (Option<i32>, Option<i32>) {
-    let max = deferred.iter().find_map(|d| match d {
+    let max = deferred.iter().rev().find_map(|d| match d {
         Deferred::ScrollBarSetParams { id, max, .. } if *id == bar => *max,
         _ => None,
     });
-    let page = deferred.iter().find_map(|d| match d {
+    let page = deferred.iter().rev().find_map(|d| match d {
         Deferred::ScrollBarSetParams { id, page_step, .. } if *id == bar => *page_step,
         _ => None,
     });
@@ -485,6 +492,51 @@ fn single_mode_choice_broadcasts_list_item_selected_with_the_table_id() {
 }
 
 #[test]
+fn click_on_the_check_cell_toggles_and_broadcasts() {
+    let mut fx = multi();
+    let id = Some(fx.id);
+    // The check cell spans view x 1..4 (text starts at x 1); y 3 = row c3.
+    let out = fx.click(2, 3);
+    assert_eq!(
+        fx.t().focused_key(),
+        Some(RowKey::from("c3")),
+        "click focuses"
+    );
+    assert_eq!(keys(fx.t().selected_keys()), ["c3"]);
+    assert_eq!(out, [(Command::TABLE_SELECTION_CHANGED, id)]);
+    fx.send(Event::MouseUp(MouseEvent::default()));
+    fx.click(2, 3);
+    assert!(fx.t().selected_keys().is_empty(), "a second click unmarks");
+}
+
+#[test]
+fn click_on_a_text_cell_only_focuses() {
+    let mut fx = multi();
+    let out = fx.click(10, 2);
+    assert_eq!(fx.t().focused_key(), Some(RowKey::from("b2")));
+    assert!(fx.t().selected_keys().is_empty());
+    assert!(out.is_empty());
+}
+
+#[test]
+fn header_hit_test_accounts_for_the_check_column() {
+    let mut fx = multi();
+    let out = fx.click(2, 0); // the blank check header cell
+    assert_eq!(fx.t().sort_spec(), None);
+    assert!(out.is_empty());
+    // Widths [check 3, ID 4, NAME 7, STATE 7, CPU 5]: ID spans view x 5..9.
+    fx.click(6, 0);
+    assert_eq!(fx.t().sort_spec(), Some((0, SortDir::Asc)));
+}
+
+#[test]
+fn single_mode_has_no_check_column() {
+    let mut fx = Fixture::table();
+    let screen = fx.render(W as u16, H as u16);
+    assert!(!screen.contains("[ ]"), "{screen}");
+}
+
+#[test]
 fn marks_survive_reload_and_drop_vanished_keys() {
     let mut fx = multi();
     fx.key(Key::Char(' ')); // a1
@@ -654,4 +706,268 @@ fn snapshot_row_role() {
     fx.key(Key::Down);
     fx.key(Key::Down);
     insta::assert_snapshot!(fx.render(W as u16, H as u16));
+}
+
+// -- layout: stretch and horizontal scroll -----------------------------------
+
+/// A bar id minted by a throwaway group (the table only needs the id).
+fn mint_bar() -> ViewId {
+    let mut mint = Group::new(Rect::new(0, 0, 4, 4));
+    mint.insert(Box::new(Group::new(Rect::new(0, 0, 1, 1))))
+}
+
+/// The fixture columns, none shrinkable: 4 + 10 + 8 + 5 plus three
+/// separators = 30 content cells.
+fn fixed_columns() -> Vec<ColumnSpec> {
+    columns()
+        .into_iter()
+        .map(|c| {
+            let w = c.width;
+            c.min_width(w)
+        })
+        .collect()
+}
+
+/// A multi-mode table `w` wide over the fixed columns: the check cell and
+/// its separator take 4 of the `w - 1` text cells, the rest scroll.
+fn scrolling(w: i32, h_bar: Option<ViewId>) -> Fixture {
+    let mut t = Table::new(Rect::new(0, 0, w, H), fixed_columns(), None)
+        .with_model(model(&ROWS))
+        .with_selection_mode(SelectionMode::Multi);
+    if let Some(bar) = h_bar {
+        t = t.with_h_bar(bar);
+    }
+    let mut fx = Fixture::new(t);
+    fx.focus(true);
+    fx
+}
+
+/// The `value` the deferred queue last sends to scroll bar `bar`.
+fn bar_value(deferred: &[Deferred], bar: ViewId) -> Option<i32> {
+    deferred.iter().rev().find_map(|d| match d {
+        Deferred::ScrollBarSetParams { id, value, .. } if *id == bar => *value,
+        _ => None,
+    })
+}
+
+#[test]
+fn flex_column_takes_the_spare_width() {
+    let mut cols = columns();
+    cols[1] = cols[1].clone().flex(1);
+    let mut fx =
+        Fixture::new(Table::new(Rect::new(0, 0, W + 6, H), cols, None).with_model(model(&ROWS)));
+    let d = fx.t().data.clone();
+    let l = body::row_layout(&d.borrow(), W + 6);
+    assert_eq!(l.widths, vec![4, 16, 8, 5], "NAME took all six spare cells");
+    assert_eq!(fx.t().h_offset(), 0);
+}
+
+#[test]
+fn columns_that_fit_do_not_scroll_and_arrows_bubble() {
+    let mut fx = Fixture::table();
+    fx.focus(true);
+    for k in [Key::Left, Key::Right] {
+        let (ev, _) = fx.send(Event::KeyDown(KeyEvent::new(k, KeyModifiers::default())));
+        assert!(!ev.is_nothing(), "{k:?} must bubble: nothing to scroll");
+    }
+    fx.with(|t, ctx| t.set_h_offset(5, ctx));
+    assert_eq!(fx.t().h_offset(), 0, "clamped to no overflow");
+}
+
+#[test]
+fn arrows_scroll_by_one_cell_within_the_overflow() {
+    // 20 text cells − 4 frozen = 16 visible of 30 → overflow 14.
+    let bar = mint_bar();
+    let mut fx = scrolling(21, Some(bar));
+    let (ev, _) = fx.send(Event::KeyDown(KeyEvent::new(
+        Key::Right,
+        KeyModifiers::default(),
+    )));
+    assert!(ev.is_nothing(), "Right consumed while the columns overflow");
+    assert_eq!(fx.t().h_offset(), 1);
+    fx.key(Key::Left);
+    fx.key(Key::Left);
+    assert_eq!(fx.t().h_offset(), 0, "clamped at the left edge");
+    for _ in 0..20 {
+        fx.key(Key::Right);
+    }
+    assert_eq!(fx.t().h_offset(), 14, "clamped at the overflow");
+    assert_eq!(fx.t().focused_row(), Some(0), "rows did not move");
+    // The bar follows a key scroll.
+    let mut ev = Event::KeyDown(KeyEvent::new(Key::Left, KeyModifiers::default()));
+    let id = fx.id;
+    let mut deferred = vec![];
+    {
+        let mut out = VecDeque::new();
+        let mut timers = TimerQueue::new();
+        let mut ctx = Context::new(&mut out, &mut timers, 0, &mut deferred);
+        fx.owner
+            .child_mut(id)
+            .unwrap()
+            .handle_event(&mut ev, &mut ctx);
+    }
+    assert_eq!(bar_value(&deferred, bar), Some(13));
+}
+
+#[test]
+fn the_h_bar_gets_the_overflow_as_range_and_the_view_as_page() {
+    let bar = mint_bar();
+    let mut owner = Group::new(Rect::new(0, 0, 60, 20));
+    owner.insert(Box::new(
+        Table::new(Rect::new(0, 0, 21, H), fixed_columns(), None)
+            .with_model(model(&ROWS))
+            .with_selection_mode(SelectionMode::Multi)
+            .with_h_bar(bar),
+    ));
+    let deferred = deferred_of(|ctx| owner.set_state(StateFlag::Active, true, ctx));
+    assert_eq!(bar_params(&deferred, bar), (Some(14), Some(16)));
+    assert_eq!(bar_value(&deferred, bar), Some(0));
+}
+
+#[test]
+fn the_h_bar_moves_the_offset() {
+    let bar = mint_bar();
+    let mut fx = scrolling(21, Some(bar));
+    fx.with(|t, ctx| t.body_mut().apply_scroll_sync(Some(6), None, ctx));
+    assert_eq!(fx.t().h_offset(), 6);
+    assert_eq!(fx.t().focused_row(), Some(0), "the v branch is untouched");
+}
+
+#[test]
+fn resize_republishes_both_bars() {
+    let (v, h) = (mint_bar(), mint_bar());
+    let mut fx = Fixture::new(
+        Table::new(Rect::new(0, 0, 21, H), fixed_columns(), Some(v))
+            .with_model(model(&ROWS))
+            .with_selection_mode(SelectionMode::Multi)
+            .with_h_bar(h),
+    );
+    fx.with(|t, ctx| t.set_h_offset(12, ctx));
+    // Grow 6 wider and 2 taller, as a window resize does.
+    fx.t().change_bounds(Rect::new(0, 0, 27, H + 2));
+    let deferred = fx.with_deferred(|t, ctx| t.set_state(StateFlag::Active, true, ctx));
+    assert_eq!(
+        bar_params(&deferred, h),
+        (Some(8), Some(22)),
+        "overflow 30 − 22"
+    );
+    assert_eq!(
+        bar_value(&deferred, h),
+        Some(8),
+        "the offset clamps into it"
+    );
+    // The C++ resize formula (TListViewer::changeBounds): page step = the
+    // new body height, arrow step left alone.
+    assert_eq!(
+        bar_params(&deferred, v).1,
+        Some(H + 2 - 1),
+        "page step = new body height"
+    );
+    let arrow = deferred.iter().rev().find_map(|d| match d {
+        Deferred::ScrollBarSetParams {
+            id,
+            page_step: Some(_),
+            arrow_step,
+            ..
+        } if *id == v => Some(*arrow_step),
+        _ => None,
+    });
+    assert_eq!(arrow, Some(None), "the arrow step is kept");
+    // The owner's on_bounds_changed publishes right away.
+    fx.t().change_bounds(Rect::new(0, 0, 40, H));
+    let deferred = fx.with_deferred(|t, ctx| t.on_bounds_changed(ctx));
+    assert_eq!(bar_params(&deferred, h).0, Some(0), "everything fits");
+}
+
+#[test]
+fn header_click_hits_the_scrolled_column() {
+    let mut fx = scrolling(21, None);
+    fx.with(|t, ctx| t.set_h_offset(5, ctx));
+    // Text x 4 is the first scrolled cell: content cell 5 = NAME (ID is
+    // 0..4, its separator 4). Screen x = text x + 1.
+    fx.click(5, 0);
+    assert_eq!(fx.t().sort_spec(), Some((1, SortDir::Asc)));
+    // The frozen check cell still toggles the row.
+    fx.click(2, 2);
+    assert_eq!(keys(fx.t().selected_keys()), ["b2"]);
+}
+
+#[test]
+fn snapshot_stretched() {
+    let mut cols = columns();
+    cols[1] = cols[1].clone().flex(2);
+    cols[2] = cols[2].clone().flex(1);
+    let mut fx =
+        Fixture::new(Table::new(Rect::new(0, 0, W + 9, H), cols, None).with_model(model(&ROWS)));
+    fx.focus(true);
+    insta::assert_snapshot!(fx.render(W as u16 + 9, H as u16));
+}
+
+#[test]
+fn snapshot_h_scrolled() {
+    let mut fx = scrolling(21, None);
+    fx.key(Key::Char(' '));
+    fx.with(|t, ctx| t.set_h_offset(7, ctx));
+    // Header and rows scroll together; the check column stays put.
+    insta::assert_snapshot!(fx.render(21, H as u16));
+}
+
+#[test]
+fn an_h_bar_change_requests_a_scroll_sync_for_the_body() {
+    let bar = mint_bar();
+    let mut fx = scrolling(21, Some(bar));
+    let body = fx.t().body_id;
+    let mut ev = Event::Broadcast {
+        command: Command::SCROLL_BAR_CHANGED,
+        source: Some(bar),
+    };
+    let deferred = fx.with_deferred(|t, ctx| t.handle_event(&mut ev, ctx));
+    assert!(
+        deferred.iter().any(|d| matches!(
+            d,
+            Deferred::ScrollSync { target, h: Some(h), .. } if *target == body && *h == bar
+        )),
+        "the pump is asked to read the h bar into the body"
+    );
+}
+
+#[test]
+fn hiding_a_column_while_scrolled_clamps_and_republishes() {
+    let bar = mint_bar();
+    let mut fx = scrolling(21, Some(bar));
+    fx.with(|t, ctx| t.set_h_offset(14, ctx));
+    assert_eq!(fx.t().h_offset(), 14);
+    // Without NAME (10 + separator) the content is 19 in 16: overflow 3.
+    fx.t().set_column_hidden(1, true);
+    assert_eq!(fx.t().h_offset(), 3, "clamped at once");
+    let mut ev = Event::KeyDown(KeyEvent::new(Key::Char('x'), KeyModifiers::default()));
+    let deferred = fx.with_deferred(|t, ctx| t.handle_event(&mut ev, ctx));
+    assert_eq!(
+        bar_params(&deferred, bar).0,
+        Some(3),
+        "the next event republishes"
+    );
+    assert_eq!(bar_value(&deferred, bar), Some(3));
+}
+
+#[test]
+fn snapshot_wide_glyph_at_the_scroll_edge() {
+    // 4 + 10 + 8 plus two separators = 24 content cells in 15: overflow 9.
+    let cols = vec![
+        ColumnSpec::new("ID", 4).min_width(4),
+        ColumnSpec::new("NAME", 10).min_width(10),
+        ColumnSpec::new("STATE", 8).min_width(8),
+    ];
+    let rows = vec![
+        vec!["a1".to_string(), "日本語テキスト".into(), "running".into()],
+        vec!["b2".to_string(), "ascii".into(), "exited".into()],
+    ];
+    let mut fx = Fixture::new(
+        Table::new(Rect::new(0, 0, 16, 4), cols, None).with_model(Box::new(VecModel::new(rows))),
+    );
+    fx.focus(true);
+    // Offset 6 cuts 日 (content cells 5–6) in half: its visible half is a
+    // space, and 本 starts under the header's "M" of NAME.
+    fx.with(|t, ctx| t.set_h_offset(6, ctx));
+    insta::assert_snapshot!(fx.render(16, 4));
 }
