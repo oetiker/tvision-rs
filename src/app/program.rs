@@ -2619,6 +2619,9 @@ impl Program {
                                             sp.end_resize_session(commit)
                                         }
                                     }
+                                    // The panes the layout re-sized re-publish
+                                    // their scroll state.
+                                    sp.on_bounds_changed(&mut ctx);
                                 }
                             }
                             // Write direction (TScrollBar::setParams driven by
@@ -13377,6 +13380,9 @@ mod tests {
             Nested,
             /// The single pane of a `Splitter` filling the window interior.
             Splitter,
+            /// The first of two row panes of a `Splitter` filling the window
+            /// interior.
+            SplitTwo,
         }
 
         const GROW_ALL: GrowMode = GrowMode {
@@ -13397,8 +13403,23 @@ mod tests {
             h: u16,
             layout: Layout,
         ) -> (Program, HeadlessHandle, ViewId, ViewId) {
+            let (program, handle, win, bar, _content, _list) = program_with_content(w, h, layout);
+            (program, handle, win, bar)
+        }
+
+        /// `(window, bar, content, list box)` ids of a built window.
+        type BuiltIds = (ViewId, ViewId, ViewId, ViewId);
+
+        /// [`program_with_list_window`] that also returns the id of the
+        /// window's content child (the list box, inner group or splitter) and of
+        /// the list box.
+        fn program_with_content(
+            w: u16,
+            h: u16,
+            layout: Layout,
+        ) -> (Program, HeadlessHandle, ViewId, ViewId, ViewId, ViewId) {
             let (backend, handle) = HeadlessBackend::new(w, h);
-            let ids: Rc<RefCell<Option<(ViewId, ViewId)>>> = Rc::new(RefCell::new(None));
+            let ids: Rc<RefCell<Option<BuiltIds>>> = Rc::new(RefCell::new(None));
             let ids_cap = ids.clone();
             let mut program = Program::new(
                 Box::new(backend),
@@ -13413,35 +13434,43 @@ mod tests {
                         vertical: true,
                         handle_keyboard: false,
                     });
-                    match layout {
+                    let (content, list) = match layout {
                         Layout::Plain => {
                             let mut lb = ListBox::new(Rect::new(1, 1, 29, 11), 1, None, Some(bar));
                             lb.state_mut().grow_mode = GROW_ALL;
-                            win.insert_child(Box::new(lb));
+                            let id = win.insert_child(Box::new(lb));
+                            (id, id)
                         }
                         Layout::Nested => {
                             let mut inner = Group::new(Rect::new(1, 1, 29, 11));
                             inner.state_mut().grow_mode = GROW_ALL;
                             let mut lb = ListBox::new(Rect::new(0, 0, 28, 10), 1, None, Some(bar));
                             lb.state_mut().grow_mode = GROW_ALL;
-                            inner.insert(Box::new(lb));
-                            win.insert_child(Box::new(inner));
+                            let lb_id = inner.insert(Box::new(lb));
+                            (win.insert_child(Box::new(inner)), lb_id)
                         }
-                        Layout::Splitter => {
+                        Layout::Splitter | Layout::SplitTwo => {
                             let mut sp = Splitter::rows();
-                            sp.insert(
+                            let lb_id = sp.insert(
                                 Box::new(ListBox::new(Rect::new(0, 0, 0, 0), 1, None, Some(bar))),
                                 Constraints::flex(),
                             );
+                            if matches!(layout, Layout::SplitTwo) {
+                                sp.insert(
+                                    Box::new(ListBox::new(Rect::new(0, 0, 0, 0), 1, None, None)),
+                                    Constraints::flex(),
+                                );
+                            }
                             sp.state_mut().grow_mode = GROW_ALL;
                             let sp_id = win.insert_child(Box::new(sp));
                             if let Some(v) = win.child_mut(sp_id) {
                                 v.change_bounds(Rect::new(1, 1, 29, 11));
                             }
+                            (sp_id, lb_id)
                         }
-                    }
+                    };
                     let win_id = desktop.insert_view(Box::new(win));
-                    *ids_cap.borrow_mut() = Some((win_id, bar));
+                    *ids_cap.borrow_mut() = Some((win_id, bar, content, list));
                     Some(Box::new(desktop))
                 },
                 |_r| None,
@@ -13449,8 +13478,8 @@ mod tests {
             );
             program.out_events.clear();
             program.pump_once();
-            let (win_id, bar) = ids.borrow().expect("window built");
-            (program, handle, win_id, bar)
+            let (win_id, bar, content, list) = ids.borrow().expect("window built");
+            (program, handle, win_id, bar, content, list)
         }
 
         fn bar_page_step(program: &mut Program, bar: ViewId) -> i32 {
@@ -13538,9 +13567,35 @@ mod tests {
         #[test]
         fn window_move_without_resize_does_not_republish() {
             let (mut program, _h, win, bar) = program_with_list_window(80, 25, Layout::Plain);
-            let before = bar_page_step(&mut program, bar);
+            // A sentinel no list-box formula produces for this window.
+            program
+                .group_mut()
+                .find_mut(bar)
+                .and_then(|v| v.as_any_mut())
+                .and_then(|a| a.downcast_mut::<ScrollBar>())
+                .expect("bar resolves")
+                .page_step = 99;
             resize_window_deferred(&mut program, win, Rect::new(5, 2, 35, 14));
-            assert_eq!(bar_page_step(&mut program, bar), before);
+            assert_eq!(bar_page_step(&mut program, bar), 99);
+        }
+
+        #[test]
+        fn divider_nudge_republishes_list_box_page_step() {
+            use crate::view::DividerOp;
+            let (mut program, _h, _win, bar, sp, lb) =
+                program_with_content(80, 25, Layout::SplitTwo);
+            let pane_height =
+                |program: &mut Program| program.group_mut().find_mut(lb).unwrap().state().size.y;
+            let before = pane_height(&mut program);
+            program.deferred.push(Deferred::SplitterDivider {
+                splitter: sp,
+                op: DividerOp::Nudge { index: 0, delta: 2 },
+            });
+            pump_with_dispatch(&mut program);
+            pump_with_dispatch(&mut program);
+            let after = pane_height(&mut program);
+            assert_eq!(after, before + 2, "the nudge grew the list-box pane");
+            assert_eq!(bar_page_step(&mut program, bar), after);
         }
     }
 
