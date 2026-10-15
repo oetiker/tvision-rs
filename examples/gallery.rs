@@ -586,7 +586,7 @@ fn listbox() -> Box<dyn View> {
 
 // ANCHOR: table
 /// A multi-select `Table` with a vertical scroll bar. Click a column label to
-/// sort (again to flip), Space marks a row. Rows are keyed by their ID so focus
+/// sort (again to flip); click the [ ] box or press Space to mark a row. Rows are keyed by their ID so focus
 /// and marks follow the record through a re-sort or a `set_model` reload. No
 /// wrapper view is needed: the table publishes its range to the bar itself.
 /// The bar spans the rows only, not the header.
