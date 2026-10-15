@@ -626,8 +626,11 @@ impl View for Table {
         }
     }
 
-    /// Re-publish the bars for the new size.
+    /// Re-publish the bars for the new size, and hand the hook on to the
+    /// children the group re-bounded (the header and body publish nothing
+    /// themselves; this keeps the group's cascade intact for any child).
     fn on_bounds_changed(&mut self, ctx: &mut Context) {
+        self.group.on_bounds_changed(ctx);
         self.needs_publish = true;
         self.resized = true;
         self.ensure_published(ctx);
