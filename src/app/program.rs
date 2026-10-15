@@ -3403,9 +3403,13 @@ impl Program {
 
         // 7. resetCursor, then redraw. Renderer::render reads self.cursor, so the
         //    cursor must be set BEFORE render.
+        //    The root clips the caret to its own extent (the last step of
+        //    TVCursor::computeCaretSize); Group::cursor_request clips the rest.
         let group_origin = group.state().origin;
+        let root_extent = group.state().get_extent();
         let cursor = group
             .cursor_request()
+            .filter(|p| root_extent.contains(*p))
             .map(|p| p + group_origin)
             .map(|p| (p.x.max(0) as u16, p.y.max(0) as u16));
         renderer.set_cursor(cursor);
@@ -13537,6 +13541,55 @@ mod tests {
             let before = bar_page_step(&mut program, bar);
             resize_window_deferred(&mut program, win, Rect::new(5, 2, 35, 14));
             assert_eq!(bar_page_step(&mut program, bar), before);
+        }
+    }
+
+    // -- Hardware cursor clipping (TVCursor::computeCaretSize) ----------------
+    mod caret_clip {
+        use super::*;
+        use crate::widgets::InputLine;
+        use crate::window::Window;
+
+        /// A 40×12 program whose desktop holds a selected window at (2, 2) with
+        /// a focused input line at window (1, 1); its caret sits at screen
+        /// (4, 3). With `cover`, a non-selectable window is inserted above it at
+        /// `cover`. Returns the pumped program's backend handle.
+        fn program_with_caret(cover: Option<Rect>) -> (Program, HeadlessHandle) {
+            let (backend, handle) = HeadlessBackend::new(40, 12);
+            let mut program = Program::new(
+                Box::new(backend),
+                Box::new(Rc::new(ManualClock::new(0))),
+                Theme::classic_blue(),
+                move |r| {
+                    let mut desktop = Desktop::new(r, |r2| Some(Desktop::init_background(r2)));
+                    let mut win = Window::new(Rect::new(2, 2, 22, 8), Some("A".into()), 1);
+                    win.insert_child(Box::new(InputLine::with_limit(Rect::new(1, 1, 15, 2), 20)));
+                    desktop.insert_view(Box::new(win));
+                    if let Some(c) = cover {
+                        let mut top = Window::new(c, Some("B".into()), 2);
+                        top.state_mut().options.selectable = false;
+                        desktop.insert_view(Box::new(top));
+                    }
+                    Some(Box::new(desktop))
+                },
+                |_r| None,
+                |_r| None,
+            );
+            program.out_events.clear();
+            program.pump_once();
+            (program, handle)
+        }
+
+        #[test]
+        fn caret_shown_when_uncovered() {
+            let (_p, handle) = program_with_caret(Some(Rect::new(20, 2, 35, 8)));
+            assert_eq!(handle.cursor(), Some((4, 3)));
+        }
+
+        #[test]
+        fn caret_hidden_under_window_above_focused_window() {
+            let (_p, handle) = program_with_caret(Some(Rect::new(3, 1, 18, 6)));
+            assert_eq!(handle.cursor(), None);
         }
     }
 }

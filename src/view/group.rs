@@ -1179,18 +1179,40 @@ impl View for Group {
 
     /// Descend into the `current` child to find where the hardware cursor should
     /// sit, accumulating the child's `origin` so the result is in this group's
-    /// coordinate frame. `None` if there is no current child or it wants no cursor
-    /// shown. The event loop walks this chain from the root to place the cursor.
+    /// coordinate frame. The event loop walks this chain from the root to place
+    /// the cursor.
+    ///
+    /// `None` (caret hidden) if there is no current child or it wants no cursor
+    /// shown, if this group or the child is hidden, if the caret lies outside the
+    /// child's extent, or if a visible sibling above the child in Z-order covers
+    /// the caret cell. Each level checks its own child, so a caret scrolled out
+    /// of any owner on the chain is hidden; the root's own extent is checked by
+    /// the caller.
     ///
     /// # Turbo Vision heritage
-    /// The group case of the focused-chain cursor walk (`TView::resetCursor`).
+    /// The group case of the focused-chain cursor walk (`TView::resetCursor`),
+    /// with the clipping of `TVCursor::computeCaretSize` / `caretCovered`
+    /// (`tvcursor.cpp`): there the walk runs bottom-up from the focused view;
+    /// here it runs top-down over the same chain and applies the same tests.
     fn cursor_request(&self) -> Option<Point> {
+        if !self.st.state.visible {
+            return None;
+        }
         let i = self.current.and_then(|id| self.index_of(id))?;
-        let child = &self.children[i];
-        child
-            .view
-            .cursor_request()
-            .map(|p| p + child.view.state().origin)
+        let cs = self.children[i].view.state();
+        if !cs.state.visible {
+            return None;
+        }
+        let p = self.children[i].view.cursor_request()?;
+        if !(0 <= p.x && p.x < cs.size.x && 0 <= p.y && p.y < cs.size.y) {
+            return None;
+        }
+        let p = p + cs.origin;
+        let covered = self.children[i + 1..].iter().any(|u| {
+            let us = u.view.state();
+            us.state.visible && us.get_bounds().contains(p)
+        });
+        if covered { None } else { Some(p) }
     }
 
     /// The group's [`View::find_mut`] override — the recursive tree-walk.
@@ -2738,6 +2760,113 @@ mod tests {
         // No current child -> None.
         let empty = Group::new(Rect::new(0, 0, 20, 10));
         assert_eq!(empty.cursor_request(), None);
+    }
+
+    // -- 11b. cursor_request clips the caret (TVCursor::computeCaretSize) -----
+
+    /// A focused, cursor-visible probe at `bounds` with its cursor at `cursor`.
+    fn caret_probe(bounds: Rect, cursor: Point) -> Probe {
+        let mut p = Probe::new(bounds, 'A', Rc::new(RefCell::new(Vec::new())));
+        p.st.options.selectable = true;
+        p.st.state.focused = true;
+        p.st.state.cursor_vis = true;
+        p.st.cursor = cursor;
+        p
+    }
+
+    /// Insert `view` into `group` and make it current.
+    fn insert_current(group: &mut Group, view: Box<dyn View>) -> ViewId {
+        let mut out = VecDeque::new();
+        let mut timers = TimerQueue::new();
+        let id = group.insert(view);
+        with_ctx(&mut out, &mut timers, |ctx| {
+            group.set_current(Some(id), SelectMode::Normal, ctx)
+        });
+        id
+    }
+
+    #[test]
+    fn cursor_request_shows_caret_inside_view() {
+        let mut group = Group::new(Rect::new(0, 0, 20, 10));
+        insert_current(
+            &mut group,
+            Box::new(caret_probe(Rect::new(6, 4, 11, 9), Point::new(4, 4))),
+        );
+        assert_eq!(group.cursor_request(), Some(Point::new(10, 8)));
+    }
+
+    #[test]
+    fn cursor_request_hides_caret_beyond_view_width() {
+        let mut group = Group::new(Rect::new(0, 0, 20, 10));
+        // The probe is 5 wide: column 5 is the first cell past its right edge,
+        // although it still lies inside the group.
+        insert_current(
+            &mut group,
+            Box::new(caret_probe(Rect::new(6, 4, 11, 9), Point::new(5, 0))),
+        );
+        assert_eq!(group.cursor_request(), None);
+    }
+
+    #[test]
+    fn cursor_request_hides_caret_of_hidden_view() {
+        let mut group = Group::new(Rect::new(0, 0, 20, 10));
+        let id = insert_current(
+            &mut group,
+            Box::new(caret_probe(Rect::new(6, 4, 11, 9), Point::new(1, 1))),
+        );
+        group.child_mut(id).unwrap().state_mut().state.visible = false;
+        assert_eq!(group.cursor_request(), None);
+    }
+
+    #[test]
+    fn cursor_request_hides_caret_outside_owner() {
+        // The probe sticks out 3 columns to the left of the inner group; its
+        // caret at local (1, 0) lies at inner column -2.
+        let mut inner = Group::new(Rect::new(2, 2, 12, 6));
+        insert_current(
+            &mut inner,
+            Box::new(caret_probe(Rect::new(-3, 0, 5, 1), Point::new(1, 0))),
+        );
+        let mut outer = Group::new(Rect::new(0, 0, 20, 10));
+        insert_current(&mut outer, Box::new(inner));
+        assert_eq!(outer.cursor_request(), None);
+    }
+
+    #[test]
+    fn cursor_request_hides_caret_under_sibling_above() {
+        let mut group = Group::new(Rect::new(0, 0, 20, 10));
+        let id = insert_current(
+            &mut group,
+            Box::new(caret_probe(Rect::new(0, 0, 10, 5), Point::new(4, 2))),
+        );
+        // A non-current sibling above the probe in Z-order covers (4, 2).
+        group.insert(Box::new(Probe::new(
+            Rect::new(3, 1, 8, 4),
+            'B',
+            Rc::new(RefCell::new(Vec::new())),
+        )));
+        let mut out = VecDeque::new();
+        let mut timers = TimerQueue::new();
+        with_ctx(&mut out, &mut timers, |ctx| {
+            group.set_current(Some(id), SelectMode::Normal, ctx)
+        });
+        assert_eq!(group.cursor_request(), None);
+
+        // A sibling above that does not cover the caret cell leaves it shown.
+        let mut group = Group::new(Rect::new(0, 0, 20, 10));
+        let id = insert_current(
+            &mut group,
+            Box::new(caret_probe(Rect::new(0, 0, 10, 5), Point::new(4, 2))),
+        );
+        group.insert(Box::new(Probe::new(
+            Rect::new(5, 1, 8, 4),
+            'B',
+            Rc::new(RefCell::new(Vec::new())),
+        )));
+        with_ctx(&mut out, &mut timers, |ctx| {
+            group.set_current(Some(id), SelectMode::Normal, ctx)
+        });
+        assert_eq!(group.cursor_request(), Some(Point::new(4, 2)));
     }
 
     // -- 12. Z-reorder: put_in_front_of (the primitive) ----------------------
