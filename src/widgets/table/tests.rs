@@ -856,11 +856,23 @@ fn resize_republishes_both_bars() {
         Some(8),
         "the offset clamps into it"
     );
+    // The C++ resize formula (TListViewer::changeBounds): page step = the
+    // new body height, arrow step left alone.
     assert_eq!(
         bar_params(&deferred, v).1,
-        Some(H + 2 - 1 - 1),
-        "page step = new body height − 1"
+        Some(H + 2 - 1),
+        "page step = new body height"
     );
+    let arrow = deferred.iter().rev().find_map(|d| match d {
+        Deferred::ScrollBarSetParams {
+            id,
+            page_step: Some(_),
+            arrow_step,
+            ..
+        } if *id == v => Some(*arrow_step),
+        _ => None,
+    });
+    assert_eq!(arrow, Some(None), "the arrow step is kept");
     // The owner's on_bounds_changed publishes right away.
     fx.t().change_bounds(Rect::new(0, 0, 40, H));
     let deferred = fx.with_deferred(|t, ctx| t.on_bounds_changed(ctx));
@@ -898,4 +910,64 @@ fn snapshot_h_scrolled() {
     fx.with(|t, ctx| t.set_h_offset(7, ctx));
     // Header and rows scroll together; the check column stays put.
     insta::assert_snapshot!(fx.render(21, H as u16));
+}
+
+#[test]
+fn an_h_bar_change_requests_a_scroll_sync_for_the_body() {
+    let bar = mint_bar();
+    let mut fx = scrolling(21, Some(bar));
+    let body = fx.t().body_id;
+    let mut ev = Event::Broadcast {
+        command: Command::SCROLL_BAR_CHANGED,
+        source: Some(bar),
+    };
+    let deferred = fx.with_deferred(|t, ctx| t.handle_event(&mut ev, ctx));
+    assert!(
+        deferred.iter().any(|d| matches!(
+            d,
+            Deferred::ScrollSync { target, h: Some(h), .. } if *target == body && *h == bar
+        )),
+        "the pump is asked to read the h bar into the body"
+    );
+}
+
+#[test]
+fn hiding_a_column_while_scrolled_clamps_and_republishes() {
+    let bar = mint_bar();
+    let mut fx = scrolling(21, Some(bar));
+    fx.with(|t, ctx| t.set_h_offset(14, ctx));
+    assert_eq!(fx.t().h_offset(), 14);
+    // Without NAME (10 + separator) the content is 19 in 16: overflow 3.
+    fx.t().set_column_hidden(1, true);
+    assert_eq!(fx.t().h_offset(), 3, "clamped at once");
+    let mut ev = Event::KeyDown(KeyEvent::new(Key::Char('x'), KeyModifiers::default()));
+    let deferred = fx.with_deferred(|t, ctx| t.handle_event(&mut ev, ctx));
+    assert_eq!(
+        bar_params(&deferred, bar).0,
+        Some(3),
+        "the next event republishes"
+    );
+    assert_eq!(bar_value(&deferred, bar), Some(3));
+}
+
+#[test]
+fn snapshot_wide_glyph_at_the_scroll_edge() {
+    // 4 + 10 + 8 plus two separators = 24 content cells in 15: overflow 9.
+    let cols = vec![
+        ColumnSpec::new("ID", 4).min_width(4),
+        ColumnSpec::new("NAME", 10).min_width(10),
+        ColumnSpec::new("STATE", 8).min_width(8),
+    ];
+    let rows = vec![
+        vec!["a1".to_string(), "日本語テキスト".into(), "running".into()],
+        vec!["b2".to_string(), "ascii".into(), "exited".into()],
+    ];
+    let mut fx = Fixture::new(
+        Table::new(Rect::new(0, 0, 16, 4), cols, None).with_model(Box::new(VecModel::new(rows))),
+    );
+    fx.focus(true);
+    // Offset 6 cuts 日 (content cells 5–6) in half: its visible half is a
+    // space, and 本 starts under the header's "M" of NAME.
+    fx.with(|t, ctx| t.set_h_offset(6, ctx));
+    insta::assert_snapshot!(fx.render(16, 4));
 }

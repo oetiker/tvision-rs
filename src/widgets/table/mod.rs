@@ -32,8 +32,10 @@
 //! horizontally by display cells: the header scrolls with the rows, the
 //! multi-select check column stays put, ←/→ scroll one cell, and an optional
 //! horizontal bar ([`Table::with_h_bar`]) shows and drives the offset
-//! ([`Table::h_offset`] / [`Table::set_h_offset`]). After a resize the table
-//! re-publishes both bars' ranges and page steps.
+//! ([`Table::h_offset`] / [`Table::set_h_offset`]); while the columns fit,
+//! the bar's range is 0. A resize changes the bars' page steps and the
+//! horizontal range; the table re-publishes them on its next event (a timer,
+//! a key, a window switch), since a resize hands it no [`Context`].
 //!
 //! # Data
 //!
@@ -46,8 +48,8 @@
 //!
 //! Build with [`Table::new`] and [`Table::with_model`] (plus
 //! [`Table::with_h_bar`] for a horizontal bar), insert, done: the table
-//! publishes its ranges and scroll steps to the bars on its first event or
-//! activation.
+//! publishes its ranges and scroll steps to the bars on activation or on its
+//! first event.
 //! Reload later with [`Table::set_model`].
 //!
 //! ```rust,ignore
@@ -204,12 +206,15 @@ pub struct Table {
     group: Group,
     data: Shared,
     body_id: ViewId,
-    /// The optional horizontal scroll bar ([`with_h_bar`](Self::with_h_bar)).
-    h_bar: Option<ViewId>,
     /// Set until the range and scroll steps have been published to the bars —
     /// that needs a [`Context`], which construction and
     /// [`change_bounds`](View::change_bounds) do not have.
     needs_publish: bool,
+    /// The bars have been published once: a later resize re-publishes the
+    /// vertical page step with the resize formula, not the construction one.
+    published: bool,
+    /// The size changed since the last publish.
+    resized: bool,
 }
 
 impl Table {
@@ -247,17 +252,16 @@ impl Table {
             group,
             data,
             body_id,
-            h_bar: None,
             needs_publish: true,
+            published: false,
+            resized: false,
         }
     }
 
     /// Builder: wire the horizontal scroll bar `h_bar` (an external sibling,
-    /// like the vertical one). It shows the horizontal scroll of the columns
-    /// once they no longer fit at their `min_width`; the table publishes its
-    /// range and steps itself.
+    /// like the vertical one). Its range is the columns' overflow past the
+    /// view: 0 while they fit. The table publishes range and steps itself.
     pub fn with_h_bar(mut self, h_bar: ViewId) -> Self {
-        self.h_bar = Some(h_bar);
         // The list viewer's bar wiring gives the bar its visibility and the
         // changed/clicked broadcasts; the body turns its value into the
         // table's offset.
@@ -332,11 +336,18 @@ impl Table {
     }
 
     /// Publish the range and the scroll steps to the bar, then focus display
-    /// row `idx` (clamped).
+    /// row `idx` (clamped). The steps use the list viewer's construction
+    /// formula the first time and its resize formula (page = height, arrow
+    /// kept) after a resize, as `TListViewer::changeBounds` does.
     fn publish(&mut self, idx: usize, ctx: &mut Context) {
         let len = self.data.borrow().order.len() as i32;
+        let resize = self.published && self.resized;
         let body = self.body_mut();
-        list_viewer::update_steps(body, ctx);
+        if resize {
+            list_viewer::on_bounds_changed(body, ctx);
+        } else {
+            list_viewer::update_steps(body, ctx);
+        }
         list_viewer::set_range(body, len, ctx);
         // Keep the viewport inside the new rows so a shrunken model does not
         // leave the visible window scrolled past its end.
@@ -348,6 +359,8 @@ impl Table {
         }
         self.publish_h(ctx);
         self.needs_publish = false;
+        self.published = true;
+        self.resized = false;
     }
 
     /// Clamp the horizontal offset to the current overflow and publish it,
@@ -361,7 +374,8 @@ impl Table {
             d.h_offset = l.clamp(d.h_offset);
             (d.h_offset, l.max_offset(), l.view)
         };
-        if let Some(h) = self.h_bar {
+        // The h bar id is stored once, in the body's list-viewer wiring.
+        if let Some(h) = self.body_mut().lv_state().h_scroll_bar {
             ctx.request_scroll_bar_params(
                 h,
                 Some(off),
@@ -601,19 +615,21 @@ impl View for Table {
     /// Resize the header and the body (grow modes), and mark the bars for a
     /// re-publish: the new size changes the vertical page step and the
     /// horizontal range. There is no [`Context`] here, so the publish runs on
-    /// the table's next event or state change, or right away when the owner
-    /// calls [`on_bounds_changed`](View::on_bounds_changed).
+    /// the table's next event (a timer, a key, a window switch), or right
+    /// away when the owner calls [`on_bounds_changed`](View::on_bounds_changed).
     fn change_bounds(&mut self, bounds: Rect) {
         let old = self.group.state().size;
         self.group.change_bounds(bounds);
         if self.group.state().size != old {
             self.needs_publish = true;
+            self.resized = true;
         }
     }
 
     /// Re-publish the bars for the new size.
     fn on_bounds_changed(&mut self, ctx: &mut Context) {
         self.needs_publish = true;
+        self.resized = true;
         self.ensure_published(ctx);
     }
 

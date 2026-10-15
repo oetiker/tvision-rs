@@ -150,7 +150,7 @@ impl TableBody {
             if l.max_offset() == 0 {
                 return false;
             }
-            d.h_offset = l.clamp(d.h_offset + step);
+            d.h_offset = l.clamp(d.h_offset.saturating_add(step));
             d.h_offset
         };
         if let Some(h) = self.lv.h_scroll_bar {

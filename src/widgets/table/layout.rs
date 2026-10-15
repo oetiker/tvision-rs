@@ -104,7 +104,9 @@ impl ColumnSpec {
     }
 
     /// Builder: let this column stretch into spare width with `weight`
-    /// (0 = fixed). `width` stays the width it starts from.
+    /// (0 = fixed). `width` is the width it starts from; a flex column is at
+    /// least `min_width` wide, so `ColumnSpec::new("Notes", 0).flex(1)` simply
+    /// fills the rest.
     pub fn flex(mut self, weight: u16) -> Self {
         self.flex = weight;
         self
@@ -146,18 +148,15 @@ pub fn with_check_cell(w0: i32, check: &str, rest: String) -> String {
 /// they stay empty. With no room at all (`avail` at or below the separators)
 /// every width is 0.
 pub fn layout_widths(cols: &[ColumnSpec], avail: i32) -> Vec<i32> {
-    let mut widths: Vec<i32> = cols
-        .iter()
-        .map(|c| if c.hidden { 0 } else { c.width.max(0) })
-        .collect();
+    let mut widths: Vec<i32> = cols.iter().map(preferred_width).collect();
     // A visible column of width 0 renders nothing and gets no separator
     // (as in `join_cells` / `column_at`), so it does not count here either.
-    let visible = cols.iter().filter(|c| !c.hidden && c.width > 0).count() as i32;
+    let visible = widths.iter().filter(|&&w| w > 0).count() as i32;
     let budget = avail - (visible - 1).max(0);
     if visible == 0 || budget <= 0 {
         return vec![0; cols.len()];
     }
-    let mut over = widths.iter().sum::<i32>() - budget;
+    let mut over = sum_widths(&widths).saturating_sub(budget);
     while over > 0 {
         let widest = widths
             .iter()
@@ -173,6 +172,25 @@ pub fn layout_widths(cols: &[ColumnSpec], avail: i32) -> Vec<i32> {
         stretch(cols, &mut widths, -over);
     }
     widths
+}
+
+/// The width a column starts the layout from: 0 when hidden; a flex column
+/// at least its `min_width` (and at least 1), so `ColumnSpec::new("X",
+/// 0).flex(1)` is the "fill the rest" column.
+fn preferred_width(c: &ColumnSpec) -> i32 {
+    match () {
+        _ if c.hidden => 0,
+        _ if c.flex > 0 => c.width.max(c.min_width).max(1),
+        _ => c.width.max(0),
+    }
+}
+
+/// The sum of `widths`, saturating instead of overflowing on absurd widths.
+fn sum_widths(widths: &[i32]) -> i32 {
+    widths
+        .iter()
+        .filter(|&&w| w > 0)
+        .fold(0i32, |acc, &w| acc.saturating_add(w))
 }
 
 /// Give `spare` cells to the visible, non-zero-width flex columns: each gets
@@ -202,8 +220,8 @@ pub fn stretch(cols: &[ColumnSpec], widths: &mut [i32], spare: i32) {
 /// The width of a line of `widths` joined with one-cell separators (zero-width
 /// columns take no cell and no separator).
 pub fn line_width(widths: &[i32]) -> i32 {
-    let shown: Vec<i32> = widths.iter().copied().filter(|&w| w > 0).collect();
-    shown.iter().sum::<i32>() + (shown.len() as i32 - 1).max(0)
+    let shown = widths.iter().filter(|&&w| w > 0).count() as i32;
+    sum_widths(widths).saturating_add((shown - 1).max(0))
 }
 
 /// The horizontal geometry of a table row for one view width: the leading
@@ -230,7 +248,7 @@ impl RowLayout {
         let content = line_width(&widths[frozen..]);
         let mut frozen_width = line_width(&widths[..frozen]);
         if frozen_width > 0 && content > 0 {
-            frozen_width += 1;
+            frozen_width = frozen_width.saturating_add(1);
         }
         RowLayout {
             view: (avail.max(0) - frozen_width).max(0),
@@ -275,7 +293,11 @@ impl RowLayout {
         if sx >= self.view {
             return None;
         }
-        column_at(&self.widths[self.frozen..], sx + self.clamp(offset)).map(|c| c + self.frozen)
+        column_at(
+            &self.widths[self.frozen..],
+            sx.saturating_add(self.clamp(offset)),
+        )
+        .map(|c| c + self.frozen)
     }
 }
 
@@ -283,7 +305,10 @@ impl RowLayout {
 /// columns. A wide glyph cut by either edge turns into spaces for its visible
 /// half, so the result never starts mid-glyph.
 pub fn slice_cols(s: &str, skip: i32, width: i32) -> String {
-    let (skip, end) = (skip.max(0) as usize, (skip.max(0) + width.max(0)) as usize);
+    let (skip, end) = (
+        skip.max(0) as usize,
+        skip.max(0).saturating_add(width.max(0)) as usize,
+    );
     let mut out = String::new();
     let mut col = 0;
     for g in s.graphemes(true) {
@@ -402,10 +427,10 @@ pub fn column_at(widths: &[i32], x: i32) -> Option<usize> {
         if w <= 0 {
             continue;
         }
-        if x >= start && x < start + w {
+        if x >= start && x < start.saturating_add(w) {
             return Some(i);
         }
-        start += w + 1;
+        start = start.saturating_add(w).saturating_add(1);
     }
     None
 }
@@ -627,6 +652,29 @@ mod tests {
             vec![4, 3],
             "no spare: flex columns shrink like the others"
         );
+    }
+
+    #[test]
+    fn a_zero_width_flex_column_fills_the_rest() {
+        // avail 20 − 1 separator = 19; A keeps 5, X (width 0) takes 14.
+        let cols = [col("A", 5), col("X", 0).flex(1)];
+        assert_eq!(layout_widths(&cols, 20), vec![5, 14]);
+        // No spare: it still shows one cell and its separator counts.
+        assert_eq!(layout_widths(&cols, 7), vec![5, 1]);
+    }
+
+    #[test]
+    fn huge_widths_saturate_instead_of_overflowing() {
+        let big = i32::MAX / 2;
+        let cols = [col("A", big).min_width(big), col("B", big).min_width(big)];
+        let w = layout_widths(&cols, 10);
+        assert_eq!(w, vec![big, big], "nothing may shrink");
+        assert_eq!(line_width(&w), i32::MAX);
+        let l = RowLayout::new(&cols, 0, 10);
+        assert_eq!((l.content, l.view), (i32::MAX, 10));
+        assert_eq!(l.max_offset(), i32::MAX - 10);
+        assert_eq!(l.column_at(3, l.max_offset()), Some(1));
+        assert_eq!(slice_cols("abc", i32::MAX - 1, 10), "");
     }
 
     #[test]
