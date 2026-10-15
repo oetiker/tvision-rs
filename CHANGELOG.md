@@ -13,7 +13,8 @@ moves it into a dated, versioned section when a release is cut.
 ### New
 
 - **`Table` widget.** A sortable multi-column list with a click-to-sort header,
-  single or multi selection, hidden columns and per-row text colours; the
+  single or multi selection (a `[ ]` check column), hidden columns, per-row
+  text colours, stretching (flex) columns and horizontal scrolling; the
   focused row and the marked rows stay on the same record when rows are
   reloaded or re-sorted. Adapted from tvdocker (MIT, by supertorpe).
 - **Common app patterns** page in the guide: focus, resize, cursor, help
@@ -42,6 +43,13 @@ moves it into a dated, versioned section when a release is cut.
 
 ### Fixed
 
+- **Scroll bars follow window resizes.** Lists and scrollable views inside a
+  window now update their scroll bars when the window is resized, zoomed,
+  tiled or cascaded, when a splitter divider moves, or when the terminal size
+  changes; before, Page Up/Down and the scroll bar used the old size.
+- **The text cursor is hidden where it cannot be seen**: outside its field,
+  outside the window that holds it, past the screen edge, or under another
+  window.
 - **Double- and triple-clicks now work in real terminals.** Before, they only
   worked in tests: a double-click on a window title now zooms the window, and a
   double-click picks an entry in a list, history or file dialog. In the editor a
