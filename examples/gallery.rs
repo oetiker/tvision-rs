@@ -17,11 +17,12 @@ use std::{env, io};
 use tvision_rs::{
     Button, ButtonFlags, ButtonRowAlign, CD_NORMAL, ChDirDialog, CheckBoxes, Color, ColorPicker,
     ColumnSpec, Command, Constraints, Context, CrosstermBackend, Desktop, Dialog, EditWindow,
-    Event, FD_OPEN_BUTTON, FieldValue, FileDialog, HistoryWindow, InputLine, Key, KeyEvent, Label,
-    ListBox, MaskedInput, Memo, Menu, MenuBar, MenuBox, Node, Outline, OutlineViewer, Program,
-    RadioButtons, Rect, RevealEyeConfig, RowKey, ScrollBar, ScrollBarOptions, SelectionMode,
-    Splitter, StaticText, StatusDef, StatusLine, SystemClock, THistory, Tab, Table, Terminal,
-    TextDevice, Theme, VecModel, View, ViewId, Window, alt, delegate, history_add, ov_update,
+    Event, FD_OPEN_BUTTON, FieldValue, FileDialog, GrowMode, HistoryWindow, InputLine, Key,
+    KeyEvent, Label, ListBox, MaskedInput, Memo, Menu, MenuBar, MenuBox, Node, Outline,
+    OutlineViewer, Program, RadioButtons, Rect, RevealEyeConfig, RowKey, ScrollBar,
+    ScrollBarOptions, SelectionMode, Splitter, StaticText, StatusDef, StatusLine, SystemClock,
+    THistory, Tab, Table, Terminal, TextDevice, Theme, VecModel, View, ViewId, Window, alt,
+    delegate, history_add, ov_update,
 };
 
 /// How a specimen is shown. Most widgets are leaf controls hosted in a dialog on
@@ -585,14 +586,24 @@ fn listbox() -> Box<dyn View> {
 // ANCHOR_END: listbox
 
 // ANCHOR: table
-/// A multi-select `Table` with a vertical scroll bar. Click a column label to
-/// sort (again to flip); click the [ ] box or press Space to mark a row. Rows are keyed by their ID so focus
-/// and marks follow the record through a re-sort or a `set_model` reload. No
-/// wrapper view is needed: the table publishes its range to the bar itself.
-/// The bar spans the rows only, not the header.
+/// A multi-select `Table` in a resizable window, with both scroll bars on the
+/// frame. Click a column label to sort (again to flip); click the [ ] box or
+/// press Space to mark a row. Rows are keyed by their ID so focus and marks
+/// follow the record through a re-sort or a `set_model` reload. The Image
+/// column is `flex`: widen the window and it takes the spare width. Shrink
+/// the window below the columns' `min_width`s and the columns scroll
+/// horizontally (←/→ or the bottom bar) while the check column stays put. No
+/// wrapper view is needed: the table publishes its ranges to the bars itself.
 fn table() -> Box<dyn View> {
-    let mut dlg = Dialog::new(Rect::new(2, 1, 50, 15), Some("Table".to_string()));
-    let vsb_id = dlg.insert_child(Box::new(ScrollBar::new(Rect::new(45, 3, 46, 12))));
+    let mut win = Window::new(Rect::new(2, 1, 52, 16), Some("Table".to_string()), 1);
+    let h_bar = win.standard_scroll_bar(ScrollBarOptions {
+        vertical: false,
+        handle_keyboard: false,
+    });
+    let v_bar = win.standard_scroll_bar(ScrollBarOptions {
+        vertical: true,
+        handle_keyboard: false,
+    });
     let rows = [
         ["web", "nginx", "running", "12.5"],
         ["db", "postgres", "running", "31.0"],
@@ -610,20 +621,29 @@ fn table() -> Box<dyn View> {
         .iter()
         .map(|r| r.iter().map(|s| s.to_string()).collect())
         .collect();
-    let table = Table::new(
-        Rect::new(2, 2, 45, 12),
+    // The table fills the window's interior and grows with it.
+    let mut inner = View::state(&win).get_extent();
+    inner.grow(-1, -1);
+    let mut table = Table::new(
+        inner,
         vec![
-            ColumnSpec::new("Name", 8),
-            ColumnSpec::new("Image", 11),
-            ColumnSpec::new("State", 8),
-            ColumnSpec::new("CPU %", 6).right(),
+            ColumnSpec::new("Name", 8).min_width(8),
+            ColumnSpec::new("Image", 11).min_width(10).flex(1),
+            ColumnSpec::new("State", 8).min_width(8),
+            ColumnSpec::new("CPU %", 6).min_width(6).right(),
         ],
-        Some(vsb_id),
+        Some(v_bar),
     )
+    .with_h_bar(h_bar)
     .with_model(Box::new(VecModel::new(rows).with_keys(keys)))
     .with_selection_mode(SelectionMode::Multi);
-    dlg.insert_child(Box::new(table));
-    Box::new(dlg)
+    table.state_mut().grow_mode = GrowMode {
+        hi_x: true,
+        hi_y: true,
+        ..Default::default()
+    };
+    win.insert_child(Box::new(table));
+    Box::new(win)
 }
 // ANCHOR_END: table
 

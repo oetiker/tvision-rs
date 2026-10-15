@@ -123,7 +123,11 @@ scrolling row list. Rows come from a `TableModel` (`VecModel` for plain
 strings) and carry a stable `RowKey`, so focus and the marked rows follow the
 record through a re-sort or a `set_model` reload. Click a column label to sort
 by it, click again to flip; numbers sort numerically. Columns shrink widest
-first to fit (never below `min_width`), cut text with `…`, and can be hidden.
+first to fit (never below `min_width`), cut text with `…`, and can be hidden;
+a `flex` column takes the spare width when the table is wider than its
+columns. Columns that do not fit at their `min_width` scroll horizontally:
+←/→ or the horizontal bar (`with_h_bar`) move them, the header moves along,
+the check column stays put. Resize the window in the demo to see both.
 In `SelectionMode::Multi` the rows get a leading check column drawn like
 check boxes: click a row's `[ ]` box, or press Space, to mark it. The table
 broadcasts `TABLE_SORT_CHANGED`, `TABLE_SELECTION_CHANGED` and, in single
