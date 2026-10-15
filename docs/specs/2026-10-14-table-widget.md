@@ -110,3 +110,75 @@ value/set_value, broadcasts), `insta` snapshots on the `HeadlessBackend`
 (focused/unfocused, sorted, multi-selected, narrow width with truncation,
 hidden column, `row_role`). Add the table to the gallery example and a book page
 next to the other extensions.
+
+---
+
+# v2 additions (2026-10-15, after the user tried the demo)
+
+The user asked for all of the former "out of scope" items. Built in three
+phases on `feat/table`, each two-stage reviewed. Building blocks that already
+exist: `Context::start_mouse_track` (drag tracking), `menu::popup_menu`,
+`validate::Validator` + `InputLine::set_validator`, `request_exec_view` +
+`set_modal_data` (dialog data-back).
+
+## Check column (done first)
+
+Multi mode draws a fixed leading `[ ]`/`[X]` column (CheckBoxes glyphs); a
+click on it toggles, Space and double-click toggle too. No column-0 `X`.
+
+## Phase A — layout
+
+- **Stretch.** `ColumnSpec::flex(weight: u16)` (default 0). When the visible
+  columns are narrower than the table, the spare cells go to the flex columns
+  in proportion to their weights (remainder to the leftmost); with no flex
+  column the spare stays empty, as today.
+- **Horizontal scroll.** When the columns still do not fit after every column
+  is at `min_width`, the table scrolls horizontally by display cells. Optional
+  h scroll bar passed by id (`Table::new(..., v_bar, h_bar)` or a
+  `with_h_bar(id)` builder). The header scrolls with the body. ←/→ scroll
+  when no cell cursor exists (see Phase C). The check column is frozen (does
+  not scroll). `h_offset()`/`set_h_offset()`.
+- Resize: widths are derived on every draw from the current size, so window
+  resizes re-lay out. The table re-publishes its v/h bar ranges and page
+  steps from `change_bounds` itself, so it does not depend on the framework's
+  missing `on_bounds_changed` cascade.
+
+## Phase B — header interaction
+
+- **Resize by mouse.** Pressing on the separator cell right of a column label
+  and dragging changes that column's width (clamped to `min_width`, ≥ 1).
+  Uses `start_mouse_track`. A resize turns a flex column into a fixed width.
+- **Reorder by drag.** Pressing on a label and dragging horizontally by more
+  than its own cell moves the column; a drop indicator shows the target gap;
+  release commits. A press-release without drag still sorts. Sort and hidden
+  state follow the column (they are keyed by the column's model index, not
+  its display position).
+- **Show/hide.** Right-click on the header opens a `popup_menu` listing every
+  column with a check mark; choosing one toggles it. The last visible column
+  cannot be hidden. The same toggle is reachable as `Command::TABLE_COLUMNS`
+  (opens the popup at the header) so apps can bind a key or menu item.
+- **Persisting layout.** `Table::column_layout() -> Vec<ColumnState>` (model
+  index, width, hidden, order) and `set_column_layout(..)`; every user change
+  broadcasts `Command::TABLE_COLUMNS_CHANGED` (source = table id).
+- Column specs gain `resizable` (default true) and `movable` (default true).
+
+## Phase C — cell editing
+
+- `ColumnSpec::editable(bool)` (default false), optional
+  `ColumnSpec::validator(Box<dyn Fn() -> Box<dyn Validator>>)` factory.
+- `TableModel::set_cell(&mut self, row, col, text: &str) -> Result<(), String>`
+  defaulted to `Err("read-only")`; `VecModel` implements it.
+- **Cell cursor.** Exists only when at least one visible column is editable:
+  ←/→ move it between editable columns (auto-scrolling horizontally); it is
+  drawn as a distinct colour on the focused row.
+- **Start editing:** F2, or double-click on an editable cell (in Multi mode a
+  double-click on a non-editable cell still toggles). Enter keeps its
+  ListViewer meaning (item selected).
+- **Editor:** an `InputLine` (with the column's validator) placed over the
+  cell inside the table group, focused, pre-filled with the cell text, all
+  selected. Enter commits → `set_cell`; on `Err(msg)` show `message_box` and
+  stay in the editor. Esc cancels. Losing focus cancels. Tab/Shift-Tab commit
+  and move to the next/previous editable cell on the same row.
+- After a commit the sort is re-applied; focus follows the row key.
+  Broadcast `Command::TABLE_CELL_EDITED` (source = table id); the app reads
+  `table.model()` or its own copy.
