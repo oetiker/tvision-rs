@@ -7,22 +7,23 @@ use crate::theme::Role;
 use crate::view::{Context, DrawCtx, GrowMode, Point, Rect, StateFlag, View, ViewId, ViewState};
 use crate::widgets::list_viewer::{self, ListViewer, ListViewerState};
 
-use super::layout::{column_at, format_line, header_line, layout_widths};
-use super::{SelectionMode, Shared};
+use super::layout::{column_at, format_line, header_line, layout_widths, with_check_cell};
+use super::{SelectionMode, Shared, TableData};
+use crate::widgets::cluster::check_box;
 
 /// The cell the row text (and the header text) starts at: the list viewer
 /// leaves column 0 of every row blank, and the header lines up with it.
 const TEXT_X: i32 = 1;
 
-/// The multi-mode mark drawn in column 0 (the gutter the list viewer leaves
-/// blank) of a marked row — the checked marker of
-/// [`CheckBoxes`](crate::widgets::CheckBoxes). The theme has no check glyph;
-/// the cluster hard-codes the same character.
-const MARK: char = 'X';
-
 /// The width available to the columns in a view `size_x` wide.
 fn text_width(size_x: i32) -> i32 {
     (size_x - TEXT_X).max(0)
+}
+
+/// The layout widths (the check column first in multi mode) for a view
+/// `size_x` wide.
+fn widths(d: &TableData, size_x: i32) -> Vec<i32> {
+    layout_widths(&d.layout_columns(), text_width(size_x))
 }
 
 // ---------------------------------------------------------------------------
@@ -61,16 +62,29 @@ impl View for TableHeader {
         let style = ctx.style(Role::TableHeader);
         ctx.fill(self.state.get_extent(), ' ', style);
         let d = self.data.borrow();
-        let widths = layout_widths(&d.columns, text_width(self.state.size.x));
-        ctx.put_str(TEXT_X, 0, &header_line(&d.columns, &widths, d.sort), style);
+        let w = widths(&d, self.state.size.x);
+        let k = d.check_cols();
+        let line = header_line(&d.columns, &w[k..], d.sort);
+        // The check column's header cell is blank.
+        let line = if k > 0 {
+            with_check_cell(w[0], "", line)
+        } else {
+            line
+        };
+        ctx.put_str(TEXT_X, 0, &line, style);
     }
 
     fn handle_event(&mut self, ev: &mut Event, _ctx: &mut Context) {
         if let Event::MouseDown(me) = *ev {
             let mut d = self.data.borrow_mut();
-            let widths = layout_widths(&d.columns, text_width(self.state.size.x));
-            if let Some(col) = column_at(&widths, me.position.x - TEXT_X) {
-                d.header_click = Some(col);
+            let w = widths(&d, self.state.size.x);
+            let k = d.check_cols();
+            // Layout columns before `k` are the check column: its blank
+            // header cell does nothing.
+            if let Some(col) = column_at(&w, me.position.x - TEXT_X)
+                && col >= k
+            {
+                d.header_click = Some(col - k);
             }
             ev.clear();
         }
@@ -108,30 +122,14 @@ impl TableBody {
         }
     }
 
-    /// Draw [`MARK`] in the gutter of every visible marked row, so a mark
-    /// stays visible on the focused row too (whose colour hides the
-    /// selected colour). Colour per cell as the shared draw chose it.
-    fn draw_marks(&self, ctx: &mut DrawCtx) {
-        let roles = self.list_roles();
-        let focused_style = ctx.style(roles.focused);
-        let selected_style = ctx.style(roles.selected);
-        let lv = &self.lv;
-        let list_focused = lv.state.state.focused;
-        for y in 0..lv.state.size.y {
-            let item = lv.top_item + y;
-            if item >= lv.range {
-                break;
-            }
-            if !self.is_selected(item) {
-                continue;
-            }
-            let style = if list_focused && item == lv.focused {
-                focused_style
-            } else {
-                selected_style
-            };
-            ctx.put_char(0, y, MARK, style);
+    /// Whether view-local `x` falls on the check cell (multi mode only).
+    fn on_check_cell(&self, x: i32) -> bool {
+        let d = self.data.borrow();
+        if d.mode != SelectionMode::Multi {
+            return false;
         }
+        let w = widths(&d, self.lv.state.size.x);
+        column_at(&w, x - TEXT_X) == Some(0)
     }
 
     /// Mutable access to the list-viewer state, for the table's focus moves.
@@ -151,10 +149,21 @@ impl ListViewer for TableBody {
 
     fn get_text(&self, item: i32) -> String {
         let d = self.data.borrow();
-        match d.order.get(item as usize) {
-            Some(&row) => format_line(&*d.model, row, &self.widths, &d.columns),
-            None => String::new(),
+        let Some(&row) = d.order.get(item as usize) else {
+            return String::new();
+        };
+        let k = d.check_cols();
+        let Some(rest_widths) = self.widths.get(k..) else {
+            return String::new();
+        };
+        let line = format_line(&*d.model, row, rest_widths, &d.columns);
+        if k == 0 {
+            return line;
         }
+        let marked = d
+            .key_at(item as usize)
+            .is_some_and(|k| d.selected.contains(&k));
+        with_check_cell(self.widths[0], &check_box(marked), line)
     }
 
     fn is_selected(&self, item: i32) -> bool {
@@ -211,18 +220,27 @@ impl View for TableBody {
     }
 
     fn draw(&mut self, ctx: &mut DrawCtx) {
-        self.widths = layout_widths(
-            &self.data.borrow().columns,
-            text_width(self.lv.state.size.x),
-        );
+        self.widths = widths(&self.data.borrow(), self.lv.state.size.x);
         list_viewer::draw(self, ctx);
-        if self.data.borrow().mode == SelectionMode::Multi {
-            self.draw_marks(ctx);
-        }
     }
 
+    /// The shared list-viewer handling, plus: in multi mode a single click on
+    /// a row's check cell also toggles that row's mark (after the click
+    /// focused it). A double-click already toggles through `select_item`.
     fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
+        let check_click = match *ev {
+            Event::MouseDown(me) if !me.flags.double_click && self.on_check_cell(me.position.x) => {
+                Some(me.position.y + self.lv.top_item)
+            }
+            _ => None,
+        };
         list_viewer::handle_event(self, ev, ctx);
+        if let Some(item) = check_click
+            && item < self.lv.range
+            && item == self.lv.focused
+        {
+            self.select_item(item, ctx);
+        }
     }
 
     fn set_state(&mut self, flag: StateFlag, enable: bool, ctx: &mut Context) {

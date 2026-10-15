@@ -485,6 +485,51 @@ fn single_mode_choice_broadcasts_list_item_selected_with_the_table_id() {
 }
 
 #[test]
+fn click_on_the_check_cell_toggles_and_broadcasts() {
+    let mut fx = multi();
+    let id = Some(fx.id);
+    // The check cell spans view x 1..4 (text starts at x 1); y 3 = row c3.
+    let out = fx.click(2, 3);
+    assert_eq!(
+        fx.t().focused_key(),
+        Some(RowKey::from("c3")),
+        "click focuses"
+    );
+    assert_eq!(keys(fx.t().selected_keys()), ["c3"]);
+    assert_eq!(out, [(Command::TABLE_SELECTION_CHANGED, id)]);
+    fx.send(Event::MouseUp(MouseEvent::default()));
+    fx.click(2, 3);
+    assert!(fx.t().selected_keys().is_empty(), "a second click unmarks");
+}
+
+#[test]
+fn click_on_a_text_cell_only_focuses() {
+    let mut fx = multi();
+    let out = fx.click(10, 2);
+    assert_eq!(fx.t().focused_key(), Some(RowKey::from("b2")));
+    assert!(fx.t().selected_keys().is_empty());
+    assert!(out.is_empty());
+}
+
+#[test]
+fn header_hit_test_accounts_for_the_check_column() {
+    let mut fx = multi();
+    let out = fx.click(2, 0); // the blank check header cell
+    assert_eq!(fx.t().sort_spec(), None);
+    assert!(out.is_empty());
+    // Widths [check 3, ID 4, NAME 7, STATE 7, CPU 5]: ID spans view x 5..9.
+    fx.click(6, 0);
+    assert_eq!(fx.t().sort_spec(), Some((0, SortDir::Asc)));
+}
+
+#[test]
+fn single_mode_has_no_check_column() {
+    let mut fx = Fixture::table();
+    let screen = fx.render(W as u16, H as u16);
+    assert!(!screen.contains("[ ]"), "{screen}");
+}
+
+#[test]
 fn marks_survive_reload_and_drop_vanished_keys() {
     let mut fx = multi();
     fx.key(Key::Char(' ')); // a1

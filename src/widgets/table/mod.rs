@@ -50,7 +50,8 @@
 //! User actions broadcast with the **table's** id as `source`:
 //! [`Command::TABLE_SORT_CHANGED`] (header click, [`Command::TABLE_SORT_NEXT`],
 //! [`Command::TABLE_SORT_FLIP`]), [`Command::TABLE_SELECTION_CHANGED`] (multi
-//! mode: Space or a double-click toggled a row) and
+//! mode: a click on a row's `[ ]` box, Space or a double-click toggled a row)
+//! and
 //! [`Command::LIST_ITEM_SELECTED`] (single mode: Space or a double-click chose
 //! the focused row). Programmatic setters do not broadcast — the caller already
 //! knows what it changed.
@@ -90,9 +91,12 @@ pub enum SelectionMode {
     /// [`Command::LIST_ITEM_SELECTED`].
     #[default]
     Single,
-    /// A set of marked rows; Space or a double-click toggles the focused row's
-    /// mark and broadcasts [`Command::TABLE_SELECTION_CHANGED`]. Marked rows
-    /// draw in the list-selected colour.
+    /// A set of marked rows. The rows get a leading, fixed check column drawn
+    /// like [`CheckBoxes`](crate::widgets::CheckBoxes) (`[ ]` / `[X]`, blank
+    /// header cell). A click on a row's box, Space, or a double-click toggles
+    /// the row's mark and broadcasts [`Command::TABLE_SELECTION_CHANGED`]; a
+    /// click elsewhere on a row only focuses it. Marked rows also draw in the
+    /// list-selected colour.
     Multi,
 }
 
@@ -149,6 +153,22 @@ impl TableData {
     fn prune_selection(&mut self) {
         let keys = self.all_keys();
         self.selected.retain(|k| keys.contains(k));
+    }
+
+    /// The columns the layout runs over: in multi mode the fixed check column
+    /// leads, so the layout index of user column `c` is `c + check_cols()`.
+    fn layout_columns(&self) -> Vec<ColumnSpec> {
+        let mut cols = Vec::with_capacity(self.columns.len() + 1);
+        if self.mode == SelectionMode::Multi {
+            cols.push(layout::check_column());
+        }
+        cols.extend(self.columns.iter().cloned());
+        cols
+    }
+
+    /// How many layout columns precede the user columns (1 in multi mode).
+    fn check_cols(&self) -> usize {
+        usize::from(self.mode == SelectionMode::Multi)
     }
 
     /// The first visible column at or after `from` (wrapping), if any.

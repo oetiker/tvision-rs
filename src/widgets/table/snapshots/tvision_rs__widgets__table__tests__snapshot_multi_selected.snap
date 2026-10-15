@@ -5,11 +5,11 @@ expression: "fx.render(W as u16, H as u16)"
 size: 31x6
 cursor: hidden
 text:
-| ID   NAME       STATE      CPU|
-|Xa1   web        running   12.5|
-| b2   db         exited       0|
-|Xc3   cache      running   3.25|
-| d4   worker-lo… paused     100|
+|     ID   NAME    STATE     CPU|
+| [X] a1   web     running  12.5|
+| [ ] b2   db      exited      0|
+| [X] c3   cache   running  3.25|
+| [ ] d4   worker… paused    100|
 |                               |
 attr:
 |aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|

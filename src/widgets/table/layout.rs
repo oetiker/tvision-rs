@@ -99,6 +99,31 @@ impl ColumnSpec {
     }
 }
 
+/// Width of the multi-select check column: the `[ ]` box of
+/// [`CheckBoxes`](crate::widgets::CheckBoxes).
+pub const CHECK_WIDTH: i32 = 3;
+
+/// The fixed, non-shrinkable check column a multi-select table lays out in
+/// front of its own columns (blank label).
+pub fn check_column() -> ColumnSpec {
+    ColumnSpec::new("", CHECK_WIDTH).min_width(CHECK_WIDTH)
+}
+
+/// Prefix `rest` (an already joined line) with the check-column cell `check`
+/// of width `w0`, using the same one-space separator as the other columns.
+/// A zero-width check column (no room at all) adds nothing.
+pub fn with_check_cell(w0: i32, check: &str, rest: String) -> String {
+    if w0 <= 0 {
+        return rest;
+    }
+    let cell = pad_cell(check, w0, Align::Left);
+    if rest.is_empty() {
+        cell
+    } else {
+        format!("{cell} {rest}")
+    }
+}
+
 /// Distribute `avail` cells over `cols`: hidden columns get 0; the visible ones
 /// keep their preferred width while everything (plus one separator between
 /// neighbouring visible columns) fits, else the currently widest shrinkable
@@ -408,6 +433,20 @@ mod tests {
             [1, 2, 0, 3],
             "descending reverses within each kind, numbers still first"
         );
+    }
+
+    #[test]
+    fn check_column_is_fixed_on_a_narrow_table() {
+        // avail 12: check 3 + separators 2 leaves 7 for A and B (wanted 20).
+        let cols = [check_column(), col("A", 10), col("B", 10)];
+        let w = layout_widths(&cols, 12);
+        assert_eq!(w, vec![3, 4, 3], "the check column never shrinks");
+        let m = model(&[&["alpha", "beta"]]);
+        let line = with_check_cell(w[0], "[X]", format_line(&m, 0, &w[1..], &cols[1..]));
+        assert_eq!(line, "[X] alp… be…");
+        assert_eq!(text::width(&line), 12, "fills avail exactly");
+        assert_eq!(with_check_cell(0, "[X]", "rest".into()), "rest");
+        assert_eq!(with_check_cell(3, "[ ]", String::new()), "[ ]");
     }
 
     #[test]
