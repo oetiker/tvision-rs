@@ -732,8 +732,14 @@ impl View for Splitter {
     }
 
     fn change_bounds(&mut self, bounds: Rect) {
+        let resized = bounds.b - bounds.a != self.group.state().size;
         self.group.state_mut().set_bounds(bounds);
         self.resolve_layout_local();
+        // The panes were re-bounded by the layout, not the group cascade: let
+        // the delegated `on_bounds_changed` reach them.
+        if resized {
+            self.group.mark_bounds_dirty();
+        }
     }
 
     /// Downcast seam: a parent (the owning window, or an outer splitter reaching a

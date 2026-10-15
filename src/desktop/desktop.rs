@@ -303,6 +303,9 @@ impl View for Desktop {
             }
             tile_num -= 1;
         }
+        // The windows were re-bounded here, not by the group cascade: let the
+        // caller's `on_bounds_changed` reach them.
+        self.group.mark_bounds_dirty();
     }
 
     /// Stack the tileable windows, each offset one cell down-and-right from the
@@ -343,6 +346,7 @@ impl View for Desktop {
                 cascade_num -= 1;
             }
         }
+        self.group.mark_bounds_dirty();
     }
 }
 

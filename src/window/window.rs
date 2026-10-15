@@ -833,6 +833,7 @@ impl Window {
         let owner_size = ctx.owner_size();
         let (_min, max) = View::size_limits(self, owner_size);
         self.locate(Rect::new(0, 0, max.x, max.y), owner_size);
+        View::on_bounds_changed(self, ctx);
         self.push_zoomed(true);
     }
 
@@ -843,6 +844,7 @@ impl Window {
         if let Some(r) = self.restore_rect.take() {
             let owner_size = ctx.owner_size();
             self.locate(r, owner_size);
+            View::on_bounds_changed(self, ctx);
         }
         self.push_zoomed(false);
     }

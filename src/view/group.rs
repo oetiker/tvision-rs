@@ -121,6 +121,12 @@ pub struct Group {
     /// currency. Settled by [`View::settle_currency`]; cleared by any explicit
     /// [`set_current`](Group::set_current).
     currency_dirty: bool,
+    /// The children were re-bounded by a size-changing
+    /// [`change_bounds`](View::change_bounds) since the last
+    /// [`on_bounds_changed`](View::on_bounds_changed) — a pending request to
+    /// hand every child its own `on_bounds_changed` (the `Context`-bearing half
+    /// of the C++ child `changeBounds` cascade). Cleared when forwarded.
+    bounds_dirty: bool,
     /// Opt-in background surface: `Some((normal, inactive))` fills the group's
     /// extent before children draw, keyed on the group's own `focused` flag.
     /// `None` (the default) — the group paints nothing; children cover it.
@@ -158,8 +164,17 @@ impl Group {
             children: Vec::new(),
             current: None,
             currency_dirty: false,
+            bounds_dirty: false,
             surface: None,
         }
+    }
+
+    /// Record that the children were re-bounded outside
+    /// [`change_bounds`](View::change_bounds) (a container that lays its
+    /// children out itself), so the next
+    /// [`on_bounds_changed`](View::on_bounds_changed) forwards to every child.
+    pub(crate) fn mark_bounds_dirty(&mut self) {
+        self.bounds_dirty = true;
     }
 
     /// The current (selected) child's id, if any.
@@ -1119,6 +1134,26 @@ impl View for Group {
             for i in 0..self.children.len() {
                 let r = self.children[i].view.calc_bounds(owner_size, delta);
                 self.children[i].view.change_bounds(r);
+            }
+            self.bounds_dirty = true;
+        }
+    }
+
+    /// Forward [`on_bounds_changed`](View::on_bounds_changed) to every child when
+    /// the last [`change_bounds`](Self::change_bounds) resized them, so a list
+    /// viewer or scroller at any depth re-publishes its scroll-bar state. A move
+    /// without a size change re-bounds no child and forwards nothing.
+    ///
+    /// # Turbo Vision heritage
+    /// `TGroup::changeBounds` calls `changeBounds` on every child after a size
+    /// change, and `TListViewer`/`TScroller::changeBounds` re-publish inline.
+    /// Here `change_bounds` has no `Context`, so the re-publish half runs in this
+    /// hook; the dirty flag carries "the children were re-bounded" from one call
+    /// to the other.
+    fn on_bounds_changed(&mut self, ctx: &mut Context) {
+        if std::mem::take(&mut self.bounds_dirty) {
+            for child in self.children.iter_mut() {
+                child.view.on_bounds_changed(ctx);
             }
         }
     }

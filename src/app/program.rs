@@ -2209,6 +2209,17 @@ impl Program {
             }
         }
 
+        // 2a'. Hand the terminal resize to every re-bounded view's
+        //      `on_bounds_changed` (scroll views re-publish their bar steps) —
+        //      the Context-bearing half of the root `change_bounds` cascade
+        //      above. Runs after the fullscreen re-fit so it sees final bounds.
+        if size_changed {
+            let mut ctx = Context::new(out_events, timers, now, deferred);
+            ctx.set_disabled_commands(disabled_commands.clone());
+            ctx.set_clipboard_snapshot(*clipboard_editor_id, *clipboard_has_selection);
+            group.on_bounds_changed(&mut ctx);
+        }
+
         // 2b. Settle pending insert-time currency cascades BEFORE the event
         //     pick, so the dispatched event sees C++-equivalent currency: in C++
         //     every insert of a visible+selectable view ran show()->resetCurrent
@@ -3612,6 +3623,7 @@ fn apply_fullscreen(
         && let Some(v) = group.find_mut(dt)
     {
         v.change_bounds(Rect::new(0, top, w, h - status_h));
+        v.on_bounds_changed(ctx);
     }
 
     // 3. Window bounds:
@@ -3992,6 +4004,9 @@ fn program_handle_event(
             } else {
                 dt.cascade(r);
             }
+            // The Context-bearing half of the windows' changeBounds (scroll
+            // views re-publish their bar steps).
+            dt.on_bounds_changed(ctx);
         }
         ev.clear(); // clearEvent after handling.
     }
@@ -13334,5 +13349,194 @@ mod tests {
             "idle hook should fire once on each event-less pass, got {}",
             ticks.get()
         );
+    }
+
+    // -- Resize cascade reaches nested scroll views ---------------------------
+    //
+    // C++ TGroup::changeBounds calls child->changeBounds on every child when the
+    // group's size changes, and TListViewer::changeBounds re-publishes its bar
+    // steps inline. The Rust split puts the re-publish in `on_bounds_changed`,
+    // which must therefore reach every child of a resized group, at any depth
+    // and on every resize path.
+    mod resize_cascade {
+        use super::*;
+        use crate::view::{Deferred, Group, GrowMode};
+        use crate::widgets::{Constraints, ListBox, ScrollBar, Splitter};
+        use crate::window::{ScrollBarOptions, Window};
+
+        /// Where the list box sits inside the window.
+        #[derive(Clone, Copy)]
+        enum Layout {
+            /// A direct window child.
+            Plain,
+            /// Inside an inner `Group` filling the window interior.
+            Nested,
+            /// The single pane of a `Splitter` filling the window interior.
+            Splitter,
+        }
+
+        const GROW_ALL: GrowMode = GrowMode {
+            lo_x: false,
+            lo_y: false,
+            hi_x: true,
+            hi_y: true,
+            rel: false,
+            fixed: false,
+        };
+
+        /// A program whose desktop holds one 30×12 window at the desktop origin
+        /// with a standard vertical bar and a list box wired to it, placed in the
+        /// window interior per `layout`. Returns `(program, handle, window_id,
+        /// bar_id)`.
+        fn program_with_list_window(
+            w: u16,
+            h: u16,
+            layout: Layout,
+        ) -> (Program, HeadlessHandle, ViewId, ViewId) {
+            let (backend, handle) = HeadlessBackend::new(w, h);
+            let ids: Rc<RefCell<Option<(ViewId, ViewId)>>> = Rc::new(RefCell::new(None));
+            let ids_cap = ids.clone();
+            let mut program = Program::new(
+                Box::new(backend),
+                Box::new(Rc::new(ManualClock::new(0))),
+                Theme::classic_blue(),
+                move |r| {
+                    let mut desktop = Desktop::new(r, |r2| Some(Desktop::init_background(r2)));
+                    let mut win = Window::new(Rect::new(0, 0, 30, 12), Some("L".into()), 1)
+                        .with_grow_mode(GROW_ALL);
+                    win.state_mut().options.tileable = true;
+                    let bar = win.standard_scroll_bar(ScrollBarOptions {
+                        vertical: true,
+                        handle_keyboard: false,
+                    });
+                    match layout {
+                        Layout::Plain => {
+                            let mut lb = ListBox::new(Rect::new(1, 1, 29, 11), 1, None, Some(bar));
+                            lb.state_mut().grow_mode = GROW_ALL;
+                            win.insert_child(Box::new(lb));
+                        }
+                        Layout::Nested => {
+                            let mut inner = Group::new(Rect::new(1, 1, 29, 11));
+                            inner.state_mut().grow_mode = GROW_ALL;
+                            let mut lb = ListBox::new(Rect::new(0, 0, 28, 10), 1, None, Some(bar));
+                            lb.state_mut().grow_mode = GROW_ALL;
+                            inner.insert(Box::new(lb));
+                            win.insert_child(Box::new(inner));
+                        }
+                        Layout::Splitter => {
+                            let mut sp = Splitter::rows();
+                            sp.insert(
+                                Box::new(ListBox::new(Rect::new(0, 0, 0, 0), 1, None, Some(bar))),
+                                Constraints::flex(),
+                            );
+                            sp.state_mut().grow_mode = GROW_ALL;
+                            let sp_id = win.insert_child(Box::new(sp));
+                            if let Some(v) = win.child_mut(sp_id) {
+                                v.change_bounds(Rect::new(1, 1, 29, 11));
+                            }
+                        }
+                    }
+                    let win_id = desktop.insert_view(Box::new(win));
+                    *ids_cap.borrow_mut() = Some((win_id, bar));
+                    Some(Box::new(desktop))
+                },
+                |_r| None,
+                |_r| None,
+            );
+            program.out_events.clear();
+            program.pump_once();
+            let (win_id, bar) = ids.borrow().expect("window built");
+            (program, handle, win_id, bar)
+        }
+
+        fn bar_page_step(program: &mut Program, bar: ViewId) -> i32 {
+            program
+                .group_mut()
+                .find_mut(bar)
+                .and_then(|v| v.as_any_mut())
+                .and_then(|a| a.downcast_mut::<ScrollBar>())
+                .expect("bar resolves")
+                .page_step
+        }
+
+        /// Resize the window through the deferred channel (the drag-resize /
+        /// tile / cascade path); two pumps: one applies the bounds, the next
+        /// applies the scroll-bar params the list box re-published.
+        fn resize_window_deferred(program: &mut Program, win: ViewId, r: Rect) {
+            program.deferred.push(Deferred::ChangeBounds(win, r));
+            pump_with_dispatch(program);
+            pump_with_dispatch(program);
+        }
+
+        /// Pump once with a benign broadcast queued, so the pass reaches its
+        /// deferred-apply loop.
+        fn pump_with_dispatch(program: &mut Program) {
+            program.out_events.push_back(Event::Broadcast {
+                command: Command::custom("test.noop"),
+                source: None,
+            });
+            program.pump_once();
+        }
+
+        #[test]
+        fn window_resize_republishes_list_box_page_step() {
+            let (mut program, _h, win, bar) = program_with_list_window(80, 25, Layout::Plain);
+            resize_window_deferred(&mut program, win, Rect::new(0, 0, 30, 18));
+            // The list box is now 16 rows tall: the resize page step is size.y.
+            assert_eq!(bar_page_step(&mut program, bar), 16);
+        }
+
+        #[test]
+        fn window_resize_reaches_list_box_in_nested_group() {
+            let (mut program, _h, win, bar) = program_with_list_window(80, 25, Layout::Nested);
+            resize_window_deferred(&mut program, win, Rect::new(0, 0, 30, 18));
+            assert_eq!(bar_page_step(&mut program, bar), 16);
+        }
+
+        #[test]
+        fn window_resize_reaches_list_box_in_splitter_pane() {
+            let (mut program, _h, win, bar) = program_with_list_window(80, 25, Layout::Splitter);
+            resize_window_deferred(&mut program, win, Rect::new(0, 0, 30, 18));
+            assert_eq!(bar_page_step(&mut program, bar), 16);
+        }
+
+        #[test]
+        fn terminal_resize_republishes_list_box_page_step() {
+            let (mut program, handle, _win, bar) = program_with_list_window(80, 25, Layout::Plain);
+            // Desktop 80×25 → 80×31 (no menu/status line): the window grows by
+            // 6 rows, the list box from 10 to 16.
+            handle.resize(80, 31);
+            program.pump_once();
+            program.pump_once();
+            assert_eq!(bar_page_step(&mut program, bar), 16);
+        }
+
+        #[test]
+        fn window_zoom_republishes_list_box_page_step() {
+            let (mut program, _h, _win, bar) = program_with_list_window(80, 25, Layout::Plain);
+            program.out_events.push_back(Event::Command(Command::ZOOM));
+            program.pump_once();
+            program.pump_once();
+            // Zoomed to the 80×25 desktop: the list box is 23 rows tall.
+            assert_eq!(bar_page_step(&mut program, bar), 23);
+        }
+
+        #[test]
+        fn tile_republishes_list_box_page_step() {
+            let (mut program, _h, _win, bar) = program_with_list_window(80, 25, Layout::Plain);
+            program.out_events.push_back(Event::Command(Command::TILE));
+            program.pump_once();
+            pump_with_dispatch(&mut program);
+            // The only window tiles to the 80×25 desktop: the list box is 23 rows.
+            assert_eq!(bar_page_step(&mut program, bar), 23);
+        }
+
+        #[test]
+        fn window_move_without_resize_does_not_republish() {
+            let (mut program, _h, win, bar) = program_with_list_window(80, 25, Layout::Plain);
+            let before = bar_page_step(&mut program, bar);
+            resize_window_deferred(&mut program, win, Rect::new(5, 2, 35, 14));
+            assert_eq!(bar_page_step(&mut program, bar), before);
+        }
     }
 }

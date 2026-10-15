@@ -1026,7 +1026,10 @@ pub trait View {
     ///
     /// Scrollers re-apply their scroll limit after a resize, and list viewers
     /// re-publish their step params; both do so by overriding this hook in their
-    /// respective concrete types.
+    /// respective concrete types. A [`Group`](crate::view::Group) whose size
+    /// changed forwards the call to every child, so the hook reaches views at
+    /// any depth. Every resize path (deferred bounds change, zoom, terminal
+    /// resize) ends with this call on the view it re-bounded.
     fn on_bounds_changed(&mut self, _ctx: &mut Context) {}
 
     /// The view-local hardware-cursor position this view wants shown, or `None` to
