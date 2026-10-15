@@ -21,6 +21,20 @@
 //! vertical scroll bar is an external sibling passed by id, the `ListBox`
 //! convention.
 //!
+//! # Layout
+//!
+//! Column widths follow the view width on every draw. Columns that do not fit
+//! shrink widest first, never below their
+//! [`min_width`](ColumnSpec::min_width); spare width goes to the
+//! [`flex`](ColumnSpec::flex) columns by weight (the cells the rounding leaves
+//! over go one each to the leftmost flex columns), or stays empty without
+//! one. When the columns still do not fit at their `min_width`s, they scroll
+//! horizontally by display cells: the header scrolls with the rows, the
+//! multi-select check column stays put, ←/→ scroll one cell, and an optional
+//! horizontal bar ([`Table::with_h_bar`]) shows and drives the offset
+//! ([`Table::h_offset`] / [`Table::set_h_offset`]). After a resize the table
+//! re-publishes both bars' ranges and page steps.
+//!
 //! # Data
 //!
 //! The rows come from a [`TableModel`] ([`VecModel`] for plain strings). The
@@ -30,8 +44,10 @@
 //!
 //! # Wiring
 //!
-//! Build with [`Table::new`] and [`Table::with_model`], insert, done: the
-//! table publishes its range and scroll steps to the bar on its first event.
+//! Build with [`Table::new`] and [`Table::with_model`] (plus
+//! [`Table::with_h_bar`] for a horizontal bar), insert, done: the table
+//! publishes its ranges and scroll steps to the bars on its first event or
+//! activation.
 //! Reload later with [`Table::set_model`].
 //!
 //! ```rust,ignore
@@ -117,6 +133,9 @@ struct TableData {
     pending: Vec<Command>,
     /// A header click waiting for the table to sort by that column.
     header_click: Option<usize>,
+    /// Horizontal scroll offset of the non-frozen columns, in display cells.
+    /// Clamped to the overflow wherever a layout is at hand (draw, publish).
+    h_offset: i32,
 }
 
 type Shared = Rc<RefCell<TableData>>;
@@ -185,8 +204,11 @@ pub struct Table {
     group: Group,
     data: Shared,
     body_id: ViewId,
-    /// Set until the range and scroll steps have been published to the bar —
-    /// that needs a [`Context`], which construction does not have.
+    /// The optional horizontal scroll bar ([`with_h_bar`](Self::with_h_bar)).
+    h_bar: Option<ViewId>,
+    /// Set until the range and scroll steps have been published to the bars —
+    /// that needs a [`Context`], which construction and
+    /// [`change_bounds`](View::change_bounds) do not have.
     needs_publish: bool,
 }
 
@@ -212,6 +234,7 @@ impl Table {
             focused: 0,
             pending: Vec::new(),
             header_click: None,
+            h_offset: 0,
         }));
         group.insert(Box::new(TableHeader::new(size.x, data.clone())));
         let body_bounds = Rect::new(0, 1, size.x, size.y.max(1));
@@ -224,8 +247,38 @@ impl Table {
             group,
             data,
             body_id,
+            h_bar: None,
             needs_publish: true,
         }
+    }
+
+    /// Builder: wire the horizontal scroll bar `h_bar` (an external sibling,
+    /// like the vertical one). It shows the horizontal scroll of the columns
+    /// once they no longer fit at their `min_width`; the table publishes its
+    /// range and steps itself.
+    pub fn with_h_bar(mut self, h_bar: ViewId) -> Self {
+        self.h_bar = Some(h_bar);
+        // The list viewer's bar wiring gives the bar its visibility and the
+        // changed/clicked broadcasts; the body turns its value into the
+        // table's offset.
+        self.body_mut().lv_state().h_scroll_bar = Some(h_bar);
+        self.needs_publish = true;
+        self
+    }
+
+    /// How far the columns are scrolled to the left, in display cells (0 when
+    /// they fit).
+    pub fn h_offset(&self) -> i32 {
+        let d = self.data.borrow();
+        body::row_layout(&d, self.group.state().size.x).clamp(d.h_offset)
+    }
+
+    /// Scroll the columns to `offset` display cells (clamped to the
+    /// overflow) and move the horizontal bar with them.
+    pub fn set_h_offset(&mut self, offset: i32, ctx: &mut Context) {
+        self.ensure_published(ctx);
+        self.data.borrow_mut().h_offset = offset;
+        self.publish_h(ctx);
     }
 
     /// Builder: the initial rows (no [`Context`] needed; the table publishes
@@ -293,7 +346,31 @@ impl Table {
         if len == 0 {
             self.data.borrow_mut().focused = 0;
         }
+        self.publish_h(ctx);
         self.needs_publish = false;
+    }
+
+    /// Clamp the horizontal offset to the current overflow and publish it,
+    /// the range (`0..=overflow`) and the steps (page = the visible width of
+    /// the scrolling columns, arrow = 1) to the horizontal bar.
+    fn publish_h(&mut self, ctx: &mut Context) {
+        let size_x = self.group.state().size.x;
+        let (off, max, page) = {
+            let mut d = self.data.borrow_mut();
+            let l = body::row_layout(&d, size_x);
+            d.h_offset = l.clamp(d.h_offset);
+            (d.h_offset, l.max_offset(), l.view)
+        };
+        if let Some(h) = self.h_bar {
+            ctx.request_scroll_bar_params(
+                h,
+                Some(off),
+                Some(0),
+                Some(max),
+                Some(page.max(1)),
+                Some(1),
+            );
+        }
     }
 
     /// Publish to the bar if construction left that pending.
@@ -437,6 +514,8 @@ impl Table {
         if let Some(c) = self.data.borrow_mut().columns.get_mut(col) {
             c.hidden = hidden;
         }
+        // The horizontal range changes with the visible columns.
+        self.needs_publish = true;
     }
 
     /// Whether column `col` is hidden (`false` for an unknown column).
@@ -519,9 +598,23 @@ impl View for Table {
         self.drain(ctx);
     }
 
-    /// Republish the body's scroll step for its new height.
+    /// Resize the header and the body (grow modes), and mark the bars for a
+    /// re-publish: the new size changes the vertical page step and the
+    /// horizontal range. There is no [`Context`] here, so the publish runs on
+    /// the table's next event or state change, or right away when the owner
+    /// calls [`on_bounds_changed`](View::on_bounds_changed).
+    fn change_bounds(&mut self, bounds: Rect) {
+        let old = self.group.state().size;
+        self.group.change_bounds(bounds);
+        if self.group.state().size != old {
+            self.needs_publish = true;
+        }
+    }
+
+    /// Re-publish the bars for the new size.
     fn on_bounds_changed(&mut self, ctx: &mut Context) {
-        self.body_mut().on_bounds_changed(ctx);
+        self.needs_publish = true;
+        self.ensure_published(ctx);
     }
 
     /// Single mode: the focused row's key as [`FieldValue::Text`] (`""` with

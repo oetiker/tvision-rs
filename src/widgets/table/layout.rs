@@ -60,6 +60,10 @@ pub struct ColumnSpec {
     pub align: Align,
     /// A hidden column takes no space at all (no cell, no separator).
     pub hidden: bool,
+    /// Stretch weight (0 = fixed, the default). When the visible columns are
+    /// narrower than the table, the spare cells go to the flex columns in
+    /// proportion to their weights.
+    pub flex: u16,
 }
 
 impl ColumnSpec {
@@ -71,6 +75,7 @@ impl ColumnSpec {
             min_width: 1,
             align: Align::Left,
             hidden: false,
+            flex: 0,
         }
     }
 
@@ -95,6 +100,13 @@ impl ColumnSpec {
     /// Builder: start hidden.
     pub fn hidden(mut self, hidden: bool) -> Self {
         self.hidden = hidden;
+        self
+    }
+
+    /// Builder: let this column stretch into spare width with `weight`
+    /// (0 = fixed). `width` stays the width it starts from.
+    pub fn flex(mut self, weight: u16) -> Self {
+        self.flex = weight;
         self
     }
 }
@@ -128,8 +140,11 @@ pub fn with_check_cell(w0: i32, check: &str, rest: String) -> String {
 /// keep their preferred width while everything (plus one separator between
 /// neighbouring visible columns) fits, else the currently widest shrinkable
 /// column loses one cell per pass until it fits or every column sits at its
-/// `min_width`. A layout that still does not fit is clipped by the view. With
-/// no room at all (`avail` at or below the separators) every width is 0.
+/// `min_width`. A layout that still does not fit is wider than `avail`; the
+/// table scrolls it horizontally. Spare cells go to the
+/// [`flex`](ColumnSpec::flex) columns by weight (see [`stretch`]); without one
+/// they stay empty. With no room at all (`avail` at or below the separators)
+/// every width is 0.
 pub fn layout_widths(cols: &[ColumnSpec], avail: i32) -> Vec<i32> {
     let mut widths: Vec<i32> = cols
         .iter()
@@ -154,7 +169,138 @@ pub fn layout_widths(cols: &[ColumnSpec], avail: i32) -> Vec<i32> {
         widths[i] -= 1;
         over -= 1;
     }
+    if over < 0 {
+        stretch(cols, &mut widths, -over);
+    }
     widths
+}
+
+/// Give `spare` cells to the visible, non-zero-width flex columns: each gets
+/// `spare * weight / total_weight` (rounded down), and the cells the rounding
+/// leaves over go one each to the leftmost flex columns. Without a flex column
+/// nothing changes.
+pub fn stretch(cols: &[ColumnSpec], widths: &mut [i32], spare: i32) {
+    let flex: Vec<usize> = (0..cols.len())
+        .filter(|&i| !cols[i].hidden && cols[i].flex > 0 && widths[i] > 0)
+        .collect();
+    let total: i64 = flex.iter().map(|&i| i64::from(cols[i].flex)).sum();
+    if total == 0 || spare <= 0 {
+        return;
+    }
+    let mut left = spare;
+    for &i in &flex {
+        let share = (i64::from(spare) * i64::from(cols[i].flex) / total) as i32;
+        widths[i] += share;
+        left -= share;
+    }
+    // The rounding remainder is below the number of flex columns.
+    for &i in flex.iter().take(left as usize) {
+        widths[i] += 1;
+    }
+}
+
+/// The width of a line of `widths` joined with one-cell separators (zero-width
+/// columns take no cell and no separator).
+pub fn line_width(widths: &[i32]) -> i32 {
+    let shown: Vec<i32> = widths.iter().copied().filter(|&w| w > 0).collect();
+    shown.iter().sum::<i32>() + (shown.len() as i32 - 1).max(0)
+}
+
+/// The horizontal geometry of a table row for one view width: the leading
+/// `frozen` layout columns (the check column) stay put, the rest scroll.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RowLayout {
+    /// The width of every layout column, frozen ones first.
+    pub widths: Vec<i32>,
+    /// How many leading layout columns are frozen.
+    pub frozen: usize,
+    /// Cells the frozen part takes, its trailing separator included.
+    pub frozen_width: i32,
+    /// The full width of the scrolling part.
+    pub content: i32,
+    /// The cells the scrolling part has on screen.
+    pub view: i32,
+}
+
+impl RowLayout {
+    /// Lay `cols` out over `avail` cells with the first `frozen` columns fixed.
+    pub fn new(cols: &[ColumnSpec], frozen: usize, avail: i32) -> Self {
+        let widths = layout_widths(cols, avail);
+        let frozen = frozen.min(widths.len());
+        let content = line_width(&widths[frozen..]);
+        let mut frozen_width = line_width(&widths[..frozen]);
+        if frozen_width > 0 && content > 0 {
+            frozen_width += 1;
+        }
+        RowLayout {
+            view: (avail.max(0) - frozen_width).max(0),
+            widths,
+            frozen,
+            frozen_width,
+            content,
+        }
+    }
+
+    /// The largest horizontal offset: how far the scrolling part overflows.
+    pub fn max_offset(&self) -> i32 {
+        (self.content - self.view).max(0)
+    }
+
+    /// `offset` clamped into `0..=max_offset()`.
+    pub fn clamp(&self, offset: i32) -> i32 {
+        offset.clamp(0, self.max_offset())
+    }
+
+    /// The on-screen text of a row: the `frozen` cell text (the check cell),
+    /// then the scrolling `rest` (a full-width line over
+    /// `widths[frozen..]`) cut to the view from `offset`.
+    pub fn compose(&self, frozen: &str, rest: &str, offset: i32) -> String {
+        let shown = slice_cols(rest, self.clamp(offset), self.view);
+        match self.frozen {
+            0 => shown,
+            _ => with_check_cell(self.widths[0], frozen, shown),
+        }
+    }
+
+    /// The layout column under text-relative column `x` at `offset`, or
+    /// `None` (a separator, or no column there).
+    pub fn column_at(&self, x: i32, offset: i32) -> Option<usize> {
+        if x < 0 {
+            return None;
+        }
+        if x < self.frozen_width {
+            return column_at(&self.widths[..self.frozen], x);
+        }
+        let sx = x - self.frozen_width;
+        if sx >= self.view {
+            return None;
+        }
+        column_at(&self.widths[self.frozen..], sx + self.clamp(offset)).map(|c| c + self.frozen)
+    }
+}
+
+/// The part of `s` from display column `skip` that fits in `width` display
+/// columns. A wide glyph cut by either edge turns into spaces for its visible
+/// half, so the result never starts mid-glyph.
+pub fn slice_cols(s: &str, skip: i32, width: i32) -> String {
+    let (skip, end) = (skip.max(0) as usize, (skip.max(0) + width.max(0)) as usize);
+    let mut out = String::new();
+    let mut col = 0;
+    for g in s.graphemes(true) {
+        if col >= end {
+            break;
+        }
+        let gw = text::width(g);
+        let next = col + gw;
+        if col >= skip && next <= end {
+            out.push_str(g);
+        } else if next > skip {
+            // Cut by an edge: pad the visible part.
+            out.push_str(&" ".repeat(next.min(end) - col.max(skip)));
+        }
+        col = next;
+    }
+    out
 }
 
 /// Fit `cell` into exactly `width` display columns: pad with spaces per
@@ -447,6 +593,89 @@ mod tests {
         assert_eq!(text::width(&line), 12, "fills avail exactly");
         assert_eq!(with_check_cell(0, "[X]", "rest".into()), "rest");
         assert_eq!(with_check_cell(3, "[ ]", String::new()), "[ ]");
+    }
+
+    #[test]
+    fn flex_columns_take_the_spare_width_by_weight() {
+        // avail 30 − 2 separators = 28; wanted 15 → 13 spare, weights 2:1.
+        let cols = [col("A", 5).flex(2), col("B", 5), col("C", 5).flex(1)];
+        let w = layout_widths(&cols, 30);
+        // 13·2/3 = 8, 13·1/3 = 4, remainder 1 → the leftmost flex column.
+        assert_eq!(w, vec![5 + 8 + 1, 5, 5 + 4]);
+        assert_eq!(line_width(&w), 30, "fills avail exactly");
+    }
+
+    #[test]
+    fn flex_remainder_goes_one_cell_each_to_the_leftmost() {
+        // avail 10 − 2 = 8; wanted 3 → 5 spare over three equal weights.
+        let cols = [
+            col("A", 1).flex(1),
+            col("B", 1).flex(1),
+            col("C", 1).flex(1),
+        ];
+        assert_eq!(layout_widths(&cols, 10), vec![3, 3, 2]);
+    }
+
+    #[test]
+    fn without_flex_the_spare_stays_empty_and_hidden_flex_gets_none() {
+        assert_eq!(layout_widths(&[col("A", 5), col("B", 5)], 30), vec![5, 5]);
+        let cols = [col("A", 5).flex(1).hidden(true), col("B", 5)];
+        assert_eq!(layout_widths(&cols, 30), vec![0, 5]);
+        let cols = [col("A", 5).flex(1), col("B", 5)];
+        assert_eq!(
+            layout_widths(&cols, 8),
+            vec![4, 3],
+            "no spare: flex columns shrink like the others"
+        );
+    }
+
+    #[test]
+    fn row_layout_overflows_only_past_min_width() {
+        let cols = [col("A", 10).min_width(8), col("B", 10).min_width(8)];
+        // Shrinkable to fit: no overflow.
+        let l = RowLayout::new(&cols, 0, 17);
+        assert_eq!((l.content, l.view, l.max_offset()), (17, 17, 0));
+        // 8 + 1 + 8 = 17 cells of content in 12: overflow by 5.
+        let l = RowLayout::new(&cols, 0, 12);
+        assert_eq!((l.content, l.view, l.max_offset()), (17, 12, 5));
+        assert_eq!(l.clamp(-3), 0);
+        assert_eq!(l.clamp(3), 3);
+        assert_eq!(l.clamp(99), 5, "the offset clamps to the overflow");
+    }
+
+    #[test]
+    fn row_layout_keeps_the_frozen_column_out_of_the_scroll() {
+        let cols = [
+            check_column(),
+            col("A", 6).min_width(6),
+            col("B", 6).min_width(6),
+        ];
+        // 3 + 1 frozen; 13 content cells in 16 − 4 = 12.
+        let l = RowLayout::new(&cols, 1, 16);
+        assert_eq!((l.frozen_width, l.content, l.view), (4, 13, 12));
+        assert_eq!(l.max_offset(), 1);
+        let rest = "aaaaaa bbbbbb";
+        assert_eq!(l.compose("[X]", rest, 0), "[X] aaaaaa bbbbb");
+        assert_eq!(l.compose("[X]", rest, 1), "[X] aaaaa bbbbbb");
+        assert_eq!(l.compose("[X]", rest, 9), "[X] aaaaa bbbbbb", "clamped");
+        // Hit test: the frozen cell, then the scrolled columns.
+        assert_eq!(l.column_at(1, 1), Some(0));
+        assert_eq!(l.column_at(3, 1), None, "frozen separator");
+        assert_eq!(l.column_at(4, 0), Some(1));
+        assert_eq!(l.column_at(9, 0), Some(1));
+        assert_eq!(l.column_at(9, 1), None, "scrolled: now the separator");
+        assert_eq!(l.column_at(10, 1), Some(2));
+        assert_eq!(l.column_at(16, 1), None, "past the view");
+    }
+
+    #[test]
+    fn slice_cols_cuts_by_display_columns() {
+        assert_eq!(slice_cols("abcdef", 2, 3), "cde");
+        assert_eq!(slice_cols("abc", 1, 9), "bc");
+        assert_eq!(slice_cols("abc", 5, 2), "");
+        // A wide glyph cut by the left or the right edge leaves a space.
+        assert_eq!(slice_cols("日本語", 1, 4), " 本 ");
+        assert_eq!(slice_cols("日本語", 2, 4), "本語");
     }
 
     #[test]

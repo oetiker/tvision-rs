@@ -94,6 +94,12 @@ impl Fixture {
             .collect()
     }
 
+    /// Run `f` on the table; return the deferred effects it queued.
+    fn with_deferred(&mut self, f: impl FnOnce(&mut Table, &mut Context)) -> Vec<Deferred> {
+        let t = self.t();
+        deferred_of(|ctx| f(t, ctx))
+    }
+
     /// Run `f` on the table.
     fn with(&mut self, f: impl FnOnce(&mut Table, &mut Context)) -> Broadcasts {
         let id = self.id;
@@ -189,13 +195,14 @@ fn focus_reaches_the_body() {
     assert!(!fx.t().body_mut().lv().state.state.focused);
 }
 
-/// The `max` and `page_step` the deferred queue sends to scroll bar `bar`.
+/// The `max` and `page_step` the deferred queue leaves on scroll bar `bar`
+/// (the last request wins, as when the pump applies them in order).
 fn bar_params(deferred: &[Deferred], bar: ViewId) -> (Option<i32>, Option<i32>) {
-    let max = deferred.iter().find_map(|d| match d {
+    let max = deferred.iter().rev().find_map(|d| match d {
         Deferred::ScrollBarSetParams { id, max, .. } if *id == bar => *max,
         _ => None,
     });
-    let page = deferred.iter().find_map(|d| match d {
+    let page = deferred.iter().rev().find_map(|d| match d {
         Deferred::ScrollBarSetParams { id, page_step, .. } if *id == bar => *page_step,
         _ => None,
     });
@@ -699,4 +706,196 @@ fn snapshot_row_role() {
     fx.key(Key::Down);
     fx.key(Key::Down);
     insta::assert_snapshot!(fx.render(W as u16, H as u16));
+}
+
+// -- layout: stretch and horizontal scroll -----------------------------------
+
+/// A bar id minted by a throwaway group (the table only needs the id).
+fn mint_bar() -> ViewId {
+    let mut mint = Group::new(Rect::new(0, 0, 4, 4));
+    mint.insert(Box::new(Group::new(Rect::new(0, 0, 1, 1))))
+}
+
+/// The fixture columns, none shrinkable: 4 + 10 + 8 + 5 plus three
+/// separators = 30 content cells.
+fn fixed_columns() -> Vec<ColumnSpec> {
+    columns()
+        .into_iter()
+        .map(|c| {
+            let w = c.width;
+            c.min_width(w)
+        })
+        .collect()
+}
+
+/// A multi-mode table `w` wide over the fixed columns: the check cell and
+/// its separator take 4 of the `w - 1` text cells, the rest scroll.
+fn scrolling(w: i32, h_bar: Option<ViewId>) -> Fixture {
+    let mut t = Table::new(Rect::new(0, 0, w, H), fixed_columns(), None)
+        .with_model(model(&ROWS))
+        .with_selection_mode(SelectionMode::Multi);
+    if let Some(bar) = h_bar {
+        t = t.with_h_bar(bar);
+    }
+    let mut fx = Fixture::new(t);
+    fx.focus(true);
+    fx
+}
+
+/// The `value` the deferred queue last sends to scroll bar `bar`.
+fn bar_value(deferred: &[Deferred], bar: ViewId) -> Option<i32> {
+    deferred.iter().rev().find_map(|d| match d {
+        Deferred::ScrollBarSetParams { id, value, .. } if *id == bar => *value,
+        _ => None,
+    })
+}
+
+#[test]
+fn flex_column_takes_the_spare_width() {
+    let mut cols = columns();
+    cols[1] = cols[1].clone().flex(1);
+    let mut fx =
+        Fixture::new(Table::new(Rect::new(0, 0, W + 6, H), cols, None).with_model(model(&ROWS)));
+    let d = fx.t().data.clone();
+    let l = body::row_layout(&d.borrow(), W + 6);
+    assert_eq!(l.widths, vec![4, 16, 8, 5], "NAME took all six spare cells");
+    assert_eq!(fx.t().h_offset(), 0);
+}
+
+#[test]
+fn columns_that_fit_do_not_scroll_and_arrows_bubble() {
+    let mut fx = Fixture::table();
+    fx.focus(true);
+    for k in [Key::Left, Key::Right] {
+        let (ev, _) = fx.send(Event::KeyDown(KeyEvent::new(k, KeyModifiers::default())));
+        assert!(!ev.is_nothing(), "{k:?} must bubble: nothing to scroll");
+    }
+    fx.with(|t, ctx| t.set_h_offset(5, ctx));
+    assert_eq!(fx.t().h_offset(), 0, "clamped to no overflow");
+}
+
+#[test]
+fn arrows_scroll_by_one_cell_within_the_overflow() {
+    // 20 text cells − 4 frozen = 16 visible of 30 → overflow 14.
+    let bar = mint_bar();
+    let mut fx = scrolling(21, Some(bar));
+    let (ev, _) = fx.send(Event::KeyDown(KeyEvent::new(
+        Key::Right,
+        KeyModifiers::default(),
+    )));
+    assert!(ev.is_nothing(), "Right consumed while the columns overflow");
+    assert_eq!(fx.t().h_offset(), 1);
+    fx.key(Key::Left);
+    fx.key(Key::Left);
+    assert_eq!(fx.t().h_offset(), 0, "clamped at the left edge");
+    for _ in 0..20 {
+        fx.key(Key::Right);
+    }
+    assert_eq!(fx.t().h_offset(), 14, "clamped at the overflow");
+    assert_eq!(fx.t().focused_row(), Some(0), "rows did not move");
+    // The bar follows a key scroll.
+    let mut ev = Event::KeyDown(KeyEvent::new(Key::Left, KeyModifiers::default()));
+    let id = fx.id;
+    let mut deferred = vec![];
+    {
+        let mut out = VecDeque::new();
+        let mut timers = TimerQueue::new();
+        let mut ctx = Context::new(&mut out, &mut timers, 0, &mut deferred);
+        fx.owner
+            .child_mut(id)
+            .unwrap()
+            .handle_event(&mut ev, &mut ctx);
+    }
+    assert_eq!(bar_value(&deferred, bar), Some(13));
+}
+
+#[test]
+fn the_h_bar_gets_the_overflow_as_range_and_the_view_as_page() {
+    let bar = mint_bar();
+    let mut owner = Group::new(Rect::new(0, 0, 60, 20));
+    owner.insert(Box::new(
+        Table::new(Rect::new(0, 0, 21, H), fixed_columns(), None)
+            .with_model(model(&ROWS))
+            .with_selection_mode(SelectionMode::Multi)
+            .with_h_bar(bar),
+    ));
+    let deferred = deferred_of(|ctx| owner.set_state(StateFlag::Active, true, ctx));
+    assert_eq!(bar_params(&deferred, bar), (Some(14), Some(16)));
+    assert_eq!(bar_value(&deferred, bar), Some(0));
+}
+
+#[test]
+fn the_h_bar_moves_the_offset() {
+    let bar = mint_bar();
+    let mut fx = scrolling(21, Some(bar));
+    fx.with(|t, ctx| t.body_mut().apply_scroll_sync(Some(6), None, ctx));
+    assert_eq!(fx.t().h_offset(), 6);
+    assert_eq!(fx.t().focused_row(), Some(0), "the v branch is untouched");
+}
+
+#[test]
+fn resize_republishes_both_bars() {
+    let (v, h) = (mint_bar(), mint_bar());
+    let mut fx = Fixture::new(
+        Table::new(Rect::new(0, 0, 21, H), fixed_columns(), Some(v))
+            .with_model(model(&ROWS))
+            .with_selection_mode(SelectionMode::Multi)
+            .with_h_bar(h),
+    );
+    fx.with(|t, ctx| t.set_h_offset(12, ctx));
+    // Grow 6 wider and 2 taller, as a window resize does.
+    fx.t().change_bounds(Rect::new(0, 0, 27, H + 2));
+    let deferred = fx.with_deferred(|t, ctx| t.set_state(StateFlag::Active, true, ctx));
+    assert_eq!(
+        bar_params(&deferred, h),
+        (Some(8), Some(22)),
+        "overflow 30 − 22"
+    );
+    assert_eq!(
+        bar_value(&deferred, h),
+        Some(8),
+        "the offset clamps into it"
+    );
+    assert_eq!(
+        bar_params(&deferred, v).1,
+        Some(H + 2 - 1 - 1),
+        "page step = new body height − 1"
+    );
+    // The owner's on_bounds_changed publishes right away.
+    fx.t().change_bounds(Rect::new(0, 0, 40, H));
+    let deferred = fx.with_deferred(|t, ctx| t.on_bounds_changed(ctx));
+    assert_eq!(bar_params(&deferred, h).0, Some(0), "everything fits");
+}
+
+#[test]
+fn header_click_hits_the_scrolled_column() {
+    let mut fx = scrolling(21, None);
+    fx.with(|t, ctx| t.set_h_offset(5, ctx));
+    // Text x 4 is the first scrolled cell: content cell 5 = NAME (ID is
+    // 0..4, its separator 4). Screen x = text x + 1.
+    fx.click(5, 0);
+    assert_eq!(fx.t().sort_spec(), Some((1, SortDir::Asc)));
+    // The frozen check cell still toggles the row.
+    fx.click(2, 2);
+    assert_eq!(keys(fx.t().selected_keys()), ["b2"]);
+}
+
+#[test]
+fn snapshot_stretched() {
+    let mut cols = columns();
+    cols[1] = cols[1].clone().flex(2);
+    cols[2] = cols[2].clone().flex(1);
+    let mut fx =
+        Fixture::new(Table::new(Rect::new(0, 0, W + 9, H), cols, None).with_model(model(&ROWS)));
+    fx.focus(true);
+    insta::assert_snapshot!(fx.render(W as u16 + 9, H as u16));
+}
+
+#[test]
+fn snapshot_h_scrolled() {
+    let mut fx = scrolling(21, None);
+    fx.key(Key::Char(' '));
+    fx.with(|t, ctx| t.set_h_offset(7, ctx));
+    // Header and rows scroll together; the check column stays put.
+    insta::assert_snapshot!(fx.render(21, H as u16));
 }

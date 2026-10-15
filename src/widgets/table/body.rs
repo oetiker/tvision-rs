@@ -2,12 +2,12 @@
 //! and the row list. Both read the table's shared data; neither is public.
 
 use crate::command::Command;
-use crate::event::Event;
+use crate::event::{Event, Key};
 use crate::theme::Role;
 use crate::view::{Context, DrawCtx, GrowMode, Point, Rect, StateFlag, View, ViewId, ViewState};
 use crate::widgets::list_viewer::{self, ListViewer, ListViewerState};
 
-use super::layout::{column_at, format_line, header_line, layout_widths, with_check_cell};
+use super::layout::{RowLayout, format_line, header_line};
 use super::{SelectionMode, Shared, TableData};
 use crate::widgets::cluster::check_box;
 
@@ -20,10 +20,10 @@ fn text_width(size_x: i32) -> i32 {
     (size_x - TEXT_X).max(0)
 }
 
-/// The layout widths (the check column first in multi mode) for a view
-/// `size_x` wide.
-fn widths(d: &TableData, size_x: i32) -> Vec<i32> {
-    layout_widths(&d.layout_columns(), text_width(size_x))
+/// The row geometry for a view `size_x` wide: the layout widths (the frozen
+/// check column first in multi mode) and the horizontal scroll extent.
+pub(super) fn row_layout(d: &TableData, size_x: i32) -> RowLayout {
+    RowLayout::new(&d.layout_columns(), d.check_cols(), text_width(size_x))
 }
 
 // ---------------------------------------------------------------------------
@@ -62,29 +62,23 @@ impl View for TableHeader {
         let style = ctx.style(Role::TableHeader);
         ctx.fill(self.state.get_extent(), ' ', style);
         let d = self.data.borrow();
-        let w = widths(&d, self.state.size.x);
-        let k = d.check_cols();
-        let line = header_line(&d.columns, &w[k..], d.sort);
-        // The check column's header cell is blank.
-        let line = if k > 0 {
-            with_check_cell(w[0], "", line)
-        } else {
-            line
-        };
-        ctx.put_str(TEXT_X, 0, &line, style);
+        let l = row_layout(&d, self.state.size.x);
+        let labels = header_line(&d.columns, &l.widths[l.frozen..], d.sort);
+        // The labels scroll with the rows; the check column's header cell is
+        // blank.
+        ctx.put_str(TEXT_X, 0, &l.compose("", &labels, d.h_offset), style);
     }
 
     fn handle_event(&mut self, ev: &mut Event, _ctx: &mut Context) {
         if let Event::MouseDown(me) = *ev {
             let mut d = self.data.borrow_mut();
-            let w = widths(&d, self.state.size.x);
-            let k = d.check_cols();
-            // Layout columns before `k` are the check column: its blank
+            let l = row_layout(&d, self.state.size.x);
+            // Layout columns before `frozen` are the check column: its blank
             // header cell does nothing.
-            if let Some(col) = column_at(&w, me.position.x - TEXT_X)
-                && col >= k
+            if let Some(col) = l.column_at(me.position.x - TEXT_X, d.h_offset)
+                && col >= l.frozen
             {
-                d.header_click = Some(col - k);
+                d.header_click = Some(col - l.frozen);
             }
             ev.clear();
         }
@@ -101,13 +95,16 @@ impl View for TableHeader {
 pub(super) struct TableBody {
     lv: ListViewerState,
     data: Shared,
-    /// Column widths for the current view width, refreshed by every `draw`
-    /// before the shared draw calls back into `get_text`.
-    widths: Vec<i32>,
+    /// The row geometry for the current view width, refreshed by every
+    /// `draw` before the shared draw calls back into `get_text`.
+    layout: RowLayout,
 }
 
 impl TableBody {
     /// The row list below the header, wired to the optional vertical bar.
+    /// The horizontal bar, if any, is set later by the table; it moves the
+    /// table's `h_offset`, never the list viewer's own `indent` (that would
+    /// scroll the frozen check column too).
     pub(super) fn new(bounds: Rect, v_scroll_bar: Option<ViewId>, data: Shared) -> Self {
         let mut lv = ListViewerState::new(bounds, 1, None, v_scroll_bar);
         lv.state.grow_mode = GrowMode {
@@ -118,7 +115,7 @@ impl TableBody {
         TableBody {
             lv,
             data,
-            widths: Vec::new(),
+            layout: RowLayout::new(&[], 0, 0),
         }
     }
 
@@ -128,8 +125,38 @@ impl TableBody {
         if d.mode != SelectionMode::Multi {
             return false;
         }
-        let w = widths(&d, self.lv.state.size.x);
-        column_at(&w, x - TEXT_X) == Some(0)
+        let l = row_layout(&d, self.lv.state.size.x);
+        l.column_at(x - TEXT_X, d.h_offset) == Some(0)
+    }
+
+    /// ←/→ (no Ctrl/Alt) scroll the columns one cell while they overflow the
+    /// view; returns whether the key was used. A table without overflow lets
+    /// the keys bubble.
+    fn scroll_key(&mut self, ev: &Event, ctx: &mut Context) -> bool {
+        let Event::KeyDown(ke) = *ev else {
+            return false;
+        };
+        if ke.modifiers.ctrl || ke.modifiers.alt {
+            return false;
+        }
+        let step = match ke.key {
+            Key::Left => -1,
+            Key::Right => 1,
+            _ => return false,
+        };
+        let off = {
+            let mut d = self.data.borrow_mut();
+            let l = row_layout(&d, self.lv.state.size.x);
+            if l.max_offset() == 0 {
+                return false;
+            }
+            d.h_offset = l.clamp(d.h_offset + step);
+            d.h_offset
+        };
+        if let Some(h) = self.lv.h_scroll_bar {
+            ctx.request_scroll_bar_params(h, Some(off), None, None, None, None);
+        }
+        true
     }
 
     /// Mutable access to the list-viewer state, for the table's focus moves.
@@ -152,18 +179,20 @@ impl ListViewer for TableBody {
         let Some(&row) = d.order.get(item as usize) else {
             return String::new();
         };
-        let k = d.check_cols();
-        let Some(rest_widths) = self.widths.get(k..) else {
+        let l = &self.layout;
+        let Some(rest_widths) = l.widths.get(l.frozen..) else {
             return String::new();
         };
         let line = format_line(&*d.model, row, rest_widths, &d.columns);
-        if k == 0 {
-            return line;
-        }
-        let marked = d
-            .key_at(item as usize)
-            .is_some_and(|k| d.selected.contains(&k));
-        with_check_cell(self.widths[0], &check_box(marked), line)
+        let check = if l.frozen > 0 {
+            let marked = d
+                .key_at(item as usize)
+                .is_some_and(|k| d.selected.contains(&k));
+            check_box(marked)
+        } else {
+            String::new()
+        };
+        l.compose(&check, &line, d.h_offset)
     }
 
     fn is_selected(&self, item: i32) -> bool {
@@ -220,14 +249,27 @@ impl View for TableBody {
     }
 
     fn draw(&mut self, ctx: &mut DrawCtx) {
-        self.widths = widths(&self.data.borrow(), self.lv.state.size.x);
+        {
+            let mut d = self.data.borrow_mut();
+            self.layout = row_layout(&d, self.lv.state.size.x);
+            // A wider view may have shrunk the overflow under the offset.
+            d.h_offset = self.layout.clamp(d.h_offset);
+        }
+        // The table scrolls by `h_offset` (frozen check column); the list
+        // viewer's own indent stays 0.
+        self.lv.indent = 0;
         list_viewer::draw(self, ctx);
     }
 
-    /// The shared list-viewer handling, plus: in multi mode a single click on
-    /// a row's check cell also toggles that row's mark (after the click
-    /// focused it). A double-click already toggles through `select_item`.
+    /// The shared list-viewer handling, plus: ←/→ scroll the columns while
+    /// they overflow, and in multi mode a single click on a row's check cell
+    /// also toggles that row's mark (after the click focused it). A
+    /// double-click already toggles through `select_item`.
     fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
+        if self.scroll_key(ev, ctx) {
+            ev.clear();
+            return;
+        }
         let check_click = match *ev {
             Event::MouseDown(me) if !me.flags.double_click && self.on_check_cell(me.position.x) => {
                 Some(me.position.y + self.lv.top_item)
@@ -247,16 +289,17 @@ impl View for TableBody {
         list_viewer::set_state(self, flag, enable, ctx);
     }
 
-    fn on_bounds_changed(&mut self, ctx: &mut Context) {
-        list_viewer::on_bounds_changed(self, ctx);
-    }
-
     fn cursor_request(&self) -> Option<Point> {
         list_viewer::focused_cursor(self)
     }
 
+    /// The horizontal bar moves the table's `h_offset` (the check column
+    /// stays frozen); the vertical bar goes the list-viewer way.
     fn apply_scroll_sync(&mut self, h: Option<i32>, v: Option<i32>, ctx: &mut Context) {
-        list_viewer::apply_scroll(self, h, v, ctx);
+        if let Some(hv) = h {
+            self.data.borrow_mut().h_offset = hv.max(0);
+        }
+        list_viewer::apply_scroll(self, None, v, ctx);
     }
 
     fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
