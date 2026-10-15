@@ -13641,6 +13641,37 @@ mod tests {
             assert_eq!(handle.cursor(), Some((4, 3)));
         }
 
+        /// Only the pump's root-extent clip can hide this caret: the desktop is
+        /// wider than the 40-column screen, so every group on the chain sees the
+        /// caret inside its child, but it lands at screen column 44.
+        #[test]
+        fn caret_hidden_past_the_screen_edge() {
+            let (backend, handle) = HeadlessBackend::new(40, 12);
+            let mut program = Program::new(
+                Box::new(backend),
+                Box::new(Rc::new(ManualClock::new(0))),
+                Theme::classic_blue(),
+                |r| {
+                    let wide = Rect::new(r.a.x, r.a.y, r.b.x + 40, r.b.y);
+                    let mut desktop = Desktop::new(wide, |r2| Some(Desktop::init_background(r2)));
+                    let mut win = Window::new(Rect::new(42, 2, 62, 8), Some("A".into()), 1);
+                    win.insert_child(Box::new(InputLine::with_limit(Rect::new(1, 1, 15, 2), 20)));
+                    desktop.insert_view(Box::new(win));
+                    Some(Box::new(desktop))
+                },
+                |_r| None,
+                |_r| None,
+            );
+            program.out_events.clear();
+            program.pump_once();
+            // The walk below the root does yield the caret.
+            assert_eq!(
+                program.group_mut().cursor_request(),
+                Some(Point::new(44, 3))
+            );
+            assert_eq!(handle.cursor(), None);
+        }
+
         #[test]
         fn caret_hidden_under_window_above_focused_window() {
             let (_p, handle) = program_with_caret(Some(Rect::new(3, 1, 18, 6)));
