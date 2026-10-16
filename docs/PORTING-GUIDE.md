@@ -541,6 +541,11 @@ never `sleep` (this is also what makes timing deterministic under test, D11).
 > at row 34). **Phase-4 breadcrumb:** when menus + multiple windows + a modal
 > coexist, suppress program-level command interception while a modal is active
 > (C++'s nested `p->execute()` does this structurally).
+> *Done for view routing:* while a modal executes, `program_handle_event` hands
+> focused events (key, command, paste) to the modal view itself instead of the
+> root group, so the menu bar's pre-process hot keys and item accelerators stay
+> silent under a dialog (`CaptureStack::modal_view`). The program-level Alt-N and
+> `cmQuit` catches above are unchanged.
 >
 > **`endModal` is downward (no up-pointer, D3).** `TDialog::handleEvent` cannot call
 > `Program::endModal` (it has `&mut Context`, not the program). It signals through a

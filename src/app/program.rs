@@ -2494,9 +2494,11 @@ impl Program {
                             // routing.
                             let consumed = captures.dispatch(&mut ev, &mut ctx);
                             if !consumed {
+                                let modal = captures.modal_view();
                                 program_handle_event(
                                     group,
                                     *desktop,
+                                    modal,
                                     &mut ev,
                                     &mut ctx,
                                     end_state,
@@ -3967,6 +3969,7 @@ fn resolve_shell_msg(hook: &Option<Box<dyn Fn() -> String>>) -> String {
 fn program_handle_event(
     group: &mut Group,
     desktop: Option<ViewId>,
+    modal: Option<ViewId>,
     ev: &mut Event,
     ctx: &mut Context,
     end_state: &mut Option<Command>,
@@ -4018,7 +4021,22 @@ fn program_handle_event(
         }
     }
 
-    group.handle_event(ev, ctx);
+    // While a modal view executes, a focused event (key, command, paste) goes
+    // to that view alone. C++ `TGroup::execute` (tgroup.cpp:180) calls the
+    // modal view's own `handleEvent`, so the application group's pre-/post-
+    // process views — the menu bar's title hot keys and item accelerators —
+    // never see it. Routing through the root group here would run its
+    // pre-process phase and fire the menu bar under the dialog. Positional
+    // and broadcast events keep the root route: the ModalFrame already gates
+    // mouse events to the modal's bounds, and broadcasts fan out by design.
+    match modal {
+        Some(id) if matches!(ev, Event::KeyDown(_) | Event::Command(_) | Event::Paste(_)) => {
+            if let Some(v) = group.find_mut(id) {
+                v.handle_event(ev, ctx);
+            }
+        }
+        _ => group.handle_event(ev, ctx),
+    }
 
     // C++: endModal(cmQuit); clearEvent(event).
     if *ev == Event::Command(Command::QUIT) {
@@ -9746,6 +9764,84 @@ mod tests {
         program.pump_once(); // highlight File, NO box
         program.out_events.push_back(key(Key::Down));
         program.pump_once(); // bar kbDown → autoSelect → open File box
+    }
+
+    /// Menu-bar keys do not fire while a modal dialog executes. C++
+    /// `TGroup::execute` (tgroup.cpp:180) hands each event only to the modal
+    /// view's own `handleEvent`, so the menu bar's pre-process hot keys (Alt+F
+    /// title, F3 item accelerator) never see it; only `TProgram::getEvent`'s
+    /// status-line pre-route (tprogram.cpp:153) sits outside the modal view.
+    /// Control: without the modal, the same keys reach the bar.
+    #[test]
+    fn menu_bar_keys_do_not_fire_during_modal() {
+        let open_cmds = |p: &Program| {
+            p.out_events
+                .iter()
+                .filter(|e| matches!(e, Event::Command(c) if *c == Cmd::OPEN))
+                .count()
+        };
+
+        // Control: no modal → Alt+F arms the menu session, F3 posts cmOpen.
+        {
+            let (mut program, bar_id, _baseline) = program_with_menu_bar(60, 20);
+            program.out_events.push_back(Event::KeyDown(alt('f')));
+            program.pump_once();
+            assert_eq!(program.capture_len(), 1, "control: Alt+F opens the menu");
+            assert_eq!(bar_current(&mut program, bar_id), Some(0));
+
+            let (mut program, _bar_id, _baseline) = program_with_menu_bar(60, 20);
+            program.out_events.push_back(key(Key::F(3)));
+            program.pump_once();
+            assert_eq!(open_cmds(&program), 1, "control: F3 posts cmOpen");
+        }
+
+        // Modal: replicate exec_view's setup (modal state + focus + ModalFrame).
+        let (mut program, bar_id, _baseline) = program_with_menu_bar(60, 20);
+        let id = program.group_mut().insert(Box::new(Dialog::new(
+            Rect::new(10, 4, 50, 16),
+            Some("D".into()),
+        )));
+        if let Some(v) = program.group_mut().find_mut(id) {
+            let st = v.state_mut();
+            st.options.selectable = false;
+            st.state.modal = true;
+        }
+        program.with_ctx(|g, ctx| g.set_current(Some(id), SelectMode::Enter, ctx));
+        let bounds = program
+            .group_mut()
+            .find_mut(id)
+            .unwrap()
+            .state()
+            .get_bounds();
+        program.captures.push(Box::new(ModalFrame::new(id, bounds)));
+        for _ in 0..3 {
+            program.pump_once();
+        }
+        program.out_events.clear();
+        let len = program.group_mut().len();
+
+        program.out_events.push_back(key(Key::F(3)));
+        program.pump_once();
+        assert_eq!(
+            open_cmds(&program),
+            0,
+            "a menu item accelerator posts nothing during a modal"
+        );
+        assert_eq!(program.capture_len(), 1);
+
+        program.out_events.push_back(Event::KeyDown(alt('f')));
+        program.pump_once();
+        assert_eq!(
+            program.capture_len(),
+            1,
+            "Alt+F during a modal arms no menu session (only the ModalFrame)"
+        );
+        assert_eq!(
+            bar_current(&mut program, bar_id),
+            None,
+            "no title highlighted"
+        );
+        assert_eq!(program.group_mut().len(), len, "no dropdown opened");
     }
 
     /// cmMenu (F10) highlights the default title but opens NO dropdown, and leaves

@@ -299,6 +299,19 @@ impl CaptureStack {
         self.handlers.is_empty()
     }
 
+    /// Returns the [`ViewId`] of the innermost executing modal view: the
+    /// topmost modal gate ([`CaptureHandler::is_modal_gate`]) on the stack,
+    /// even when a drag or menu handler sits above it. `None` when no modal
+    /// view executes. The pump routes focused events to this view, as C++
+    /// `TGroup::execute` hands them to the modal view's own `handleEvent`.
+    pub fn modal_view(&self) -> Option<ViewId> {
+        self.handlers
+            .iter()
+            .rev()
+            .find(|h| h.is_modal_gate())
+            .and_then(|h| h.view())
+    }
+
     /// Returns the [`ViewId`] of the top capture handler only when it is a
     /// modal-bounds gate ([`CaptureHandler::is_modal_gate`] == `true`).
     /// Used by the pump's outside-modal redirect to avoid firing on drag or
