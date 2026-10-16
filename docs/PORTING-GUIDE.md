@@ -528,19 +528,30 @@ never `sleep` (this is also what makes timing deterministic under test, D11).
 >   completion `Command`** (the original note's mechanism). *Designed, not built —
 >   no menu/button exists until Phase 4; row 34 builds only the sync path.*
 >
-> **Known deviation — program-level handling runs during modal pumps (row 34).**
-> Because our single loop keeps calling `program_handle_event` on every pump,
-> the Alt-N window-selection block and the `cmQuit → end_state` catch are live
-> *during* a modal. C++ does the opposite: `TGroup::execView` → `p->execute()`
-> (`tgroup.cpp:205`) dispatches via the **dialog's** `handleEvent`, so
-> `TProgram::handleEvent` (Alt-N + `cmQuit → endModal`, `tprogram.cpp:205`) is
-> out of the modal dispatch path. Consequence: here a `cmQuit` during a modal
-> ends the modal (with `QUIT`) and Alt-N could reach the desktop under a modal;
-> in C++ the dialog discards `cmQuit` (modal stays open) and Alt-N can't switch
-> background windows. We KEEP this (defensible UX; no menu/Alt-N trigger exists
-> at row 34). **Phase-4 breadcrumb:** when menus + multiple windows + a modal
-> coexist, suppress program-level command interception while a modal is active
-> (C++'s nested `p->execute()` does this structurally).
+> **Modal dispatch — resolved (was a known deviation from row 34).** The single
+> loop keeps calling `program_handle_event` on every pump, also during a modal.
+> C++ `TGroup::execView` → `p->execute()` (`tgroup.cpp:173-186`) instead hands
+> each event to the **dialog's** `handleEvent` and drops what is left
+> (`eventError`). Until the menus, multiple windows and modals coexisted, Rust
+> let Alt-N and the `cmQuit → end_state` catch run under a modal. Now
+> `program_handle_event` takes the innermost modal view
+> (`CaptureStack::modal_view`). While it is set, focused events (key, command,
+> paste) go to that view alone (`Group::deliver_to_modal`, which gives it the
+> root's size as owner size). An unconsumed command is dropped. The menu bar's
+> pre-process hot keys, Alt-N, the `cmQuit` catch, cmTile/cmCascade/cmDosShell
+> and `run_app`'s command handler do not see it. The status-line pre-route in
+> the pump (`TProgram::getEvent`) still runs first, so Alt-X still becomes
+> `cmQuit` — which the dialog ignores, as in C++.
+>
+> **Remaining deviation — broadcasts under a modal.** Positional and broadcast
+> events keep the root route under a modal. In C++ a broadcast a dialog view
+> posts with `putEvent` reaches only the modal view (it comes back through
+> `TGroup::execute`), while `TProgram::idle`'s `message(this, …)` broadcasts
+> (cmCommandSetChanged, timers) reach the whole program. Rust queues both
+> through one channel (`Context::broadcast` is also the successor of the
+> synchronous `message(receiver, evBroadcast, …)` with any receiver), so it
+> cannot tell them apart and delivers every broadcast to the whole tree.
+> Receivers filter by `source`.
 >
 > **`endModal` is downward (no up-pointer, D3).** `TDialog::handleEvent` cannot call
 > `Program::endModal` (it has `&mut Context`, not the program). It signals through a

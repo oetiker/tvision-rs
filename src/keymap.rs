@@ -332,6 +332,11 @@ pub fn set_global(km: Keymap) {
 
 /// Resolve a stroke against the process-global keymap.
 pub fn resolve_global(pending: Option<KeyStroke>, stroke: KeyStroke) -> Resolve {
+    #[cfg(test)]
+    if let Some(r) = TEST_KEYMAP.with(|o| o.borrow().as_ref().map(|km| km.resolve(pending, stroke)))
+    {
+        return r;
+    }
     global_cell()
         .read()
         .expect("keymap lock poisoned")
@@ -339,32 +344,34 @@ pub fn resolve_global(pending: Option<KeyStroke>, stroke: KeyStroke) -> Resolve 
 }
 
 #[cfg(test)]
-pub(crate) static GLOBAL_KEYMAP_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+thread_local! {
+    /// The keymap a test installed with [`GlobalKeymapGuard`]; it shadows the
+    /// process-global map for [`resolve_global`] on this test's thread only.
+    static TEST_KEYMAP: std::cell::RefCell<Option<Keymap>> =
+        const { std::cell::RefCell::new(None) };
+}
 
-/// RAII guard for tests that mutate the process-global keymap: serializes
-/// against other global-touching tests and restores `word_star()` on drop
-/// (even on panic). Use in any test that calls `set_global`.
+/// RAII guard for tests that need a different global keymap: installs `km`
+/// for [`resolve_global`] on the current thread and removes it on drop (even
+/// on panic). The process-global map is never touched, so tests running in
+/// parallel on other threads keep resolving against the default
+/// `word_star()` — a test that does not take a guard cannot see another
+/// test's preset.
 #[cfg(test)]
-pub(crate) struct GlobalKeymapGuard(
-    // Held purely for its RAII effect: keeps the serialization lock until drop.
-    #[allow(dead_code)] std::sync::MutexGuard<'static, ()>,
-);
+pub(crate) struct GlobalKeymapGuard(());
 
 #[cfg(test)]
 impl GlobalKeymapGuard {
     pub(crate) fn new(km: Keymap) -> Self {
-        let lock = GLOBAL_KEYMAP_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()); // tolerate a poisoned lock from a prior panic
-        set_global(km);
-        GlobalKeymapGuard(lock)
+        TEST_KEYMAP.with(|o| *o.borrow_mut() = Some(km));
+        GlobalKeymapGuard(())
     }
 }
 
 #[cfg(test)]
 impl Drop for GlobalKeymapGuard {
     fn drop(&mut self) {
-        set_global(Keymap::word_star());
+        TEST_KEYMAP.with(|o| *o.borrow_mut() = None);
     }
 }
 
@@ -466,11 +473,17 @@ mod tests {
         let bs = KeyStroke::from_event(ev(Key::Backspace, false, false, false));
         assert!(matches!(local.resolve(None, bs), Resolve::Command(c) if c == Command::BACK_SPACE));
 
-        // The set_global / resolve_global round-trip mutates shared state, so
-        // run it under the serializing guard (restores word_star() on drop).
-        let _g = GlobalKeymapGuard::new(Keymap::cua());
+        // Swapping the map is done through the thread-local test guard, so it
+        // cannot race other tests (they keep the default word_star()).
         let cc = KeyStroke::from_event(ev(Key::Char('c'), true, false, false));
-        assert!(matches!(resolve_global(None, cc), Resolve::Command(c) if c == Command::COPY));
+        {
+            let _g = GlobalKeymapGuard::new(Keymap::cua());
+            assert!(matches!(resolve_global(None, cc), Resolve::Command(c) if c == Command::COPY));
+        }
+        assert!(
+            !matches!(resolve_global(None, cc), Resolve::Command(c) if c == Command::COPY),
+            "the guard's map is gone after drop"
+        );
     }
 
     #[test]

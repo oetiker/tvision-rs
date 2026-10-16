@@ -144,9 +144,11 @@ event. With no input they come about every 20 ms, sooner when a timer is due.
 
 - [`Program::set_on_idle`](../api/tvision_rs/app/struct.Program.html#method.set_on_idle)
   holds one callback with `&mut Program`. It also runs while a modal is open.
-  `Program` has no method to post or broadcast an event, so the callback cannot
-  notify views directly. Use it to update shared state (`Rc<RefCell<_>>`) that
-  views read in `draw`; the next redraw shows the change.
+  The callback can update shared state (`Rc<RefCell<_>>`) that views read in
+  `draw`; the next redraw shows the change. To make views react, it queues an
+  event with `Program::broadcast(REFRESH, None)` or `Program::put_event(ev)`.
+  The event is delivered on the next pump pass, not inside the callback.
+  Queue it only when new data arrived, not on every pass.
 - A view-owned periodic timer:
   [`Context::set_timer`](../api/tvision_rs/view/struct.Context.html#method.set_timer)
   with a period. Each expiry arrives as `Event::Timer(id)` and is delivered to
@@ -155,8 +157,8 @@ event. With no input they come about every 20 ms, sooner when a timer is due.
   update themselves. The timer is not tied to its view: call
   `ctx.kill_timer(id)` when the work ends.
 
-Use the timer when views must react (rebuild a list, change commands); use the
-idle hook for state that is only drawn. The `external_state` example shows the
+Use the idle hook when the program owns the data source; use the timer when a
+view owns it. The `external_state` example shows the
 timer pattern end to end; see also
 [Background work each idle pass](../internals/event-loop.md#background-work-each-idle-pass).
 

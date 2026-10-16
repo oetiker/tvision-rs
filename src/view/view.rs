@@ -91,7 +91,9 @@ pub struct State {
     pub visible: bool,
     /// `sfCursorVis` — the hardware cursor is visible while this view is focused.
     pub cursor_vis: bool,
-    /// `sfCursorIns` — the cursor is in insert (block) shape rather than underline.
+    /// `sfCursorIns` — the caret fills the whole cell (overwrite mode): a
+    /// terminal backend shows a blinking block instead of the terminal's own
+    /// caret shape.
     pub cursor_ins: bool,
     /// `sfShadow` — the view casts a drop shadow.
     pub shadow: bool,
@@ -619,7 +621,8 @@ impl ViewState {
         self.state.cursor_ins = true;
     }
 
-    /// Switch the hardware cursor to underline (normal) shape.
+    /// Switch the hardware cursor to the normal shape (on a terminal, the
+    /// terminal's own caret).
     ///
     /// Clears [`State::cursor_ins`]. This is the default shape; call this after
     /// [`block_cursor`](Self::block_cursor) when leaving insert mode.
@@ -1046,6 +1049,27 @@ pub trait View {
             Some(s.cursor)
         } else {
             None
+        }
+    }
+
+    /// The caret size this view wants while its cursor is shown, as a
+    /// percentage of the character cell (1..=100). Base:
+    /// [`CARET_INSERT`](crate::backend::CARET_INSERT) (a block) when the
+    /// `cursor_ins` state is set, else
+    /// [`CARET_NORMAL`](crate::backend::CARET_NORMAL) (the normal caret).
+    /// The event loop reads it along the same focused chain as
+    /// [`cursor_request`](Self::cursor_request);
+    /// [`Group`](crate::view::Group) overrides it to descend into its current
+    /// child.
+    ///
+    /// # Turbo Vision heritage
+    /// Ports `TVCursor::decideCaretSize` (`tvcursor.cpp`): `100` when
+    /// `sfCursorIns` is set, else `TScreen::cursorLines & 0x0F`.
+    fn caret_size(&self) -> u8 {
+        if self.state().state.cursor_ins {
+            crate::backend::CARET_INSERT
+        } else {
+            crate::backend::CARET_NORMAL
         }
     }
 

@@ -32,4 +32,4 @@ pub use crossterm_backend::{ColorDepth, CrosstermBackend};
 pub use headless::{HeadlessBackend, HeadlessHandle};
 pub use quantize::*;
 pub use renderer::Renderer;
-pub use traits::Backend;
+pub use traits::{Backend, CARET_INSERT, CARET_NORMAL};
