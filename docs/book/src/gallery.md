@@ -140,6 +140,13 @@ broadcasts `TABLE_SORT_CHANGED`, `TABLE_SELECTION_CHANGED` and, in single
 mode, `LIST_ITEM_SELECTED`, each with the table's id as `source`; its value is
 the focused key (single) or the list of marked keys (multi). Keyboard sorting
 is opt-in: bind keys to `TABLE_SORT_NEXT` / `TABLE_SORT_FLIP`.
+Columns built `editable(true)` are edited in place: the focused row shows a
+cell cursor that ←/→ move between them, and F2 or a double-click opens an
+input line over the cell (with the column's `validator`, if any). Enter stores
+the text through `TableModel::set_cell` (a refusal shows its message and keeps
+the editor open), Esc or a click elsewhere cancels, Tab/Shift-Tab store and
+move to the next/previous editable cell; a store re-sorts and broadcasts
+`TABLE_CELL_EDITED`. In the demo, Image and CPU % are editable.
 
 {{#include screens/table.html}}
 
