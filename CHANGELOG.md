@@ -12,6 +12,14 @@ moves it into a dated, versioned section when a release is cut.
 
 ### New
 
+### Changed
+
+### Fixed
+
+## 0.17.0 - 2026-10-16
+
+### New
+
 - **`Table` widget.** A sortable multi-column list with a click-to-sort header,
   single or multi selection (a `[ ]` check column), hidden columns, per-row
   text colours, stretching (flex) columns and horizontal scrolling; the
@@ -49,7 +57,6 @@ moves it into a dated, versioned section when a release is cut.
 - **Adjustable double-click interval.** `Program::set_double_delay_ms` changes how
   fast two clicks must follow each other to count as a double-click (default
   440 ms).
-
 ### Changed
 
 - **A modal dialog alone receives keys and commands.** While a dialog runs,

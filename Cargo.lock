@@ -2780,7 +2780,7 @@ dependencies = [
 
 [[package]]
 name = "tvision-rs"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "arboard",
  "crossterm",
@@ -2795,7 +2795,7 @@ dependencies = [
 
 [[package]]
 name = "tvision-rs-macros"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
