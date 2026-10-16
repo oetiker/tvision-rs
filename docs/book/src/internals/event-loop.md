@@ -305,9 +305,11 @@ redraw:
    and queued as a typed
    [`Event::Timer(id)`](../api/tvision_rs/event/enum.Event.html) — a view matches
    the id against its own timer handles to know which timer fired.
-3. **Refreshes the status line.** The help context of the topmost modal view
-   (or `NO_CONTEXT` if none) is handed to the status line so it can display
-   context-sensitive help text.
+3. **Refreshes the status line.** The status line gets the current help
+   context, so it can show the items for that context. The help context comes
+   from the open menu, if a menu is open. Otherwise it comes from the topmost
+   modal view. With no modal view open, it comes from the application root,
+   which follows the focus chain down to the focused view.
 
 After `pump_once` returns, the outer `pump_and_drive` fires the optional
 **idle hook** registered with
@@ -316,13 +318,21 @@ After `pump_once` returns, the outer `pump_and_drive` fires the optional
 ```rust
 # use tvision_rs as tv;
 # fn _demo(program: &mut tv::app::Program) {
-program.set_on_idle(|p| {
+let refresh = tv::Command::custom("myapp.refresh");
+program.set_on_idle(move |p| {
     // Called on every idle pass — roughly every 20 ms with no user input.
-    // `p` is &mut Program, so you can post events, access the view tree, etc.
     // Keep this callback cheap: it runs on the loop's frame cadence.
+    p.broadcast(refresh, None);
 });
 # }
 ```
+
+The hook gets `&mut Program`. To reach the views it queues events:
+`Program::broadcast(command, source)` queues a broadcast, and
+`Program::put_event(ev)` queues any event. The hook does not dispatch them
+itself. The next pump pass takes the queued event before it polls the backend,
+and routes it like an input event. In C++, `idle()` sends its broadcasts at
+once with `message()`; here they arrive one pump pass later.
 
 Only one idle hook is held at a time; a second `set_on_idle` call replaces the
 first. The hook fires during any loop level, including while a modal dialog is

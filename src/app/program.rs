@@ -814,8 +814,12 @@ impl Program {
     ///    each view factory closure and into the idle callback.
     /// 2. In the callback, drain the external source (e.g. `try_recv` on a
     ///    `std::sync::mpsc::Receiver`) into the shared state.
-    /// 3. Broadcast a refresh command so interested views repaint from the updated
-    ///    state. Use a stable `Command::custom("myapp.refresh")` constant.
+    /// 3. Broadcast a refresh command with [`broadcast`](Self::broadcast) so
+    ///    interested views repaint from the updated state. Use a stable
+    ///    `Command::custom("myapp.refresh")` constant. Any other event can be
+    ///    queued with [`put_event`](Self::put_event). Both are queued, not
+    ///    dispatched inside the hook: the event reaches the views on the next
+    ///    pump pass.
     ///
     /// ```rust,ignore
     /// let shared = Rc::new(RefCell::new(AppState::default()));
@@ -902,6 +906,36 @@ impl Program {
     /// The current modal end state, if set (test/inspection hook).
     pub fn end_state(&self) -> Option<Command> {
         self.end_state
+    }
+
+    // -- posting events into the loop ---------------------------------------
+
+    /// Queue `ev` for the loop. The next pump pass takes it before it polls the
+    /// backend, and routes it like any input event (through the capture stack
+    /// when a modal or menu is open). This is how code that holds `&mut
+    /// Program` — an idle hook ([`set_on_idle`](Self::set_on_idle)), or the
+    /// application between [`pump_once`](Self::pump_once) calls — injects an
+    /// event. Views use [`Context::put_event`] instead.
+    ///
+    /// # Turbo Vision heritage
+    /// Ports `TProgram::putEvent` (`tprogram.cpp`). C++ holds one `pending`
+    /// event and a second `putEvent` overwrites the first; here the events
+    /// queue up in order, so none is lost.
+    pub fn put_event(&mut self, ev: Event) {
+        self.out_events.push_back(ev);
+    }
+
+    /// Queue a broadcast of `command` for the loop. `source` names the view the
+    /// broadcast is about, or `None`. The broadcast is delivered on a later pump
+    /// pass, to every view in the tree.
+    ///
+    /// # Turbo Vision heritage
+    /// The successor to `message(app, evBroadcast, command, infoPtr)` from an
+    /// overridden `TProgram::idle`. C++ `message` dispatches at once; here the
+    /// broadcast is queued, because the idle hook runs between pump passes.
+    pub fn broadcast(&mut self, command: Command, source: Option<ViewId>) {
+        self.out_events
+            .push_back(Event::Broadcast { command, source });
     }
 
     // -- command-enable policy ----------------------------------------------
@@ -13355,6 +13389,64 @@ mod tests {
             3,
             "idle hook should fire once on each event-less pass, got {}",
             ticks.get()
+        );
+    }
+
+    /// An idle hook posts a broadcast and an event through `&mut Program`
+    /// (the TProgram::idle → message / putEvent pattern); both are delivered
+    /// on later pump passes, in order.
+    #[test]
+    fn on_idle_hook_can_post_broadcast_and_event() {
+        use std::cell::Cell;
+
+        let refresh = Command::custom("test.idle-refresh");
+        let (mut program, _handle, _clock) = program_with_desktop(80, 25);
+        let log = Rc::new(RefCell::new(Vec::new()));
+        program.group_mut().insert(Box::new(Probe::new(
+            Rect::new(0, 0, 4, 2),
+            'P',
+            log.clone(),
+        )));
+        for _ in 0..4 {
+            program.pump_and_drive();
+        }
+        log.borrow_mut().clear();
+
+        // Post once, on the first idle pass only.
+        let fired = Rc::new(Cell::new(false));
+        let fired_in = fired.clone();
+        program.set_on_idle(move |p| {
+            if !fired_in.replace(true) {
+                p.broadcast(refresh, None);
+                p.put_event(Event::Command(Command::QUIT));
+            }
+        });
+
+        assert!(
+            program.pump_and_drive(),
+            "first pass is idle; the hook posts"
+        );
+        assert!(
+            log.borrow().is_empty() && program.end_state().is_none(),
+            "posted events are queued, not dispatched inside the hook"
+        );
+
+        assert!(!program.pump_and_drive(), "pass 2 dispatches the broadcast");
+        let got: Vec<Event> = log.borrow().clone();
+        assert!(
+            matches!(
+                got.as_slice(),
+                [Event::Broadcast { command: b, source: None }] if *b == refresh
+            ),
+            "the broadcast reaches the probe, got {got:?}"
+        );
+        assert!(program.end_state().is_none(), "QUIT is still queued");
+
+        assert!(!program.pump_and_drive(), "pass 3 dispatches the command");
+        assert_eq!(
+            program.end_state(),
+            Some(Command::QUIT),
+            "the posted QUIT reaches TProgram::handleEvent and ends the loop"
         );
     }
 
