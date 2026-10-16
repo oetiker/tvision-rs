@@ -116,7 +116,8 @@ impl Table {
     /// Restore a [`column_layout`](Self::column_layout). Entries for unknown
     /// columns are ignored; the columns `layout` does not name keep their
     /// state and follow the named ones in their current order. Widths are
-    /// clamped to `0..=`[`MAX_COLUMN_WIDTH`].
+    /// clamped to the column's `min_width` (at least 1) and to
+    /// [`MAX_COLUMN_WIDTH`].
     /// Does not broadcast; the bars catch up on the table's next event.
     pub fn set_column_layout(&mut self, layout: &[ColumnState]) {
         let mut d = self.data.borrow_mut();
@@ -129,7 +130,7 @@ impl Table {
                 order.push(s.column);
             }
             let c = &mut d.columns[s.column];
-            c.width = s.width.clamp(0, MAX_COLUMN_WIDTH);
+            c.width = s.width.clamp(width_floor(c), MAX_COLUMN_WIDTH);
             c.flex = s.flex;
             c.fixed = s.fixed;
             c.hidden = s.hidden;
@@ -161,7 +162,7 @@ impl Table {
             // Only a tracked release ends a drag: an untracked up reaching
             // the table through normal routing is left alone.
             Event::MouseUp(me) if self.drag.is_some() => {
-                self.header_release(me.position.x, ctx);
+                self.header_release(me.position, ctx);
                 true
             }
             Event::Command(c) if c == Command::TABLE_COLUMNS => {
@@ -250,7 +251,7 @@ impl Table {
                 let c = &mut d.columns[col];
                 let width = start
                     .saturating_add(x - press_x)
-                    .clamp(c.min_width.max(1), MAX_COLUMN_WIDTH);
+                    .clamp(width_floor(c), MAX_COLUMN_WIDTH);
                 if !*changed && width == start {
                     return;
                 }
@@ -283,9 +284,11 @@ impl Table {
         }
     }
 
-    /// The press ends at header x `x`: commit a resize or a move, or sort on
-    /// a click.
-    fn header_release(&mut self, x: i32, ctx: &mut Context) {
+    /// The press ends at table-local `at`: commit a resize or a move, or
+    /// sort on a click (released on the pressed label; a drag off it
+    /// cancels).
+    fn header_release(&mut self, at: Point, ctx: &mut Context) {
+        let x = at.x;
         let Some(drag) = self.drag.take() else { return };
         self.data.borrow_mut().drop_x = None;
         match drag {
@@ -295,8 +298,13 @@ impl Table {
                 }
             }
             HeaderDrag::Move { col, moving: false } => {
-                let sort = self.click_sort(col);
-                self.user_sort(sort, ctx);
+                let on_label = at.y == 0
+                    && label_span(&self.data.borrow(), self.group.state().size.x, col)
+                        .is_some_and(|(s, e)| (s..e).contains(&x));
+                if on_label {
+                    let sort = self.click_sort(col);
+                    self.user_sort(sort, ctx);
+                }
             }
             HeaderDrag::Move { col, moving: true } => {
                 let size_x = self.group.state().size.x;
@@ -324,7 +332,10 @@ impl Table {
                 .iter()
                 .fold(Menu::builder(), |b, &c| {
                     let spec = &d.columns[c];
-                    let label = format!("{} {}", check_box(!spec.hidden), spec.label);
+                    // The menu reads `~` as a hotkey marker and has no
+                    // escape for it: drop it so no stray hotkey appears.
+                    let name: String = spec.label.chars().filter(|&c| c != '~').collect();
+                    let label = format!("{} {name}", check_box(!spec.hidden));
                     b.command(label, toggle_command(c))
                 })
                 .build()
@@ -361,6 +372,12 @@ impl Table {
             .pending
             .push(Command::TABLE_COLUMNS_CHANGED);
     }
+}
+
+/// The narrowest a user resize or a restored layout may make column `c`: its
+/// `min_width`, at least 1 and at most [`MAX_COLUMN_WIDTH`].
+fn width_floor(c: &super::ColumnSpec) -> i32 {
+    c.min_width.clamp(1, MAX_COLUMN_WIDTH)
 }
 
 /// The header x range `[start, end)` model column `col`'s label covers on

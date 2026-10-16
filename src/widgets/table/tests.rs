@@ -1217,10 +1217,19 @@ fn a_column_that_is_not_movable_only_sorts() {
     cols[0] = cols[0].clone().movable(false);
     let mut fx =
         Fixture::new(Table::new(Rect::new(0, 0, W, H), cols, None).with_model(model(&ROWS)));
-    fx.drag(2, &[24]);
+    // Dragged off the label and released there: neither a move nor a sort.
+    let out = fx.drag(2, &[24]);
     let order: Vec<usize> = fx.t().column_layout().iter().map(|s| s.order).collect();
     assert_eq!(order, [0, 1, 2, 3]);
     assert_eq!(fx.t().data.borrow().drop_x, None);
+    assert_eq!(fx.t().sort_spec(), None);
+    assert!(out.is_empty());
+    // Released below the header, even under the label: cancelled too.
+    fx.send(mouse_down(2, 0, false));
+    fx.send(mouse_at(MouseKind::Up, 2, 3));
+    assert_eq!(fx.t().sort_spec(), None);
+    // Back on the label before the release: a click, so it sorts.
+    fx.drag(2, &[24, 3]);
     assert_eq!(fx.t().sort_spec(), Some((0, SortDir::Asc)));
     // Other columns still move past it.
     fx.drag(8, &[1]);
@@ -1395,4 +1404,71 @@ fn programmatic_layout_changes_do_not_broadcast() {
     let saved = fx.t().column_layout();
     let out = fx.with(|t, _| t.set_column_layout(&saved));
     assert!(out.is_empty());
+}
+
+// -- fix round 1 ----------------------------------------------------------------
+
+#[test]
+fn a_min_width_past_the_cap_does_not_panic_a_resize() {
+    let cols = vec![ColumnSpec::new("Log", 2000).min_width(i32::MAX)];
+    let mut fx =
+        Fixture::new(Table::new(Rect::new(0, 0, W, H), cols, None).with_model(model(&ROWS)));
+    // The column (capped at 1024 cells) overflows; scrolled to its end, its
+    // last cell (view x 30) is the resize handle.
+    fx.with(|t, ctx| t.set_h_offset(i32::MAX, ctx));
+    let out = fx.drag(30, &[25, 20]);
+    // The floor is capped too, so the 1024 cells on screen cannot shrink:
+    // nothing changes.
+    assert_eq!(width_of(&mut fx, 0), 2000);
+    assert!(out.is_empty());
+}
+
+#[test]
+fn a_last_column_that_fills_the_view_is_resizable_on_its_last_cell() {
+    let mut cols = columns();
+    cols[3] = cols[3].clone().flex(1);
+    let mut fx =
+        Fixture::new(Table::new(Rect::new(0, 0, W + 6, H), cols, None).with_model(model(&ROWS)));
+    // CPU is stretched to 11 cells and ends on the view's last cell, x 36.
+    assert_eq!(laid_out(&mut fx, 3), 11);
+    let out = fx.drag(W + 5, &[W + 3]);
+    let s = &fx.t().column_layout()[3];
+    assert_eq!((s.width, s.flex, s.fixed), (9, 0, true));
+    assert_eq!(changed(&out), 1);
+    assert_eq!(fx.t().sort_spec(), None, "the handle cell does not sort");
+}
+
+#[test]
+fn set_column_layout_raises_widths_to_min_width() {
+    let mut cols = columns();
+    cols[1] = cols[1].clone().min_width(3);
+    cols[2] = cols[2].clone().min_width(i32::MAX);
+    let mut fx =
+        Fixture::new(Table::new(Rect::new(0, 0, W, H), cols, None).with_model(model(&ROWS)));
+    let mut l = fx.t().column_layout();
+    for s in &mut l {
+        s.width = 0;
+    }
+    fx.t().set_column_layout(&l);
+    let widths: Vec<i32> = fx.t().column_layout().iter().map(|s| s.width).collect();
+    assert_eq!(widths, [1, 3, layout::MAX_COLUMN_WIDTH, 1]);
+}
+
+#[test]
+fn a_tilde_in_a_label_does_not_become_a_popup_hotkey() {
+    let mut cols = columns();
+    cols[0].label = "~5~ min".to_string();
+    let mut fx =
+        Fixture::new(Table::new(Rect::new(0, 0, W, H), cols, None).with_model(model(&ROWS)));
+    fx.render(60, 20);
+    let mut ev = Event::Command(Command::TABLE_COLUMNS);
+    let deferred = fx.with_deferred(|t, ctx| t.handle_event(&mut ev, ctx));
+    let (labels, _) = popup_labels(&deferred).expect("a popup opens");
+    assert_eq!(labels[0], "[X] 5 min");
+}
+
+#[test]
+fn the_fixed_builder_sets_the_flag() {
+    assert!(ColumnSpec::new("A", 4).fixed(true).fixed);
+    assert!(!ColumnSpec::new("A", 4).fixed);
 }
