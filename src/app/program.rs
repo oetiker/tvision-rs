@@ -2493,7 +2493,18 @@ impl Program {
                         if !modal_handled {
                             // Offer to the capture stack first; if consumed, skip view
                             // routing.
-                            let consumed = captures.dispatch(&mut ev, &mut ctx);
+                            //
+                            // A timer expiry bypasses the captures. C++ delivers it
+                            // from `TProgram::idle` as a synchronous
+                            // `message(this, evBroadcast, cmTimerExpired, id)`
+                            // (tprogram.cpp:212-228), and `idle` runs inside every
+                            // `getEvent` — also the ones in a mouse hold
+                            // (`TView::mouseEvent`, tview.cpp:636), a window drag
+                            // and `TMenuView::execute`. The hold never sees the
+                            // expiry, so it cannot discard it; a one-shot timer
+                            // must not be lost while a drag or a menu is open.
+                            let consumed = !matches!(ev, Event::Timer(_))
+                                && captures.dispatch(&mut ev, &mut ctx);
                             if !consumed {
                                 let modal = captures.modal_view();
                                 program_handle_event(
@@ -6192,6 +6203,122 @@ mod tests {
             [false, true],
             "the popup's toggle reached the table"
         );
+    }
+
+    /// Program with a desktop holding a timer-logging [`Probe`] and the view
+    /// `extra` builds; returns it with the probe log and the clock handle.
+    fn timer_hold_program(
+        extra: impl FnOnce() -> Box<dyn View> + 'static,
+    ) -> (Program, Rc<RefCell<Vec<Event>>>, Rc<ManualClock>) {
+        let log: Rc<RefCell<Vec<Event>>> = Rc::new(RefCell::new(Vec::new()));
+        let log_cap = log.clone();
+        let (backend, _handle) = HeadlessBackend::new(80, 25);
+        let clock = Rc::new(ManualClock::new(0));
+        let mut program = Program::new(
+            Box::new(backend),
+            Box::new(clock.clone()),
+            Theme::classic_blue(),
+            move |r| {
+                let mut desktop = Desktop::new(r, |r2| Some(Desktop::init_background(r2)));
+                desktop.insert_view(Box::new(Probe::new(
+                    Rect::new(60, 20, 62, 21),
+                    'p',
+                    log_cap,
+                )));
+                desktop.insert_view(extra());
+                Some(Box::new(desktop))
+            },
+            |_r| None,
+            |_r| None,
+        );
+        program.out_events.clear();
+        program.out_events.push_back(Event::Broadcast {
+            command: Command::custom("test.noop"),
+            source: None,
+        });
+        program.pump_once();
+        (program, log, clock)
+    }
+
+    /// Drive a one-shot timer that expires while a capture hold (started by
+    /// `press`) is on top, then release; return how many expiries reached
+    /// the probe.
+    fn timer_ticks_across_hold(
+        program: &mut Program,
+        log: &Rc<RefCell<Vec<Event>>>,
+        clock: &ManualClock,
+        press: Event,
+        release: Event,
+    ) -> usize {
+        program
+            .timers
+            .set_timer(0, std::time::Duration::from_millis(10), None);
+        program.out_events.push_back(press);
+        program.pump_once();
+        assert_eq!(program.capture_len(), 1, "the press started a capture hold");
+        clock.advance(20);
+        for _ in 0..4 {
+            program.pump_once();
+        }
+        assert_eq!(program.capture_len(), 1, "the hold is still on top");
+        program.out_events.push_back(release);
+        for _ in 0..4 {
+            program.pump_once();
+        }
+        assert_eq!(program.capture_len(), 0, "the release ended the hold");
+        log.borrow()
+            .iter()
+            .filter(|e| matches!(e, Event::Timer(_)))
+            .count()
+    }
+
+    /// **A one-shot timer survives a `Table` header drag** (a
+    /// `MouseTrackCapture` hold). C++ `TProgram::idle` broadcasts
+    /// `cmTimerExpired` synchronously from inside the hold loop's `getEvent`,
+    /// so the hold never gets to discard it.
+    #[test]
+    fn timer_reaches_views_during_table_header_drag() {
+        use crate::widgets::{ColumnSpec, Table, VecModel};
+        let (mut program, log, clock) = timer_hold_program(|| {
+            let rows = vec![vec!["a".to_string(), "b".to_string()]];
+            Box::new(
+                Table::new(
+                    Rect::new(5, 3, 30, 8),
+                    vec![ColumnSpec::new("A", 4), ColumnSpec::new("B", 4)],
+                    None,
+                )
+                .with_model(Box::new(VecModel::new(rows))),
+            )
+        });
+        let n = timer_ticks_across_hold(
+            &mut program,
+            &log,
+            &clock,
+            mouse_down_at(15, 3),
+            mouse_up_at(15, 3),
+        );
+        assert_eq!(n, 1, "the expiry reached the views during the drag");
+    }
+
+    /// **A one-shot timer survives a window drag** (the `DragCapture` hold,
+    /// which consumes everything else, broadcasts included).
+    #[test]
+    fn timer_reaches_views_during_window_drag() {
+        let (mut program, log, clock) = timer_hold_program(|| {
+            Box::new(crate::window::Window::new(
+                Rect::new(10, 5, 40, 15),
+                Some("W".into()),
+                0,
+            ))
+        });
+        let n = timer_ticks_across_hold(
+            &mut program,
+            &log,
+            &clock,
+            mouse_down_at(20, 5),
+            mouse_up_at(22, 6),
+        );
+        assert_eq!(n, 1, "the expiry reached the views during the drag");
     }
 
     /// **End-to-end: a `Table` cell edit through the pump.** F2 opens the

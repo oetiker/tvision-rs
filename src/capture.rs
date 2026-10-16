@@ -218,9 +218,11 @@ impl CaptureHandler for MouseTrackCapture {
             // the editor/scroller never scrolls. (The bug this fixes: dragging a
             // scrollbar did not move the associated text.)
             Event::Broadcast { .. } => CaptureFlow::Pass,
-            // Everything else (unmasked mouse classes, keys, commands, timers) is
-            // discarded until the mouse-up — the hold is modal, and idle/timer
-            // work does not run inside it.
+            // Everything else (unmasked mouse classes, keys, commands) is
+            // discarded until the mouse-up, as the C++ hold loop discards what
+            // its `getEvent` returns outside the mask. Timer expiries never get
+            // here: the pump routes them around the capture stack, because C++
+            // delivers them from `idle` inside that same `getEvent`.
             _ => CaptureFlow::Consumed,
         }
     }
