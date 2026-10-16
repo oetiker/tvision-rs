@@ -64,6 +64,15 @@ pub struct ColumnSpec {
     /// narrower than the table, the spare cells go to the flex columns in
     /// proportion to their weights.
     pub flex: u16,
+    /// The user may change the width by dragging the separator right of the
+    /// label (default `true`).
+    pub resizable: bool,
+    /// The user may move the column by dragging its label (default `true`).
+    pub movable: bool,
+    /// The layout never shrinks this column below `width`: it overflows and
+    /// scrolls instead. A user resize sets it (and clears `flex`), so a
+    /// dragged width holds.
+    pub fixed: bool,
 }
 
 impl ColumnSpec {
@@ -76,6 +85,9 @@ impl ColumnSpec {
             align: Align::Left,
             hidden: false,
             flex: 0,
+            resizable: true,
+            movable: true,
+            fixed: false,
         }
     }
 
@@ -111,7 +123,27 @@ impl ColumnSpec {
         self.flex = weight;
         self
     }
+
+    /// Builder: whether the user may drag the column's width (default
+    /// `true`).
+    pub fn resizable(mut self, resizable: bool) -> Self {
+        self.resizable = resizable;
+        self
+    }
+
+    /// Builder: whether the user may drag the column to another position
+    /// (default `true`).
+    pub fn movable(mut self, movable: bool) -> Self {
+        self.movable = movable;
+        self
+    }
 }
+
+/// The widest a column is ever laid out, in cells. Every cell is padded to its
+/// column width when drawn, so an unbounded width would allocate without
+/// bound; a user resize and [`Table::set_column_layout`](super::Table::set_column_layout)
+/// clamp to it as well.
+pub const MAX_COLUMN_WIDTH: i32 = 1024;
 
 /// Width of the multi-select check column: the `[ ]` box of
 /// [`CheckBoxes`](crate::widgets::CheckBoxes).
@@ -142,7 +174,7 @@ pub fn with_check_cell(w0: i32, check: &str, rest: String) -> String {
 /// keep their preferred width while everything (plus one separator between
 /// neighbouring visible columns) fits, else the currently widest shrinkable
 /// column loses one cell per pass until it fits or every column sits at its
-/// `min_width`. A layout that still does not fit is wider than `avail`; the
+/// `min_width` (a [`fixed`](ColumnSpec::fixed) one at its `width`). A layout that still does not fit is wider than `avail`; the
 /// table scrolls it horizontally. Spare cells go to the
 /// [`flex`](ColumnSpec::flex) columns by weight (see [`stretch`]); without one
 /// they stay empty. With no room at all (`avail` at or below the separators)
@@ -161,7 +193,7 @@ pub fn layout_widths(cols: &[ColumnSpec], avail: i32) -> Vec<i32> {
         let widest = widths
             .iter()
             .enumerate()
-            .filter(|(i, w)| !cols[*i].hidden && **w > cols[*i].min_width.max(1))
+            .filter(|(i, w)| !cols[*i].hidden && **w > shrink_floor(&cols[*i]))
             .max_by_key(|(_, w)| **w)
             .map(|(i, _)| i);
         let Some(i) = widest else { break };
@@ -178,10 +210,22 @@ pub fn layout_widths(cols: &[ColumnSpec], avail: i32) -> Vec<i32> {
 /// at least its `min_width` (and at least 1), so `ColumnSpec::new("X",
 /// 0).flex(1)` is the "fill the rest" column.
 fn preferred_width(c: &ColumnSpec) -> i32 {
-    match () {
+    let w = match () {
         _ if c.hidden => 0,
         _ if c.flex > 0 => c.width.max(c.min_width).max(1),
         _ => c.width.max(0),
+    };
+    w.min(MAX_COLUMN_WIDTH)
+}
+
+/// The narrowest the layout shrinks a column to: its `min_width` (at least 1),
+/// or its `width` when it is [`fixed`](ColumnSpec::fixed).
+fn shrink_floor(c: &ColumnSpec) -> i32 {
+    let floor = c.min_width.max(1);
+    if c.fixed {
+        floor.max(c.width.min(MAX_COLUMN_WIDTH))
+    } else {
+        floor
     }
 }
 
@@ -298,6 +342,50 @@ impl RowLayout {
             sx.saturating_add(self.clamp(offset)),
         )
         .map(|c| c + self.frozen)
+    }
+
+    /// The visible scrolling columns as `(layout index, start, end)` in
+    /// content cells (`end` exclusive; the one-cell separator sits at `end`).
+    pub fn spans(&self) -> Vec<(usize, i32, i32)> {
+        let mut out = Vec::new();
+        let mut start = 0i32;
+        for (i, &w) in self.widths.iter().enumerate().skip(self.frozen) {
+            if w <= 0 {
+                continue;
+            }
+            let end = start.saturating_add(w);
+            out.push((i, start, end));
+            start = end.saturating_add(1);
+        }
+        out
+    }
+
+    /// The content cell under text-relative column `x` at `offset`, or `None`
+    /// outside the scrolling part's view.
+    pub fn content_x(&self, x: i32, offset: i32) -> Option<i32> {
+        let sx = x - self.frozen_width;
+        (0..self.view)
+            .contains(&sx)
+            .then(|| sx.saturating_add(self.clamp(offset)))
+    }
+
+    /// The text-relative column of content cell `cx` at `offset` (it may lie
+    /// outside the view).
+    pub fn text_x(&self, cx: i32, offset: i32) -> i32 {
+        self.frozen_width
+            .saturating_add(cx)
+            .saturating_sub(self.clamp(offset))
+    }
+
+    /// The scrolling layout column whose right-hand separator cell is under
+    /// text-relative column `x` at `offset` — the resize handle. The cell
+    /// right after the last column counts too, so the last column can grow.
+    pub fn separator_at(&self, x: i32, offset: i32) -> Option<usize> {
+        let cx = self.content_x(x, offset)?;
+        self.spans()
+            .into_iter()
+            .find(|&(_, _, end)| end == cx)
+            .map(|(i, _, _)| i)
     }
 }
 
@@ -664,16 +752,21 @@ mod tests {
     }
 
     #[test]
-    fn huge_widths_saturate_instead_of_overflowing() {
+    fn huge_widths_are_capped_and_sums_saturate() {
         let big = i32::MAX / 2;
         let cols = [col("A", big).min_width(big), col("B", big).min_width(big)];
         let w = layout_widths(&cols, 10);
-        assert_eq!(w, vec![big, big], "nothing may shrink");
-        assert_eq!(line_width(&w), i32::MAX);
+        // Every cell is padded to its width on draw: the layout caps it.
+        let max = MAX_COLUMN_WIDTH;
+        assert_eq!(w, vec![max, max], "nothing may shrink below the cap");
+        let flex = [col("F", big).min_width(big).flex(1)];
+        assert_eq!(layout_widths(&flex, 10), vec![max]);
         let l = RowLayout::new(&cols, 0, 10);
-        assert_eq!((l.content, l.view), (i32::MAX, 10));
-        assert_eq!(l.max_offset(), i32::MAX - 10);
+        assert_eq!((l.content, l.view), (2 * max + 1, 10));
         assert_eq!(l.column_at(3, l.max_offset()), Some(1));
+        // The width helpers themselves still saturate.
+        assert_eq!(line_width(&[big, big]), i32::MAX);
+        assert_eq!(column_at(&[big, big], i32::MAX - 1), Some(1));
         assert_eq!(slice_cols("abc", i32::MAX - 1, 10), "");
     }
 
