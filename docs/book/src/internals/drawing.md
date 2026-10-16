@@ -70,8 +70,8 @@ The terminal seam is the [`Backend`](../api/tvision_rs/backend/trait.Backend.htm
 trait ([deviation D11](../reference/deviations.md#d11)). The app holds a
 `Box<dyn Backend>`, so the trait is **object-safe** and the view tree never
 carries a backend type parameter. Its surface is small: report `size`, `draw` a
-slice of changed cells, `flush`, `set_cursor`, `poll_event`, plus clipboard and
-suspend/resume hooks.
+slice of changed cells, `flush`, `set_cursor`, `set_caret_size`, `poll_event`,
+plus clipboard and suspend/resume hooks.
 
 Two implementations ship:
 

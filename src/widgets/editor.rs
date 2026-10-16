@@ -3522,9 +3522,12 @@ mod tests {
         e.toggle_ins_mode();
         assert!(e.overwrite);
         assert!(e.state.state.cursor_ins);
+        // TVCursor::decideCaretSize: overwrite shows the block caret.
+        assert_eq!(e.caret_size(), crate::backend::CARET_INSERT);
         e.toggle_ins_mode();
         assert!(!e.overwrite);
         assert!(!e.state.state.cursor_ins);
+        assert_eq!(e.caret_size(), crate::backend::CARET_NORMAL);
     }
 
     // -- convertEvent keymap -------------------------------------------------

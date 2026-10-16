@@ -57,6 +57,8 @@ fn view(f: &Ident, k: &TokenStream) -> Vec<(&'static str, TokenStream)> {
          quote! { fn on_bounds_changed(&mut self, ctx: &mut #k::Context) { self.#f.on_bounds_changed(ctx) } }),
         ("cursor_request",
          quote! { fn cursor_request(&self) -> ::core::option::Option<#k::Point> { self.#f.cursor_request() } }),
+        ("caret_size",
+         quote! { fn caret_size(&self) -> u8 { self.#f.caret_size() } }),
         ("find_mut",
          quote! { fn find_mut(&mut self, id: #k::ViewId) -> ::core::option::Option<&mut dyn #k::View> { self.#f.find_mut(id) } }),
         ("remove_descendant",

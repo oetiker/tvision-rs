@@ -1049,6 +1049,27 @@ pub trait View {
         }
     }
 
+    /// The caret size this view wants while its cursor is shown, as a
+    /// percentage of the character cell (1..=100). Base:
+    /// [`CARET_INSERT`](crate::backend::CARET_INSERT) (a block) when the
+    /// `cursor_ins` state is set, else
+    /// [`CARET_NORMAL`](crate::backend::CARET_NORMAL) (a thin underline).
+    /// The event loop reads it along the same focused chain as
+    /// [`cursor_request`](Self::cursor_request);
+    /// [`Group`](crate::view::Group) overrides it to descend into its current
+    /// child.
+    ///
+    /// # Turbo Vision heritage
+    /// Ports `TVCursor::decideCaretSize` (`tvcursor.cpp`): `100` when
+    /// `sfCursorIns` is set, else `TScreen::cursorLines & 0x0F`.
+    fn caret_size(&self) -> u8 {
+        if self.state().state.cursor_ins {
+            crate::backend::CARET_INSERT
+        } else {
+            crate::backend::CARET_NORMAL
+        }
+    }
+
     /// Resolve `id` to a **descendant** of this view (never self — the *parent*
     /// identifies a view by id). A leaf has no descendants, so the base returns
     /// `None`; a [`Group`](crate::view::Group) overrides to search its children

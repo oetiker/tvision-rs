@@ -3452,6 +3452,8 @@ impl Program {
             .map(|p| p + group_origin)
             .map(|p| (p.x.max(0) as u16, p.y.max(0) as u16));
         renderer.set_cursor(cursor);
+        // TVCursor::decideCaretSize: block for sfCursorIns, else normal.
+        renderer.set_caret_size(group.caret_size());
 
         renderer.render(|buf| {
             let bounds = group.state().get_bounds();
@@ -13864,6 +13866,33 @@ mod tests {
         fn caret_hidden_under_window_above_focused_window() {
             let (_p, handle) = program_with_caret(Some(Rect::new(3, 1, 18, 6)));
             assert_eq!(handle.cursor(), None);
+        }
+
+        /// TVCursor::decideCaretSize: the Insert key flips the focused input
+        /// line's sfCursorIns, and the caret the backend gets follows it —
+        /// a block (100) in overwrite mode, the normal thin caret otherwise.
+        #[test]
+        fn caret_shape_follows_insert_toggle() {
+            use crate::backend::{CARET_INSERT, CARET_NORMAL};
+            use crate::keymap::{GlobalKeymapGuard, Keymap};
+            // Insert -> INS_MODE comes from the global keymap; hold the default.
+            let _g = GlobalKeymapGuard::new(Keymap::word_star());
+
+            let (mut p, handle) = program_with_caret(None);
+            // Drain what the first idle pass queued (command-set-changed).
+            p.pump_once();
+            assert!(p.out_events.is_empty());
+            assert_eq!(handle.cursor(), Some((4, 3)));
+            assert_eq!(handle.caret_size(), CARET_NORMAL);
+
+            p.put_event(key(Key::Insert));
+            p.pump_once();
+            assert_eq!(handle.cursor(), Some((4, 3)));
+            assert_eq!(handle.caret_size(), CARET_INSERT, "overwrite: block caret");
+
+            p.put_event(key(Key::Insert));
+            p.pump_once();
+            assert_eq!(handle.caret_size(), CARET_NORMAL, "insert: normal caret");
         }
     }
 }

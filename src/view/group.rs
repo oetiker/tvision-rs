@@ -1215,6 +1215,26 @@ impl View for Group {
         if covered { None } else { Some(p) }
     }
 
+    /// The caret size of the current child (recursively) — the view whose
+    /// caret [`cursor_request`](View::cursor_request) places. Falls back to
+    /// the group's own state when there is no current child.
+    ///
+    /// # Turbo Vision heritage
+    /// `TVCursor::decideCaretSize` reads `sfCursorIns` of the view whose
+    /// `resetCursor` runs: the focused leaf at the end of this chain.
+    fn caret_size(&self) -> u8 {
+        match self.current.and_then(|id| self.index_of(id)) {
+            Some(i) => self.children[i].view.caret_size(),
+            None => {
+                if self.st.state.cursor_ins {
+                    crate::backend::CARET_INSERT
+                } else {
+                    crate::backend::CARET_NORMAL
+                }
+            }
+        }
+    }
+
     /// The group's [`View::find_mut`] override — the recursive tree-walk.
     /// One pass per child: match the child's own id, else recurse into it. A
     /// two-pass split (all direct children, then all recursions) fails the borrow

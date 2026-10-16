@@ -230,21 +230,31 @@ let cursor = group.cursor_request()   // descends through current children
     .map(|p| p + group_origin)
     .map(|p| (p.x.max(0) as u16, p.y.max(0) as u16));
 renderer.set_cursor(cursor);
+renderer.set_caret_size(group.caret_size()); // same chain: block or normal
 renderer.render(|buf| { /* whole-tree redraw */ });
 ```
+
+`View::caret_size` follows the same current-child chain and reads
+`cursor_ins` on the focused view: `CARET_INSERT` (100, a block) when it is
+set, else `CARET_NORMAL` (1, a thin line). While the cursor is shown, the
+renderer passes this size to `Backend::set_caret_size`. The crossterm backend
+shows it as a blinking block or a blinking underline, and restores the
+terminal's own caret shape on exit and suspend.
 
 A view that wants no cursor simply leaves `cursor_vis = false`; it never calls
 `show_cursor`. A view that loses focus keeps whatever `cursor_vis` value it
 had, but the walk only descends through *focused* children, so the cursor is
 hidden automatically until the view is focused again.
 
-**Sources:** `State::cursor_ins` / `block_cursor` / `normal_cursor` in
-`src/view/view.rs`; `Group::cursor_request` in `src/view/group.rs`;
+**Sources:** `State::cursor_ins` / `block_cursor` / `normal_cursor` /
+`View::caret_size` in `src/view/view.rs`; `Group::cursor_request` /
+`Group::caret_size` in `src/view/group.rs`;
 `resetCursor` walk in `src/app/program.rs`.
 
 > **Turbo Vision heritage:** ports `sfCursorVis` and `sfCursorIns` from
 > `views.h`. The `TView::resetCursor` tree-walk is realized by
-> `Group::cursor_request`.
+> `Group::cursor_request`, and `TVCursor::decideCaretSize` by
+> `View::caret_size`.
 
 ## Marking an event handled
 
