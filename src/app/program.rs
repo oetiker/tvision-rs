@@ -1757,9 +1757,8 @@ impl Program {
     ///   Without save/restore, when the inner `exec_view` returns,
     ///   `self.end_state` still holds the inner end command and the **outer**
     ///   `while self.end_state.is_none()` would spuriously exit. The modal still
-    ///   **returns** its end command (a quit command is unchanged — the
-    ///   quit-ends-modal deviation still holds); only the leftover `self.end_state`
-    ///   is restored to the enclosing loop's value.
+    ///   **returns** its end command unchanged; only the leftover
+    ///   `self.end_state` is restored to the enclosing loop's value.
     /// * **the completion**, run after the loop breaks but BEFORE remove/drop,
     ///   while the modal is still in the tree by `id` (so it can read its final
     ///   selection). It is a DIRECT `group` mutation, NOT a deferred queue
@@ -1901,12 +1900,12 @@ impl Program {
         let retval = loop {
             self.end_state = None;
             while self.end_state.is_none() {
-                // DEVIATION (see this fn's doc): pump_once runs
-                // program_handle_event each pass, so Alt-N + the cmQuit catch are
-                // live during the modal. C++ execView -> p->execute() (tgroup.cpp:205)
-                // dispatches to the dialog's handleEvent, NOT TProgram::handleEvent
-                // (where cmQuit->endModal + Alt-N live, tprogram.cpp:205) — so program
-                // handling is out of the modal dispatch path there. We keep ours.
+                // pump_once runs program_handle_event each pass, but while the
+                // ModalFrame is on the capture stack it hands keys and commands
+                // to this modal view alone and drops what it leaves (Alt-N, the
+                // cmQuit catch and the app command slot do not run) — as C++
+                // execView -> p->execute() (tgroup.cpp:173-186) dispatches to
+                // the dialog's handleEvent, not TProgram::handleEvent.
                 //
                 // pump_and_drive: a THistory inside this modal dialog can
                 // itself request a modal (the history popup), driven re-entrantly at

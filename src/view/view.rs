@@ -91,7 +91,9 @@ pub struct State {
     pub visible: bool,
     /// `sfCursorVis` — the hardware cursor is visible while this view is focused.
     pub cursor_vis: bool,
-    /// `sfCursorIns` — the cursor is in insert (block) shape rather than underline.
+    /// `sfCursorIns` — the caret fills the whole cell (overwrite mode): a
+    /// terminal backend shows a blinking block instead of the terminal's own
+    /// caret shape.
     pub cursor_ins: bool,
     /// `sfShadow` — the view casts a drop shadow.
     pub shadow: bool,

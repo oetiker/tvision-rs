@@ -79,7 +79,8 @@ pub trait Backend {
 
     /// Set the shape of the visible caret. `size` is the percentage of the
     /// character cell the caret fills, `1..=100`:
-    /// [`CARET_NORMAL`] (a thin line) or [`CARET_INSERT`] (a block). Called
+    /// [`CARET_NORMAL`] (the normal caret) or [`CARET_INSERT`] (the whole
+    /// cell). Called
     /// by [`Renderer::render`](crate::backend::Renderer::render) each frame
     /// in which the caret is shown, after [`set_cursor`](Self::set_cursor);
     /// hiding the caret is `set_cursor(None)`. The default does nothing, for
