@@ -60,7 +60,7 @@ impl Renderer {
     /// 2. Calls `paint` with a mutable reference to the back buffer.
     /// 3. Diffs the back buffer against the front buffer.
     /// 4. Pushes changed cells to the backend.
-    /// 5. Sets the cursor.
+    /// 5. Sets the cursor and, while it is shown, the caret size.
     /// 6. Flushes.
     /// 7. Swaps back/front.
     ///

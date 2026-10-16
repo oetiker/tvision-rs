@@ -345,24 +345,26 @@ impl Backend for CrosstermBackend {
         }
     }
 
-    /// Map the caret size onto a terminal cursor style. A terminal offers
-    /// shapes, not percentages: a size above 50 fills most of the cell and
-    /// shows as a block, a smaller one as an underline (the DOS and Windows
-    /// console caret grows up from the bottom of the cell). Blinking, as the
-    /// console caret does. Sent only when the size changes.
+    /// Map the caret size onto a terminal cursor style, as the terminal
+    /// platform layer of the original does: the full-cell caret (100) is made
+    /// "very visible" — here a blinking block — and every other size keeps the
+    /// terminal's own caret shape. Sent only when the size changes.
     ///
     /// # Turbo Vision heritage
-    /// `DisplayBuffer::flushScreen` (`dispbuff.cpp`) likewise calls the
-    /// display's `setCaretSize` only when the size changed.
+    /// Ports `NcursesDisplay::setCaretSize` (`ncurdisp.cpp:86-97`):
+    /// `curs_set(size == 100 ? 2 : 1)`, where `1` is the terminal's normal
+    /// caret. ncurses' "very visible" (terminfo `cvvis`) varies by terminal;
+    /// a block is the portable way to show it. `DisplayBuffer::flushScreen`
+    /// (`dispbuff.cpp:220-221`) likewise calls `setCaretSize` only on change.
     fn set_caret_size(&mut self, size: u8) {
         if self.caret_size == Some(size) {
             return;
         }
         self.caret_size = Some(size);
-        let style = if size > 50 {
+        let style = if size == crate::backend::CARET_INSERT {
             SetCursorStyle::BlinkingBlock
         } else {
-            SetCursorStyle::BlinkingUnderScore
+            SetCursorStyle::DefaultUserShape
         };
         let _ = queue!(self.out, style);
     }

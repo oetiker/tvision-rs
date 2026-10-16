@@ -619,7 +619,8 @@ impl ViewState {
         self.state.cursor_ins = true;
     }
 
-    /// Switch the hardware cursor to underline (normal) shape.
+    /// Switch the hardware cursor to the normal shape (on a terminal, the
+    /// terminal's own caret).
     ///
     /// Clears [`State::cursor_ins`]. This is the default shape; call this after
     /// [`block_cursor`](Self::block_cursor) when leaving insert mode.
@@ -1053,7 +1054,7 @@ pub trait View {
     /// percentage of the character cell (1..=100). Base:
     /// [`CARET_INSERT`](crate::backend::CARET_INSERT) (a block) when the
     /// `cursor_ins` state is set, else
-    /// [`CARET_NORMAL`](crate::backend::CARET_NORMAL) (a thin underline).
+    /// [`CARET_NORMAL`](crate::backend::CARET_NORMAL) (the normal caret).
     /// The event loop reads it along the same focused chain as
     /// [`cursor_request`](Self::cursor_request);
     /// [`Group`](crate::view::Group) overrides it to descend into its current

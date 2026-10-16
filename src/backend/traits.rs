@@ -9,8 +9,9 @@ use std::time::Duration;
 use crate::event::Event;
 use crate::screen::Cell;
 
-/// Caret size for the normal (insert-mode) caret: a thin line, 1% of the
-/// cell. See [`Backend::set_caret_size`].
+/// Caret size for the normal (insert-mode) caret, 1% of the cell. A terminal
+/// backend shows it as the terminal's own caret shape. See
+/// [`Backend::set_caret_size`].
 ///
 /// # Turbo Vision heritage
 /// `TScreen::cursorLines & 0x0F`, which on the modern platform layer is the
@@ -84,10 +85,10 @@ pub trait Backend {
     /// hiding the caret is `set_cursor(None)`. The default does nothing, for
     /// backends that cannot change the caret shape.
     ///
-    /// The [`CrosstermBackend`](crate::backend::CrosstermBackend) shows sizes
-    /// above 50 as a blinking block and smaller sizes as a blinking
-    /// underline, and restores the terminal's own caret shape on exit and
-    /// suspend.
+    /// The [`CrosstermBackend`](crate::backend::CrosstermBackend) shows
+    /// [`CARET_INSERT`] as a blinking block and keeps the terminal's own caret
+    /// shape for every other size (as the original's ncurses display does),
+    /// and restores the terminal's shape on exit and suspend.
     ///
     /// # Turbo Vision heritage
     /// Ports `THardwareInfo::setCaretSize` (`hardware.cpp`). A size of `0`
