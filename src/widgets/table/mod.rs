@@ -42,7 +42,8 @@
 //! The user arranges the columns from the header:
 //!
 //! - **Resize:** drag the separator cell right of a label (the cell after the
-//!   last column too). The width follows the pointer, clamped to the column's
+//!   last column too, or the last column's own last cell when it ends at the
+//!   view's right edge). The width follows the pointer, clamped to the column's
 //!   [`min_width`](ColumnSpec::min_width) and to
 //!   [`MAX_COLUMN_WIDTH`](layout::MAX_COLUMN_WIDTH); the column turns
 //!   [`fixed`](ColumnSpec::fixed) (a flex column stops stretching), so the

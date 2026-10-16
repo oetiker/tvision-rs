@@ -137,6 +137,13 @@ impl ColumnSpec {
         self.movable = movable;
         self
     }
+
+    /// Builder: keep the column at `width` instead of shrinking it to fit
+    /// (default `false`; see [`fixed`](Self::fixed)).
+    pub fn fixed(mut self, fixed: bool) -> Self {
+        self.fixed = fixed;
+        self
+    }
 }
 
 /// The widest a column is ever laid out, in cells. Every cell is padded to its
@@ -379,13 +386,18 @@ impl RowLayout {
 
     /// The scrolling layout column whose right-hand separator cell is under
     /// text-relative column `x` at `offset` — the resize handle. The cell
-    /// right after the last column counts too, so the last column can grow.
+    /// right after the last column counts too, so the last column can grow;
+    /// when the last column ends on the view's last cell (it fills or
+    /// overflows the view), that cell is its handle instead.
     pub fn separator_at(&self, x: i32, offset: i32) -> Option<usize> {
         let cx = self.content_x(x, offset)?;
-        self.spans()
-            .into_iter()
-            .find(|&(_, _, end)| end == cx)
-            .map(|(i, _, _)| i)
+        let spans = self.spans();
+        if let Some(&(i, _, _)) = spans.iter().find(|&&(_, _, end)| end == cx) {
+            return Some(i);
+        }
+        let &(last, _, end) = spans.last()?;
+        let on_last_cell = x - self.frozen_width == self.view - 1;
+        (on_last_cell && end == cx + 1).then_some(last)
     }
 }
 
