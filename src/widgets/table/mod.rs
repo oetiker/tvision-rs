@@ -30,7 +30,8 @@
 //! over go one each to the leftmost flex columns), or stays empty without
 //! one. When the columns still do not fit at their `min_width`s, they scroll
 //! horizontally by display cells: the header scrolls with the rows, the
-//! multi-select check column stays put, ←/→ scroll one cell, and an optional
+//! multi-select check column stays put, ←/→ scroll one cell (past the cell
+//! cursor's stops, see [Editing](#editing)), and an optional
 //! horizontal bar ([`Table::with_h_bar`]) shows and drives the offset
 //! ([`Table::h_offset`] / [`Table::set_h_offset`]); while the columns fit,
 //! the bar's range is 0. A resize changes the bars' page steps and the
@@ -60,6 +61,35 @@
 //! [`ColumnSpec::resizable`] and [`ColumnSpec::movable`] turn the drags off
 //! per column. [`Table::column_layout`] / [`Table::set_column_layout`] read
 //! and restore the arrangement for persisting it.
+//!
+//! # Editing
+//!
+//! A column built with [`ColumnSpec::editable`] can be edited in place. While
+//! at least one visible column is editable the focused row shows a **cell
+//! cursor** ([`Role::TableCellCursor`](crate::theme::Role::TableCellCursor)):
+//! ←/→ move it between the editable columns in display order, scrolling it
+//! into view; at the first or last one the keys scroll the columns as usual.
+//! A click on an editable cell puts the cursor there.
+//!
+//! F2, or a double-click on an editable cell, opens an
+//! [`InputLine`](crate::widgets::InputLine) over the cell, pre-filled with
+//! its text, all selected, with the column's
+//! [`validator`](ColumnSpec::validator) if it has one. Enter stores the text
+//! through [`TableModel::set_cell`]; a validator or a `set_cell` that refuses
+//! it shows its message in an error box and the editor stays open. Esc
+//! cancels; so does losing the focus or a click outside the editor. Tab and
+//! Shift-Tab store and open the next/previous editable cell of the row (past
+//! the last one the edit just ends). An unchanged text stores nothing.
+//! Enter without an open editor keeps its list meaning, and a double-click
+//! on a cell that is not editable still chooses (single mode) or toggles
+//! (multi mode) the row.
+//!
+//! After a store the sort is re-applied and the focus follows the row's key.
+//! The editor stays over its cell through a re-sort, a horizontal scroll, a
+//! column resize or move and a table resize (a resize scrolls the cell back
+//! into view); once its cell is off screen (scrolled away, its column
+//! hidden) the editor hides and the table's next event cancels the edit. A
+//! press on the header and [`Table::set_model`] cancel it too.
 //!
 //! # Data
 //!
@@ -96,7 +126,8 @@
 //! and
 //! [`Command::LIST_ITEM_SELECTED`] (single mode: Space or a double-click chose
 //! the focused row) and [`Command::TABLE_COLUMNS_CHANGED`] (a column resized,
-//! moved, shown or hidden). Programmatic setters do not broadcast — the caller already
+//! moved, shown or hidden) and [`Command::TABLE_CELL_EDITED`] (a cell editor
+//! stored a new text). Programmatic setters do not broadcast — the caller already
 //! knows what it changed.
 //!
 //! # Turbo Vision heritage
@@ -110,6 +141,7 @@
 
 mod body;
 mod columns;
+mod edit;
 pub mod layout;
 pub mod model;
 
@@ -125,7 +157,7 @@ use crate::widgets::list_viewer;
 
 use body::{TableBody, TableHeader};
 pub use columns::ColumnState;
-pub use layout::{Align, ColumnSpec, SortDir};
+pub use layout::{Align, ColumnSpec, SortDir, ValidatorFactory};
 pub use model::{RowKey, SortKey, TableModel, VecModel};
 
 /// How a [`Table`] selects rows.
@@ -169,6 +201,9 @@ struct TableData {
     /// Horizontal scroll offset of the non-frozen columns, in display cells.
     /// Clamped to the overflow wherever a layout is at hand (draw, publish).
     h_offset: i32,
+    /// The model column the cell cursor was last put on; see
+    /// [`cursor_col`](TableData::cursor_col) for the one in effect.
+    cursor: Option<usize>,
 }
 
 type Shared = Rc<RefCell<TableData>>;
@@ -275,6 +310,8 @@ pub struct Table {
     /// column popup is placed with both.
     abs_origin: Point,
     screen: Point,
+    /// The open cell editor, if any.
+    edit: Option<edit::CellEdit>,
 }
 
 impl Table {
@@ -302,6 +339,7 @@ impl Table {
             col_order,
             drop_x: None,
             h_offset: 0,
+            cursor: None,
         }));
         group.insert(Box::new(TableHeader::new(size.x, data.clone())));
         let body_bounds = Rect::new(0, 1, size.x, size.y.max(1));
@@ -320,6 +358,7 @@ impl Table {
             drag: None,
             abs_origin: Point::new(0, 0),
             screen: Point::new(0, 0),
+            edit: None,
         }
     }
 
@@ -383,6 +422,8 @@ impl Table {
     /// sort is re-applied, marks of vanished rows are dropped, and the scroll
     /// bar's range is updated. Does not broadcast.
     pub fn set_model(&mut self, model: Box<dyn TableModel>, ctx: &mut Context) {
+        // The edited cell may be gone or hold other text now.
+        self.cancel_edit(ctx);
         let idx = self.load_model(model);
         self.publish(idx, ctx);
     }
@@ -653,6 +694,9 @@ impl View for Table {
     fn set_state(&mut self, flag: StateFlag, enable: bool, ctx: &mut Context) {
         self.ensure_published(ctx);
         self.group.set_state(flag, enable, ctx);
+        if flag == StateFlag::Focused {
+            self.edit_focus(enable, ctx);
+        }
     }
 
     /// Remember where the table sits on screen (for the drag tracking and
@@ -660,12 +704,18 @@ impl View for Table {
     fn draw(&mut self, ctx: &mut DrawCtx) {
         self.abs_origin = ctx.origin();
         self.screen = ctx.screen_size();
+        self.place_editor(false);
         self.group.draw(ctx);
     }
 
     fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
         self.ensure_published(ctx);
-        if self.header_event(ev, ctx) {
+        let used = if self.edit.is_some() {
+            self.edit_event(ev, ctx)
+        } else {
+            self.start_event(ev, ctx)
+        };
+        if used || self.header_event(ev, ctx) {
             ev.clear();
         }
         if let Event::Command(command) = *ev {
@@ -698,6 +748,8 @@ impl View for Table {
         if self.group.state().size != old {
             self.needs_publish = true;
             self.resized = true;
+            // Keep the edited cell on screen under the editor.
+            self.place_editor(true);
         }
     }
 
