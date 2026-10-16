@@ -9,7 +9,7 @@
 //!
 //! - a one-row header that draws the column labels and the sort marker
 //!   (`▲`/`▼`); a click on a label sorts by that column, a second click flips
-//!   the direction;
+//!   the direction (see [Columns](#columns) for the drags and the popup);
 //! - a row body that is a [`ListViewer`](crate::widgets::ListViewer) (one
 //!   column, item text = the formatted row), so keys, mouse, focus colours,
 //!   type-to-search and the vertical scroll bar behave exactly like a
@@ -36,6 +36,29 @@
 //! the bar's range is 0. A resize changes the bars' page steps and the
 //! horizontal range; the table re-publishes them on its next event (a timer,
 //! a key, a window switch), since a resize hands it no [`Context`].
+//!
+//! # Columns
+//!
+//! The user arranges the columns from the header:
+//!
+//! - **Resize:** drag the separator cell right of a label (the cell after the
+//!   last column too). The width follows the pointer, clamped to the column's
+//!   [`min_width`](ColumnSpec::min_width) and to
+//!   [`MAX_COLUMN_WIDTH`](layout::MAX_COLUMN_WIDTH); the column turns
+//!   [`fixed`](ColumnSpec::fixed) (a flex column stops stretching), so the
+//!   layout keeps that width and scrolls instead of shrinking it.
+//! - **Move:** press a label and drag off it; a marker shows the gap the
+//!   column lands in, the release moves it there. A press and release without
+//!   leaving the label sorts instead. Sort, width and hidden state belong to
+//!   the column, so they move with it.
+//! - **Show/hide:** a right-click on the header (or
+//!   [`Command::TABLE_COLUMNS`]) opens a popup listing every column with a
+//!   check mark; choosing one shows or hides it. The last visible column
+//!   stays. Each item posts [`Table::toggle_column_command`].
+//!
+//! [`ColumnSpec::resizable`] and [`ColumnSpec::movable`] turn the drags off
+//! per column. [`Table::column_layout`] / [`Table::set_column_layout`] read
+//! and restore the arrangement for persisting it.
 //!
 //! # Data
 //!
@@ -71,7 +94,8 @@
 //! mode: a click on a row's `[ ]` box, Space or a double-click toggled a row)
 //! and
 //! [`Command::LIST_ITEM_SELECTED`] (single mode: Space or a double-click chose
-//! the focused row). Programmatic setters do not broadcast — the caller already
+//! the focused row) and [`Command::TABLE_COLUMNS_CHANGED`] (a column resized,
+//! moved, shown or hidden). Programmatic setters do not broadcast — the caller already
 //! knows what it changed.
 //!
 //! # Turbo Vision heritage
@@ -84,6 +108,7 @@
 //! the list viewer.
 
 mod body;
+mod columns;
 pub mod layout;
 pub mod model;
 
@@ -94,10 +119,11 @@ use std::rc::Rc;
 use crate::command::Command;
 use crate::data::FieldValue;
 use crate::event::Event;
-use crate::view::{Context, Group, Rect, StateFlag, View, ViewId};
+use crate::view::{Context, DrawCtx, Group, Point, Rect, StateFlag, View, ViewId};
 use crate::widgets::list_viewer;
 
 use body::{TableBody, TableHeader};
+pub use columns::ColumnState;
 pub use layout::{Align, ColumnSpec, SortDir};
 pub use model::{RowKey, SortKey, TableModel, VecModel};
 
@@ -133,8 +159,12 @@ struct TableData {
     /// User notifications queued by the children, broadcast by the table with
     /// its own id after it routed the event.
     pending: Vec<Command>,
-    /// A header click waiting for the table to sort by that column.
-    header_click: Option<usize>,
+    /// Display order of the columns: `col_order[display_col] = model_col`
+    /// (hidden columns included). Sort, width and hidden state stay keyed by
+    /// the model column, so they follow a moved column.
+    col_order: Vec<usize>,
+    /// Header-local x of a column drag's drop indicator, drawn by the header.
+    drop_x: Option<i32>,
     /// Horizontal scroll offset of the non-frozen columns, in display cells.
     /// Clamped to the overflow wherever a layout is at hand (draw, publish).
     h_offset: i32,
@@ -183,8 +213,24 @@ impl TableData {
         if self.mode == SelectionMode::Multi {
             cols.push(layout::check_column());
         }
-        cols.extend(self.columns.iter().cloned());
+        cols.extend(self.display_columns());
         cols
+    }
+
+    /// The column specs in display order.
+    fn display_columns(&self) -> Vec<ColumnSpec> {
+        self.col_order
+            .iter()
+            .map(|&c| self.columns[c].clone())
+            .collect()
+    }
+
+    /// The model column at layout index `layout_col` (`None` for the check
+    /// column or past the end).
+    fn model_col(&self, layout_col: usize) -> Option<usize> {
+        layout_col
+            .checked_sub(self.check_cols())
+            .and_then(|i| self.col_order.get(i).copied())
     }
 
     /// How many layout columns precede the user columns (1 in multi mode).
@@ -192,12 +238,18 @@ impl TableData {
         usize::from(self.mode == SelectionMode::Multi)
     }
 
-    /// The first visible column at or after `from` (wrapping), if any.
+    /// The model column of the first visible column at or after display
+    /// position `from` (wrapping), if any.
     fn visible_from(&self, from: usize) -> Option<usize> {
-        let n = self.columns.len();
+        let n = self.col_order.len();
         (0..n)
-            .map(|step| (from + step) % n)
+            .map(|step| self.col_order[(from + step) % n])
             .find(|&c| !self.columns[c].hidden)
+    }
+
+    /// The display position of model column `col`.
+    fn display_pos(&self, col: usize) -> Option<usize> {
+        self.col_order.iter().position(|&c| c == col)
     }
 }
 
@@ -215,6 +267,13 @@ pub struct Table {
     published: bool,
     /// The size changed since the last publish.
     resized: bool,
+    /// A header press being tracked (resize or move), if any.
+    drag: Option<columns::HeaderDrag>,
+    /// Absolute screen position of the table's `(0, 0)` and the screen size,
+    /// cached by `draw`: the drag tracking localizes against the first, the
+    /// column popup is placed with both.
+    abs_origin: Point,
+    screen: Point,
 }
 
 impl Table {
@@ -229,6 +288,7 @@ impl Table {
         // row, sorts the column), like a list box.
         group.state_mut().options.first_click = true;
         let size = group.state().size;
+        let col_order = (0..columns.len()).collect();
         let data: Shared = Rc::new(RefCell::new(TableData {
             model: Box::new(VecModel::default()),
             columns,
@@ -238,7 +298,8 @@ impl Table {
             selected: BTreeSet::new(),
             focused: 0,
             pending: Vec::new(),
-            header_click: None,
+            col_order,
+            drop_x: None,
             h_offset: 0,
         }));
         group.insert(Box::new(TableHeader::new(size.x, data.clone())));
@@ -255,6 +316,9 @@ impl Table {
             needs_publish: true,
             published: false,
             resized: false,
+            drag: None,
+            abs_origin: Point::new(0, 0),
+            screen: Point::new(0, 0),
         }
     }
 
@@ -502,10 +566,14 @@ impl Table {
         }
     }
 
-    /// [`Command::TABLE_SORT_NEXT`]: the next visible column, ascending.
+    /// [`Command::TABLE_SORT_NEXT`]: the next visible column (in display
+    /// order), ascending.
     fn next_sort(&self) -> Option<(usize, SortDir)> {
         let d = self.data.borrow();
-        let from = d.sort.map_or(0, |(c, _)| c + 1);
+        let from = d
+            .sort
+            .and_then(|(c, _)| d.display_pos(c))
+            .map_or(0, |p| p + 1);
         d.visible_from(from).map(|c| (c, SortDir::Asc))
     }
 
@@ -564,14 +632,9 @@ impl Table {
         self.data.borrow_mut().selected.clear();
     }
 
-    /// Broadcast the queued user notifications (and run a pending header
-    /// sort) with this table's id as `source`.
+    /// Broadcast the queued user notifications with this table's id as
+    /// `source`.
     fn drain(&mut self, ctx: &mut Context) {
-        let click = self.data.borrow_mut().header_click.take();
-        if let Some(col) = click {
-            let sort = self.click_sort(col);
-            self.user_sort(sort, ctx);
-        }
         let pending = std::mem::take(&mut self.data.borrow_mut().pending);
         let source = self.group.state().id();
         for command in pending {
@@ -591,8 +654,19 @@ impl View for Table {
         self.group.set_state(flag, enable, ctx);
     }
 
+    /// Remember where the table sits on screen (for the drag tracking and
+    /// the column popup), then draw the header and the rows.
+    fn draw(&mut self, ctx: &mut DrawCtx) {
+        self.abs_origin = ctx.origin();
+        self.screen = ctx.screen_size();
+        self.group.draw(ctx);
+    }
+
     fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
         self.ensure_published(ctx);
+        if self.header_event(ev, ctx) {
+            ev.clear();
+        }
         if let Event::Command(command) = *ev {
             let sort = if command == Command::TABLE_SORT_NEXT {
                 Some(self.next_sort())

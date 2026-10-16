@@ -128,6 +128,12 @@ a `flex` column takes the spare width when the table is wider than its
 columns. Columns that do not fit at their `min_width` scroll horizontally:
 ←/→ or the horizontal bar (`with_h_bar`) move them, the header moves along,
 the check column stays put. Resize the window in the demo to see both.
+Drag the separator right of a label to resize that column (it then keeps that
+width), drag a label to move the column (a marker shows where it lands), and
+right-click the header to show or hide columns from a popup; `TABLE_COLUMNS`
+opens the same popup from a key or menu. Each of these broadcasts
+`TABLE_COLUMNS_CHANGED`; `column_layout()` / `set_column_layout()` save and
+restore the arrangement. `resizable(false)` / `movable(false)` lock a column.
 In `SelectionMode::Multi` the rows get a leading check column drawn like
 check boxes: click a row's `[ ]` box, or press Space, to mark it. The table
 broadcasts `TABLE_SORT_CHANGED`, `TABLE_SELECTION_CHANGED` and, in single

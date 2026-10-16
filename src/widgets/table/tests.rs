@@ -130,8 +130,27 @@ impl Fixture {
             .1
     }
 
+    /// A left click: on a row a press; on the header (`y == 0`) a press
+    /// and a release at the same cell, since a header press is tracked and
+    /// acts on release.
     fn click(&mut self, x: i32, y: i32) -> Broadcasts {
-        self.send(mouse_down(x, y, false)).1
+        let mut out = self.send(mouse_down(x, y, false)).1;
+        if y == 0 {
+            out.extend(self.send(mouse_at(MouseKind::Up, x, 0)).1);
+        }
+        out
+    }
+
+    /// Press the header at `from`, move through `path`, release at the last
+    /// point of `path` (or at `from`); return the broadcasts.
+    fn drag(&mut self, from: i32, path: &[i32]) -> Broadcasts {
+        let mut out = self.send(mouse_down(from, 0, false)).1;
+        for &x in path {
+            out.extend(self.send(mouse_at(MouseKind::Move, x, 0)).1);
+        }
+        let end = path.last().copied().unwrap_or(from);
+        out.extend(self.send(mouse_at(MouseKind::Up, end, 0)).1);
+        out
     }
 
     fn focus(&mut self, on: bool) {
@@ -161,6 +180,29 @@ fn mouse_down(x: i32, y: i32, double: bool) -> Event {
         },
         ..Default::default()
     })
+}
+
+#[derive(Clone, Copy)]
+enum MouseKind {
+    Move,
+    Up,
+}
+
+/// A left-button move or release at table-local `(x, y)` — what the drag
+/// tracking delivers to the table.
+fn mouse_at(kind: MouseKind, x: i32, y: i32) -> Event {
+    let me = MouseEvent {
+        position: Point::new(x, y),
+        buttons: MouseButtons {
+            left: matches!(kind, MouseKind::Move),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    match kind {
+        MouseKind::Move => Event::MouseMove(me),
+        MouseKind::Up => Event::MouseUp(me),
+    }
 }
 
 fn keys(v: Vec<RowKey>) -> Vec<String> {
@@ -970,4 +1012,387 @@ fn snapshot_wide_glyph_at_the_scroll_edge() {
     // space, and 本 starts under the header's "M" of NAME.
     fx.with(|t, ctx| t.set_h_offset(6, ctx));
     insta::assert_snapshot!(fx.render(16, 4));
+}
+
+// -- header interaction: resize, move, show/hide, layout ----------------------
+
+// The fixture header (W = 31): ID at view x 1..5, separator 5; NAME 6..16,
+// separator 16; STATE 17..25, separator 25; CPU 26..31.
+
+fn changed(out: &Broadcasts) -> usize {
+    out.iter()
+        .filter(|(c, _)| *c == Command::TABLE_COLUMNS_CHANGED)
+        .count()
+}
+
+fn width_of(fx: &mut Fixture, col: usize) -> i32 {
+    fx.t().column_layout()[col].width
+}
+
+/// The layout width of model column `col` at the table's current size.
+fn laid_out(fx: &mut Fixture, col: usize) -> i32 {
+    let t = fx.t();
+    let size_x = t.state().size.x;
+    let d = t.data.borrow();
+    let l = body::row_layout(&d, size_x);
+    l.widths[d.display_pos(col).unwrap() + l.frozen]
+}
+
+#[test]
+fn a_header_press_starts_mouse_tracking_on_the_table() {
+    let mut fx = Fixture::table();
+    let deferred = fx.with_deferred(|t, ctx| t.handle_event(&mut mouse_down(8, 0, false), ctx));
+    assert!(
+        deferred
+            .iter()
+            .any(|d| matches!(d, Deferred::PushCapture(_))),
+        "a label press is tracked until the release"
+    );
+    // Nothing happens before the release.
+    assert_eq!(fx.t().sort_spec(), None);
+}
+
+#[test]
+fn dragging_a_separator_resizes_and_broadcasts_on_release() {
+    let mut fx = Fixture::table();
+    let id = Some(fx.id);
+    let out = fx.drag(16, &[18, 19]);
+    assert_eq!(width_of(&mut fx, 1), 13, "NAME: 10 + 3");
+    assert_eq!(
+        laid_out(&mut fx, 1),
+        13,
+        "a dragged width holds in the layout"
+    );
+    assert!(fx.t().column_layout()[1].fixed);
+    assert_eq!(out, [(Command::TABLE_COLUMNS_CHANGED, id)]);
+    assert_eq!(fx.t().sort_spec(), None, "a resize does not sort");
+}
+
+#[test]
+fn a_separator_press_without_a_move_changes_nothing() {
+    let mut fx = Fixture::table();
+    let before = fx.t().column_layout();
+    let out = fx.drag(16, &[16]);
+    assert_eq!(fx.t().column_layout(), before);
+    assert!(out.is_empty());
+}
+
+#[test]
+fn resize_clamps_to_min_width_and_to_the_cap() {
+    let mut cols = columns();
+    cols[1] = cols[1].clone().min_width(3);
+    let mut fx =
+        Fixture::new(Table::new(Rect::new(0, 0, W, H), cols, None).with_model(model(&ROWS)));
+    // A column without a min_width stops at one cell.
+    fx.drag(5, &[-40]);
+    assert_eq!(width_of(&mut fx, 0), 1);
+    // ID now ends at view x 2, NAME at 13.
+    fx.drag(13, &[2]);
+    assert_eq!(width_of(&mut fx, 1), 3, "never below min_width");
+    // NAME now ends at view x 6.
+    fx.drag(6, &[6 + 5000]);
+    assert_eq!(width_of(&mut fx, 1), layout::MAX_COLUMN_WIDTH);
+}
+
+#[test]
+fn resizing_a_flex_column_makes_it_fixed() {
+    let mut cols = columns();
+    cols[1] = cols[1].clone().flex(1);
+    let mut fx =
+        Fixture::new(Table::new(Rect::new(0, 0, W + 6, H), cols, None).with_model(model(&ROWS)));
+    // NAME is stretched to 16 cells (view x 6..22), its separator at 22.
+    assert_eq!(laid_out(&mut fx, 1), 16);
+    fx.drag(22, &[19]);
+    let s = &fx.t().column_layout()[1];
+    assert_eq!((s.width, s.flex, s.fixed), (13, 0, true));
+    assert_eq!(laid_out(&mut fx, 1), 13, "the spare width stays empty now");
+}
+
+#[test]
+fn a_column_that_is_not_resizable_ignores_separator_drags() {
+    let mut cols = columns();
+    cols[1] = cols[1].clone().resizable(false);
+    let mut fx =
+        Fixture::new(Table::new(Rect::new(0, 0, W, H), cols, None).with_model(model(&ROWS)));
+    let out = fx.drag(16, &[20]);
+    assert_eq!(width_of(&mut fx, 1), 10);
+    assert!(out.is_empty());
+    // Its neighbours still resize.
+    fx.drag(5, &[7]);
+    assert_eq!(width_of(&mut fx, 0), 6);
+}
+
+#[test]
+fn the_separator_hit_test_goes_through_the_h_offset() {
+    let mut fx = scrolling(21, None);
+    fx.with(|t, ctx| t.set_h_offset(5, ctx));
+    // Check cell + separator = 4 frozen text cells; NAME's separator is at
+    // content x 15 → text x 4 + 15 − 5 = 14 → view x 15.
+    fx.drag(15, &[17]);
+    assert_eq!(width_of(&mut fx, 1), 12);
+    assert_eq!(width_of(&mut fx, 0), 4, "ID (scrolled off) is untouched");
+}
+
+#[test]
+fn a_resize_republishes_the_h_bar_range() {
+    let bar = mint_bar();
+    let mut fx = scrolling(21, Some(bar));
+    // Check cell + separator take 4 text cells: NAME's separator (content
+    // x 15) is at view x 20.
+    let mut ev = vec![mouse_down(20, 0, false)];
+    ev.push(mouse_at(MouseKind::Move, 23, 0));
+    // Content 30 in a view of 16: max offset 14; NAME + 3 → 17.
+    let deferred = fx.with_deferred(|t, ctx| {
+        for e in &mut ev {
+            t.handle_event(e, ctx);
+        }
+    });
+    assert_eq!(bar_params(&deferred, bar).0, Some(17));
+}
+
+#[test]
+fn dragging_a_label_moves_the_column_on_release() {
+    let mut fx = Fixture::table();
+    let id = Some(fx.id);
+    // Drop past STATE's middle: before CPU.
+    let out = fx.drag(2, &[10, 24]);
+    let order: Vec<usize> = fx.t().column_layout().iter().map(|s| s.order).collect();
+    assert_eq!(order, [2, 0, 1, 3], "ID now sits third");
+    assert_eq!(out, [(Command::TABLE_COLUMNS_CHANGED, id)]);
+    assert_eq!(fx.t().sort_spec(), None, "a move does not sort");
+    // The cells moved with the label.
+    insta::assert_snapshot!(fx.render(W as u16, H as u16));
+}
+
+#[test]
+fn a_move_keeps_sort_and_hidden_state_with_the_column() {
+    let mut fx = Fixture::table();
+    fx.with(|t, ctx| t.sort_by(0, SortDir::Asc, ctx));
+    fx.t().set_column_hidden(2, true);
+    // ID 1..5, NAME 6..16, CPU 17..22: drop NAME before ID.
+    let out = fx.drag(8, &[1]);
+    assert_eq!(changed(&out), 1);
+    let order: Vec<usize> = fx.t().column_layout().iter().map(|s| s.order).collect();
+    assert_eq!(order, [1, 0, 2, 3]);
+    assert_eq!(fx.t().sort_spec(), Some((0, SortDir::Asc)), "still ID");
+    assert!(fx.t().is_column_hidden(2), "STATE still hidden");
+    insta::assert_snapshot!(fx.render(W as u16, H as u16));
+}
+
+#[test]
+fn a_drag_shows_the_drop_indicator_until_release() {
+    let mut fx = Fixture::table();
+    fx.send(mouse_down(2, 0, false));
+    fx.send(mouse_at(MouseKind::Move, 24, 0));
+    // The gap before CPU: its separator cell, view x 25.
+    assert_eq!(fx.t().data.borrow().drop_x, Some(25));
+    insta::assert_snapshot!(fx.render(W as u16, H as u16));
+    fx.send(mouse_at(MouseKind::Up, 24, 0));
+    assert_eq!(fx.t().data.borrow().drop_x, None);
+}
+
+#[test]
+fn a_small_move_inside_the_label_still_sorts() {
+    let mut fx = Fixture::table();
+    let out = fx.drag(8, &[10, 14]);
+    assert_eq!(fx.t().sort_spec(), Some((1, SortDir::Asc)));
+    assert_eq!(out, [(Command::TABLE_SORT_CHANGED, Some(fx.id))]);
+    let order: Vec<usize> = fx.t().column_layout().iter().map(|s| s.order).collect();
+    assert_eq!(order, [0, 1, 2, 3]);
+}
+
+#[test]
+fn dropping_a_column_next_to_itself_changes_nothing() {
+    let mut fx = Fixture::table();
+    // Out of NAME and back between ID and NAME: the gap NAME already fills.
+    let out = fx.drag(8, &[20, 6]);
+    let order: Vec<usize> = fx.t().column_layout().iter().map(|s| s.order).collect();
+    assert_eq!(order, [0, 1, 2, 3]);
+    assert!(out.is_empty(), "no move, and a drag is no click: {out:?}");
+}
+
+#[test]
+fn a_column_that_is_not_movable_only_sorts() {
+    let mut cols = columns();
+    cols[0] = cols[0].clone().movable(false);
+    let mut fx =
+        Fixture::new(Table::new(Rect::new(0, 0, W, H), cols, None).with_model(model(&ROWS)));
+    fx.drag(2, &[24]);
+    let order: Vec<usize> = fx.t().column_layout().iter().map(|s| s.order).collect();
+    assert_eq!(order, [0, 1, 2, 3]);
+    assert_eq!(fx.t().data.borrow().drop_x, None);
+    assert_eq!(fx.t().sort_spec(), Some((0, SortDir::Asc)));
+    // Other columns still move past it.
+    fx.drag(8, &[1]);
+    let order: Vec<usize> = fx.t().column_layout().iter().map(|s| s.order).collect();
+    assert_eq!(order, [1, 0, 2, 3]);
+}
+
+#[test]
+fn an_untracked_mouse_up_is_ignored() {
+    let mut fx = Fixture::table();
+    let (ev, out) = fx.send(mouse_at(MouseKind::Up, 8, 0));
+    assert!(!ev.is_nothing(), "not the table's release");
+    assert!(out.is_empty());
+    assert_eq!(fx.t().sort_spec(), None);
+}
+
+#[test]
+fn sort_next_follows_the_display_order() {
+    let mut fx = Fixture::table();
+    fx.drag(26, &[1]); // CPU to the front: CPU ID NAME STATE
+    fx.send(Event::Command(Command::TABLE_SORT_NEXT));
+    assert_eq!(fx.t().sort_spec(), Some((3, SortDir::Asc)), "CPU first");
+    fx.send(Event::Command(Command::TABLE_SORT_NEXT));
+    assert_eq!(fx.t().sort_spec(), Some((0, SortDir::Asc)), "then ID");
+}
+
+/// The menu the last popup the deferred queue opens shows.
+fn popup_labels(deferred: &[Deferred]) -> Option<(Vec<String>, Rect)> {
+    deferred.iter().rev().find_map(|d| match d {
+        Deferred::OpenMenuBox { menu, bounds, .. } => Some((
+            menu.items
+                .iter()
+                .filter_map(|i| match i {
+                    crate::menu::MenuItem::Command { name, .. } => Some(name.clone()),
+                    _ => None,
+                })
+                .collect(),
+            *bounds,
+        )),
+        _ => None,
+    })
+}
+
+fn right_down(x: i32, y: i32) -> Event {
+    Event::MouseDown(MouseEvent {
+        position: Point::new(x, y),
+        buttons: MouseButtons {
+            right: true,
+            ..Default::default()
+        },
+        ..Default::default()
+    })
+}
+
+#[test]
+fn right_click_on_the_header_opens_the_column_popup() {
+    let mut fx = Fixture::table();
+    fx.t().set_column_hidden(2, true);
+    fx.drag(18, &[1]); // CPU (view x 17..22 with STATE hidden) first
+    fx.render(60, 20); // places the table on a 60 × 20 screen
+    let mut ev = right_down(8, 0);
+    let deferred = fx.with_deferred(|t, ctx| t.handle_event(&mut ev, ctx));
+    assert!(ev.is_nothing());
+    let (labels, bounds) = popup_labels(&deferred).expect("a popup opens");
+    assert_eq!(labels, ["[X] CPU", "[X] ID", "[X] NAME", "[ ] STATE"]);
+    assert_eq!((bounds.a.x, bounds.a.y), (8, 1), "below-right of the click");
+    assert_eq!(fx.t().sort_spec(), None, "a right-click does not sort");
+}
+
+#[test]
+fn the_columns_command_opens_the_popup_at_the_header() {
+    let mut fx = Fixture::table();
+    fx.render(60, 20);
+    let mut ev = Event::Command(Command::TABLE_COLUMNS);
+    let deferred = fx.with_deferred(|t, ctx| t.handle_event(&mut ev, ctx));
+    assert!(ev.is_nothing());
+    let (labels, bounds) = popup_labels(&deferred).expect("a popup opens");
+    assert_eq!(labels.len(), 4);
+    assert_eq!((bounds.a.x, bounds.a.y), (1, 1));
+}
+
+#[test]
+fn a_toggle_command_hides_and_shows_and_broadcasts() {
+    let mut fx = Fixture::table();
+    let id = Some(fx.id);
+    let toggle = Table::toggle_column_command(2);
+    assert_eq!(toggle, Table::toggle_column_command(2), "stable per column");
+    let (ev, out) = fx.send(Event::Command(toggle));
+    assert!(ev.is_nothing());
+    assert!(fx.t().is_column_hidden(2));
+    assert_eq!(out, [(Command::TABLE_COLUMNS_CHANGED, id)]);
+    fx.send(Event::Command(toggle));
+    assert!(!fx.t().is_column_hidden(2));
+    // A toggle for a column the table does not have bubbles.
+    let (ev, _) = fx.send(Event::Command(Table::toggle_column_command(9)));
+    assert!(!ev.is_nothing());
+}
+
+#[test]
+fn the_last_visible_column_cannot_be_hidden() {
+    let mut fx = Fixture::table();
+    for c in [0, 1, 2] {
+        fx.t().set_column_hidden(c, true);
+    }
+    let (ev, out) = fx.send(Event::Command(Table::toggle_column_command(3)));
+    assert!(ev.is_nothing(), "the command is the table's");
+    assert!(!fx.t().is_column_hidden(3));
+    assert!(out.is_empty());
+    // Showing one again works, and then CPU may go.
+    fx.send(Event::Command(Table::toggle_column_command(1)));
+    fx.send(Event::Command(Table::toggle_column_command(3)));
+    assert!(fx.t().is_column_hidden(3));
+    assert!(!fx.t().is_column_hidden(1));
+}
+
+#[test]
+fn hiding_from_the_popup_republishes_the_h_bar() {
+    let bar = mint_bar();
+    let mut fx = scrolling(21, Some(bar));
+    // Hiding NAME (10 + separator) shrinks content 30 → 19: max offset 3.
+    let mut ev = Event::Command(Table::toggle_column_command(1));
+    let deferred = fx.with_deferred(|t, ctx| t.handle_event(&mut ev, ctx));
+    assert_eq!(bar_params(&deferred, bar).0, Some(3));
+}
+
+#[test]
+fn column_layout_round_trips() {
+    let mut fx = Fixture::table();
+    fx.drag(2, &[24]); // move ID before CPU
+    fx.drag(25, &[27]); // resize ID (now third, its separator at 25)
+    fx.send(Event::Command(Table::toggle_column_command(3)));
+    let saved = fx.t().column_layout();
+    let screen = fx.render(W as u16, H as u16);
+
+    let mut other = Fixture::table();
+    other.t().set_column_layout(&saved);
+    assert_eq!(other.t().column_layout(), saved);
+    assert_eq!(other.render(W as u16, H as u16), screen);
+}
+
+#[test]
+fn set_column_layout_clamps_widths_and_keeps_unnamed_columns() {
+    let mut fx = Fixture::table();
+    fx.t().set_column_layout(&[
+        ColumnState {
+            column: 2,
+            order: 0,
+            width: 5000,
+            flex: 0,
+            fixed: false,
+            hidden: false,
+        },
+        ColumnState {
+            column: 7, // unknown: ignored
+            order: 1,
+            width: 3,
+            flex: 0,
+            fixed: false,
+            hidden: true,
+        },
+    ]);
+    let l = fx.t().column_layout();
+    assert_eq!(l[2].width, layout::MAX_COLUMN_WIDTH);
+    let order: Vec<usize> = l.iter().map(|s| s.order).collect();
+    assert_eq!(order, [1, 2, 0, 3], "STATE first, the rest in their order");
+    assert_eq!(l.len(), 4);
+}
+
+#[test]
+fn programmatic_layout_changes_do_not_broadcast() {
+    let mut fx = Fixture::table();
+    let saved = fx.t().column_layout();
+    let out = fx.with(|t, _| t.set_column_layout(&saved));
+    assert!(out.is_empty());
 }

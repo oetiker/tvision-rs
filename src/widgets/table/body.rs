@@ -7,13 +7,16 @@ use crate::theme::Role;
 use crate::view::{Context, DrawCtx, GrowMode, Point, Rect, StateFlag, View, ViewId, ViewState};
 use crate::widgets::list_viewer::{self, ListViewer, ListViewerState};
 
-use super::layout::{RowLayout, format_line, header_line};
+use std::borrow::Cow;
+
+use super::layout::{ColumnSpec, RowLayout, format_line, header_line};
+use super::model::{RowKey, TableModel};
 use super::{SelectionMode, Shared, TableData};
 use crate::widgets::cluster::check_box;
 
 /// The cell the row text (and the header text) starts at: the list viewer
 /// leaves column 0 of every row blank, and the header lines up with it.
-const TEXT_X: i32 = 1;
+pub(super) const TEXT_X: i32 = 1;
 
 /// The width available to the columns in a view `size_x` wide.
 fn text_width(size_x: i32) -> i32 {
@@ -30,8 +33,9 @@ pub(super) fn row_layout(d: &TableData, size_x: i32) -> RowLayout {
 // TableHeader
 // ---------------------------------------------------------------------------
 
-/// The column-label row. Not selectable; a click on a label records the column
-/// for the table to sort by (the table drains it after routing the event).
+/// The column-label row, in display order, with the drop indicator of a column
+/// drag. Not selectable and draw-only: the table handles every header press
+/// itself (it owns the drag tracking, the sort and the popup).
 pub(super) struct TableHeader {
     state: ViewState,
     data: Shared,
@@ -63,25 +67,45 @@ impl View for TableHeader {
         ctx.fill(self.state.get_extent(), ' ', style);
         let d = self.data.borrow();
         let l = row_layout(&d, self.state.size.x);
-        let labels = header_line(&d.columns, &l.widths[l.frozen..], d.sort);
+        // The sort marker goes on the sorted column's display position.
+        let sort = d
+            .sort
+            .and_then(|(c, dir)| d.col_order.iter().position(|&m| m == c).map(|p| (p, dir)));
+        let labels = header_line(&d.display_columns(), &l.widths[l.frozen..], sort);
         // The labels scroll with the rows; the check column's header cell is
         // blank.
         ctx.put_str(TEXT_X, 0, &l.compose("", &labels, d.h_offset), style);
+        if let Some(x) = d.drop_x {
+            ctx.put_char(x, 0, DROP_MARK, ctx.style(Role::ListFocused));
+        }
+    }
+}
+
+/// The drop indicator a column drag draws on the target gap.
+const DROP_MARK: char = '┃';
+
+/// A model seen with its columns in display order: display column `i` is
+/// model column `cols[i]`, so the layout helpers format a moved column's
+/// cells under its label.
+struct DisplayModel<'a> {
+    model: &'a dyn TableModel,
+    cols: &'a [usize],
+}
+
+impl TableModel for DisplayModel<'_> {
+    fn row_count(&self) -> usize {
+        self.model.row_count()
     }
 
-    fn handle_event(&mut self, ev: &mut Event, _ctx: &mut Context) {
-        if let Event::MouseDown(me) = *ev {
-            let mut d = self.data.borrow_mut();
-            let l = row_layout(&d, self.state.size.x);
-            // Layout columns before `frozen` are the check column: its blank
-            // header cell does nothing.
-            if let Some(col) = l.column_at(me.position.x - TEXT_X, d.h_offset)
-                && col >= l.frozen
-            {
-                d.header_click = Some(col - l.frozen);
-            }
-            ev.clear();
+    fn cell(&self, row: usize, col: usize) -> Cow<'_, str> {
+        match self.cols.get(col) {
+            Some(&c) => self.model.cell(row, c),
+            None => Cow::Borrowed(""),
         }
+    }
+
+    fn row_key(&self, row: usize) -> RowKey {
+        self.model.row_key(row)
     }
 }
 
@@ -98,6 +122,8 @@ pub(super) struct TableBody {
     /// The row geometry for the current view width, refreshed by every
     /// `draw` before the shared draw calls back into `get_text`.
     layout: RowLayout,
+    /// The column specs in display order, refreshed with `layout`.
+    display: Vec<ColumnSpec>,
 }
 
 impl TableBody {
@@ -116,6 +142,7 @@ impl TableBody {
             lv,
             data,
             layout: RowLayout::new(&[], 0, 0),
+            display: Vec::new(),
         }
     }
 
@@ -183,7 +210,11 @@ impl ListViewer for TableBody {
         let Some(rest_widths) = l.widths.get(l.frozen..) else {
             return String::new();
         };
-        let line = format_line(&*d.model, row, rest_widths, &d.columns);
+        let model = DisplayModel {
+            model: &*d.model,
+            cols: &d.col_order,
+        };
+        let line = format_line(&model, row, rest_widths, &self.display);
         let check = if l.frozen > 0 {
             let marked = d
                 .key_at(item as usize)
@@ -252,6 +283,7 @@ impl View for TableBody {
         {
             let mut d = self.data.borrow_mut();
             self.layout = row_layout(&d, self.lv.state.size.x);
+            self.display = d.display_columns();
             // A wider view may have shrunk the overflow under the offset.
             d.h_offset = self.layout.clamp(d.h_offset);
         }

@@ -62,6 +62,7 @@ pub use splitter::{Constraints, DividerStyle, Orientation, Splitter};
 pub use static_text::{Label, ParamText, StaticText};
 pub use tab_bar::TabBar;
 pub use table::{
-    Align, ColumnSpec, RowKey, SelectionMode, SortDir, SortKey, Table, TableModel, VecModel,
+    Align, ColumnSpec, ColumnState, RowKey, SelectionMode, SortDir, SortKey, Table, TableModel,
+    VecModel,
 };
 pub use terminal::{Terminal, TextDevice};
