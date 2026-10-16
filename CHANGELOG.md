@@ -70,6 +70,9 @@ moves it into a dated, versioned section when a release is cut.
 
 ### Fixed
 
+- The book build (`cargo xtask docs`) uses ammonia 4.1.4; 4.1.2 let an SVG
+  `<set>` or `<animate>` tag inject a `javascript:` link (GHSA-m6mh-2hw2-555x).
+  The `tvision-rs` crate itself never depended on ammonia.
 - **Timers fire while a window or column is dragged or a menu is open.**
   Before, a timer that expired during the drag or while the menu was open was
   lost, so a one-shot timer never fired at all.
