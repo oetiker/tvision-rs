@@ -80,6 +80,16 @@ const MOUSE_AUTO_DELAY_MS: u64 = 440;
 /// The value is two legacy 55 ms timer ticks (**110 ms**).
 const MOUSE_AUTO_PERIOD_MS: u64 = 110;
 
+/// Default double-click interval, in ms: a press that repeats the previous
+/// press (same buttons, same cell) at most this long after it counts as a
+/// double (then triple) click. Apps tune it with
+/// [`Program::set_double_delay_ms`].
+///
+/// # Turbo Vision heritage
+/// Ports `TEventQueue::doubleDelay` (`tevent.cpp`): 8 legacy 55 ms timer ticks
+/// (8 × 55 ms = **440 ms**).
+const DOUBLE_DELAY_MS: u64 = 440;
+
 // ---------------------------------------------------------------------------
 // MouseAutoState — the global evMouseAuto synthesizer
 // ---------------------------------------------------------------------------
@@ -114,6 +124,10 @@ struct MouseAutoState {
 impl MouseAutoState {
     /// Bookkeeping on every *real* picked event (queue or backend), BEFORE
     /// dispatch mutates/localizes it.
+    ///
+    /// Backend model gap: crossterm reports a Down per button even while
+    /// another button is held, so any MouseDown counts as a press here, unlike
+    /// the C++ `buttons != 0 && lastMouse.buttons == 0`.
     fn observe(&mut self, ev: &Event, now: u64) {
         match ev {
             // A press with a REAL button arms (re-arms) the delay —
@@ -158,6 +172,79 @@ impl MouseAutoState {
     }
 }
 
+// ---------------------------------------------------------------------------
+// MouseClickState — the global double/triple-click synthesizer
+// ---------------------------------------------------------------------------
+
+/// The pump's click-count state: sets
+/// [`double_click`](crate::event::MouseEventFlags::double_click) /
+/// [`triple_click`](crate::event::MouseEventFlags::triple_click) on a real
+/// [`Event::MouseDown`] that repeats the previous press (same buttons, same
+/// cell) within `double_delay_ms` (default [`DOUBLE_DELAY_MS`]).
+///
+/// The cycle is single → double → triple → single: a fourth quick press gets
+/// neither flag, and the fifth is a double again. Flags a backend set on the
+/// press are cleared first, so the count is always the loop's own.
+///
+/// # Turbo Vision heritage
+/// Ports the `downMouse` / `downTicks` / `doubleDelay` slice of
+/// `TEventQueue::getMouseEvent` (`tevent.cpp`).
+#[derive(Debug)]
+struct MouseClickState {
+    /// The previous press with its final flags (`downMouse`). `None` = no
+    /// press seen yet.
+    down_mouse: Option<crate::event::MouseEvent>,
+    /// Clock time of the previous press, in ms (`downTicks`).
+    down_ms: u64,
+    /// The double-click interval, in ms (`doubleDelay`).
+    double_delay_ms: u64,
+}
+
+impl Default for MouseClickState {
+    fn default() -> Self {
+        MouseClickState {
+            down_mouse: None,
+            down_ms: 0,
+            double_delay_ms: DOUBLE_DELAY_MS,
+        }
+    }
+}
+
+impl MouseClickState {
+    /// Set the click-count flags on a real press from the backend, and record
+    /// it as the reference for the next press.
+    fn observe(&mut self, ev: &mut Event, now: u64) {
+        // Backend model gap: crossterm reports a Down per button even while
+        // another button is held, so any MouseDown is a "press" here, unlike
+        // the C++ `buttons != 0 && lastMouse.buttons == 0`.
+        let Event::MouseDown(m) = ev else {
+            return;
+        };
+        if !(m.buttons.left || m.buttons.right || m.buttons.middle) {
+            return;
+        }
+        // `ev.mouse.eventFlags = 0` (tevent.cpp): the count is the loop's own.
+        m.flags.double_click = false;
+        m.flags.triple_click = false;
+        // A clock that went backwards is no repeat (the C++ unsigned tick
+        // difference wraps to a huge value).
+        if let Some(down) = &self.down_mouse
+            && m.buttons == down.buttons
+            && m.position == down.position
+            && now >= self.down_ms
+            && now - self.down_ms <= self.double_delay_ms
+        {
+            if !(down.flags.double_click || down.flags.triple_click) {
+                m.flags.double_click = true;
+            } else if down.flags.double_click {
+                m.flags.triple_click = true;
+            }
+        }
+        self.down_mouse = Some(*m);
+        self.down_ms = now;
+    }
+}
+
 /// The startup-disabled command seed.
 ///
 /// The program tracks its command set as a **disabled set** (denylist):
@@ -191,13 +278,20 @@ fn initial_disabled_commands() -> CommandSet {
 // ---------------------------------------------------------------------------
 
 /// A capture handler that realizes modality: while it is on the
-/// [`CaptureStack`], keyboard and command events
-/// [`Pass`](CaptureFlow::Pass) through to normal routing and reach the modal
-/// view via focus; broadcast events also [`Pass`](CaptureFlow::Pass) and fan
-/// out to **all** views by design; positional (mouse) events are gated by
-/// `bounds` — inside → [`Pass`](CaptureFlow::Pass), outside →
-/// [`Consumed`](CaptureFlow::Consumed) (swallowed). This is the "a handler that
-/// consumes every otherwise-unhandled event *is* the modal loop" realization.
+/// [`CaptureStack`], positional (mouse) events are gated by `bounds`. Inside,
+/// they [`Pass`](CaptureFlow::Pass) to normal routing; outside, the frame
+/// returns [`Consumed`](CaptureFlow::Consumed). In practice an outside click
+/// never reaches the frame: `pump_once` runs an outside-click redirect first,
+/// which hands the event, localized, to the modal view alone (a history window
+/// closes on it, a plain dialog ignores it).
+///
+/// Every other event [`Pass`](CaptureFlow::Pass)es. Keys, commands, pastes and
+/// the mouse wheel then go to the modal view alone: `program_handle_event`
+/// reads [`CaptureStack::modal_view`] and hands them to `Group::deliver_to_modal`,
+/// as C++ `TGroup::execute` does, and drops a command the modal leaves
+/// unhandled. Broadcasts keep the root route and fan out to **all** views
+/// (deviation D9). This is the "a handler that consumes every
+/// otherwise-unhandled event *is* the modal loop" realization.
 ///
 /// It holds the modal view's [`ViewId`] (identity, per the capture contract) and
 /// its `bounds` in the root group's frame, so positional events can be hit-tested
@@ -231,8 +325,9 @@ impl CaptureHandler for ModalFrame {
     fn handle(&mut self, ev: &mut Event, _ctx: &mut Context) -> CaptureFlow {
         match ev {
             // Positional events: let them through only if they land on the modal
-            // view's bounds; otherwise swallow them so views beneath the modal
-            // never see them.
+            // view's bounds; otherwise consume them so views beneath the modal
+            // never see them. (The outside-click redirect in `pump_once` runs
+            // before the capture stack and normally handles these already.)
             Event::MouseDown(m) | Event::MouseUp(m) | Event::MouseMove(m) | Event::MouseAuto(m) => {
                 if self.bounds.contains(m.position) {
                     CaptureFlow::Pass
@@ -240,8 +335,9 @@ impl CaptureHandler for ModalFrame {
                     CaptureFlow::Consumed
                 }
             }
-            // Focused (keyboard/command) + broadcast events pass through to normal
-            // routing, which reaches the modal view because the group focuses it.
+            // Everything else passes. `program_handle_event` then delivers keys,
+            // commands, pastes and the wheel to the modal view alone
+            // (`Group::deliver_to_modal`); broadcasts fan out to the whole tree.
             _ => CaptureFlow::Pass,
         }
     }
@@ -296,7 +392,7 @@ struct FullscreenSlot {
 }
 
 /// Ports `TProgram` (`tprogram.cpp`). The original derived an application class
-/// from this root by inheritance; here [`Application`] embeds a `Program` and
+/// from this root by inheritance; here [`Application`](crate::app::Application) embeds a `Program` and
 /// forwards to it (deviation D2), and the single event loop replaces the nested
 /// modal loops (deviation D9).
 pub struct Program {
@@ -349,6 +445,10 @@ pub struct Program {
     /// held, idle pump passes synthesize [`Event::MouseAuto`] on the 440 ms /
     /// 110 ms cadence (see [`MouseAutoState`]).
     mouse_auto: MouseAutoState,
+    /// The global double/triple-click synthesizer: flags a real press that
+    /// repeats the previous one within the double-click interval (see
+    /// [`MouseClickState`]).
+    mouse_clicks: MouseClickState,
     /// `Some(cmd)` ends the (modal) loop with that command as its result.
     end_state: Option<Command>,
     /// Set on an enable/disable change; the changed command set is broadcast once
@@ -412,6 +512,13 @@ enum ModalCompletion {
         answer_to: ViewId,
         /// The focused command to re-post after routing (`None` = no re-post).
         then_command: Option<Command>,
+        /// Also deliver the modal's record ([`View::value`], read while the
+        /// modal is still in the tree) to `answer_to` via
+        /// [`View::set_modal_data`], before the answer and only on a
+        /// non-[`Command::CANCEL`] close. `true` for `request_exec_view`
+        /// (`Deferred::OpenModal`); `false` for message boxes, whose record is
+        /// meaningless and must not reach a launcher's own data channel.
+        deliver_data: bool,
     },
     /// An informational (OK-only) async message box with no requester to route to
     /// (a validator `error`, a `FileEditor` save-error popup). The box just shows;
@@ -602,6 +709,7 @@ impl Program {
             status_line,
             fullscreen: None,
             mouse_auto: MouseAutoState::default(),
+            mouse_clicks: MouseClickState::default(),
             end_state: None,
             command_set_changed: true, // first idle pump broadcasts cmCommandSetChanged so startup-disabled buttons self-gray
             pending_modal: None,
@@ -715,8 +823,12 @@ impl Program {
     ///    each view factory closure and into the idle callback.
     /// 2. In the callback, drain the external source (e.g. `try_recv` on a
     ///    `std::sync::mpsc::Receiver`) into the shared state.
-    /// 3. Broadcast a refresh command so interested views repaint from the updated
-    ///    state. Use a stable `Command::custom("myapp.refresh")` constant.
+    /// 3. Broadcast a refresh command with [`broadcast`](Self::broadcast) so
+    ///    interested views repaint from the updated state. Use a stable
+    ///    `Command::custom("myapp.refresh")` constant. Any other event can be
+    ///    queued with [`put_event`](Self::put_event). Both are queued, not
+    ///    dispatched inside the hook: the event reaches the views on the next
+    ///    pump pass.
     ///
     /// ```rust,ignore
     /// let shared = Rc::new(RefCell::new(AppState::default()));
@@ -745,6 +857,30 @@ impl Program {
     /// including during modal `execute()` loops.
     pub fn set_on_idle(&mut self, f: impl FnMut(&mut Program) + 'static) {
         self.on_idle = Some(Box::new(f));
+    }
+
+    /// The double-click interval, in ms: a mouse press with the same buttons
+    /// on the same cell at most this long after the previous press is flagged
+    /// [`double_click`](crate::event::MouseEventFlags::double_click) (then
+    /// [`triple_click`](crate::event::MouseEventFlags::triple_click)).
+    /// Default 440 ms.
+    ///
+    /// # Turbo Vision heritage
+    /// Reads `TEventQueue::doubleDelay` (`tevent.cpp`), kept in 55 ms ticks
+    /// there.
+    pub fn double_delay_ms(&self) -> u64 {
+        self.mouse_clicks.double_delay_ms
+    }
+
+    /// Set the double-click interval, in ms (see
+    /// [`double_delay_ms`](Self::double_delay_ms)). A mouse-settings dialog
+    /// calls this.
+    ///
+    /// # Turbo Vision heritage
+    /// Writes `TEventQueue::doubleDelay`, the public static tvdemo's mouse
+    /// dialog tunes (`mousedlg.cpp`).
+    pub fn set_double_delay_ms(&mut self, ms: u64) {
+        self.mouse_clicks.double_delay_ms = ms;
     }
 
     /// Thin test accessor over [`resolve_shell_msg`]: returns the same string
@@ -779,6 +915,46 @@ impl Program {
     /// The current modal end state, if set (test/inspection hook).
     pub fn end_state(&self) -> Option<Command> {
         self.end_state
+    }
+
+    // -- posting events into the loop ---------------------------------------
+
+    /// Queue `ev` for the loop. The next pump pass takes it before it polls the
+    /// backend, and routes it like any input event (through the capture stack
+    /// when a modal or menu is open). This is how code that holds `&mut
+    /// Program` — an idle hook ([`set_on_idle`](Self::set_on_idle)), or the
+    /// application between [`pump_once`](Self::pump_once) calls — injects an
+    /// event. Views use [`Context::put_event`] instead.
+    ///
+    /// The idle hook also runs while a modal is open. Then a queued command or
+    /// key reaches only the modal and is dropped if the modal does not handle
+    /// it, as in C++ `TGroup::execute`. While a drag holds the input, a queued
+    /// command or key is discarded, as the C++ hold loops discard it. To tell
+    /// views to refresh, use
+    /// [`broadcast`](Self::broadcast): broadcasts and timer expiries reach the
+    /// whole tree also under a modal (D9).
+    ///
+    /// # Turbo Vision heritage
+    /// Ports `TProgram::putEvent` (`tprogram.cpp`). C++ holds one `pending`
+    /// event and a second `putEvent` overwrites the first; here the events
+    /// queue up in order, so none is lost.
+    pub fn put_event(&mut self, ev: Event) {
+        self.out_events.push_back(ev);
+    }
+
+    /// Queue a broadcast of `command` for the loop. `source` names the view the
+    /// broadcast is about, or `None`. The broadcast is delivered on a later pump
+    /// pass, to every view in the tree, also while a modal is open (D9). A
+    /// window drag or an open menu discards a broadcast that arrives while it
+    /// holds the input.
+    ///
+    /// # Turbo Vision heritage
+    /// The successor to `message(app, evBroadcast, command, infoPtr)` from an
+    /// overridden `TProgram::idle`. C++ `message` dispatches at once; here the
+    /// broadcast is queued, because the idle hook runs between pump passes.
+    pub fn broadcast(&mut self, command: Command, source: Option<ViewId>) {
+        self.out_events
+            .push_back(Event::Broadcast { command, source });
     }
 
     // -- command-enable policy ----------------------------------------------
@@ -1078,14 +1254,16 @@ impl Program {
     /// instead requests one through the deferred channel
     /// (`Deferred::OpenModal` + a posted completion command).
     ///
-    /// **Program-level handling runs during the modal pump.** Under the single
-    /// loop, the nested [`pump_once`](Self::pump_once) calls below still run
-    /// [`program_handle_event`] every iteration — so the Alt-N window-selection
-    /// block and the quit catch are live *during* the modal. A `Command::QUIT`
-    /// arriving while a modal is open therefore ends the modal (with `QUIT`) and
-    /// quits the app, even from inside a dialog. This is intentional UX (and a
-    /// deliberate deviation from the original's modal dispatch, which would have
-    /// discarded it and left the modal open).
+    /// **Only the modal view handles focused events during the modal pump.**
+    /// While the [`ModalFrame`] is on the capture stack, keys, commands and
+    /// pastes go to the modal view alone, as `TGroup::execute` hands them to
+    /// `p->handleEvent`. A command it does not consume is dropped
+    /// (`eventError`): the menu bar, the Alt-N window selection, the quit
+    /// catch, cmTile/cmCascade/cmDosShell and the application command handler
+    /// of [`run_app`](Self::run_app) do not see it. So a `Command::QUIT` — for
+    /// example from the status line's Alt-X — leaves the modal open. The
+    /// status line still sees keys and clicks first, as in
+    /// `TProgram::getEvent`.
     ///
     /// **HEADLESS HANG WARNING:** [`pump_once`](Self::pump_once) does not block on a
     /// headless backend, so the inner `while end_state.is_none()` loop spins until
@@ -1233,7 +1411,7 @@ impl Program {
     /// Build and run a single-line input dialog at an explicit `Rect`. The modal
     /// insertion / teardown lives here in [`Program`] and the typed value currency
     /// carries the scatter (seed) / gather (read-back). Construction is split out
-    /// into the pure [`build_input_box`](crate::dialog::build_input_box) builder.
+    /// into the pure `build_input_box` builder.
     ///
     /// `label` is the prompt drawn left of the field; `initial` is the starting
     /// text, seeded into the input line with select-all; `limit` caps the field's
@@ -1522,7 +1700,7 @@ impl Program {
         Some(desk.insert_and_focus(view, &mut ctx))
     }
 
-    /// Show a file-open dialog and return the chosen [`PathBuf`], or `None` on
+    /// Show a file-open dialog and return the chosen [`PathBuf`](std::path::PathBuf), or `None` on
     /// cancel. Runs a [`FileDialog`](crate::dialog::FileDialog) modally and reads
     /// back the resolved filename.
     ///
@@ -1598,9 +1776,8 @@ impl Program {
     ///   Without save/restore, when the inner `exec_view` returns,
     ///   `self.end_state` still holds the inner end command and the **outer**
     ///   `while self.end_state.is_none()` would spuriously exit. The modal still
-    ///   **returns** its end command (a quit command is unchanged — the
-    ///   quit-ends-modal deviation still holds); only the leftover `self.end_state`
-    ///   is restored to the enclosing loop's value.
+    ///   **returns** its end command unchanged; only the leftover
+    ///   `self.end_state` is restored to the enclosing loop's value.
     /// * **the completion**, run after the loop breaks but BEFORE remove/drop,
     ///   while the modal is still in the tree by `id` (so it can read its final
     ///   selection). It is a DIRECT `group` mutation, NOT a deferred queue
@@ -1742,12 +1919,12 @@ impl Program {
         let retval = loop {
             self.end_state = None;
             while self.end_state.is_none() {
-                // DEVIATION (see this fn's doc): pump_once runs
-                // program_handle_event each pass, so Alt-N + the cmQuit catch are
-                // live during the modal. C++ execView -> p->execute() (tgroup.cpp:205)
-                // dispatches to the dialog's handleEvent, NOT TProgram::handleEvent
-                // (where cmQuit->endModal + Alt-N live, tprogram.cpp:205) — so program
-                // handling is out of the modal dispatch path there. We keep ours.
+                // pump_once runs program_handle_event each pass, but while the
+                // ModalFrame is on the capture stack it hands keys and commands
+                // to this modal view alone and drops what it leaves (Alt-N, the
+                // cmQuit catch and the app command slot do not run) — as C++
+                // execView -> p->execute() (tgroup.cpp:173-186) dispatches to
+                // the dialog's handleEvent, not TProgram::handleEvent.
                 //
                 // pump_and_drive: a THistory inside this modal dialog can
                 // itself request a modal (the history popup), driven re-entrantly at
@@ -2023,6 +2200,7 @@ impl Program {
             status_line,
             fullscreen,
             mouse_auto,
+            mouse_clicks,
             end_state,
             command_set_changed,
             pending_modal,
@@ -2085,6 +2263,17 @@ impl Program {
             }
         }
 
+        // 2a'. Hand the terminal resize to every re-bounded view's
+        //      `on_bounds_changed` (scroll views re-publish their bar steps) —
+        //      the Context-bearing half of the root `change_bounds` cascade
+        //      above. Runs after the fullscreen re-fit so it sees final bounds.
+        if size_changed {
+            let mut ctx = Context::new(out_events, timers, now, deferred);
+            ctx.set_disabled_commands(disabled_commands.clone());
+            ctx.set_clipboard_snapshot(*clipboard_editor_id, *clipboard_has_selection);
+            group.on_bounds_changed(&mut ctx);
+        }
+
         // 2b. Settle pending insert-time currency cascades BEFORE the event
         //     pick, so the dispatched event sees C++-equivalent currency: in C++
         //     every insert of a visible+selectable view ran show()->resetCurrent
@@ -2105,9 +2294,18 @@ impl Program {
         //    mouse-auto jitter below to +20 ms — the same wake cadence C++ runs
         //    its getMouseEvent checks on. No shorter wait is needed.
         let timeout = event_wait_timeout(timers, now);
+        //    A press polled from the backend gets its double/triple-click
+        //    flags here (see MouseClickState), timestamped by a clock re-read
+        //    after the poll returned, so the wait does not skew the interval;
+        //    a queued event is not a device event and is never counted — C++
+        //    getEvent hands `pending` out without passing through
+        //    getMouseEvent.
         let ev = match out_events.pop_front() {
             Some(e) => Some(e),
-            None => renderer.backend_mut().poll_event(timeout),
+            None => renderer.backend_mut().poll_event(timeout).map(|mut e| {
+                mouse_clicks.observe(&mut e, clock.now_ms());
+                e
+            }),
         };
 
         // 3b. The evMouseAuto synthesizer (see MouseAutoState): a real
@@ -2314,11 +2512,24 @@ impl Program {
                         if !modal_handled {
                             // Offer to the capture stack first; if consumed, skip view
                             // routing.
-                            let consumed = captures.dispatch(&mut ev, &mut ctx);
+                            //
+                            // A timer expiry bypasses the captures. C++ delivers it
+                            // from `TProgram::idle` as a synchronous
+                            // `message(this, evBroadcast, cmTimerExpired, id)`
+                            // (tprogram.cpp:212-228), and `idle` runs inside every
+                            // `getEvent` — also the ones in a mouse hold
+                            // (`TView::mouseEvent`, tview.cpp:636), a window drag
+                            // and `TMenuView::execute`. The hold never sees the
+                            // expiry, so it cannot discard it; a one-shot timer
+                            // must not be lost while a drag or a menu is open.
+                            let consumed = !matches!(ev, Event::Timer(_))
+                                && captures.dispatch(&mut ev, &mut ctx);
                             if !consumed {
+                                let modal = captures.modal_view();
                                 program_handle_event(
                                     group,
                                     *desktop,
+                                    modal,
                                     &mut ev,
                                     &mut ctx,
                                     end_state,
@@ -2475,6 +2686,9 @@ impl Program {
                                             sp.end_resize_session(commit)
                                         }
                                     }
+                                    // The panes the layout re-sized re-publish
+                                    // their scroll state.
+                                    sp.on_bounds_changed(&mut ctx);
                                 }
                             }
                             // Write direction (TScrollBar::setParams driven by
@@ -2880,6 +3094,7 @@ impl Program {
                                     Some(answer_to) => ModalCompletion::RouteModalAnswer {
                                         answer_to,
                                         then_command,
+                                        deliver_data: false,
                                     },
                                     // Informational (OK-only) box: nothing to route.
                                     None => ModalCompletion::Informational,
@@ -2959,6 +3174,7 @@ impl Program {
                                     ModalCompletion::RouteModalAnswer {
                                         answer_to: requester,
                                         then_command,
+                                        deliver_data: true,
                                     },
                                     None,
                                 ));
@@ -3257,12 +3473,18 @@ impl Program {
 
         // 7. resetCursor, then redraw. Renderer::render reads self.cursor, so the
         //    cursor must be set BEFORE render.
+        //    The root clips the caret to its own extent (the last step of
+        //    TVCursor::computeCaretSize); Group::cursor_request clips the rest.
         let group_origin = group.state().origin;
+        let root_extent = group.state().get_extent();
         let cursor = group
             .cursor_request()
+            .filter(|p| root_extent.contains(*p))
             .map(|p| p + group_origin)
             .map(|p| (p.x.max(0) as u16, p.y.max(0) as u16));
         renderer.set_cursor(cursor);
+        // TVCursor::decideCaretSize: block for sfCursorIns, else normal.
+        renderer.set_caret_size(group.caret_size());
 
         renderer.render(|buf| {
             let bounds = group.state().get_bounds();
@@ -3477,6 +3699,7 @@ fn apply_fullscreen(
         && let Some(v) = group.find_mut(dt)
     {
         v.change_bounds(Rect::new(0, top, w, h - status_h));
+        v.on_bounds_changed(ctx);
     }
 
     // 3. Window bounds:
@@ -3552,7 +3775,19 @@ fn apply_modal_completion(
         ModalCompletion::RouteModalAnswer {
             answer_to,
             then_command,
+            deliver_data,
         } => {
+            // Data first, then the answer (C++ `if (execView(d) != cmCancel)
+            // d->getData(&rec);`): the record is read while the modal is still
+            // in the tree, and only on a non-cancel close. A modal with no value
+            // (`None`) or a vanished requester delivers nothing.
+            if deliver_data
+                && result != Command::CANCEL
+                && let Some(data) = group.find_mut(modal_id).and_then(|m| m.value())
+                && let Some(v) = group.find_mut(answer_to)
+            {
+                v.set_modal_data(data);
+            }
             if let Some(v) = group.find_mut(answer_to) {
                 v.set_modal_answer(result);
             }
@@ -3767,6 +4002,7 @@ fn resolve_shell_msg(hook: &Option<Box<dyn Fn() -> String>>) -> String {
 fn program_handle_event(
     group: &mut Group,
     desktop: Option<ViewId>,
+    modal: Option<ViewId>,
     ev: &mut Event,
     ctx: &mut Context,
     end_state: &mut Option<Command>,
@@ -3774,11 +4010,38 @@ fn program_handle_event(
     renderer: &mut Renderer,
     shell_msg_hook: &Option<Box<dyn Fn() -> String>>,
 ) {
-    // Modal-isolation note: program-level interception (this Alt-N block + the
-    // cmQuit catch below) is NOT suppressed while a modal is active. C++'s nested
-    // `p->execute()` (tgroup.cpp:205) structurally avoids it by dispatching to the
-    // dialog's handleEvent, not TProgram's; tvision-rs's single loop runs this on every
-    // pump, including modal pumps (the deviation documented on `exec_view`).
+    // While a modal view executes, a focused event (key, command, paste) goes
+    // to that view alone, and nothing program-level sees it. C++
+    // `TGroup::execute` (tgroup.cpp:173-186) calls the modal view's own
+    // `handleEvent` and hands what is left to `eventError`, which drops it:
+    // the application group's pre-/post-process views (the menu bar's hot
+    // keys and accelerators) and `TProgram`/`TApplication::handleEvent`
+    // (Alt-N, cmQuit, cmTile/cmCascade, cmDosShell, the app command slot)
+    // never run for it. The mouse wheel goes the same way: it is not a
+    // positional event in C++ (`positionalEvents = evMouse & ~evMouseWheel`),
+    // so the root route would fan it out to every view behind the modal,
+    // while C++ `execute` hands it to the modal alone. Positional and
+    // broadcast events keep the root route below: the ModalFrame already
+    // gates mouse events to the modal's bounds (outside clicks go to the
+    // modal itself), and broadcasts fan out by design (see `ModalFrame`).
+    if let Some(id) = modal
+        && matches!(
+            ev,
+            Event::KeyDown(_) | Event::Command(_) | Event::Paste(_) | Event::MouseWheel(_)
+        )
+    {
+        group.deliver_to_modal(id, ev, ctx);
+        // eventError: an unconsumed command is dropped, not queued for the
+        // application's command handler.
+        if matches!(ev, Event::Command(_)) {
+            ev.clear();
+        }
+        return;
+    }
+
+    // No modal executes past this point for focused events (see the early
+    // return above), so the program-level steps below are TProgram /
+    // TApplication::handleEvent proper.
     //
     // Alt+digit window selection (cmSelectWindowNum). Faithful TProgram::handleEvent
     // order: the Alt-N block runs BEFORE the group dispatch. The window NUMBER is an
@@ -3845,6 +4108,9 @@ fn program_handle_event(
             } else {
                 dt.cascade(r);
             }
+            // The Context-bearing half of the windows' changeBounds (scroll
+            // views re-publish their bar steps).
+            dt.on_bounds_changed(ctx);
         }
         ev.clear(); // clearEvent after handling.
     }
@@ -5350,8 +5616,8 @@ mod tests {
         assert!(
             matches!(
                 completion,
-                ModalCompletion::RouteModalAnswer { answer_to, then_command }
-                    if answer_to == requester && then_command == Some(then_cmd)
+                ModalCompletion::RouteModalAnswer { answer_to, then_command, deliver_data }
+                    if answer_to == requester && then_command == Some(then_cmd) && deliver_data
             ),
             "RouteModalAnswer routes to the requester + carries then_command"
         );
@@ -5480,6 +5746,223 @@ mod tests {
             reinjected_seen,
             "then_command was re-injected into out_events after the modal closed"
         );
+    }
+
+    /// A test-only requester that records BOTH channels of a `request_exec_view`
+    /// result, in arrival order: `set_modal_data` (the modal's gathered record) and
+    /// `set_modal_answer` (its close command).
+    #[derive(Debug, PartialEq)]
+    enum Delivered {
+        Data(crate::data::FieldValue),
+        Answer(Command),
+    }
+    struct ModalResultRecorder {
+        st: ViewState,
+        log: Rc<RefCell<Vec<Delivered>>>,
+    }
+    impl View for ModalResultRecorder {
+        fn state(&self) -> &ViewState {
+            &self.st
+        }
+        fn state_mut(&mut self) -> &mut ViewState {
+            &mut self.st
+        }
+        fn draw(&mut self, _ctx: &mut DrawCtx) {}
+        fn set_modal_answer(&mut self, cmd: Command) {
+            self.log.borrow_mut().push(Delivered::Answer(cmd));
+        }
+        fn set_modal_data(&mut self, data: crate::data::FieldValue) {
+            self.log.borrow_mut().push(Delivered::Data(data));
+        }
+    }
+
+    /// A small input dialog: one `InputLine`, no buttons (closes on a posted
+    /// command, Esc or the close box).
+    fn input_dialog() -> crate::dialog::Dialog {
+        use crate::widgets::{InputLine, LimitMode};
+        let mut dialog =
+            crate::dialog::Dialog::new(Rect::new(20, 8, 50, 14), Some("Name".to_string()));
+        dialog.insert_child(Box::new(InputLine::new(
+            Rect::new(2, 2, 26, 3),
+            32,
+            None,
+            LimitMode::MaxBytes,
+        )));
+        dialog
+    }
+
+    /// Insert a [`ModalResultRecorder`], request [`input_dialog`] as a
+    /// view-launched modal, queue `input` behind a benign broadcast, and drive
+    /// `pump_and_drive` (bounded). Optionally removes the requester from the tree
+    /// before the modal runs. Returns the log.
+    fn run_input_dialog_modal(input: Vec<Event>, remove_requester: bool) -> Vec<Delivered> {
+        run_requested_modal(Box::new(input_dialog()), input, remove_requester)
+    }
+
+    /// [`run_input_dialog_modal`] with a caller-supplied modal.
+    fn run_requested_modal(
+        modal: Box<dyn View>,
+        input: Vec<Event>,
+        remove_requester: bool,
+    ) -> Vec<Delivered> {
+        let (mut program, _handle, _clock) = program_with_desktop(80, 25);
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let requester = program.group_mut().insert(Box::new(ModalResultRecorder {
+            st: ViewState::new(Rect::new(0, 0, 10, 3)),
+            log: log.clone(),
+        }));
+        program.out_events.clear();
+
+        program.with_ctx(|_g, ctx| {
+            ctx.request_exec_view(
+                modal,
+                requester,
+                Some(Command::custom("test.exec_view.data")),
+            );
+        });
+        if remove_requester {
+            program.with_ctx(|g, ctx| g.remove(requester, ctx));
+        }
+
+        program.out_events.push_back(Event::Broadcast {
+            command: Command::custom("test.noop"),
+            source: None,
+        });
+        program.out_events.extend(input);
+        for _ in 0..12 {
+            program.pump_and_drive();
+        }
+        assert!(program.pending_modal.is_none(), "the modal closed");
+        log.take()
+    }
+
+    /// A dialog wrapper whose `value()` stays at the trait default `None` (a
+    /// modal that carries no transferable data).
+    struct NoValueDialog {
+        dialog: crate::dialog::Dialog,
+    }
+    #[crate::delegate(to = dialog, skip(value))]
+    impl View for NoValueDialog {}
+
+    /// YES and NO are non-cancel closes: the record is delivered, then the answer.
+    #[test]
+    fn request_exec_view_yes_and_no_deliver_record() {
+        use crate::data::FieldValue;
+        for cmd in [Command::YES, Command::NO] {
+            let log = run_input_dialog_modal(vec![key(Key::Char('z')), Event::Command(cmd)], false);
+            assert_eq!(
+                log,
+                vec![
+                    Delivered::Data(FieldValue::List(vec![FieldValue::Text("z".into())])),
+                    Delivered::Answer(cmd),
+                ],
+                "{cmd:?} delivers data then answer"
+            );
+        }
+    }
+
+    /// A modal whose `value()` is `None` delivers only the answer, even on OK.
+    #[test]
+    fn request_exec_view_valueless_modal_delivers_answer_only() {
+        let modal = NoValueDialog {
+            dialog: input_dialog(),
+        };
+        let log = run_requested_modal(
+            Box::new(modal),
+            vec![key(Key::Char('q')), Event::Command(Command::OK)],
+            false,
+        );
+        assert_eq!(log, vec![Delivered::Answer(Command::OK)]);
+    }
+
+    /// The close box (`Command::CLOSE` on a modal window re-posts CANCEL) and
+    /// Esc (the dialog posts CANCEL) both end the modal with CANCEL: the
+    /// requester gets the CANCEL answer and no record.
+    #[test]
+    fn request_exec_view_close_box_and_esc_cancel_without_data() {
+        for close in [Event::Command(Command::CLOSE), key(Key::Esc)] {
+            let log = run_input_dialog_modal(vec![key(Key::Char('w')), close.clone()], false);
+            assert_eq!(
+                log,
+                vec![Delivered::Answer(Command::CANCEL)],
+                "{close:?} cancels without data"
+            );
+        }
+    }
+
+    /// The data arm: on a non-cancel close the pump gathers the modal's record
+    /// (`Dialog::value()` = its ordered `FieldValue::List`) while it is still in
+    /// the tree and delivers it via `set_modal_data` BEFORE the close command
+    /// reaches `set_modal_answer` (C++ `if (execView(d) != cmCancel) d->getData(&rec)`).
+    #[test]
+    fn request_exec_view_delivers_record_then_answer_on_ok() {
+        use crate::data::FieldValue;
+        let log = run_input_dialog_modal(
+            vec![
+                key(Key::Char('h')),
+                key(Key::Char('i')),
+                Event::Command(Command::OK),
+            ],
+            false,
+        );
+        assert_eq!(
+            log,
+            vec![
+                Delivered::Data(FieldValue::List(vec![FieldValue::Text("hi".into())])),
+                Delivered::Answer(Command::OK),
+            ]
+        );
+    }
+
+    /// On `Command::CANCEL` no record is delivered — only the close command.
+    #[test]
+    fn request_exec_view_cancel_delivers_answer_only() {
+        let log = run_input_dialog_modal(
+            vec![key(Key::Char('x')), Event::Command(Command::CANCEL)],
+            false,
+        );
+        assert_eq!(log, vec![Delivered::Answer(Command::CANCEL)]);
+    }
+
+    /// A requester removed while its modal ran gets nothing, and the pump does not
+    /// panic (both deliveries resolve by id and drop silently).
+    #[test]
+    fn request_exec_view_removed_requester_drops_silently() {
+        let log =
+            run_input_dialog_modal(vec![key(Key::Char('y')), Event::Command(Command::OK)], true);
+        assert!(log.is_empty(), "nothing delivered to a removed requester");
+    }
+
+    /// A message box routed through `RouteModalAnswer` (the `valid()` prompt
+    /// path) delivers only the answer — never a `set_modal_data` record, so a
+    /// launcher's own data channel (e.g. the Editor's find record) is untouched.
+    #[test]
+    fn request_message_box_answer_carries_no_data() {
+        let (mut program, _handle, _clock) = program_with_desktop(80, 25);
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let requester = program.group_mut().insert(Box::new(ModalResultRecorder {
+            st: ViewState::new(Rect::new(0, 0, 10, 3)),
+            log: log.clone(),
+        }));
+        program.out_events.clear();
+        program.with_ctx(|_g, ctx| {
+            ctx.request_message_box(
+                "prompt".to_string(),
+                crate::dialog::MessageBoxKind::Confirmation,
+                crate::dialog::MessageBoxButtons::ok(),
+                Some(requester),
+                None,
+            );
+        });
+        program.out_events.push_back(Event::Broadcast {
+            command: Command::custom("test.noop"),
+            source: None,
+        });
+        program.out_events.push_back(Event::Command(Command::OK));
+        for _ in 0..12 {
+            program.pump_and_drive();
+        }
+        assert_eq!(*log.borrow(), vec![Delivered::Answer(Command::OK)]);
     }
 
     // -- button mouse hold-tracking end-to-end through the pump ------------
@@ -5625,6 +6108,569 @@ mod tests {
             drained.contains(&Event::Command(Command::OK)),
             "Command::OK fired after MouseUp inside"
         );
+    }
+
+    /// **End-to-end: a `Table` header drag through the pump.** The table is
+    /// the tracked view, so the tracked moves and the release reach
+    /// `Table::handle_event` (localized against the origin its draw cached):
+    /// a separator drag resizes, a label drag moves the column, and the
+    /// release broadcasts `TABLE_COLUMNS_CHANGED` with the table's id.
+    #[test]
+    fn table_header_drags_end_to_end_through_pump() {
+        use crate::widgets::{ColumnSpec, Table, VecModel};
+
+        fn layout(program: &mut Program, id: ViewId) -> Vec<(usize, i32)> {
+            program
+                .group_mut()
+                .find_mut(id)
+                .and_then(|v| v.as_any_mut())
+                .and_then(|a| a.downcast_mut::<Table>())
+                .expect("table resolves")
+                .column_layout()
+                .iter()
+                .map(|s| (s.order, s.width))
+                .collect()
+        }
+
+        let ids: Rc<RefCell<Option<ViewId>>> = Rc::new(RefCell::new(None));
+        let ids_cap = ids.clone();
+        let (backend, _handle) = HeadlessBackend::new(80, 25);
+        let clock = Rc::new(ManualClock::new(0));
+        let mut program = Program::new(
+            Box::new(backend),
+            Box::new(clock),
+            Theme::classic_blue(),
+            move |r| {
+                let mut desktop = Desktop::new(r, |r2| Some(Desktop::init_background(r2)));
+                // Header at abs y 3; text from abs x 6: A at 6..10, its
+                // separator 10, B at 11..15, separator 15.
+                let rows = vec![vec!["a".to_string(), "b".to_string()]];
+                let table = Table::new(
+                    Rect::new(5, 3, 30, 8),
+                    vec![ColumnSpec::new("A", 4), ColumnSpec::new("B", 4)],
+                    None,
+                )
+                .with_model(Box::new(VecModel::new(rows)));
+                *ids_cap.borrow_mut() = Some(desktop.insert_view(Box::new(table)));
+                Some(Box::new(desktop))
+            },
+            |_r| None,
+            |_r| None,
+        );
+        let id = ids.borrow().expect("table id set");
+        program.out_events.clear();
+        program.out_events.push_back(Event::Broadcast {
+            command: Command::custom("test.noop"),
+            source: None,
+        });
+        program.pump_once();
+
+        // Resize A: press its separator, drag 3 right, release.
+        program.out_events.push_back(mouse_down_at(10, 3));
+        program.pump_once();
+        assert_eq!(program.capture_len(), 1, "the press is tracked");
+        program.out_events.push_back(mouse_move_at(13, 3));
+        program.pump_once();
+        assert_eq!(layout(&mut program, id), [(0, 7), (1, 4)], "live width");
+        program.out_events.push_back(mouse_up_at(13, 3));
+        program.pump_once();
+        assert_eq!(program.capture_len(), 0, "the release ends the hold");
+        assert!(
+            program.out_events.iter().any(|e| *e
+                == Event::Broadcast {
+                    command: Command::TABLE_COLUMNS_CHANGED,
+                    source: Some(id),
+                }),
+            "the release broadcasts with the table's id"
+        );
+
+        // Move B (now abs x 14..18) in front of A.
+        program.out_events.clear();
+        program.out_events.push_back(mouse_down_at(15, 3));
+        program.pump_once();
+        program.out_events.push_back(mouse_move_at(6, 3));
+        program.pump_once();
+        program.out_events.push_back(mouse_up_at(6, 3));
+        program.pump_once();
+        assert_eq!(layout(&mut program, id), [(1, 7), (0, 4)], "B leads");
+
+        // Right-click the header, pick the first popup item (B): it hides.
+        program.out_events.clear();
+        program.out_events.push_back(Event::MouseDown(MouseEvent {
+            position: Point::new(8, 3),
+            buttons: MouseButtons {
+                right: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        }));
+        program.pump_once();
+        assert_eq!(program.capture_len(), 1, "the popup session runs");
+        for k in [Key::Down, Key::Enter] {
+            program.out_events.push_back(key(k));
+            program.pump_once();
+        }
+        // Bounded: the posted toggle needs a pump or two to arrive.
+        for _ in 0..8 {
+            program.pump_once();
+        }
+        let hidden: Vec<bool> = program
+            .group_mut()
+            .find_mut(id)
+            .and_then(|v| v.as_any_mut())
+            .and_then(|a| a.downcast_mut::<Table>())
+            .expect("table resolves")
+            .column_layout()
+            .iter()
+            .map(|s| s.hidden)
+            .collect();
+        assert_eq!(
+            hidden,
+            [false, true],
+            "the popup's toggle reached the table"
+        );
+    }
+
+    /// Program with a desktop holding a timer-logging [`Probe`] and the view
+    /// `extra` builds; returns it with the probe log and the clock handle.
+    fn timer_hold_program(
+        extra: impl FnOnce() -> Box<dyn View> + 'static,
+    ) -> (Program, Rc<RefCell<Vec<Event>>>, Rc<ManualClock>) {
+        let log: Rc<RefCell<Vec<Event>>> = Rc::new(RefCell::new(Vec::new()));
+        let log_cap = log.clone();
+        let (backend, _handle) = HeadlessBackend::new(80, 25);
+        let clock = Rc::new(ManualClock::new(0));
+        let mut program = Program::new(
+            Box::new(backend),
+            Box::new(clock.clone()),
+            Theme::classic_blue(),
+            move |r| {
+                let mut desktop = Desktop::new(r, |r2| Some(Desktop::init_background(r2)));
+                desktop.insert_view(Box::new(Probe::new(
+                    Rect::new(60, 20, 62, 21),
+                    'p',
+                    log_cap,
+                )));
+                desktop.insert_view(extra());
+                Some(Box::new(desktop))
+            },
+            |_r| None,
+            |_r| None,
+        );
+        program.out_events.clear();
+        program.out_events.push_back(Event::Broadcast {
+            command: Command::custom("test.noop"),
+            source: None,
+        });
+        program.pump_once();
+        (program, log, clock)
+    }
+
+    /// Drive a one-shot timer that expires while a capture hold (started by
+    /// `press`) is on top, then release; return how many expiries reached
+    /// the probe.
+    fn timer_ticks_across_hold(
+        program: &mut Program,
+        log: &Rc<RefCell<Vec<Event>>>,
+        clock: &ManualClock,
+        press: Event,
+        release: Event,
+    ) -> usize {
+        program
+            .timers
+            .set_timer(0, std::time::Duration::from_millis(10), None);
+        program.out_events.push_back(press);
+        program.pump_once();
+        assert_eq!(program.capture_len(), 1, "the press started a capture hold");
+        clock.advance(20);
+        for _ in 0..4 {
+            program.pump_once();
+        }
+        assert_eq!(program.capture_len(), 1, "the hold is still on top");
+        program.out_events.push_back(release);
+        for _ in 0..4 {
+            program.pump_once();
+        }
+        assert_eq!(program.capture_len(), 0, "the release ended the hold");
+        log.borrow()
+            .iter()
+            .filter(|e| matches!(e, Event::Timer(_)))
+            .count()
+    }
+
+    /// **A one-shot timer survives a `Table` header drag** (a
+    /// `MouseTrackCapture` hold). C++ `TProgram::idle` broadcasts
+    /// `cmTimerExpired` synchronously from inside the hold loop's `getEvent`,
+    /// so the hold never gets to discard it.
+    #[test]
+    fn timer_reaches_views_during_table_header_drag() {
+        use crate::widgets::{ColumnSpec, Table, VecModel};
+        let (mut program, log, clock) = timer_hold_program(|| {
+            let rows = vec![vec!["a".to_string(), "b".to_string()]];
+            Box::new(
+                Table::new(
+                    Rect::new(5, 3, 30, 8),
+                    vec![ColumnSpec::new("A", 4), ColumnSpec::new("B", 4)],
+                    None,
+                )
+                .with_model(Box::new(VecModel::new(rows))),
+            )
+        });
+        let n = timer_ticks_across_hold(
+            &mut program,
+            &log,
+            &clock,
+            mouse_down_at(15, 3),
+            mouse_up_at(15, 3),
+        );
+        assert_eq!(n, 1, "the expiry reached the views during the drag");
+    }
+
+    /// **A one-shot timer survives a window drag** (the `DragCapture` hold,
+    /// which consumes everything else, broadcasts included).
+    #[test]
+    fn timer_reaches_views_during_window_drag() {
+        let (mut program, log, clock) = timer_hold_program(|| {
+            Box::new(crate::window::Window::new(
+                Rect::new(10, 5, 40, 15),
+                Some("W".into()),
+                0,
+            ))
+        });
+        let n = timer_ticks_across_hold(
+            &mut program,
+            &log,
+            &clock,
+            mouse_down_at(20, 5),
+            mouse_up_at(22, 6),
+        );
+        assert_eq!(n, 1, "the expiry reached the views during the drag");
+    }
+
+    /// **The mouse wheel under a modal reaches the modal alone.** C++
+    /// `TGroup::execute` hands every event to the modal view; the wheel is
+    /// not positional, so the root route would fan it out to the desktop.
+    #[test]
+    fn wheel_under_modal_does_not_reach_views_behind_it() {
+        let log: Rc<RefCell<Vec<Event>>> = Rc::new(RefCell::new(Vec::new()));
+        let log_cap = log.clone();
+        let inner_log: Rc<RefCell<Vec<Event>>> = Rc::new(RefCell::new(Vec::new()));
+        let (backend, _handle) = HeadlessBackend::new(80, 25);
+        let clock = Rc::new(ManualClock::new(0));
+        let mut program = Program::new(
+            Box::new(backend),
+            Box::new(clock),
+            Theme::classic_blue(),
+            move |r| {
+                let mut desktop = Desktop::new(r, |r2| Some(Desktop::init_background(r2)));
+                desktop.insert_view(Box::new(Probe::new(
+                    Rect::new(60, 20, 62, 21),
+                    'p',
+                    log_cap,
+                )));
+                Some(Box::new(desktop))
+            },
+            |_r| None,
+            |_r| None,
+        );
+        let mut d = crate::dialog::Dialog::new(Rect::new(5, 3, 45, 15), Some("T".into()));
+        d.insert_child(Box::new(Probe::new(
+            Rect::new(1, 1, 3, 2),
+            'i',
+            inner_log.clone(),
+        )));
+        program.out_events.clear();
+        program.out_events.push_back(Event::MouseWheel(MouseEvent {
+            position: Point::new(61, 20),
+            wheel: crate::event::MouseWheel::Down,
+            ..Default::default()
+        }));
+        program
+            .out_events
+            .push_back(Event::Command(Command::CANCEL));
+        program.exec_view(Box::new(d));
+        let wheels = |l: &Rc<RefCell<Vec<Event>>>| {
+            l.borrow()
+                .iter()
+                .filter_map(|e| match e {
+                    Event::MouseWheel(m) => Some(m.position),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        assert!(
+            wheels(&log).is_empty(),
+            "a view behind the modal saw the wheel"
+        );
+        // The dialog's own view got it, in its owner's frame (the dialog's
+        // origin (5, 3) and the probe's (1, 1) subtracted).
+        assert_eq!(wheels(&inner_log), [Point::new(55, 16)]);
+    }
+
+    /// **End-to-end: a `Table` cell edit through the pump.** F2 opens the
+    /// editor; a commit the model refuses opens an error box (a real modal
+    /// that takes the window's focus) and the edit survives it, so the user
+    /// fixes the text and commits again; a click on another control cancels.
+    #[test]
+    fn table_cell_edit_survives_its_error_box_through_pump() {
+        use crate::widgets::{ColumnSpec, InputLine, Table, TableModel, VecModel};
+        use crate::window::Window;
+        use std::borrow::Cow;
+
+        /// Refuses any text with an `x` in it.
+        struct NoX(VecModel);
+        impl TableModel for NoX {
+            fn row_count(&self) -> usize {
+                self.0.row_count()
+            }
+            fn cell(&self, row: usize, col: usize) -> Cow<'_, str> {
+                self.0.cell(row, col)
+            }
+            fn row_key(&self, row: usize) -> crate::widgets::RowKey {
+                self.0.row_key(row)
+            }
+            fn set_cell(&mut self, row: usize, col: usize, text: &str) -> Result<(), String> {
+                if text.contains('x') {
+                    return Err("no x".into());
+                }
+                self.0.set_cell(row, col, text)
+            }
+        }
+
+        fn table(program: &mut Program, id: ViewId) -> &mut Table {
+            program
+                .group_mut()
+                .find_mut(id)
+                .and_then(|v| v.as_any_mut())
+                .and_then(|a| a.downcast_mut::<Table>())
+                .expect("table resolves")
+        }
+
+        let ids: Rc<RefCell<Option<ViewId>>> = Rc::new(RefCell::new(None));
+        let ids_cap = ids.clone();
+        let (backend, _handle) = HeadlessBackend::new(80, 25);
+        let clock = Rc::new(ManualClock::new(0));
+        let mut program = Program::new(
+            Box::new(backend),
+            Box::new(clock),
+            Theme::classic_blue(),
+            move |r| {
+                let mut desktop = Desktop::new(r, |r2| Some(Desktop::init_background(r2)));
+                let mut win = Window::new(Rect::new(2, 2, 40, 12), Some("T".into()), 1);
+                let rows = vec![vec!["a".to_string(), "b".to_string()]];
+                let t = Table::new(
+                    Rect::new(1, 1, 31, 7),
+                    vec![
+                        ColumnSpec::new("A", 4),
+                        ColumnSpec::new("B", 4).editable(true),
+                    ],
+                    None,
+                )
+                .with_model(Box::new(NoX(VecModel::new(rows))));
+                // Another control, abs (3..22, 10); the table goes on top, so
+                // it starts focused.
+                win.insert_child(Box::new(InputLine::with_limit(Rect::new(1, 8, 20, 9), 20)));
+                *ids_cap.borrow_mut() = Some(win.insert_child(Box::new(t)));
+                desktop.insert_view(Box::new(win));
+                Some(Box::new(desktop))
+            },
+            |_r| None,
+            |_r| None,
+        );
+        let id = ids.borrow().expect("table id set");
+        program.out_events.clear();
+        program.out_events.push_back(Event::Broadcast {
+            command: Command::custom("test.noop"),
+            source: None,
+        });
+        program.pump_once();
+
+        program.out_events.push_back(key(Key::F(2)));
+        program.pump_once();
+        assert!(table(&mut program, id).is_editing(), "F2 opened the editor");
+
+        // "x" replaces the selected "b"; Enter is refused with a box, which the
+        // queued OK closes.
+        program.out_events.push_back(key(Key::Char('x')));
+        program.out_events.push_back(key(Key::Enter));
+        program.out_events.push_back(Event::Command(Command::OK));
+        for _ in 0..8 {
+            program.pump_and_drive();
+        }
+        assert!(
+            table(&mut program, id).is_editing(),
+            "the error box did not cancel the edit"
+        );
+        assert_eq!(table(&mut program, id).model().cell(0, 1), "b");
+
+        // The editor still has the keys: fix the text and commit.
+        program.out_events.clear();
+        for k in [Key::Backspace, Key::Char('y'), Key::Enter] {
+            program.out_events.push_back(key(k));
+            program.pump_once();
+        }
+        assert!(!table(&mut program, id).is_editing());
+        assert_eq!(table(&mut program, id).model().cell(0, 1), "y");
+        assert!(
+            program.out_events.iter().any(|e| *e
+                == Event::Broadcast {
+                    command: Command::TABLE_CELL_EDITED,
+                    source: Some(id),
+                }),
+            "the commit broadcasts with the table's id"
+        );
+
+        // A click on the other control takes the focus: the edit is cancelled.
+        program.out_events.clear();
+        program.out_events.push_back(key(Key::F(2)));
+        program.pump_once();
+        assert!(table(&mut program, id).is_editing());
+        program.out_events.push_back(mouse_down_at(5, 10));
+        // Bounded: the focus broadcasts queued ahead of the click drain first.
+        for _ in 0..8 {
+            program.pump_once();
+        }
+        assert!(!table(&mut program, id).is_editing(), "focus loss cancels");
+        assert_eq!(table(&mut program, id).model().cell(0, 1), "y");
+    }
+
+    /// **End-to-end: Enter edits a `Table` cell inside a dialog with a default
+    /// button.** Enter opens the editor on the cell cursor; the Enter that
+    /// commits is used up by the table (the dialog never broadcasts
+    /// `DEFAULT`) and leaves the cursor on the cell, so the next Enter edits it
+    /// again. Without a cell cursor Enter reaches the default button.
+    #[test]
+    fn table_enter_edits_and_never_presses_the_default_button_through_pump() {
+        use crate::dialog::Dialog;
+        use crate::widgets::{Button, ButtonFlags, ColumnSpec, Table, VecModel};
+
+        fn table(program: &mut Program, id: ViewId) -> &mut Table {
+            program
+                .group_mut()
+                .find_mut(id)
+                .and_then(|v| v.as_any_mut())
+                .and_then(|a| a.downcast_mut::<Table>())
+                .expect("table resolves")
+        }
+
+        let log: Rc<RefCell<Vec<Event>>> = Rc::new(RefCell::new(Vec::new()));
+        let log_cap = log.clone();
+        let ids: Rc<RefCell<Option<ViewId>>> = Rc::new(RefCell::new(None));
+        let ids_cap = ids.clone();
+        let (backend, _handle) = HeadlessBackend::new(80, 25);
+        let clock = Rc::new(ManualClock::new(0));
+        let mut program = Program::new(
+            Box::new(backend),
+            Box::new(clock),
+            Theme::classic_blue(),
+            move |r| {
+                let mut desktop = Desktop::new(r, |r2| Some(Desktop::init_background(r2)));
+                let mut d = Dialog::new(Rect::new(2, 2, 40, 14), Some("D".into()));
+                d.insert_child(Box::new(Button::new(
+                    Rect::new(24, 8, 34, 10),
+                    "O~K~",
+                    Command::OK,
+                    ButtonFlags {
+                        default: true,
+                        ..Default::default()
+                    },
+                )));
+                // Records the dialog's broadcasts; above the button, which
+                // uses up the `DEFAULT` it acts on, so it sees them first.
+                let mut probe = Probe::new(Rect::new(1, 10, 3, 11), '.', log_cap);
+                probe.st.options.selectable = false;
+                d.insert_child(Box::new(probe));
+                let rows = vec![
+                    vec!["a".to_string(), "b".to_string()],
+                    vec!["c".to_string(), "d".to_string()],
+                ];
+                let t = Table::new(
+                    Rect::new(1, 1, 31, 7),
+                    vec![
+                        ColumnSpec::new("A", 4),
+                        ColumnSpec::new("B", 4).editable(true),
+                    ],
+                    None,
+                )
+                .with_model(Box::new(VecModel::new(rows)));
+                // Inserted last, so it starts focused.
+                *ids_cap.borrow_mut() = Some(d.insert_child(Box::new(t)));
+                desktop.insert_view(Box::new(d));
+                Some(Box::new(desktop))
+            },
+            |_r| None,
+            |_r| None,
+        );
+        let id = ids.borrow().expect("table id set");
+        let defaults = |l: &Rc<RefCell<Vec<Event>>>| {
+            l.borrow()
+                .iter()
+                .filter(|e| {
+                    matches!(
+                        e,
+                        Event::Broadcast {
+                            command: Command::DEFAULT,
+                            ..
+                        }
+                    )
+                })
+                .count()
+        };
+        program.out_events.clear();
+        program.out_events.push_back(Event::Broadcast {
+            command: Command::custom("test.noop"),
+            source: None,
+        });
+        program.pump_once();
+
+        program.out_events.push_back(key(Key::Enter));
+        program.pump_once();
+        assert!(
+            table(&mut program, id).is_editing(),
+            "Enter opened the editor"
+        );
+
+        for k in [Key::Char('z'), Key::Enter] {
+            program.out_events.push_back(key(k));
+        }
+        for _ in 0..8 {
+            program.pump_once();
+        }
+        let t = table(&mut program, id);
+        assert!(!t.is_editing(), "the second Enter committed");
+        assert_eq!(t.model().cell(0, 1), "z");
+        assert_eq!(
+            t.focused_key(),
+            Some(crate::widgets::RowKey::from("0")),
+            "no move down"
+        );
+        assert_eq!(t.cursor_column(), Some(1));
+        assert_eq!(defaults(&log), 0, "the commit's Enter is not the dialog's");
+
+        // Bounded: the commit's focus and edit broadcasts drain first.
+        program.out_events.push_back(key(Key::Enter));
+        for _ in 0..8 {
+            program.pump_once();
+        }
+        assert!(
+            table(&mut program, id).is_editing(),
+            "the next Enter edits the same cell"
+        );
+        program.out_events.push_back(key(Key::Esc));
+        for _ in 0..8 {
+            program.pump_once();
+        }
+        assert!(!table(&mut program, id).is_editing());
+        assert_eq!(defaults(&log), 0);
+
+        // No cell cursor: Enter is the dialog's again.
+        table(&mut program, id).set_column_hidden(1, true);
+        program.out_events.push_back(key(Key::Enter));
+        for _ in 0..8 {
+            program.pump_once();
+        }
+        assert!(!table(&mut program, id).is_editing());
+        assert_eq!(defaults(&log), 1, "Enter pressed the default button");
     }
 
     /// Press inside, drag outside, release: NO press fires (the C++ post-loop
@@ -6020,6 +7066,289 @@ mod tests {
             "a probe without event_mask.mouse_auto receives no autos"
         );
         // (The opted-in case is covered by mouse_auto_fires_at_delay_then_period.)
+    }
+
+    // -- the global double/triple-click synthesizer -----------------------
+
+    /// Click once (raw MouseDown + MouseUp from the backend) at `(x, y)` at
+    /// clock time `t`, and return the flags of the MouseDown the probe saw.
+    fn click_flags(
+        program: &mut Program,
+        handle: &HeadlessHandle,
+        clock: &ManualClock,
+        log: &Rc<RefCell<Vec<Event>>>,
+        down: Event,
+        t: u64,
+    ) -> crate::event::MouseEventFlags {
+        clock.set(t);
+        log.borrow_mut().clear();
+        let pos = match &down {
+            Event::MouseDown(m) => m.position,
+            _ => unreachable!("click_flags takes a MouseDown"),
+        };
+        handle.push_event(down);
+        program.pump_once();
+        pump_until_quiet(program);
+        handle.push_event(mouse_up_at(pos.x, pos.y));
+        program.pump_once();
+        pump_until_quiet(program);
+        let downs: Vec<_> = log
+            .borrow()
+            .iter()
+            .filter_map(|e| match e {
+                Event::MouseDown(m) => Some(m.flags),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(downs.len(), 1, "the probe sees exactly one MouseDown");
+        downs[0]
+    }
+
+    /// [`auto_probe_program`] with the probe selected by a priming click at
+    /// clock 0 (the select-on-click swallows a first press on an unselected
+    /// view), on a cell no test clicks.
+    fn click_probe_program() -> (
+        Program,
+        HeadlessHandle,
+        Rc<ManualClock>,
+        Rc<RefCell<Vec<Event>>>,
+    ) {
+        let (mut program, handle, clock, log) = auto_probe_program(false);
+        handle.push_event(mouse_down_at(9, 3));
+        program.pump_once();
+        pump_until_quiet(&mut program);
+        handle.push_event(mouse_up_at(9, 3));
+        program.pump_once();
+        pump_until_quiet(&mut program);
+        (program, handle, clock, log)
+    }
+
+    fn right_down_at(x: i32, y: i32) -> Event {
+        Event::MouseDown(MouseEvent {
+            position: Point::new(x, y),
+            buttons: MouseButtons {
+                right: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+    }
+
+    /// Same cell, same button, within 440 ms: the 2nd press is a double
+    /// click, the 3rd a triple, the 4th neither, the 5th a double again —
+    /// the `meDoubleClick`/`meTripleClick` cycle of `getMouseEvent`.
+    #[test]
+    fn click_count_double_triple_then_restart() {
+        let (mut program, handle, clock, log) = click_probe_program();
+        let (p, h, c, l) = (&mut program, &handle, &*clock, &log);
+        let f1 = click_flags(p, h, c, l, mouse_down_at(2, 1), 1000);
+        assert!(!f1.double_click && !f1.triple_click, "1st press: no flag");
+        let f2 = click_flags(p, h, c, l, mouse_down_at(2, 1), 1200);
+        assert!(f2.double_click && !f2.triple_click, "2nd press: double");
+        let f3 = click_flags(p, h, c, l, mouse_down_at(2, 1), 1400);
+        assert!(!f3.double_click && f3.triple_click, "3rd press: triple");
+        let f4 = click_flags(p, h, c, l, mouse_down_at(2, 1), 1600);
+        assert!(!f4.double_click && !f4.triple_click, "4th press: neither");
+        let f5 = click_flags(p, h, c, l, mouse_down_at(2, 1), 1800);
+        assert!(f5.double_click && !f5.triple_click, "5th press: double");
+    }
+
+    /// The 440 ms window is inclusive (`ev.what - downTicks <= doubleDelay`);
+    /// one ms more is a fresh single click.
+    #[test]
+    fn click_count_respects_double_delay() {
+        let (mut program, handle, clock, log) = click_probe_program();
+        let (p, h, c, l) = (&mut program, &handle, &*clock, &log);
+        click_flags(p, h, c, l, mouse_down_at(2, 1), 1000);
+        let f = click_flags(p, h, c, l, mouse_down_at(2, 1), 1440);
+        assert!(f.double_click, "exactly 440 ms later is still a double");
+        let f = click_flags(p, h, c, l, mouse_down_at(2, 1), 1881);
+        assert!(
+            !f.double_click && !f.triple_click,
+            "441 ms after the last press is a single click"
+        );
+    }
+
+    /// A press on a different cell or with a different button is a fresh
+    /// single click (and becomes the new reference press).
+    #[test]
+    fn click_count_needs_same_cell_and_button() {
+        let (mut program, handle, clock, log) = click_probe_program();
+        let (p, h, c, l) = (&mut program, &handle, &*clock, &log);
+        click_flags(p, h, c, l, mouse_down_at(2, 1), 1000);
+        let f = click_flags(p, h, c, l, mouse_down_at(3, 1), 1100);
+        assert!(!f.double_click, "a different cell is no double click");
+        let f = click_flags(p, h, c, l, right_down_at(3, 1), 1200);
+        assert!(!f.double_click, "a different button is no double click");
+        let f = click_flags(p, h, c, l, right_down_at(3, 1), 1300);
+        assert!(f.double_click, "the reference press moved to the last one");
+    }
+
+    /// Two clean single clicks 441 ms apart stay single clicks.
+    #[test]
+    fn click_count_single_then_late_single() {
+        let (mut program, handle, clock, log) = click_probe_program();
+        let (p, h, c, l) = (&mut program, &handle, &*clock, &log);
+        let f = click_flags(p, h, c, l, mouse_down_at(2, 1), 1000);
+        assert!(!f.double_click && !f.triple_click, "1st press: single");
+        let f = click_flags(p, h, c, l, mouse_down_at(2, 1), 1441);
+        assert!(!f.double_click && !f.triple_click, "441 ms later: single");
+    }
+
+    /// Flags a backend set on a press are cleared before counting
+    /// (`ev.mouse.eventFlags = 0`): a backend "double" on a first press is a
+    /// single click, and the next quick press is a double, not a triple.
+    #[test]
+    fn click_count_clears_backend_flags() {
+        let (mut program, handle, clock, log) = click_probe_program();
+        let (p, h, c, l) = (&mut program, &handle, &*clock, &log);
+        let pre = Event::MouseDown(MouseEvent {
+            position: Point::new(2, 1),
+            buttons: MouseButtons {
+                left: true,
+                ..Default::default()
+            },
+            flags: crate::event::MouseEventFlags {
+                double_click: true,
+                triple_click: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        let f = click_flags(p, h, c, l, pre, 1000);
+        assert!(
+            !f.double_click && !f.triple_click,
+            "backend flags are cleared"
+        );
+        let f = click_flags(p, h, c, l, mouse_down_at(2, 1), 1100);
+        assert!(f.double_click && !f.triple_click, "next press: double");
+    }
+
+    /// A clock that went backwards is no repeat (C++: the unsigned tick
+    /// difference wraps, so the press is a single click).
+    #[test]
+    fn click_count_clock_backwards_is_single() {
+        let (mut program, handle, clock, log) = click_probe_program();
+        let (p, h, c, l) = (&mut program, &handle, &*clock, &log);
+        click_flags(p, h, c, l, mouse_down_at(2, 1), 1000);
+        let f = click_flags(p, h, c, l, mouse_down_at(2, 1), 900);
+        assert!(!f.double_click, "an earlier timestamp is no double click");
+    }
+
+    /// A queued MouseDown (not from the backend) is neither counted nor
+    /// moves the reference press.
+    #[test]
+    fn click_count_ignores_queued_press() {
+        let (mut program, handle, clock, log) = click_probe_program();
+        let (p, h, c, l) = (&mut program, &handle, &*clock, &log);
+        click_flags(p, h, c, l, mouse_down_at(2, 1), 1000);
+
+        // A queued press on another cell, inside the interval.
+        clock.set(1100);
+        log.borrow_mut().clear();
+        p.out_events.push_back(mouse_down_at(5, 2));
+        p.pump_once();
+        pump_until_quiet(p);
+        let queued: Vec<_> = log
+            .borrow()
+            .iter()
+            .filter_map(|e| match e {
+                Event::MouseDown(m) => Some(m.flags),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(queued.len(), 1, "the probe sees the queued press");
+        assert!(!queued[0].double_click, "a queued press is not counted");
+        p.out_events.push_back(mouse_up_at(5, 2));
+        p.pump_once();
+        pump_until_quiet(p);
+
+        // The reference is still the backend press at (2, 1).
+        let f = click_flags(p, h, c, l, mouse_down_at(2, 1), 1200);
+        assert!(
+            f.double_click,
+            "the queued press did not move the reference"
+        );
+    }
+
+    /// `set_double_delay_ms` widens (or narrows) the double-click interval.
+    #[test]
+    fn click_count_double_delay_is_tunable() {
+        let (mut program, handle, clock, log) = click_probe_program();
+        assert_eq!(program.double_delay_ms(), 440, "default interval");
+        program.set_double_delay_ms(1000);
+        let (p, h, c, l) = (&mut program, &handle, &*clock, &log);
+        click_flags(p, h, c, l, mouse_down_at(2, 1), 1000);
+        let f = click_flags(p, h, c, l, mouse_down_at(2, 1), 2000);
+        assert!(f.double_click, "1000 ms is inside a 1000 ms interval");
+        p.set_double_delay_ms(100);
+        let f = click_flags(p, h, c, l, mouse_down_at(2, 1), 2101);
+        assert!(!f.triple_click, "101 ms is outside a 100 ms interval");
+    }
+
+    /// Two raw clicks on a window's title row (not on an icon), `gap_ms`
+    /// apart. Returns the window bounds before and after, and the desktop
+    /// extent (the zoomed size).
+    fn title_double_click(gap_ms: u64) -> (Rect, Rect, Rect) {
+        let (mut program, handle, clock) = program_with_desktop(80, 25);
+        let win_id = desktop_concrete(&mut program).insert_view(Box::new(Window::new(
+            Rect::new(10, 5, 40, 15),
+            Some("W".into()),
+            1,
+        )));
+        for _ in 0..3 {
+            program.pump_once();
+        }
+        let before = program
+            .group_mut()
+            .find_mut(win_id)
+            .unwrap()
+            .state()
+            .get_bounds();
+
+        let desktop_id = program.desktop.unwrap();
+        let desktop = program
+            .group_mut()
+            .find_mut(desktop_id)
+            .unwrap()
+            .state()
+            .get_bounds();
+        // Title row of the window: window-local y 5 + desktop top.
+        let (x, y) = (20, 5 + desktop.a.y);
+        for t in [1000, 1000 + gap_ms] {
+            clock.set(t);
+            handle.push_event(mouse_down_at(x, y));
+            program.pump_once();
+            pump_until_quiet(&mut program);
+            handle.push_event(mouse_up_at(x, y));
+            program.pump_once();
+            pump_until_quiet(&mut program);
+        }
+        let after = program
+            .group_mut()
+            .find_mut(win_id)
+            .unwrap()
+            .state()
+            .get_bounds();
+        let extent = Rect::new(0, 0, desktop.b.x - desktop.a.x, desktop.b.y - desktop.a.y);
+        (before, after, extent)
+    }
+
+    /// End-to-end: two raw clicks on a window's title row 200 ms apart zoom
+    /// the window to the desktop extent, through the frame's `double_click`
+    /// arm.
+    #[test]
+    fn raw_double_click_on_title_bar_zooms_window() {
+        let (before, after, extent) = title_double_click(200);
+        assert_ne!(before, extent, "the window starts unzoomed");
+        assert_eq!(after, extent, "a raw double click on the title zooms");
+    }
+
+    /// End-to-end negative: the same two clicks 441 ms apart do not zoom.
+    #[test]
+    fn raw_slow_clicks_on_title_bar_do_not_zoom() {
+        let (before, after, _) = title_double_click(441);
+        assert_eq!(before, after, "two slow clicks do not zoom");
     }
 
     #[test]
@@ -7661,34 +8990,29 @@ mod tests {
         assert!(!more.down, "the focused '~M~ore' button ignored the letter");
     }
 
-    /// `Command::QUIT` during a modal (the non-obvious edge). Inside the modal,
-    /// `Event::Command(Command::QUIT)` is caught by `program_handle_event` ->
-    /// `end_state = Some(QUIT)`. The inner loop exits, `valid_end(QUIT)` ->
-    /// `group.valid(QUIT)` -> true (the dialog's `valid` defers to the group, no
-    /// child vetoes QUIT), so `exec_view` returns `QUIT` and pops the frame.
-    ///
-    /// **This asserts a DELIBERATE DEVIATION (D9).** Under the single loop,
-    /// `program_handle_event` (the quit catch) runs during the modal pump, so a
-    /// quit command ends the modal with `QUIT` and quits the app. The original's
-    /// modal dispatch never reached its program-level quit catch, so there the
-    /// command would have been discarded and the modal would stay open. We keep our
-    /// behavior (see `exec_view`'s doc); the assertions below verify it (no hang,
-    /// no panic, frame popped).
+    /// `Command::QUIT` during a modal is dropped, as in C++: `TGroup::execute`
+    /// hands it to the dialog, which ignores it, and `eventError` discards it
+    /// (tgroup.cpp:167-182) — `TProgram::handleEvent`'s quit catch never runs.
+    /// The modal stays open; the queued cmCancel then ends it.
     #[test]
-    fn exec_view_cm_quit_ends_modal_deviation_from_cpp() {
+    fn exec_view_cm_quit_is_dropped_like_cpp() {
         let (mut program, _screen, _clock) = program_with_desktop(40, 12);
 
         program.out_events.push_back(Event::Command(Command::QUIT));
+        program
+            .out_events
+            .push_back(Event::Command(Command::CANCEL));
 
         let dialog = Dialog::new(Rect::new(4, 2, 36, 10), Some("Setup".into()));
         let result = program.exec_view(Box::new(dialog));
 
         assert_eq!(
             result,
-            Command::QUIT,
-            "cmQuit during a modal ends the modal with cmQuit (caller propagates)"
+            Command::CANCEL,
+            "cmQuit did not end the modal; the following cmCancel did"
         );
-        assert_eq!(program.capture_len(), 0, "ModalFrame popped on cmQuit");
+        assert_eq!(program.capture_len(), 0, "ModalFrame popped");
+        assert_eq!(program.end_state(), None, "the app loop was not ended");
     }
 
     /// A sibling view in the ROOT group whose `valid` vetoes one specific command
@@ -9045,6 +10369,193 @@ mod tests {
         program.pump_once(); // bar kbDown → autoSelect → open File box
     }
 
+    /// A 60×20 program with a menu bar and a Dialog at (10,4)-(50,16) set up
+    /// as `exec_view` does (modal state, focus, ModalFrame), settled. Returns
+    /// the program and the dialog id.
+    fn program_with_modal_dialog() -> (Program, crate::view::ViewId) {
+        program_with_modal(Box::new(Dialog::new(
+            Rect::new(10, 4, 50, 16),
+            Some("D".into()),
+        )))
+    }
+
+    /// [`program_with_modal_dialog`] for any modal view.
+    fn program_with_modal(view: Box<dyn View>) -> (Program, crate::view::ViewId) {
+        let (mut program, _bar_id, _baseline) = program_with_menu_bar(60, 20);
+        let id = program.group_mut().insert(view);
+        if let Some(v) = program.group_mut().find_mut(id) {
+            let st = v.state_mut();
+            st.options.selectable = false;
+            st.state.modal = true;
+        }
+        program.with_ctx(|g, ctx| g.set_current(Some(id), SelectMode::Enter, ctx));
+        let bounds = program
+            .group_mut()
+            .find_mut(id)
+            .unwrap()
+            .state()
+            .get_bounds();
+        program.captures.push(Box::new(ModalFrame::new(id, bounds)));
+        for _ in 0..3 {
+            program.pump_once();
+        }
+        program.out_events.clear();
+        (program, id)
+    }
+
+    /// A modal dialog still sees the application as its owner: keyboard
+    /// move (cmResize, Ctrl-F5) moves it by one cell per arrow. Regression:
+    /// the direct modal dispatch once left the owner size at (0,0), and the
+    /// first arrow collapsed the dialog to an empty rect.
+    #[test]
+    fn modal_dialog_keyboard_move_uses_owner_size() {
+        let (mut program, id) = program_with_modal_dialog();
+        program.enable_command(Command::RESIZE);
+        program.put_event(Event::Command(Command::RESIZE));
+        program.pump_once();
+        program.put_event(key(Key::Right));
+        program.pump_once();
+        program.put_event(key(Key::Enter));
+        program.pump_once();
+        let b = program
+            .group_mut()
+            .find_mut(id)
+            .unwrap()
+            .state()
+            .get_bounds();
+        assert_eq!(b, Rect::new(11, 4, 51, 16), "moved one cell right");
+    }
+
+    /// cmZoom on a modal window maximizes it to its owner, the application
+    /// (60×20) — not to the (0,0) owner size of a bare direct dispatch.
+    #[test]
+    fn modal_window_zoom_fills_the_owner() {
+        let win = crate::window::Window::new(Rect::new(10, 4, 30, 10), Some("W".into()), 0);
+        let (mut program, id) = program_with_modal(Box::new(win));
+        program.put_event(Event::Command(Command::ZOOM));
+        program.pump_once();
+        let b = program
+            .group_mut()
+            .find_mut(id)
+            .unwrap()
+            .state()
+            .get_bounds();
+        assert_eq!(b, Rect::new(0, 0, 60, 20), "zoomed to the owner's extent");
+    }
+
+    /// Under a modal, a command the dialog does not consume is dropped, as
+    /// C++ `TGroup::execute` → `eventError` drops it (tgroup.cpp:167-182):
+    /// TProgram/TApplication::handleEvent never runs. So cmQuit does not end
+    /// the loop, and an app command is not queued for `run_app`'s handler.
+    /// Control: without a modal both reach the program level.
+    #[test]
+    fn unconsumed_commands_under_modal_are_dropped() {
+        let app_cmd = Command::custom("test.app-cmd");
+
+        let (mut program, _bar, _b) = program_with_menu_bar(60, 20);
+        program.put_event(Event::Command(app_cmd));
+        program.pump_once();
+        assert_eq!(
+            program.app_commands.iter().copied().collect::<Vec<_>>(),
+            [app_cmd],
+            "control: an app command is queued for run_app"
+        );
+        program.put_event(Event::Command(Command::QUIT));
+        program.pump_once();
+        assert_eq!(program.end_state(), Some(Command::QUIT), "control: quit");
+
+        let (mut program, id) = program_with_modal_dialog();
+        program.put_event(Event::Command(app_cmd));
+        program.pump_once();
+        assert!(
+            program.app_commands.is_empty(),
+            "an app command under a modal is not queued for later"
+        );
+        program.put_event(Event::Command(Command::QUIT));
+        program.pump_once();
+        assert_eq!(program.end_state(), None, "cmQuit under a modal is dropped");
+        assert_eq!(program.capture_len(), 1, "the dialog stays open");
+        assert!(program.group_mut().find_mut(id).is_some());
+    }
+
+    /// Menu-bar keys do not fire while a modal dialog executes. C++
+    /// `TGroup::execute` (tgroup.cpp:180) hands each event only to the modal
+    /// view's own `handleEvent`, so the menu bar's pre-process hot keys (Alt+F
+    /// title, F3 item accelerator) never see it; only `TProgram::getEvent`'s
+    /// status-line pre-route (tprogram.cpp:153) sits outside the modal view.
+    /// Control: without the modal, the same keys reach the bar.
+    #[test]
+    fn menu_bar_keys_do_not_fire_during_modal() {
+        let open_cmds = |p: &Program| {
+            p.out_events
+                .iter()
+                .filter(|e| matches!(e, Event::Command(c) if *c == Cmd::OPEN))
+                .count()
+        };
+
+        // Control: no modal → Alt+F arms the menu session, F3 posts cmOpen.
+        {
+            let (mut program, bar_id, _baseline) = program_with_menu_bar(60, 20);
+            program.out_events.push_back(Event::KeyDown(alt('f')));
+            program.pump_once();
+            assert_eq!(program.capture_len(), 1, "control: Alt+F opens the menu");
+            assert_eq!(bar_current(&mut program, bar_id), Some(0));
+
+            let (mut program, _bar_id, _baseline) = program_with_menu_bar(60, 20);
+            program.out_events.push_back(key(Key::F(3)));
+            program.pump_once();
+            assert_eq!(open_cmds(&program), 1, "control: F3 posts cmOpen");
+        }
+
+        // Modal: replicate exec_view's setup (modal state + focus + ModalFrame).
+        let (mut program, bar_id, _baseline) = program_with_menu_bar(60, 20);
+        let id = program.group_mut().insert(Box::new(Dialog::new(
+            Rect::new(10, 4, 50, 16),
+            Some("D".into()),
+        )));
+        if let Some(v) = program.group_mut().find_mut(id) {
+            let st = v.state_mut();
+            st.options.selectable = false;
+            st.state.modal = true;
+        }
+        program.with_ctx(|g, ctx| g.set_current(Some(id), SelectMode::Enter, ctx));
+        let bounds = program
+            .group_mut()
+            .find_mut(id)
+            .unwrap()
+            .state()
+            .get_bounds();
+        program.captures.push(Box::new(ModalFrame::new(id, bounds)));
+        for _ in 0..3 {
+            program.pump_once();
+        }
+        program.out_events.clear();
+        let len = program.group_mut().len();
+
+        program.out_events.push_back(key(Key::F(3)));
+        program.pump_once();
+        assert_eq!(
+            open_cmds(&program),
+            0,
+            "a menu item accelerator posts nothing during a modal"
+        );
+        assert_eq!(program.capture_len(), 1);
+
+        program.out_events.push_back(Event::KeyDown(alt('f')));
+        program.pump_once();
+        assert_eq!(
+            program.capture_len(),
+            1,
+            "Alt+F during a modal arms no menu session (only the ModalFrame)"
+        );
+        assert_eq!(
+            bar_current(&mut program, bar_id),
+            None,
+            "no title highlighted"
+        );
+        assert_eq!(program.group_mut().len(), len, "no dropdown opened");
+    }
+
     /// cmMenu (F10) highlights the default title but opens NO dropdown, and leaves
     /// the session armed (`tmnuview.cpp:193,343-350,368` — the re-posted cmMenu
     /// hits the `evCommand cmMenu` arm, autoSelect stays False, the open-gate is
@@ -10354,16 +11865,19 @@ mod tests {
 
         #[test]
         fn accelerator_fires_during_a_modal() {
-            // Push a ModalFrame directly (a dialog is open), then inject Alt-X.
-            // Because the getEvent pre-routing runs BEFORE captures.dispatch, the
-            // status line still sees the key, transforms it to cmQuit, and it
-            // routes -> end_state set. BITE: moving the pre-route to AFTER
-            // captures.dispatch makes this fail (the ModalFrame would gate, and the
-            // raw keyDown — not yet a command — would never reach the status line).
+            // A probe view is the executing modal; inject Alt-X. Because the
+            // getEvent pre-routing runs BEFORE captures.dispatch, the status line
+            // still sees the key and transforms it to cmQuit, which then goes to
+            // the modal view alone (TGroup::execute) — not to the program's quit
+            // catch. BITE: moving the pre-route to AFTER captures.dispatch makes
+            // this fail (the probe would get the raw key, not cmQuit).
             let (mut program, _handle, _sl, _mb) = program_full(40, 10);
-            // A synthetic modal occupying a central rect.
-            let modal_id = ViewId::next();
+            let log = Rc::new(RefCell::new(Vec::new()));
             let bounds = Rect::new(5, 3, 35, 8);
+            let modal_id =
+                program
+                    .group_mut()
+                    .insert(Box::new(Probe::new(bounds, 'M', log.clone())));
             program
                 .captures
                 .push(Box::new(ModalFrame::new(modal_id, bounds)));
@@ -10371,28 +11885,34 @@ mod tests {
 
             program.out_events.push_back(alt_x());
             program.pump_once();
+            assert!(
+                log.borrow().contains(&Event::Command(Command::QUIT)),
+                "Alt-X reaches the status line even with a modal open, and its \
+                 cmQuit goes to the modal view: {:?}",
+                log.borrow()
+            );
             assert_eq!(
                 program.end_state(),
-                Some(Command::QUIT),
-                "Alt-X reaches the status line even with a modal open (pre-route is BEFORE dispatch)"
+                None,
+                "the modal view ignores cmQuit; it is dropped, the loop goes on"
             );
         }
 
-        /// Positive end-to-end: Alt-X pre-queued, then exec_view drives the modal
-        /// loop — the accelerator ends the modal (returns QUIT). Mirrors the C++
-        /// "cmQuit from a modal" path our exec_view documents.
+        /// End-to-end: Alt-X pre-queued, then exec_view drives the modal loop.
+        /// As in C++, the status line turns it into cmQuit, the dialog ignores
+        /// it and `eventError` drops it — the modal stays open. The queued Esc
+        /// (the dialog's cmCancel) then ends it.
         #[test]
-        fn alt_x_ends_an_exec_view_modal() {
+        fn alt_x_does_not_end_an_exec_view_modal() {
             let (mut program, _handle, _sl, _mb) = program_full(40, 10);
-            // Pre-queue Alt-X so the first modal pump pre-routes it -> cmQuit ->
-            // end_state, ending exec_view (else it would spin on headless).
             program.out_events.push_back(alt_x());
+            program.out_events.push_back(key(Key::Esc));
             let dialog = crate::dialog::Dialog::new(Rect::new(8, 3, 32, 7), Some("Modal".into()));
             let result = program.exec_view(Box::new(dialog));
             assert_eq!(
                 result,
-                Command::QUIT,
-                "the modal ended on the Alt-X accelerator"
+                Command::CANCEL,
+                "Alt-X did not end the modal; Esc did"
             );
         }
 
@@ -10415,27 +11935,33 @@ mod tests {
             //   pump 2 (MouseUp):   MouseTrackCapture (top of stack) forwards the
             //                       localized MouseUp to the status line; its MouseUp
             //                       arm fires cmQuit and clears. The capture pops.
-            //   pump 3:             the posted cmQuit routes to the cmQuit catch.
+            //   pump 3:             the posted cmQuit goes to the modal view alone
+            //                       (TGroup::execute), here a logging probe.
             //
             // BITE: removing the mouseDown pre-route arm makes the modal gate eat the
-            // click -> the line never posts -> end_state stays None -> red.
+            // click -> the line never posts -> the probe never sees cmQuit -> red.
             let (mut program, _handle, _sl, _mb) = program_full(40, 10);
-            let modal_id = ViewId::next();
             // Modal covers rows 0..9 — the whole screen EXCEPT the status-line row.
+            let log = Rc::new(RefCell::new(Vec::new()));
+            let modal_bounds = Rect::new(0, 0, 40, 9);
+            let modal_id =
+                program
+                    .group_mut()
+                    .insert(Box::new(Probe::new(modal_bounds, 'M', log.clone())));
             program
                 .captures
-                .push(Box::new(ModalFrame::new(modal_id, Rect::new(0, 0, 40, 9))));
+                .push(Box::new(ModalFrame::new(modal_id, modal_bounds)));
 
             program.out_events.push_back(mouse_down_at(2, 9));
             program.pump_once(); // pre-route delivers MouseDown: arms tracking, no command yet
             program.out_events.push_back(mouse_up_at(2, 9));
             program.pump_once(); // MouseTrackCapture delivers MouseUp -> status line fires cmQuit
-            program.pump_once(); // posted cmQuit routes -> cmQuit catch
-            assert_eq!(
-                program.end_state(),
-                Some(Command::QUIT),
+            program.pump_once(); // posted cmQuit routes to the modal view
+            assert!(
+                log.borrow().contains(&Event::Command(Command::QUIT)),
                 "a click on the status line is pre-routed even past a modal gate that excludes it"
             );
+            assert_eq!(program.end_state(), None, "cmQuit under a modal is dropped");
         }
 
         #[test]
@@ -12687,5 +14213,411 @@ mod tests {
             "idle hook should fire once on each event-less pass, got {}",
             ticks.get()
         );
+    }
+
+    /// An idle hook posts a broadcast and an event through `&mut Program`
+    /// (the TProgram::idle → message / putEvent pattern); both are delivered
+    /// on later pump passes, in order.
+    #[test]
+    fn on_idle_hook_can_post_broadcast_and_event() {
+        use std::cell::Cell;
+
+        let refresh = Command::custom("test.idle-refresh");
+        let (mut program, _handle, _clock) = program_with_desktop(80, 25);
+        let log = Rc::new(RefCell::new(Vec::new()));
+        program.group_mut().insert(Box::new(Probe::new(
+            Rect::new(0, 0, 4, 2),
+            'P',
+            log.clone(),
+        )));
+        for _ in 0..4 {
+            program.pump_and_drive();
+        }
+        log.borrow_mut().clear();
+
+        // Post once, on the first idle pass only.
+        let fired = Rc::new(Cell::new(false));
+        let fired_in = fired.clone();
+        program.set_on_idle(move |p| {
+            if !fired_in.replace(true) {
+                p.broadcast(refresh, None);
+                p.put_event(Event::Command(Command::QUIT));
+            }
+        });
+
+        assert!(
+            program.pump_and_drive(),
+            "first pass is idle; the hook posts"
+        );
+        assert!(
+            log.borrow().is_empty() && program.end_state().is_none(),
+            "posted events are queued, not dispatched inside the hook"
+        );
+
+        assert!(!program.pump_and_drive(), "pass 2 dispatches the broadcast");
+        let got: Vec<Event> = log.borrow().clone();
+        assert!(
+            matches!(
+                got.as_slice(),
+                [Event::Broadcast { command: b, source: None }] if *b == refresh
+            ),
+            "the broadcast reaches the probe, got {got:?}"
+        );
+        assert!(program.end_state().is_none(), "QUIT is still queued");
+
+        assert!(!program.pump_and_drive(), "pass 3 dispatches the command");
+        assert_eq!(
+            program.end_state(),
+            Some(Command::QUIT),
+            "the posted QUIT reaches TProgram::handleEvent and ends the loop"
+        );
+    }
+
+    // -- Resize cascade reaches nested scroll views ---------------------------
+    //
+    // C++ TGroup::changeBounds calls child->changeBounds on every child when the
+    // group's size changes, and TListViewer::changeBounds re-publishes its bar
+    // steps inline. The Rust split puts the re-publish in `on_bounds_changed`,
+    // which must therefore reach every child of a resized group, at any depth
+    // and on every resize path.
+    mod resize_cascade {
+        use super::*;
+        use crate::view::{Deferred, Group, GrowMode};
+        use crate::widgets::{Constraints, ListBox, ScrollBar, Splitter};
+        use crate::window::{ScrollBarOptions, Window};
+
+        /// Where the list box sits inside the window.
+        #[derive(Clone, Copy)]
+        enum Layout {
+            /// A direct window child.
+            Plain,
+            /// Inside an inner `Group` filling the window interior.
+            Nested,
+            /// The single pane of a `Splitter` filling the window interior.
+            Splitter,
+            /// The first of two row panes of a `Splitter` filling the window
+            /// interior.
+            SplitTwo,
+        }
+
+        const GROW_ALL: GrowMode = GrowMode {
+            lo_x: false,
+            lo_y: false,
+            hi_x: true,
+            hi_y: true,
+            rel: false,
+            fixed: false,
+        };
+
+        /// A program whose desktop holds one 30×12 window at the desktop origin
+        /// with a standard vertical bar and a list box wired to it, placed in the
+        /// window interior per `layout`. Returns `(program, handle, window_id,
+        /// bar_id)`.
+        fn program_with_list_window(
+            w: u16,
+            h: u16,
+            layout: Layout,
+        ) -> (Program, HeadlessHandle, ViewId, ViewId) {
+            let (program, handle, win, bar, _content, _list) = program_with_content(w, h, layout);
+            (program, handle, win, bar)
+        }
+
+        /// `(window, bar, content, list box)` ids of a built window.
+        type BuiltIds = (ViewId, ViewId, ViewId, ViewId);
+
+        /// [`program_with_list_window`] that also returns the id of the
+        /// window's content child (the list box, inner group or splitter) and of
+        /// the list box.
+        fn program_with_content(
+            w: u16,
+            h: u16,
+            layout: Layout,
+        ) -> (Program, HeadlessHandle, ViewId, ViewId, ViewId, ViewId) {
+            let (backend, handle) = HeadlessBackend::new(w, h);
+            let ids: Rc<RefCell<Option<BuiltIds>>> = Rc::new(RefCell::new(None));
+            let ids_cap = ids.clone();
+            let mut program = Program::new(
+                Box::new(backend),
+                Box::new(Rc::new(ManualClock::new(0))),
+                Theme::classic_blue(),
+                move |r| {
+                    let mut desktop = Desktop::new(r, |r2| Some(Desktop::init_background(r2)));
+                    let mut win = Window::new(Rect::new(0, 0, 30, 12), Some("L".into()), 1)
+                        .with_grow_mode(GROW_ALL);
+                    win.state_mut().options.tileable = true;
+                    let bar = win.standard_scroll_bar(ScrollBarOptions {
+                        vertical: true,
+                        handle_keyboard: false,
+                    });
+                    let (content, list) = match layout {
+                        Layout::Plain => {
+                            let mut lb = ListBox::new(Rect::new(1, 1, 29, 11), 1, None, Some(bar));
+                            lb.state_mut().grow_mode = GROW_ALL;
+                            let id = win.insert_child(Box::new(lb));
+                            (id, id)
+                        }
+                        Layout::Nested => {
+                            let mut inner = Group::new(Rect::new(1, 1, 29, 11));
+                            inner.state_mut().grow_mode = GROW_ALL;
+                            let mut lb = ListBox::new(Rect::new(0, 0, 28, 10), 1, None, Some(bar));
+                            lb.state_mut().grow_mode = GROW_ALL;
+                            let lb_id = inner.insert(Box::new(lb));
+                            (win.insert_child(Box::new(inner)), lb_id)
+                        }
+                        Layout::Splitter | Layout::SplitTwo => {
+                            let mut sp = Splitter::rows();
+                            let lb_id = sp.insert(
+                                Box::new(ListBox::new(Rect::new(0, 0, 0, 0), 1, None, Some(bar))),
+                                Constraints::flex(),
+                            );
+                            if matches!(layout, Layout::SplitTwo) {
+                                sp.insert(
+                                    Box::new(ListBox::new(Rect::new(0, 0, 0, 0), 1, None, None)),
+                                    Constraints::flex(),
+                                );
+                            }
+                            sp.state_mut().grow_mode = GROW_ALL;
+                            let sp_id = win.insert_child(Box::new(sp));
+                            if let Some(v) = win.child_mut(sp_id) {
+                                v.change_bounds(Rect::new(1, 1, 29, 11));
+                            }
+                            (sp_id, lb_id)
+                        }
+                    };
+                    let win_id = desktop.insert_view(Box::new(win));
+                    *ids_cap.borrow_mut() = Some((win_id, bar, content, list));
+                    Some(Box::new(desktop))
+                },
+                |_r| None,
+                |_r| None,
+            );
+            program.out_events.clear();
+            program.pump_once();
+            let (win_id, bar, content, list) = ids.borrow().expect("window built");
+            (program, handle, win_id, bar, content, list)
+        }
+
+        fn bar_page_step(program: &mut Program, bar: ViewId) -> i32 {
+            program
+                .group_mut()
+                .find_mut(bar)
+                .and_then(|v| v.as_any_mut())
+                .and_then(|a| a.downcast_mut::<ScrollBar>())
+                .expect("bar resolves")
+                .page_step
+        }
+
+        /// Resize the window through the deferred channel (the drag-resize /
+        /// tile / cascade path); two pumps: one applies the bounds, the next
+        /// applies the scroll-bar params the list box re-published.
+        fn resize_window_deferred(program: &mut Program, win: ViewId, r: Rect) {
+            program.deferred.push(Deferred::ChangeBounds(win, r));
+            pump_with_dispatch(program);
+            pump_with_dispatch(program);
+        }
+
+        /// Pump once with a benign broadcast queued, so the pass reaches its
+        /// deferred-apply loop.
+        fn pump_with_dispatch(program: &mut Program) {
+            program.out_events.push_back(Event::Broadcast {
+                command: Command::custom("test.noop"),
+                source: None,
+            });
+            program.pump_once();
+        }
+
+        #[test]
+        fn window_resize_republishes_list_box_page_step() {
+            let (mut program, _h, win, bar) = program_with_list_window(80, 25, Layout::Plain);
+            resize_window_deferred(&mut program, win, Rect::new(0, 0, 30, 18));
+            // The list box is now 16 rows tall: the resize page step is size.y.
+            assert_eq!(bar_page_step(&mut program, bar), 16);
+        }
+
+        #[test]
+        fn window_resize_reaches_list_box_in_nested_group() {
+            let (mut program, _h, win, bar) = program_with_list_window(80, 25, Layout::Nested);
+            resize_window_deferred(&mut program, win, Rect::new(0, 0, 30, 18));
+            assert_eq!(bar_page_step(&mut program, bar), 16);
+        }
+
+        #[test]
+        fn window_resize_reaches_list_box_in_splitter_pane() {
+            let (mut program, _h, win, bar) = program_with_list_window(80, 25, Layout::Splitter);
+            resize_window_deferred(&mut program, win, Rect::new(0, 0, 30, 18));
+            assert_eq!(bar_page_step(&mut program, bar), 16);
+        }
+
+        #[test]
+        fn terminal_resize_republishes_list_box_page_step() {
+            let (mut program, handle, _win, bar) = program_with_list_window(80, 25, Layout::Plain);
+            // Desktop 80×25 → 80×31 (no menu/status line): the window grows by
+            // 6 rows, the list box from 10 to 16.
+            handle.resize(80, 31);
+            program.pump_once();
+            program.pump_once();
+            assert_eq!(bar_page_step(&mut program, bar), 16);
+        }
+
+        #[test]
+        fn window_zoom_republishes_list_box_page_step() {
+            let (mut program, _h, _win, bar) = program_with_list_window(80, 25, Layout::Plain);
+            program.out_events.push_back(Event::Command(Command::ZOOM));
+            program.pump_once();
+            program.pump_once();
+            // Zoomed to the 80×25 desktop: the list box is 23 rows tall.
+            assert_eq!(bar_page_step(&mut program, bar), 23);
+        }
+
+        #[test]
+        fn tile_republishes_list_box_page_step() {
+            let (mut program, _h, _win, bar) = program_with_list_window(80, 25, Layout::Plain);
+            program.out_events.push_back(Event::Command(Command::TILE));
+            program.pump_once();
+            pump_with_dispatch(&mut program);
+            // The only window tiles to the 80×25 desktop: the list box is 23 rows.
+            assert_eq!(bar_page_step(&mut program, bar), 23);
+        }
+
+        #[test]
+        fn window_move_without_resize_does_not_republish() {
+            let (mut program, _h, win, bar) = program_with_list_window(80, 25, Layout::Plain);
+            // A sentinel no list-box formula produces for this window.
+            program
+                .group_mut()
+                .find_mut(bar)
+                .and_then(|v| v.as_any_mut())
+                .and_then(|a| a.downcast_mut::<ScrollBar>())
+                .expect("bar resolves")
+                .page_step = 99;
+            resize_window_deferred(&mut program, win, Rect::new(5, 2, 35, 14));
+            assert_eq!(bar_page_step(&mut program, bar), 99);
+        }
+
+        #[test]
+        fn divider_nudge_republishes_list_box_page_step() {
+            use crate::view::DividerOp;
+            let (mut program, _h, _win, bar, sp, lb) =
+                program_with_content(80, 25, Layout::SplitTwo);
+            let pane_height =
+                |program: &mut Program| program.group_mut().find_mut(lb).unwrap().state().size.y;
+            let before = pane_height(&mut program);
+            program.deferred.push(Deferred::SplitterDivider {
+                splitter: sp,
+                op: DividerOp::Nudge { index: 0, delta: 2 },
+            });
+            pump_with_dispatch(&mut program);
+            pump_with_dispatch(&mut program);
+            let after = pane_height(&mut program);
+            assert_eq!(after, before + 2, "the nudge grew the list-box pane");
+            assert_eq!(bar_page_step(&mut program, bar), after);
+        }
+    }
+
+    // -- Hardware cursor clipping (TVCursor::computeCaretSize) ----------------
+    mod caret_clip {
+        use super::*;
+        use crate::widgets::InputLine;
+        use crate::window::Window;
+
+        /// A 40×12 program whose desktop holds a selected window at (2, 2) with
+        /// a focused input line at window (1, 1); its caret sits at screen
+        /// (4, 3). With `cover`, a non-selectable window is inserted above it at
+        /// `cover`. Returns the pumped program's backend handle.
+        fn program_with_caret(cover: Option<Rect>) -> (Program, HeadlessHandle) {
+            let (backend, handle) = HeadlessBackend::new(40, 12);
+            let mut program = Program::new(
+                Box::new(backend),
+                Box::new(Rc::new(ManualClock::new(0))),
+                Theme::classic_blue(),
+                move |r| {
+                    let mut desktop = Desktop::new(r, |r2| Some(Desktop::init_background(r2)));
+                    let mut win = Window::new(Rect::new(2, 2, 22, 8), Some("A".into()), 1);
+                    win.insert_child(Box::new(InputLine::with_limit(Rect::new(1, 1, 15, 2), 20)));
+                    desktop.insert_view(Box::new(win));
+                    if let Some(c) = cover {
+                        let mut top = Window::new(c, Some("B".into()), 2);
+                        top.state_mut().options.selectable = false;
+                        desktop.insert_view(Box::new(top));
+                    }
+                    Some(Box::new(desktop))
+                },
+                |_r| None,
+                |_r| None,
+            );
+            program.out_events.clear();
+            program.pump_once();
+            (program, handle)
+        }
+
+        #[test]
+        fn caret_shown_when_uncovered() {
+            let (_p, handle) = program_with_caret(Some(Rect::new(20, 2, 35, 8)));
+            assert_eq!(handle.cursor(), Some((4, 3)));
+        }
+
+        /// Only the pump's root-extent clip can hide this caret: the desktop is
+        /// wider than the 40-column screen, so every group on the chain sees the
+        /// caret inside its child, but it lands at screen column 44.
+        #[test]
+        fn caret_hidden_past_the_screen_edge() {
+            let (backend, handle) = HeadlessBackend::new(40, 12);
+            let mut program = Program::new(
+                Box::new(backend),
+                Box::new(Rc::new(ManualClock::new(0))),
+                Theme::classic_blue(),
+                |r| {
+                    let wide = Rect::new(r.a.x, r.a.y, r.b.x + 40, r.b.y);
+                    let mut desktop = Desktop::new(wide, |r2| Some(Desktop::init_background(r2)));
+                    let mut win = Window::new(Rect::new(42, 2, 62, 8), Some("A".into()), 1);
+                    win.insert_child(Box::new(InputLine::with_limit(Rect::new(1, 1, 15, 2), 20)));
+                    desktop.insert_view(Box::new(win));
+                    Some(Box::new(desktop))
+                },
+                |_r| None,
+                |_r| None,
+            );
+            program.out_events.clear();
+            program.pump_once();
+            // The walk below the root does yield the caret.
+            assert_eq!(
+                program.group_mut().cursor_request(),
+                Some(Point::new(44, 3))
+            );
+            assert_eq!(handle.cursor(), None);
+        }
+
+        #[test]
+        fn caret_hidden_under_window_above_focused_window() {
+            let (_p, handle) = program_with_caret(Some(Rect::new(3, 1, 18, 6)));
+            assert_eq!(handle.cursor(), None);
+        }
+
+        /// TVCursor::decideCaretSize: the Insert key flips the focused input
+        /// line's sfCursorIns, and the caret the backend gets follows it —
+        /// a block (100) in overwrite mode, the normal thin caret otherwise.
+        #[test]
+        fn caret_shape_follows_insert_toggle() {
+            use crate::backend::{CARET_INSERT, CARET_NORMAL};
+            use crate::keymap::{GlobalKeymapGuard, Keymap};
+            // Insert -> INS_MODE comes from the global keymap; hold the default.
+            let _g = GlobalKeymapGuard::new(Keymap::word_star());
+
+            let (mut p, handle) = program_with_caret(None);
+            // Drain what the first idle pass queued (command-set-changed).
+            p.pump_once();
+            assert!(p.out_events.is_empty());
+            assert_eq!(handle.cursor(), Some((4, 3)));
+            assert_eq!(handle.caret_size(), CARET_NORMAL);
+
+            p.put_event(key(Key::Insert));
+            p.pump_once();
+            assert_eq!(handle.cursor(), Some((4, 3)));
+            assert_eq!(handle.caret_size(), CARET_INSERT, "overwrite: block caret");
+
+            p.put_event(key(Key::Insert));
+            p.pump_once();
+            assert_eq!(handle.caret_size(), CARET_NORMAL, "insert: normal caret");
+        }
     }
 }

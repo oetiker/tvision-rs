@@ -202,7 +202,7 @@ impl View for MenuBar {
     }
 
     /// The command-graying broker hook. The pump calls this at apply time (via
-    /// [`Deferred::UpdateMenu`]) with the live **disabled-command set** in hand,
+    /// [`Deferred::UpdateMenu`](crate::view::Deferred::UpdateMenu)) with the live **disabled-command set** in hand,
     /// and [`Program::new`](crate::app::Program::new) calls it once at startup to
     /// seed the initial graying; it walks the menu tree setting each command
     /// item's `disabled = disabled_cmds.has(command)` (the shared

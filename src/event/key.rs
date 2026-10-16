@@ -137,7 +137,7 @@ pub struct KeyModifiers {
 /// let ctrl_s = KeyEvent::new(Key::Char('s'), KeyModifiers { ctrl: true, ..Default::default() });
 /// ```
 ///
-/// Match a `KeyEvent` in [`View::handle`](crate::view::View::handle) by
+/// Match a `KeyEvent` in [`View::handle_event`](crate::view::View::handle_event) by
 /// destructuring `Event::KeyDown(ke)` and checking `ke.key` and `ke.modifiers`.
 ///
 /// # Turbo Vision heritage

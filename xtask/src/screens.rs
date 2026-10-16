@@ -207,6 +207,15 @@ pub const SCREENS: &[Screen] = &[
         settle_ms: 700,
     },
     Screen {
+        name: "table",
+        example: "gallery",
+        args: &["table"],
+        cols: 54,
+        rows: 18,
+        keys: &[],
+        settle_ms: 700,
+    },
+    Screen {
         name: "terminal",
         example: "gallery",
         args: &["terminal"],

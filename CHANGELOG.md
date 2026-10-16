@@ -12,9 +12,86 @@ moves it into a dated, versioned section when a release is cut.
 
 ### New
 
+- **`Table` widget.** A sortable multi-column list with a click-to-sort header,
+  single or multi selection (a `[ ]` check column), hidden columns, per-row
+  text colours, stretching (flex) columns and horizontal scrolling; the
+  focused row and the marked rows stay on the same record when rows are
+  reloaded or re-sorted. Adapted from tvdocker (MIT, by supertorpe).
+- **`Table` columns can be arranged with the mouse.** Dragging the separator
+  right of a column label resizes the column, dragging a label moves the
+  column, and a right-click on the header opens a menu that shows or hides
+  columns (also reachable as `Command::TABLE_COLUMNS`). `Table::column_layout`
+  and `set_column_layout` save and restore the arrangement, and every change
+  by the user broadcasts `Command::TABLE_COLUMNS_CHANGED`.
+- **`Table` cells can be edited in place.** Columns marked `editable` get a
+  black-on-gray cell cursor (Left/Right); Enter, F2 or a double-click opens an
+  input line over the cell, Enter or Tab stores the text through
+  `TableModel::set_cell`, Esc cancels, and a rejected value shows a message box
+  and keeps the editor open. In a dialog whose table has an editable column,
+  Enter therefore edits the cell instead of pressing the default button.
+- An open `Table` cell edit is stored when its dialog or window closes with any
+  command but Cancel (a rejected value stops the close); a click elsewhere, or
+  a reload that removes the row, discards it. Each stored edit broadcasts
+  `Command::TABLE_CELL_EDITED`.
+- **Background work can post events.** `Program::put_event` and
+  `Program::broadcast` queue an event or a broadcast from the idle hook (or any
+  code holding the `Program`); it is delivered on the next pass of the loop.
+- **Overwrite mode shows a block caret.** Input lines and the editor now show a
+  blinking block caret in overwrite mode (Ins); in insert mode the terminal
+  keeps its own caret shape, which is restored on exit and suspend.
+- **Common app patterns** page in the guide: focus, resize, cursor, help
+  context and key routing, modal results, background work, double-click.
+- **Dialogs opened from a view return their field values.** A view that opens a
+  dialog with `Context::request_exec_view` now receives the dialog's field values
+  in `set_modal_data` (an ordered `FieldValue::List`), unless the dialog was
+  cancelled; the close command still follows in `set_modal_answer`. A form or a
+  picker no longer needs an `Rc<RefCell<…>>` shared with its caller.
+- **Adjustable double-click interval.** `Program::set_double_delay_ms` changes how
+  fast two clicks must follow each other to count as a double-click (default
+  440 ms).
+
 ### Changed
 
+- **A modal dialog alone receives keys and commands.** While a dialog runs,
+  menu-bar shortcuts (Alt+F, F3), Alt+1..9 window selection, Alt+X, Tile and
+  Cascade no longer act behind it, and a command the dialog does not handle is
+  dropped instead of running after the dialog closes. Status-line keys still
+  work, as in Turbo Vision.
+- **`#[delegate]` refuses a second `ViewState`.** A `#[delegate(to = field)]`
+  impl whose `state`/`state_mut` returns anything but `self.field.state()` /
+  `self.field.state_mut()` no longer compiles. Such a view looked unfocused
+  while it received keys, and resizing used the wrong size; keep the state in
+  the delegate field or implement `View` by hand.
+- `Command::SCREEN_CHANGED` is removed: nothing ever sent it. To react to a
+  terminal resize, override `View::change_bounds` (see the new "Common app
+  patterns" page in the guide).
+- `Dialog::value()` now returns the dialog's whole record (all its data fields as
+  an ordered `FieldValue::List`) instead of nothing.
+
 ### Fixed
+
+- **Timers fire while a window or column is dragged or a menu is open.**
+  Before, a timer that expired during the drag or while the menu was open was
+  lost, so a one-shot timer never fired at all.
+- **The mouse wheel stays inside a modal dialog.** A wheel turn over the
+  dialog no longer scrolls a list, table or editor behind it.
+- The editor's right-click menu inside a window now opens at the pointer;
+  before, it could jump to the top-left corner of the screen.
+- **Scroll bars follow window resizes.** Lists and scrollable views inside a
+  window now update their scroll bars when the window is resized, zoomed,
+  tiled or cascaded, when a splitter divider moves, or when the terminal size
+  changes; before, Page Up/Down and the scroll bar used the old size.
+- **The text cursor is hidden where it cannot be seen**: outside its field,
+  outside the window that holds it, past the screen edge, or under another
+  window.
+- **Double- and triple-clicks now work in real terminals.** Before, they only
+  worked in tests: a double-click on a window title now zooms the window, and a
+  double-click picks an entry in a list, history or file dialog. In the editor a
+  double-click selects a word and a triple-click a line; in an input line a
+  double-click selects all text.
+- The API reference had 122 broken or misdirected links (for example to
+  `View::handle`, which no longer exists); `cargo doc` now builds without
+  warnings.
 
 ## 0.16.0 - 2026-09-03
 

@@ -142,7 +142,7 @@ impl Dialog {
     /// Face widths follow the dialog's [`ButtonLayout`](crate::dialog::ButtonLayout)
     /// and minimum (see [`set_button_layout`](Self::set_button_layout) /
     /// [`set_button_min_width`](Self::set_button_min_width)); the default is
-    /// `Classic` at [`STD_BUTTON`], i.e. every face a fixed 10 columns. Switch to
+    /// `Classic` at [`STD_BUTTON`](crate::dialog::STD_BUTTON), i.e. every face a fixed 10 columns. Switch to
     /// `Uniform` or `Ragged` for labels longer than the minimum ("Discard", "Keep
     /// editing"), which would otherwise render hard against the drop shadow.
     pub fn button_row(
@@ -278,8 +278,7 @@ impl Dialog {
         calc_bounds,
         grabs_focus_on_click,
         select_window_num,
-        set_value,
-        value
+        set_value
     )
 )]
 impl View for Dialog {
@@ -336,6 +335,19 @@ impl View for Dialog {
         } else {
             self.window.valid(cmd, ctx)
         }
+    }
+
+    /// The dialog's whole record: [`gather_list`](Dialog::gather_list), an
+    /// ordered [`FieldValue::List`](crate::data::FieldValue::List) of its
+    /// data-bearing controls' values. This is what a view-launched modal
+    /// ([`Context::request_exec_view`]) hands back to its requester via
+    /// [`View::set_modal_data`]. `set_value` stays a no-op: scattering needs a
+    /// `Context`, so use [`scatter_list`](Dialog::scatter_list).
+    ///
+    /// # Turbo Vision heritage
+    /// `TGroup::getData` as seen through `TView::getData` on the dialog.
+    fn value(&self) -> Option<crate::data::FieldValue> {
+        Some(self.gather_list())
     }
 }
 
@@ -693,6 +705,11 @@ mod tests {
                 FieldValue::Text("b".into()),
             ]),
             "Dialog forwards gather/scatter_list to its embedded Group"
+        );
+        assert_eq!(
+            View::value(&d),
+            Some(d.gather_list()),
+            "Dialog::value() is its gathered record (the request_exec_view data arm)"
         );
     }
 

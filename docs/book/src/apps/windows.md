@@ -351,7 +351,10 @@ the owner, so the child maintains its margins on all four sides.
 Grow mode is applied by [`View::change_bounds`](../api/tvision_rs/view/trait.View.html#method.change_bounds)
 (`src/view/view.rs`): when a group is resized, it calls `calc_bounds` on each
 child (which applies the grow formula) and then `change_bounds` to commit the new
-rectangle.
+rectangle. After that the pump calls `on_bounds_changed`, which the group
+passes to each child, so lists and scrollers inside the window update their
+scroll bars to the new size (see
+[Reacting to a terminal resize](patterns.md#reacting-to-a-terminal-resize)).
 
 Source: `src/view/view.rs` (`GrowMode`, `ViewState::calc_bounds`).
 

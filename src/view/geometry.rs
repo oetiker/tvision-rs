@@ -135,7 +135,7 @@ impl SubAssign for Point {
 ///
 /// # Turbo Vision heritage
 /// Ports `TRect` from `objects.h`. The two raw-identifier methods
-/// [`r#move`](Rect::r#move) and [`r#union`](Rect::r#union) use raw identifiers
+/// `r#move` and `r#union` use raw identifiers
 /// to avoid collisions with the Rust keywords `move` and `union`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Rect {

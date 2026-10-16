@@ -7,7 +7,7 @@
 //! consumes every otherwise-unhandled event *is* the modal loop. Handlers hold a
 //! [`ViewId`], never a view reference. The live event loop in
 //! [`Program`](crate::app::Program) owns this stack and drives
-//! [`CaptureStack::dispatch`]; the [`tests`] module here hand-plays the loop to
+//! [`CaptureStack::dispatch`]; the `tests` module here hand-plays the loop to
 //! prove the protocol composes.
 //!
 //! **Guide:** [Event capture](../../../port/capture.html).
@@ -72,7 +72,7 @@ pub trait CaptureHandler {
         None
     }
 
-    /// Returns `true` if this handler is a modal-bounds gate (a [`ModalFrame`]
+    /// Returns `true` if this handler is a modal-bounds gate (a [`ModalFrame`](crate::app::ModalFrame)
     /// equivalent).  Used by the pump's outside-modal redirect to distinguish a
     /// true modal frame from other capture handlers that also have a `view()`
     /// (drag, menu-box, etc.).  **Default is `false`** — only `ModalFrame`
@@ -218,9 +218,11 @@ impl CaptureHandler for MouseTrackCapture {
             // the editor/scroller never scrolls. (The bug this fixes: dragging a
             // scrollbar did not move the associated text.)
             Event::Broadcast { .. } => CaptureFlow::Pass,
-            // Everything else (unmasked mouse classes, keys, commands, timers) is
-            // discarded until the mouse-up — the hold is modal, and idle/timer
-            // work does not run inside it.
+            // Everything else (unmasked mouse classes, keys, commands) is
+            // discarded until the mouse-up, as the C++ hold loop discards what
+            // its `getEvent` returns outside the mask. Timer expiries never get
+            // here: the pump routes them around the capture stack, because C++
+            // delivers them from `idle` inside that same `getEvent`.
             _ => CaptureFlow::Consumed,
         }
     }
@@ -299,6 +301,19 @@ impl CaptureStack {
         self.handlers.is_empty()
     }
 
+    /// Returns the [`ViewId`] of the innermost executing modal view: the
+    /// topmost modal gate ([`CaptureHandler::is_modal_gate`]) on the stack,
+    /// even when a drag or menu handler sits above it. `None` when no modal
+    /// view executes. The pump routes focused events to this view, as C++
+    /// `TGroup::execute` hands them to the modal view's own `handleEvent`.
+    pub fn modal_view(&self) -> Option<ViewId> {
+        self.handlers
+            .iter()
+            .rev()
+            .find(|h| h.is_modal_gate())
+            .and_then(|h| h.view())
+    }
+
     /// Returns the [`ViewId`] of the top capture handler only when it is a
     /// modal-bounds gate ([`CaptureHandler::is_modal_gate`] == `true`).
     /// Used by the pump's outside-modal redirect to avoid firing on drag or
@@ -309,7 +324,7 @@ impl CaptureStack {
             .and_then(|h| if h.is_modal_gate() { h.view() } else { None })
     }
 
-    /// Returns the help context from an active [`MenuSession`] on the stack, if
+    /// Returns the help context from an active [`MenuSession`](crate::menu::MenuSession) on the stack, if
     /// any. Consults **only the topmost handler**: a menu preempts the help
     /// context iff it is the topmost capture handler, matching C++
     /// `TopView()->getHelpCtx()` where `TopView()` is the active `TMenuView`.

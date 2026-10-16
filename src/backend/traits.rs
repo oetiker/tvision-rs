@@ -9,6 +9,22 @@ use std::time::Duration;
 use crate::event::Event;
 use crate::screen::Cell;
 
+/// Caret size for the normal (insert-mode) caret, 1% of the cell. A terminal
+/// backend shows it as the terminal's own caret shape. See
+/// [`Backend::set_caret_size`].
+///
+/// # Turbo Vision heritage
+/// `TScreen::cursorLines & 0x0F`, which on the modern platform layer is the
+/// startup caret size clamped to `1..=100` — `1` on a terminal.
+pub const CARET_NORMAL: u8 = 1;
+
+/// Caret size for the block (overwrite-mode) caret: the whole cell. See
+/// [`Backend::set_caret_size`].
+///
+/// # Turbo Vision heritage
+/// The `100` that `TVCursor::decideCaretSize` returns for `sfCursorIns`.
+pub const CARET_INSERT: u8 = 100;
+
 /// Platform seam between the framework and the terminal.
 ///
 /// Two implementations exist:
@@ -60,6 +76,25 @@ pub trait Backend {
 
     /// Show the hardware cursor at `pos`, or hide it when `pos` is `None`.
     fn set_cursor(&mut self, pos: Option<(u16, u16)>);
+
+    /// Set the shape of the visible caret. `size` is the percentage of the
+    /// character cell the caret fills, `1..=100`:
+    /// [`CARET_NORMAL`] (the normal caret) or [`CARET_INSERT`] (the whole
+    /// cell). Called
+    /// by [`Renderer::render`](crate::backend::Renderer::render) each frame
+    /// in which the caret is shown, after [`set_cursor`](Self::set_cursor);
+    /// hiding the caret is `set_cursor(None)`. The default does nothing, for
+    /// backends that cannot change the caret shape.
+    ///
+    /// The [`CrosstermBackend`](crate::backend::CrosstermBackend) shows
+    /// [`CARET_INSERT`] as a blinking block and keeps the terminal's own caret
+    /// shape for every other size (as the original's ncurses display does),
+    /// and restores the terminal's shape on exit and suspend.
+    ///
+    /// # Turbo Vision heritage
+    /// Ports `THardwareInfo::setCaretSize` (`hardware.cpp`). A size of `0`
+    /// (caret hidden) is carried by `set_cursor(None)` instead.
+    fn set_caret_size(&mut self, _size: u8) {}
 
     /// Wait up to `timeout` for the next input event.
     ///

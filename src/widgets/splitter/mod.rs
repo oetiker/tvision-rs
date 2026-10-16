@@ -4,7 +4,7 @@ use crate::capture::TrackMask;
 use crate::event::Event;
 use crate::junction::{Edge, Junction, JunctionMark, Weight, divider_junction};
 use crate::theme::Role;
-use crate::view::{Context, DrawCtx, Group, GrowMode, Point, Rect, View, ViewId, ViewState};
+use crate::view::{Context, DrawCtx, Group, GrowMode, Point, Rect, View, ViewId};
 
 pub use layout::{Constraints, Orientation};
 use layout::{Slot, relax_weight, solve};
@@ -279,6 +279,7 @@ impl Splitter {
             Orientation::Rows => ext.a.y,
         };
         let ids = self.group.child_ids_in_order();
+        let mut resized = false;
         for (i, id) in ids.iter().enumerate() {
             let size = sizes.get(i).copied().unwrap_or(0);
             let rect = match self.orientation {
@@ -286,9 +287,15 @@ impl Splitter {
                 Orientation::Rows => Rect::new(ext.a.x, cursor, ext.b.x, cursor + size),
             };
             if let Some(child) = self.group.find_mut(*id) {
+                resized |= child.state().size != rect.b - rect.a;
                 child.change_bounds(rect);
             }
             cursor += size + 1; // +1 for the divider cell that follows
+        }
+        // The panes were re-bounded by the layout, not the group cascade: let
+        // the next (delegated) `on_bounds_changed` reach them.
+        if resized {
+            self.group.mark_bounds_dirty();
         }
     }
 
@@ -591,8 +598,9 @@ impl Splitter {
     }
 
     /// Move divider `index` by `delta` cells along the split axis, then re-flow
-    /// children synchronously (no `ctx` at broker-apply time — `resolve_layout_local`
-    /// writes child bounds directly).
+    /// children synchronously (`resolve_layout_local` writes child bounds
+    /// directly). The caller then calls [`View::on_bounds_changed`] so the
+    /// re-sized panes re-publish their scroll state.
     pub(crate) fn nudge_divider(&mut self, index: usize, delta: i32) {
         if let Some(p) = self.divider_axis_pos(index) {
             self.drag_divider_to(index, p + delta);
@@ -722,13 +730,6 @@ impl Splitter {
 
 #[crate::delegate(to = group)]
 impl View for Splitter {
-    fn state(&self) -> &ViewState {
-        self.group.state()
-    }
-    fn state_mut(&mut self) -> &mut ViewState {
-        self.group.state_mut()
-    }
-
     fn draw(&mut self, ctx: &mut DrawCtx) {
         self.abs_origin = ctx.origin();
         self.group.draw(ctx);
@@ -811,6 +812,7 @@ mod divider_tests {
     use crate::backend::{HeadlessBackend, Renderer};
     use crate::screen::Buffer;
     use crate::theme::{Role, Theme};
+    use crate::view::ViewState;
 
     // Minimal fill view for snapshot tests.
     struct Fill(char, ViewState);
@@ -1059,6 +1061,7 @@ mod view_tests {
     use crate::backend::{HeadlessBackend, Renderer};
     use crate::screen::Buffer;
     use crate::theme::{Role, Theme};
+    use crate::view::ViewState;
 
     struct Fill(char, ViewState);
     impl Fill {

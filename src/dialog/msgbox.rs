@@ -45,7 +45,7 @@ use crate::widgets::{InputLine, Label, LimitMode};
 
 /// The dialog title — which kind of alert this is.
 ///
-/// Pass to [`Program::message_box`] or [`Program::message_box_rect`] as the
+/// Pass to [`Program::message_box`](crate::app::Program::message_box) or [`Program::message_box_rect`](crate::app::Program::message_box_rect) as the
 /// `kind` argument. Each variant maps to a fixed title string shown in the
 /// dialog frame:
 ///
@@ -87,7 +87,7 @@ impl MessageBoxKind {
 ///
 /// Each field, when set, adds one button along the bottom of the dialog. They
 /// always appear in [Yes, No, OK, Cancel] order regardless of which are enabled.
-/// The value returned by [`Program::message_box`] is the [`Command`] of the
+/// The value returned by [`Program::message_box`](crate::app::Program::message_box) is the [`Command`] of the
 /// button the user pressed.
 ///
 /// Use one of the convenience constructors for the most common combinations:

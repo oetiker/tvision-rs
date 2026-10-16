@@ -2,7 +2,7 @@
 //!
 //! [`MenuBox`] is a framed, shadowed [`MenuView`] that lays its items out
 //! vertically, one per row. The box-specific work is its layout: the static
-//! [`menu_box_rect`] sizing helper, [`frame_line`](MenuBox::frame_line),
+//! [`menu_box_rect`] sizing helper, `frame_line`,
 //! [`draw`](MenuBox::draw), and [`get_item_rect`](MenuView::get_item_rect). Its
 //! [`handle_event`](MenuBox::handle_event) delegates to the shared passive
 //! [`menu_view::handle_event`]; the interactive navigation runs in the menu
@@ -10,7 +10,7 @@
 //!
 //! ## The inset frame (intentional, **not** a bug)
 //!
-//! [`frame_line`](MenuBox::frame_line) writes the corner/edge glyph at columns 1
+//! `frame_line` writes the corner/edge glyph at columns 1
 //! and `size.x-2`, leaving **column 0 and column `size.x-1` blank**. The menu-box
 //! frame is deliberately inset one column on each side (those outer columns are
 //! spaces in the frame-glyph table), and the snapshot captures it. Do not

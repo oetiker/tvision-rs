@@ -289,16 +289,46 @@ impl Command {
     /// (e.g. open a document, populate a detail pane).
     pub const LIST_ITEM_SELECTED: Command = Command("tv.list_item_selected");
     /// The find query changed (incremental find-and-highlight); `source` is the
-    /// list viewer's `ViewId`. Mirrors [`SCROLL_BAR_CHANGED`]'s notify-by-
+    /// list viewer's `ViewId`. Mirrors [`SCROLL_BAR_CHANGED`](Self::SCROLL_BAR_CHANGED)'s notify-by-
     /// broadcast — a parent filters on `source` to drive an external search
     /// (e.g. submit an async query and re-feed results).
     pub const LIST_FIND_CHANGED: Command = Command("tv.list_find_changed");
-    /// The terminal size changed — broadcast by `Program` after a SIGWINCH /
-    /// crossterm resize event; all views resize in response.
-    ///
-    /// Most views do not need to handle this directly; the framework resizes the
-    /// view tree automatically.
-    pub const SCREEN_CHANGED: Command = Command("tv.screen_changed");
+    /// A [`Table`](crate::widgets::Table)'s sort order changed through the user
+    /// (a header click or [`TABLE_SORT_NEXT`](Self::TABLE_SORT_NEXT) /
+    /// [`TABLE_SORT_FLIP`](Self::TABLE_SORT_FLIP)); `source` is the table's
+    /// `ViewId`. Read the new order with `Table::sort_spec`.
+    pub const TABLE_SORT_CHANGED: Command = Command("tv.table_sort_changed");
+    /// A multi-select [`Table`](crate::widgets::Table)'s set of marked rows
+    /// changed through the user (Space or a double-click toggled a row);
+    /// `source` is the table's `ViewId`. Read the set with
+    /// `Table::selected_keys`.
+    pub const TABLE_SELECTION_CHANGED: Command = Command("tv.table_selection_changed");
+    /// Sort a focused [`Table`](crate::widgets::Table) by the next visible
+    /// column, ascending (wrapping; with no sort yet, the first visible
+    /// column). The table binds no key to it: an app maps a key to this
+    /// command (status line or keymap) if it wants keyboard sorting.
+    pub const TABLE_SORT_NEXT: Command = Command("tv.table_sort_next");
+    /// Flip the sort direction of a focused [`Table`](crate::widgets::Table)
+    /// on its current sort column (with no sort yet: sort the first visible
+    /// column ascending). Unbound by default, like
+    /// [`TABLE_SORT_NEXT`](Self::TABLE_SORT_NEXT).
+    pub const TABLE_SORT_FLIP: Command = Command("tv.table_sort_flip");
+    /// A [`Table`](crate::widgets::Table) cell editor committed a new text
+    /// that the model accepted; `source` is the table's `ViewId`. Read the
+    /// value from `Table::model` (or the app's own copy of the data). An
+    /// edit committed by the command that closes a modal dialog arrives
+    /// after the dialog is gone (see `Table::valid`).
+    pub const TABLE_CELL_EDITED: Command = Command("tv.table_cell_edited");
+    /// Open a focused [`Table`](crate::widgets::Table)'s column popup at its
+    /// header: every column with a check mark, choosing one shows or hides it
+    /// (the same popup a right-click on the header opens). Unbound by
+    /// default, like [`TABLE_SORT_NEXT`](Self::TABLE_SORT_NEXT).
+    pub const TABLE_COLUMNS: Command = Command("tv.table_columns");
+    /// A [`Table`](crate::widgets::Table)'s column layout changed through the
+    /// user (a column resized, moved, shown or hidden); `source` is the
+    /// table's `ViewId`. Read the layout with `Table::column_layout` to
+    /// persist it.
+    pub const TABLE_COLUMNS_CHANGED: Command = Command("tv.table_columns_changed");
     /// Record the current input-line value into its history list — handled by
     /// `InputLine` when it loses focus.
     ///

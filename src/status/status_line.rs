@@ -34,7 +34,7 @@
 //! ## Themes only — no palettes
 //!
 //! Colors resolve directly from the [`Theme`](crate::theme::Theme) via the
-//! `Status*` [`Role`](crate::theme::Role)s ([`StatusColors`]), like
+//! `Status*` [`Role`]s ([`StatusColors`]), like
 //! [`MenuColors`](crate::menu::MenuColors).
 //!
 //! # Turbo Vision heritage
@@ -87,7 +87,7 @@ impl StatusColors {
     /// draw context's theme in one pass.
     ///
     /// Call this once at the top of a `draw` implementation and pass the result to
-    /// [`item`](Self::item) for each status item. This is how [`StatusLine::draw`]
+    /// `item` for each status item. This is how [`StatusLine::draw`]
     /// uses it — the C++ equivalent resolved palette indices for each item
     /// individually; this batches them all up front.
     pub fn resolve(ctx: &DrawCtx) -> Self {
@@ -295,10 +295,10 @@ impl View for StatusLine {
     /// each with a leading + trailing space in the per-item style, then the hint
     /// tail.
     ///
-    /// The highlighted item is [`pressed_item`](StatusLine::pressed_item) — `None`
+    /// The highlighted item is `pressed_item` — `None`
     /// when no press-and-hold is in flight, or `Some(idx)` when the item at `idx`
     /// is currently under the held button. The `(enabled, selected)` pair feeds
-    /// [`StatusColors::item`], which selects the highlight styles for that item and
+    /// `StatusColors::item`, which selects the highlight styles for that item and
     /// the normal styles for all others.
     ///
     /// `abs_origin` is cached here for the mouse-tracking capture.
@@ -359,7 +359,7 @@ impl View for StatusLine {
     ///   [`update_menu_commands`](View::update_menu_commands) hook). The whole-tree
     ///   redraw makes any explicit repaint redundant.
     /// - **mouse down** — the first step of the press-and-hold drag: hit-test the
-    ///   item, store as [`pressed_item`](StatusLine::pressed_item), set
+    ///   item, store as `pressed_item`, set
     ///   `tracking = true`, arm [`TrackMask`]`{ mouse_move: true }`. Do NOT post
     ///   yet.
     /// - **mouse move** (guarded by `tracking`) — re-derive the item; update

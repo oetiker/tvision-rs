@@ -442,6 +442,9 @@ pub struct Editor {
     /// mouse-tracking capture can localize absolute mouse coords (the same
     /// `abs_origin` pattern buttons use).
     abs_origin: Point,
+    /// Size of the whole screen, cached by `draw` (`DrawCtx::screen_size`)
+    /// so the right-click popup is placed against the screen, not the owner.
+    screen: Point,
     /// Per-hold mouse-track state — `Some` while a hold is in flight (see
     /// [`EditorTrack`]). Guards the tracked `MouseMove`/`MouseAuto`/wheel/
     /// `MouseUp` arms against stray events.
@@ -519,6 +522,7 @@ impl Editor {
             replace_str: String::new(),
             editor_flags: 0,
             abs_origin: Point::new(0, 0),
+            screen: Point::new(0, 0),
             track: None,
             pending_replace_answer: None,
         };
@@ -1327,7 +1331,7 @@ impl Editor {
 
     /// Find `needle` from the cursor; on a hit, select it and track the cursor.
     /// This is the low-level search primitive; the interactive Find / Replace
-    /// dialogs drive it through [`do_search_replace`].
+    /// dialogs drive it through `do_search_replace`.
     ///
     /// Context-free: instead of flushing inline, this only records the scroll
     /// target; the actual flush happens on the next `handle_event` boundary.
@@ -1915,6 +1919,7 @@ impl View for Editor {
         // to localize absolute mouse coords (the same `abs_origin` pattern
         // buttons use).
         self.abs_origin = ctx.origin();
+        self.screen = ctx.screen_size();
         if self.draw_line != self.delta.y {
             self.draw_ptr = self.line_move(self.draw_ptr, self.delta.y - self.draw_line);
             self.draw_line = self.delta.y;
@@ -2053,7 +2058,16 @@ impl View for Editor {
                             "Ctrl-U",
                         )
                         .build();
-                    popup_menu(global, menu, ctx.owner_size(), ctx);
+                    // `global` is in screen coordinates, so the popup is
+                    // placed against the screen. Before the first draw the
+                    // screen size is unknown; the owner's size is the best
+                    // bound there is.
+                    let screen = if self.screen.x > 0 && self.screen.y > 0 {
+                        self.screen
+                    } else {
+                        ctx.owner_size()
+                    };
+                    popup_menu(global, menu, screen, ctx);
                     ev.clear();
                     return;
                 }
@@ -2380,7 +2394,7 @@ impl View for Editor {
     }
 
     /// Cache the user's answer to the "Replace this occurrence?" prompt, routed
-    /// back from the message box. Consumed by [`do_search_replace`] on the next
+    /// back from the message box. Consumed by `do_search_replace` on the next
     /// search-again dispatch.
     fn set_modal_answer(&mut self, cmd: crate::command::Command) {
         self.pending_replace_answer = Some(cmd);
@@ -2394,6 +2408,15 @@ impl View for Editor {
     /// Replace shape. `flags` is pre-masked by the completion (and already carries
     /// or clears `EF_DO_REPLACE`); stored as the low 16 bits. Other shapes are
     /// ignored (typed-model drop, like [`set_value`](View::set_value)).
+    ///
+    /// **Shape collision:** the match is on record shape only. A view that
+    /// embeds or delegates to `Editor` and opens its own form via
+    /// [`Context::request_exec_view`](crate::view::Context::request_exec_view)
+    /// would, if that form gathers to `[Text, Bits]` (an `InputLine` plus
+    /// `CheckBoxes`) or `[Text, Text, Bits]`, have it overwrite `find_str`,
+    /// `replace_str` and the editor flags. Such a wrapper overrides
+    /// `set_modal_data` itself and forwards to the editor only the Find/Replace
+    /// records.
     fn set_modal_data(&mut self, data: crate::data::FieldValue) {
         use crate::data::FieldValue;
         if let FieldValue::List(items) = data {
@@ -2530,7 +2553,7 @@ impl Editor {
 /// embed-and-delegate wrapper over [`Editor`]; the only behavioural differences
 /// from the base editor are: it swallows a plain `Tab` keypress (so Tab navigates
 /// the dialog rather than inserting), and it exposes its text as a typed
-/// [`FieldValue`] for dialog gather/scatter.
+/// [`FieldValue`](crate::data::FieldValue) for dialog gather/scatter.
 ///
 /// A memo reuses the editor's drawing and so its scroller colors; it carries no
 /// separate palette of its own.
@@ -2626,7 +2649,7 @@ impl View for Memo {
 ///
 /// Save-as (an explicit Save-As command, or saving an untitled buffer) opens a
 /// file dialog through [`Context::request_save_as_dialog`]: the loop builds and
-/// runs the dialog, the completion sets `file_name` plus [`pending_title_update`]
+/// runs the dialog, the completion sets `file_name` plus `pending_title_update`
 /// and re-injects a Save command, which writes the file and broadcasts a
 /// title-update (refreshing the hosting [`EditWindow`]'s frame title).
 ///
@@ -2975,8 +2998,8 @@ pub(crate) fn editor_mut(v: &mut dyn View) -> Option<&mut Editor> {
 /// + a few text columns. Ports `minEditWinSize` (`teditwnd.cpp:29`).
 pub(crate) const MIN_EDIT_WIN_SIZE: Point = Point::new(24, 6);
 
-/// A [`Window`] hosting a [`FileEditor`] with two scroll bars and an
-/// [`Indicator`]. An embed-and-delegate wrapper over [`Window`]; the constructor
+/// A [`Window`](crate::window::Window) hosting a [`FileEditor`] with two scroll bars and an
+/// [`Indicator`]. An embed-and-delegate wrapper over [`Window`](crate::window::Window); the constructor
 /// wires the editor to the (initially hidden) scroll bars and indicator by id.
 ///
 /// The 24×6 minimum (`minEditWinSize`, `MIN_EDIT_WIN_SIZE`) is pushed into the
@@ -3513,9 +3536,12 @@ mod tests {
         e.toggle_ins_mode();
         assert!(e.overwrite);
         assert!(e.state.state.cursor_ins);
+        // TVCursor::decideCaretSize: overwrite shows the block caret.
+        assert_eq!(e.caret_size(), crate::backend::CARET_INSERT);
         e.toggle_ins_mode();
         assert!(!e.overwrite);
         assert!(!e.state.state.cursor_ins);
+        assert_eq!(e.caret_size(), crate::backend::CARET_NORMAL);
     }
 
     // -- convertEvent keymap -------------------------------------------------
@@ -3935,6 +3961,58 @@ mod tests {
             e.draw(&mut dc);
         });
         insta::assert_snapshot!(screen.snapshot());
+    }
+
+    /// **The right-click popup is placed against the screen**, not against
+    /// the editor's owner: the click position is in screen coordinates, so
+    /// clamping it into the (smaller) owner moved the popup away from the
+    /// click.
+    #[test]
+    fn right_click_popup_is_placed_against_the_screen() {
+        use crate::backend::{HeadlessBackend, Renderer};
+        use crate::event::{MouseButtons, MouseEvent};
+        use crate::screen::Buffer;
+        use crate::theme::Theme;
+
+        let theme = Theme::classic_blue();
+        let mut e = Editor::new(Rect::new(40, 10, 60, 15), None, None, None, 1024);
+        let (backend, _screen) = HeadlessBackend::new(80, 25);
+        let mut r = Renderer::new(Box::new(backend));
+        r.render(|buf: &mut Buffer| {
+            let bounds = e.state.get_bounds();
+            let mut dc = DrawCtx::new(buf, &theme, bounds, bounds.a);
+            e.draw(&mut dc);
+        });
+        let mut cx = Cx::new();
+        let mut ev = Event::MouseDown(MouseEvent {
+            position: Point::new(2, 1),
+            buttons: MouseButtons {
+                right: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        {
+            let mut ctx = cx.ctx();
+            // The editor's owner (its window interior) is far smaller than
+            // the screen.
+            ctx.set_owner_size(Point::new(22, 7));
+            e.handle_event(&mut ev, &mut ctx);
+        }
+        assert!(ev.is_nothing());
+        let bounds = cx
+            .deferred
+            .iter()
+            .find_map(|d| match d {
+                Deferred::OpenMenuBox { bounds, .. } => Some(*bounds),
+                _ => None,
+            })
+            .expect("a popup opens");
+        assert_eq!(
+            (bounds.a.x, bounds.a.y),
+            (42, 12),
+            "the popup opens below-right of the click at (42, 11)"
+        );
     }
 
     // -- Memo ----------------------------------------------------------------

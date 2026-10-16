@@ -15,7 +15,7 @@
 //! * [`zoomed`](Frame::zoomed) — whether the window is maximized (drives the
 //!   zoom-vs-unzoom icon)
 //! * [`palette`](Frame::palette) — the owner's colour scheme
-//!   ([`WindowPalette`](crate::window::WindowPalette)), which selects the border
+//!   ([`WindowPalette`]), which selects the border
 //!   and icon roles: `Blue` → [`Role::FrameActive`] / [`Role::FramePassive`] /
 //!   [`Role::FrameDragging`] / [`Role::FrameIcon`]; `Cyan` → the
 //!   `Role::FrameCyan*` family; `Gray` (dialogs) → the `Role::FrameGray*`
@@ -54,8 +54,8 @@
 //! [`Splitter::joined`](crate::widgets::Splitter::joined)) auto-brokers: it
 //! computes the divider abutments from its `Splitter` child and pushes them
 //! **down** to this frame as
-//! [`JunctionMark`](crate::junction::JunctionMark)s via
-//! [`set_junction_marks`](Frame::set_junction_marks); the frame then substitutes
+//! [`JunctionMark`]s via
+//! `set_junction_marks`; the frame then substitutes
 //! the matching tee glyph at each marked edge cell — the same visual result as
 //! `frameLine`, fed by pushed data. A frame with no marks (every window without a
 //! joined splitter) draws plain corners and edges, exactly as before.

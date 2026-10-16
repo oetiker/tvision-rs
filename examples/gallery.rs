@@ -14,14 +14,16 @@
 
 use std::{env, io};
 
+use tvision_rs::widgets::table::SelectionMode;
 use tvision_rs::{
     Button, ButtonFlags, ButtonRowAlign, CD_NORMAL, ChDirDialog, CheckBoxes, Color, ColorPicker,
-    Command, Constraints, Context, CrosstermBackend, Desktop, Dialog, EditWindow, Event,
-    FD_OPEN_BUTTON, FieldValue, FileDialog, HistoryWindow, InputLine, Key, KeyEvent, Label,
-    ListBox, MaskedInput, Memo, Menu, MenuBar, MenuBox, Node, Outline, OutlineViewer, Program,
-    RadioButtons, Rect, RevealEyeConfig, ScrollBar, ScrollBarOptions, Splitter, StaticText,
-    StatusDef, StatusLine, SystemClock, THistory, Tab, Terminal, TextDevice, Theme, View, ViewId,
-    Window, alt, delegate, history_add, ov_update,
+    ColumnSpec, Command, Constraints, Context, CrosstermBackend, Desktop, Dialog, EditWindow,
+    Event, FD_OPEN_BUTTON, FieldValue, FileDialog, FilterValidator, GrowMode, HistoryWindow,
+    InputLine, Key, KeyEvent, Label, ListBox, MaskedInput, Memo, Menu, MenuBar, MenuBox, Node,
+    Outline, OutlineViewer, Program, RadioButtons, Rect, RevealEyeConfig, RowKey, ScrollBar,
+    ScrollBarOptions, Splitter, StaticText, StatusDef, StatusLine, SystemClock, THistory, Tab,
+    Table, Terminal, TextDevice, Theme, VecModel, View, ViewId, Window, alt, delegate, history_add,
+    ov_update,
 };
 
 /// How a specimen is shown. Most widgets are leaf controls hosted in a dialog on
@@ -64,6 +66,7 @@ fn specimen(name: &str) -> Option<Specimen> {
         "splitter" => OnDesktop(splitter),
         "editor" => OnDesktop(editor),
         "listbox" => OnDesktop(listbox),
+        "table" => OnDesktop(table),
         "terminal" => OnDesktop(terminal),
         "outline" => OnDesktop(outline),
         "filedialog" => Modal(filedialog),
@@ -93,6 +96,7 @@ const NAMES: &[&str] = &[
     "splitter",
     "editor",
     "listbox",
+    "table",
     "terminal",
     "outline",
     "filedialog",
@@ -581,6 +585,78 @@ fn listbox() -> Box<dyn View> {
     Box::new(ListBoxShowcase::new())
 }
 // ANCHOR_END: listbox
+
+// ANCHOR: table
+/// A multi-select `Table` in a resizable window, with both scroll bars on the
+/// frame. Click a column label to sort (again to flip); click the [ ] box or
+/// press Space to mark a row. Rows are keyed by their ID so focus and marks
+/// follow the record through a re-sort or a `set_model` reload. The Image
+/// column is `flex`: widen the window and it takes the spare width. Shrink
+/// the window below the columns' `min_width`s and the columns scroll
+/// horizontally (the bottom bar, or ←/→ past the cell cursor's stops) while
+/// the check column stays put. Image and CPU % are editable: ←/→ move the cell
+/// cursor between them, Enter, F2 or a double-click opens an editor (Enter
+/// stores, Esc cancels, Tab moves on); CPU % takes only digits and a dot. No
+/// wrapper view is needed: the table publishes its ranges to the bars itself.
+fn table() -> Box<dyn View> {
+    let mut win = Window::new(Rect::new(2, 1, 52, 16), Some("Table".to_string()), 1);
+    let h_bar = win.standard_scroll_bar(ScrollBarOptions {
+        vertical: false,
+        handle_keyboard: false,
+    });
+    let v_bar = win.standard_scroll_bar(ScrollBarOptions {
+        vertical: true,
+        handle_keyboard: false,
+    });
+    let rows = [
+        ["web", "nginx", "running", "12.5"],
+        ["db", "postgres", "running", "31.0"],
+        ["cache", "redis", "exited", "0"],
+        ["queue", "rabbitmq", "running", "4.25"],
+        ["mail", "postfix", "paused", "0.5"],
+        ["search", "opensearch", "running", "48.0"],
+        ["backup", "restic", "exited", "0"],
+        ["proxy", "haproxy", "running", "2.0"],
+        ["metrics", "prometheus", "running", "9.75"],
+        ["logs", "loki", "running", "6.5"],
+    ];
+    let keys = rows.iter().map(|r| RowKey::from(r[0])).collect();
+    let rows = rows
+        .iter()
+        .map(|r| r.iter().map(|s| s.to_string()).collect())
+        .collect();
+    // The table fills the window's interior and grows with it.
+    let mut inner = View::state(&win).get_extent();
+    inner.grow(-1, -1);
+    let mut table = Table::new(
+        inner,
+        vec![
+            ColumnSpec::new("Name", 8).min_width(8),
+            ColumnSpec::new("Image", 11)
+                .min_width(10)
+                .flex(1)
+                .editable(true),
+            ColumnSpec::new("State", 8).min_width(8),
+            ColumnSpec::new("CPU %", 6)
+                .min_width(6)
+                .right()
+                .editable(true)
+                .validator(Box::new(|| Box::new(FilterValidator::new("0123456789.")))),
+        ],
+        Some(v_bar),
+    )
+    .with_h_bar(h_bar)
+    .with_model(Box::new(VecModel::new(rows).with_keys(keys)))
+    .with_selection_mode(SelectionMode::Multi);
+    table.state_mut().grow_mode = GrowMode {
+        hi_x: true,
+        hi_y: true,
+        ..Default::default()
+    };
+    win.insert_child(Box::new(table));
+    Box::new(win)
+}
+// ANCHOR_END: table
 
 // ANCHOR: terminal
 /// A `Terminal` widget initialized on the first event tick and seeded with two

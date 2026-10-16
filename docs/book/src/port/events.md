@@ -93,6 +93,11 @@ command gate: if an event is `Event::Command(c)` and `c` is in the disabled set,
 the command is cleared before it reaches any view. All other events — including
 `KeyDown`, mouse events, and broadcasts — always enter the routing chain.
 
+While a modal view runs, the chain for keys, commands, pastes and the mouse
+wheel is the modal view alone. A command it leaves unhandled is cleared there,
+so it does not reach `run_app`'s command callback after the modal closes. See
+[Modal `execView`](modal.md#modality-as-a-handler).
+
 This is a deliberate simplification over the C++ `TProgram::eventError`, which
 was called when no view consumed an event and could abort the application by
 default. In tvision-rs there is no `eventError`: an unhandled event is a

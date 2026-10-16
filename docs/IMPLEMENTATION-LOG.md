@@ -5,6 +5,143 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## tvdocker feedback, part 2: Table v2, resize cascade, cursor clip, modal routing, caret (2026-10-15/16)
+
+Continues the entry below on the same branch. The user tried the Table demo and
+asked for all former "out of scope" items (spec `# v2 additions` in
+`docs/specs/2026-10-14-table-widget.md`) and for every side bug found on the
+way. Each piece was implemented by a fresh agent in its own worktree and
+two-stage reviewed; C++ faithfulness settled every review dispute.
+
+**Table v2** (`src/widgets/table/`):
+- **Check column** (`c8237e9`, `1e01ed3`): Multi mode draws a frozen `[ ]`/`[X]`
+  column with the CheckBoxes glyphs; the user rejected an `X` in column 0.
+- **Phase A, layout** (`cae33ba`..`c7ae0ad`): `ColumnSpec::flex`, horizontal
+  scroll by display cells with the check column frozen, `layout::RowLayout`
+  as the per-width geometry, optional h bar.
+- **Phase B, header** (`fa4333f`..`020a875`): separator drag resizes (clamped
+  to `min_width.max(1)..=MAX_COLUMN_WIDTH`, 1024, in every path, because
+  `pad_cell` allocates the full column width while drawing), label drag moves,
+  right-click `popup_menu` shows/hides (last visible column guarded), header
+  sorts on release. `ColumnSpec::{resizable, movable, fixed}`; `fixed` exists
+  because the widest-first shrink otherwise took a dragged width straight back.
+  `column_layout`/`set_column_layout` with `ColumnState` (also carries `flex`
+  and `fixed`), `TABLE_COLUMNS`, `TABLE_COLUMNS_CHANGED`. New
+  `DrawCtx::screen_size()`. Popup labels drop `~` (the menu has no escape).
+- **Phase C, cell editing** (`949b3d1`..`508b1d4`): `ColumnSpec::editable` +
+  validator factory, `TableModel::set_cell` (default `Err("read-only")`), a cell
+  cursor (`Role::TableCellCursor`), F2/double-click open an `InputLine` that is
+  bound to a row key + model column and re-placed on every draw. Review rounds
+  closed three silent text-loss paths: an off-screen edit survives and the next
+  key scrolls it back; `Table::valid` commits on every non-CANCEL command (veto
+  on `set_cell` Err, like C++ `TInputLine::valid`); `set_model` keeps the edit
+  when its row and column survive. A dead edit is never committed and eats the
+  next key, so Enter cannot reach the dialog's default button.
+
+**Framework fixes:**
+- **Resize cascade** (`3f881be`, `729c6cc`, `e2b071f`): `on_bounds_changed` now
+  reaches nested scroll views on every resize path (grow-mode cascade, zoom,
+  tile, splitter divider incl. keyboard moves) via a `bounds_dirty` flag.
+- **Cursor clip** (`60f6405`, `e9264cf`): the hardware cursor is hidden when the
+  caret is outside its view, its owners, the screen, or under a sibling, like
+  C++ `TVCursor`.
+- **Idle hook can post** (`75e94c5`): `Program::put_event`/`broadcast`; the
+  rustdoc and `internals/event-loop.md` no longer claim a capability that did
+  not exist, nor that the status line gets `NO_CONTEXT`.
+- **Modal routing** (`7d68f38`, `96bb005`, `55ba6ea`): under a modal, keys,
+  commands and pastes go to the modal view only, like `TGroup::execute`; the
+  status line keeps its pre-route. The first version left the modal's owner
+  size at 0×0 (Ctrl-F5 collapsed the dialog); `Group::deliver_to_modal` now
+  sets it. The program-level tail (Alt-N, cmQuit, TILE/CASCADE, queued app
+  commands) no longer runs under a modal; D9 in PORTING-GUIDE was rewritten.
+  Recorded remaining deviation (D9): broadcasts queued while a modal runs still
+  reach the whole tree.
+- **Caret shape** (`5e86ce6`, `1c85df5`): C++ `decideCaretSize` ported;
+  `Backend::set_caret_size` (new `View::caret_size` forwarder in the macro
+  specs). Crossterm: INSERT size → blinking block, otherwise
+  `DefaultUserShape` (`ncurdisp.cpp:86-97`); restored on exit and suspend.
+- **Flaky test** (`08191c4`): `GlobalKeymapGuard` is thread-local, so
+  `ins_toggles_cursor_ins` no longer sees another test's emacs preset.
+- **Rustdoc** (`4434146`): 122 warnings → 0 under `RUSTDOCFLAGS=-D warnings`.
+
+- **Final whole-branch review fixes** (`47082a9`..`df66614`): timer expiries
+  bypass the capture stack, like C++ `TProgram::idle` firing inside every hold
+  loop (`tprogram.cpp:134-149`); the mouse wheel goes to the modal view
+  (`tgroup.cpp:173-186`); the Editor popup is clamped to the screen, not the
+  owner; generic `Align`/`SelectionMode`/`SortDir`/`SortKey` left the crate
+  root before their first release; docs say where queued events go under a
+  modal or a hold.
+
+- **Enter edits, user decision 2026-10-16** (`a4e8759`, `4d9523d`, `676d818`):
+  after trying the table the user asked for spreadsheet-style Enter. With a
+  cell cursor and a focused row, Enter opens the editor like F2 and is always
+  consumed; Enter commits and the cursor stays on the cell. Without a cell
+  cursor Enter still reaches the dialog's default button. `TableCellCursor`
+  became black on light gray, because white on blue was the input line's
+  colour and the cell cursor looked like an open editor.
+
+**Gate on the integrated branch (333e580):** 1684 workspace tests, clippy,
+fmt, examples, `cargo doc -D warnings`.
+
+**Found, not fixed:** apps cannot catch a command (for example cmHelp) under a
+modal, as C++ apps do by overriding `getEvent`; drag, keyboard-resize and menu
+holds swallow broadcasts (C++ delivers idle broadcasts inside the hold);
+`deliver_to_modal` handles only a modal in the root group (always true today);
+Table minors: the
+resize anchor drifts when the h offset is clamped mid-drag, the popup cannot
+grey out the last visible column, and the last cell of a filling last column
+resizes instead of sorting.
+
+## tvdocker feedback: double-click, modal data-back, delegate guard, Table (2026-10-15)
+
+The author of tvdocker (github.com/supertorpe/tvdocker, a Docker TUI on
+tvision-rs 0.16) reported eight places where they had to work around the
+framework. Each was checked against the code before any work started.
+
+**What landed** (branch `fix/tvdocker-feedback`, each piece two-stage reviewed):
+- **Double/triple click** (`08374bf`, `d85dea4`): nothing ever set
+  `MouseEventFlags::double_click`/`triple_click` on live events, so every
+  double-click feature worked only in tests. `MouseClickState` next to
+  `MouseAutoState` ports `TEventQueue::getMouseEvent` (clear flags, same
+  buttons + cell within `doubleDelay`, double→triple→neither), only on
+  backend-polled events. `Program::set_double_delay_ms` = the public C++ static.
+  Known backend-model gap (noted in code): crossterm reports a press per button
+  even while another is held.
+- **Modal data-back** (`1df57d2`, `e7266a9`): `request_exec_view` now hands the
+  modal's `value()` to `requester.set_modal_data` on any non-CANCEL close (the
+  C++ `execView != cmCancel → getData` idiom), before `set_modal_answer`.
+  `RouteModalAnswer` gained `deliver_data` (false for message boxes). `Dialog::value()`
+  now returns `gather_list()` (= `TGroup::getData`).
+- **`#[delegate]` one-ViewState guard** (`e0b42e4`, `5fe502d`, `dd6e187`): the
+  tvdocker "focused never reaches my leaf" report was not a propagation bug: its
+  `Table` returned its own `st` from `state()` while the macro forwarded
+  `set_state`, `calc_bounds`, … to the inner scroller's state. The macro now
+  rejects a `state`/`state_mut` body other than `self.<field>.state()` (parens /
+  invisible groups peeled); the plain forwarder stays legal because downstream
+  code writes it often.
+- **App patterns page** (`0d90728`): `docs/book/src/apps/patterns.md` answers the
+  remaining questions (focus, resize via `change_bounds`, cursor, help ctx +
+  status-line pre-routing, modal results, async drain, double-click, factories).
+  Dead `Command::SCREEN_CHANGED` removed (C++ consumes `cmScreenChanged` inside
+  `TProgram::getEvent`; apps never see it).
+- **`Table` extension** (`ed06247`..`151c5b4`, spec
+  `docs/specs/2026-10-14-table-widget.md`): adapted from tvdocker's table (MIT)
+  but rebuilt as a `Group` of a `TableHeader` leaf and a `ListViewer` body, one
+  `ViewState` each. `TableModel`/`VecModel`, `ColumnSpec`, click-to-sort,
+  single/multi selection keyed by `RowKey` across reloads, `value()` as key(s),
+  `TABLE_*` commands, `Role::TableHeader`, new defaulted `ListViewer::item_role`.
+  Table, header and body share one `Rc<RefCell>` block (ColorPicker precedent).
+  The bar is published on `set_state` (activation) and on `set_model`.
+
+**Gate on the integrated branch:** 1551 tests (1491 lib), clippy, fmt, examples.
+
+**Found, not fixed (offered to the user):** `on_bounds_changed` is skipped on
+grow-mode cascades (list/scroller bars go stale after a resize); `Program` has
+no post/broadcast, while the `set_on_idle` rustdoc and `event-loop.md` claim it;
+cursor not clipped to view/owner/siblings (C++ `TVCursor`); menu-bar
+accelerators may fire during a modal (unverified); ~120 broken intra-doc links
+under `RUSTDOCFLAGS=-D warnings`; committed book screens may be stale.
+
 ## InputLine cursor desync: derive in cursor_request, not a mutation-time cache (2026-07-04)
 
 The edaptor consumer reported that writing `InputLine`'s public caret fields

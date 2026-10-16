@@ -578,7 +578,7 @@ impl InputLine {
     /// the selection are collapsed to position 0.
     ///
     /// Pass `scroll = true` when the field is gaining focus (so the end of a
-    /// long value scrolls into view). Pass `scroll = false` from [`set_state`]
+    /// long value scrolls into view). Pass `scroll = false` from [`set_state`](crate::view::View::set_state)
     /// where the viewport position should be left as-is.
     ///
     /// This method does **not** trigger a redraw on its own — the event loop
@@ -1100,7 +1100,7 @@ impl View for InputLine {
     /// any active selection, with validator filtering and all three caps checked).
     /// Navigation keys (arrows, Home, End, Ctrl-arrows, Ins, Delete, Backspace,
     /// Ctrl-Y) are dispatched through the global keymap and applied by
-    /// [`apply_input_command`](InputLine::apply_input_command). Shift-held
+    /// `apply_input_command`. Shift-held
     /// movement extends the selection block. Unhandled keys (Tab, Enter, Escape,
     /// modified characters outside the repertoire) are left live so the enclosing
     /// dialog can route them.
@@ -1114,7 +1114,7 @@ impl View for InputLine {
     /// are consumed here; other commands fall through.
     ///
     /// After each handled event, cut/copy/paste command graying is refreshed via
-    /// [`update_commands`](InputLine::update_commands) (only while both active
+    /// `update_commands` (only while both active
     /// and selected).
     fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
         // Mouse-down auto-select is the group's job; nothing to do while unselected.
@@ -1441,7 +1441,7 @@ impl View for InputLine {
     ///   loses it.
     /// - When the active-and-selected condition changes (e.g. the field gains or
     ///   loses focus): pushes cut/copy/paste command enable/disable updates via
-    ///   [`update_commands`](InputLine::update_commands). This is what grays the
+    ///   `update_commands`. This is what grays the
     ///   Edit menu items when focus leaves the field.
     fn set_state(&mut self, flag: StateFlag, enable: bool, ctx: &mut Context) {
         // Command graying: sample the enable condition BEFORE the flag flip so

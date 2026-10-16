@@ -27,7 +27,7 @@
 //! Data-bearing dialogs work today: child controls (input lines, clusters, …)
 //! carry typed values, optional [`Validator`](crate::validate::Validator)s gate
 //! focus-release and close, and the group's gather/scatter walk collects them — see
-//! [`FileDialog`](crate::dialog::FileDialog) for a worked example.
+//! [`FileDialog`] for a worked example.
 //!
 //! **Guide:** [Dialogs & data](../../../apps/dialogs.html).
 //!

@@ -91,7 +91,9 @@ pub struct State {
     pub visible: bool,
     /// `sfCursorVis` — the hardware cursor is visible while this view is focused.
     pub cursor_vis: bool,
-    /// `sfCursorIns` — the cursor is in insert (block) shape rather than underline.
+    /// `sfCursorIns` — the caret fills the whole cell (overwrite mode): a
+    /// terminal backend shows a blinking block instead of the terminal's own
+    /// caret shape.
     pub cursor_ins: bool,
     /// `sfShadow` — the view casts a drop shadow.
     pub shadow: bool,
@@ -248,7 +250,7 @@ pub enum Phase {
 /// - **Fill the entire owner** (e.g. a text viewer inside a window):
 ///   use [`GrowMode::grow_all()`].
 /// - **Fixed size, just anchor to the right edge** (e.g. a vertical scrollbar):
-///   `hi_x = true; fixed = true` (or use [`Window::standard_scroll_bar`]).
+///   `hi_x = true; fixed = true` (or use [`Window::standard_scroll_bar`](crate::window::Window::standard_scroll_bar)).
 /// - **Desktop window, scales with the desktop**:
 ///   `hi_x = true; hi_y = true; rel = true` — all edges scale proportionally.
 ///
@@ -619,7 +621,8 @@ impl ViewState {
         self.state.cursor_ins = true;
     }
 
-    /// Switch the hardware cursor to underline (normal) shape.
+    /// Switch the hardware cursor to the normal shape (on a terminal, the
+    /// terminal's own caret).
     ///
     /// Clears [`State::cursor_ins`]. This is the default shape; call this after
     /// [`block_cursor`](Self::block_cursor) when leaving insert mode.
@@ -910,6 +913,13 @@ pub trait View {
     /// `ScrollBar` returns `FieldValue::Int`). The base returns `None` — a bare
     /// view carries nothing. Controls that don't participate (buttons, labels)
     /// simply leave the base in place.
+    ///
+    /// A [`Dialog`](crate::dialog::Dialog) answers with its **whole gathered
+    /// record** ([`Dialog::gather_list`](crate::dialog::Dialog::gather_list), an
+    /// ordered [`FieldValue::List`](crate::data::FieldValue::List)); that is what
+    /// a [`Context::request_exec_view`] modal hands back via
+    /// [`set_modal_data`](View::set_modal_data). (`Window` and `Group` still
+    /// return `None`.)
     fn value(&self) -> Option<FieldValue> {
         None
     }
@@ -925,8 +935,23 @@ pub trait View {
 
     /// Deliver a finished modal's **typed result record** to the view that
     /// launched it. Defaulted no-op; a launcher view overrides it to load the
-    /// result the pump read out of the modal's fields (each via [`View::value`])
-    /// and packed into an ordered [`FieldValue::List`](crate::data::FieldValue::List).
+    /// record. Two producers call it:
+    ///
+    /// * [`Context::request_exec_view`]: on a non-[`Command::CANCEL`] close the
+    ///   record is the **whole modal's** [`value()`](View::value) (for a
+    ///   [`Dialog`](crate::dialog::Dialog), its gathered ordered
+    ///   [`FieldValue::List`](crate::data::FieldValue::List)), delivered before
+    ///   [`set_modal_answer`](View::set_modal_answer);
+    /// * framework completions (the Editor's Find/Replace) that read selected
+    ///   fields by id and pack them into a `FieldValue::List` themselves.
+    ///
+    /// The method does not say which modal the record came from, so an override
+    /// that matches on record **shape** alone can misread a record from a
+    /// different form with the same shape. A type that embeds or delegates to a
+    /// view with such an override (e.g. [`Editor`](crate::widgets::Editor)) and
+    /// launches its own forms via `request_exec_view` must override
+    /// `set_modal_data` itself, handle its own records, and forward only the
+    /// ones meant for the inner view.
     ///
     /// Distinct from [`set_value`](View::set_value): `set_value` carries a view's
     /// **own** field/document data (e.g. the editor's text), whereas
@@ -1004,7 +1029,10 @@ pub trait View {
     ///
     /// Scrollers re-apply their scroll limit after a resize, and list viewers
     /// re-publish their step params; both do so by overriding this hook in their
-    /// respective concrete types.
+    /// respective concrete types. A [`Group`](crate::view::Group) whose size
+    /// changed forwards the call to every child, so the hook reaches views at
+    /// any depth. Every resize path (deferred bounds change, zoom, terminal
+    /// resize) ends with this call on the view it re-bounded.
     fn on_bounds_changed(&mut self, _ctx: &mut Context) {}
 
     /// The view-local hardware-cursor position this view wants shown, or `None` to
@@ -1021,6 +1049,27 @@ pub trait View {
             Some(s.cursor)
         } else {
             None
+        }
+    }
+
+    /// The caret size this view wants while its cursor is shown, as a
+    /// percentage of the character cell (1..=100). Base:
+    /// [`CARET_INSERT`](crate::backend::CARET_INSERT) (a block) when the
+    /// `cursor_ins` state is set, else
+    /// [`CARET_NORMAL`](crate::backend::CARET_NORMAL) (the normal caret).
+    /// The event loop reads it along the same focused chain as
+    /// [`cursor_request`](Self::cursor_request);
+    /// [`Group`](crate::view::Group) overrides it to descend into its current
+    /// child.
+    ///
+    /// # Turbo Vision heritage
+    /// Ports `TVCursor::decideCaretSize` (`tvcursor.cpp`): `100` when
+    /// `sfCursorIns` is set, else `TScreen::cursorLines & 0x0F`.
+    fn caret_size(&self) -> u8 {
+        if self.state().state.cursor_ins {
+            crate::backend::CARET_INSERT
+        } else {
+            crate::backend::CARET_NORMAL
         }
     }
 

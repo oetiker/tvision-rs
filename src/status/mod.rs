@@ -1,5 +1,5 @@
 //! The status-line **data types** — [`StatusItem`], [`StatusDef`] — plus a
-//! fluent builder. The [`StatusLine`](status_line::StatusLine) view (drawing,
+//! fluent builder. The [`StatusLine`] view (drawing,
 //! mouse dispatch, hotkey accelerators, command graying) lives in
 //! [`status_line`].
 //!
@@ -124,7 +124,7 @@ impl HelpCtxRange {
 /// # Turbo Vision heritage
 ///
 /// Ports `TStatusDef` (`menus.h`); the linked list of defs becomes the outer
-/// `Vec<StatusDef>` the [`StatusLine`](status_line::StatusLine) owns, and the
+/// `Vec<StatusDef>` the [`StatusLine`] owns, and the
 /// inner items list is a [`Vec<StatusItem>`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StatusDef {
@@ -188,7 +188,7 @@ impl StatusDef {
     }
 }
 
-/// A fluent builder for the `Vec<StatusDef>` a [`StatusLine`](status_line::StatusLine) owns.
+/// A fluent builder for the `Vec<StatusDef>` a [`StatusLine`] owns.
 ///
 /// Start a chain with [`StatusDef::list`], append defs with
 /// [`def_all`](Self::def_all) (the universal fallback) or

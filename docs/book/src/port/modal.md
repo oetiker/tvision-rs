@@ -15,12 +15,27 @@ mechanism; modality is one use of it.
 
 ## Modality as a handler
 
-The modal handler is `ModalFrame`. While it sits on the capture stack it lets
-keyboard, command, and broadcast events pass through to normal routing — which
-reaches the modal view because the group focuses it — while positional (mouse)
-events are gated by the modal view's bounds: inside, they pass; outside, they are
-consumed and swallowed, so views beneath the dialog never see the click. That
-gate is exactly what "modal" means.
+The modal handler is `ModalFrame`. While it sits on the capture stack,
+positional (mouse) events are gated by the modal view's bounds: inside, they
+pass to normal routing; outside, the pump hands them to the modal view alone
+(in its own coordinates), so views beneath the dialog never see the click. A
+plain dialog ignores such a click; a history popup closes on it. That gate is
+exactly what "modal" means.
+
+Keys, commands, pastes and the mouse wheel pass the frame, but they do not take
+the root route. The pump hands them to the modal view alone, as C++
+`TGroup::execute` does. So the menu bar's hot keys (Alt+F, F3), Alt+1..9 window
+selection, the `Command::QUIT` catch, Tile and Cascade, and `run_app`'s command
+callback do not act while a modal runs. A command the modal does not handle is
+dropped, not kept for later (the C++ `eventError` path). Status-line keys are
+still converted first, in the pre-route, so Alt+X still posts
+`Command::QUIT`, which a dialog ignores, as in C++.
+
+Broadcasts keep the root route and reach the whole tree, also those queued
+while the modal is open. In C++ a broadcast that a dialog view posts with
+`putEvent` reaches only the modal view; tvision-rs queues all broadcasts
+through one channel and cannot tell them apart, so receivers filter by
+`source`. A timer expiry also reaches the whole tree.
 
 ## `exec_view` steers the one loop
 
@@ -46,7 +61,7 @@ How you launch a modal depends on **what calls it**:
 | Caller | Launch method | Result delivery |
 |--------|---------------|-----------------|
 | A `Program` / `Application` method | [`Program::exec_view_with`](../api/tvision_rs/app/struct.Program.html#method.exec_view_with) | returned by value from the `extract` closure |
-| A `View` (inside `handle_event`) | `Context::request_exec_view` | close command routed to `requester` via `View::set_modal_answer`; optional `then_command` re-injected |
+| A `View` (inside `handle_event`) | `Context::request_exec_view` | record via `View::set_modal_data` (not on cancel), then close command via `View::set_modal_answer`, both to `requester`; optional `then_command` re-injected |
 
 A view holds only `&mut Context`, never `&mut Program`, so it cannot call
 `exec_view_with` inline. Calling `ctx.request_exec_view(view, requester,
@@ -108,7 +123,7 @@ fn open_info(&mut self, ctx: &mut Context) {
 
 `request_exec_view` queues `Deferred::OpenModal`. The pump picks it up at the
 bottom of the same turn, stashes the boxed `Dialog` into `pending_modal` with a
-`RouteModalAnswer { answer_to: id, then_command: None }` completion, and runs it
+`RouteModalAnswer { answer_to: id, then_command: None, deliver_data: true }` completion, and runs it
 via the existing single-loop machinery. When the user presses OK (which posts
 `Command::CANCEL` — the read-only-info convention: dismiss = `cmCancel`) the
 pump delivers that command to `DirBox` via `set_modal_answer`. The base default
@@ -116,13 +131,33 @@ for `set_modal_answer` silently discards the command, which is correct here —
 the Info box is read-only and `then_command` is `None`, so no follow-up action
 is needed.
 
-### Data-back path
+### Getting the data back
 
-The result is the close command only. A future input dialog that needs the
-modal's typed `FieldValue` result back would override `set_modal_answer` on the
-requester to cache the command, then read `modal_id.value()` (or call
-`requester.set_modal_data(...)`) on the `then_command` re-injection. That path
-is not built today because no current consumer needs it.
+C++ reads an input dialog's record after the modal returns:
+`if (deskTop->execView(d) != cmCancel) d->getData(&rec);`. `request_exec_view`
+does the same split across two hooks on the requester. When the modal closes
+with command `c`, the pump, while the modal is still in the tree:
+
+1. if `c != Command::CANCEL` and the modal's `View::value()` is `Some(record)`,
+   calls `requester.set_modal_data(record)`. A `Dialog` (and any type that
+   delegates `value` to one) returns its `gather_list()`: the ordered
+   `FieldValue::List` of its data-bearing controls, the typed image of `getData`;
+2. calls `requester.set_modal_answer(c)`;
+3. re-posts `then_command`.
+
+The hooks carry no `Context`, so the requester caches what it receives and acts
+when `then_command` arrives in its `handle_event`. A requester that was removed
+while the modal ran receives nothing.
+
+```rust,ignore
+fn set_modal_data(&mut self, data: FieldValue) {
+    if let FieldValue::List(fields) = data
+        && let Some(FieldValue::Text(name)) = fields.into_iter().next()
+    {
+        self.pending_name = Some(name); // used on the then_command
+    }
+}
+```
 
 ## Ending a modal (execView)
 
@@ -136,7 +171,7 @@ The full lifecycle of `exec_view` maps each C++ step to a tvision-rs equivalent:
 | `setCurrent(p, enterSelect)` | `group.set_current(id, SelectMode::Enter, &mut ctx)` |
 | Push capture — none in C++ | Push a `ModalFrame` onto the capture stack |
 | `p->execute()` — a nested loop | Steer the **same** pump loop; no new loop |
-| `ClearEvent` on every unhandled event | The `ModalFrame` swallows outside-bounds mouse events |
+| `p->handleEvent` on every event; `eventError` drops the rest | Keys, commands, pastes and the wheel go to the modal view alone; an unhandled command is dropped; outside-bounds mouse events go to the modal view |
 | Pop capture — none in C++ | Pop the `ModalFrame` |
 | `remove(p)`; restore focus | `group.remove(id, &mut ctx)`; restore previous current |
 | Restore command set | Restore `disabled_commands` |

@@ -70,7 +70,17 @@ commands flow through untouched (see [Commands & events](../apps/commands.md)).
 What survives is offered to the [capture stack](#the-capture-stack) first; only if
 no handler consumes it does it go to the normal view-tree walk
 (`program_handle_event`). A modal handler that consumes every otherwise-unhandled
-event *is* the modal loop.
+event *is* the modal loop. A timer expiry skips the capture stack: C++
+delivers it from `idle` inside the getEvent of every hold loop, so a drag or an
+open menu must not swallow it.
+
+While a modal view runs, `program_handle_event` does not use the root route
+for keys, commands, pastes and the mouse wheel. It hands them to the innermost
+modal view alone (`CaptureStack::modal_view`), as C++ `TGroup::execute` does,
+and drops a command the modal leaves unhandled. The program-level steps (menu
+bar hot keys, Alt+1..9, the `Command::QUIT` catch, Tile and Cascade,
+`run_app`'s callback) see none of these events. Mouse clicks and broadcasts
+keep the root route; broadcasts reach the whole tree.
 
 ### The deferred drain
 
@@ -190,8 +200,8 @@ fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
 When a view wants to show a hardware cursor it sets
 [`State::cursor_vis`](../api/tvision_rs/view/struct.State.html) (via
 [`ViewState::show_cursor`](../api/tvision_rs/view/struct.ViewState.html#method.show_cursor))
-and also sets the cursor *shape*: underline for the normal insertion point
-(`normal_cursor`, the default) or block for overwrite mode (`block_cursor`),
+and also sets the cursor *shape*: the normal caret for the insertion point
+(`normal_cursor`, the default) or a block for overwrite mode (`block_cursor`),
 controlled by [`State::cursor_ins`](../api/tvision_rs/view/struct.State.html).
 
 ```rust
@@ -208,7 +218,7 @@ fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
         if k.key == tv::Key::Insert {
             self.insert_mode = !self.insert_mode;
             if self.insert_mode {
-                self.state.normal_cursor();   // underline = insert point
+                self.state.normal_cursor();   // normal caret = insert point
             } else {
                 self.state.block_cursor();    // block = overwrite
             }
@@ -227,24 +237,43 @@ cursor — is placed on the renderer before the redraw step:
 ```rust,ignore
 // src/app/program.rs — end of pump_once
 let cursor = group.cursor_request()   // descends through current children
+    .filter(|p| root_extent.contains(*p)) // hidden past the screen edge
     .map(|p| p + group_origin)
     .map(|p| (p.x.max(0) as u16, p.y.max(0) as u16));
 renderer.set_cursor(cursor);
+renderer.set_caret_size(group.caret_size()); // same chain: block or normal
 renderer.render(|buf| { /* whole-tree redraw */ });
 ```
+
+`View::caret_size` follows the same current-child chain and reads
+`cursor_ins` on the focused view: `CARET_INSERT` (100, a block) when it is
+set, else `CARET_NORMAL` (1). While the cursor is shown, the renderer passes
+this size to `Backend::set_caret_size`. The crossterm backend shows
+`CARET_INSERT` as a blinking block and keeps the terminal's own caret shape
+for `CARET_NORMAL`, as the original's ncurses display does. It restores the
+terminal's caret shape on exit and suspend.
 
 A view that wants no cursor simply leaves `cursor_vis = false`; it never calls
 `show_cursor`. A view that loses focus keeps whatever `cursor_vis` value it
 had, but the walk only descends through *focused* children, so the cursor is
 hidden automatically until the view is focused again.
 
-**Sources:** `State::cursor_ins` / `block_cursor` / `normal_cursor` in
-`src/view/view.rs`; `Group::cursor_request` in `src/view/group.rs`;
+The walk also clips the cursor, as C++ `TVCursor` does. Each group on the
+chain returns `None` when it or its current child is hidden, when the cursor
+lies outside the child's extent, or when a visible sibling above the child in
+Z-order covers the cursor cell. So the cursor disappears when it is scrolled
+out of its field, when it is outside the window that holds it, past the screen
+edge, or under another window.
+
+**Sources:** `State::cursor_ins` / `block_cursor` / `normal_cursor` /
+`View::caret_size` in `src/view/view.rs`; `Group::cursor_request` /
+`Group::caret_size` in `src/view/group.rs`;
 `resetCursor` walk in `src/app/program.rs`.
 
 > **Turbo Vision heritage:** ports `sfCursorVis` and `sfCursorIns` from
 > `views.h`. The `TView::resetCursor` tree-walk is realized by
-> `Group::cursor_request`.
+> `Group::cursor_request`, and `TVCursor::decideCaretSize` by
+> `View::caret_size`.
 
 ## Marking an event handled
 
@@ -305,9 +334,11 @@ redraw:
    and queued as a typed
    [`Event::Timer(id)`](../api/tvision_rs/event/enum.Event.html) — a view matches
    the id against its own timer handles to know which timer fired.
-3. **Refreshes the status line.** The help context of the topmost modal view
-   (or `NO_CONTEXT` if none) is handed to the status line so it can display
-   context-sensitive help text.
+3. **Refreshes the status line.** The status line gets the current help
+   context, so it can show the items for that context. The help context comes
+   from the open menu, if a menu is open. Otherwise it comes from the topmost
+   modal view. With no modal view open, it comes from the application root,
+   which follows the focus chain down to the focused view.
 
 After `pump_once` returns, the outer `pump_and_drive` fires the optional
 **idle hook** registered with
@@ -315,14 +346,29 @@ After `pump_once` returns, the outer `pump_and_drive` fires the optional
 
 ```rust
 # use tvision_rs as tv;
-# fn _demo(program: &mut tv::app::Program) {
-program.set_on_idle(|p| {
+# fn _demo(program: &mut tv::app::Program, rx: std::sync::mpsc::Receiver<String>) {
+let refresh = tv::Command::custom("myapp.refresh");
+program.set_on_idle(move |p| {
     // Called on every idle pass — roughly every 20 ms with no user input.
-    // `p` is &mut Program, so you can post events, access the view tree, etc.
     // Keep this callback cheap: it runs on the loop's frame cadence.
+    let mut got_data = false;
+    while let Ok(_line) = rx.try_recv() {
+        // ... store the line in state the views share ...
+        got_data = true;
+    }
+    if got_data {
+        p.broadcast(refresh, None); // only when there is something new
+    }
 });
 # }
 ```
+
+The hook gets `&mut Program`. To reach the views it queues events:
+`Program::broadcast(command, source)` queues a broadcast, and
+`Program::put_event(ev)` queues any event. The hook does not dispatch them
+itself. The next pump pass takes the queued event before it polls the backend,
+and routes it like an input event. In C++, `idle()` sends its broadcasts at
+once with `message()`; here they arrive one pump pass later.
 
 Only one idle hook is held at a time; a second `set_on_idle` call replaces the
 first. The hook fires during any loop level, including while a modal dialog is

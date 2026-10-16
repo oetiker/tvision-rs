@@ -12,7 +12,7 @@ use crate::command::Command;
 use crate::event::Event;
 use crate::view::{Context, Group, Rect, View, ViewId};
 
-/// A stack of page Views showing one at a time. See the [module docs](self).
+/// A stack of page Views showing one at a time. See the module docs.
 pub struct PageStack {
     group: Group,
     pages: Vec<ViewId>,

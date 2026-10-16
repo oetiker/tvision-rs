@@ -84,7 +84,7 @@ impl ListBox {
         }
     }
 
-    /// Enable find mode (default [`FindMode::Off`] keeps the classic lookup).
+    /// Enable find mode (default [`FindMode::Off`](crate::widgets::FindMode::Off) keeps the classic lookup).
     /// `Filter` makes the list narrow its own source by the query; `Highlight`
     /// only owns the query + highlight (the host supplies the rows).
     pub fn with_find(mut self, mode: crate::widgets::list_viewer::FindMode) -> Self {
@@ -296,7 +296,7 @@ impl SortedListBox {
         }
     }
 
-    /// Enable find mode (default [`FindMode::Off`] keeps the classic lookup).
+    /// Enable find mode (default [`FindMode::Off`](crate::widgets::FindMode::Off) keeps the classic lookup).
     /// `Filter` makes the list narrow its own (already-sorted) source by the
     /// query, so the narrowed view stays in sorted order.
     pub fn with_find(mut self, mode: crate::widgets::list_viewer::FindMode) -> Self {

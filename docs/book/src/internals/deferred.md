@@ -54,9 +54,10 @@ for effect in effects {
         Deferred::OpenModal { view, requester, then_command } => {
             // View-launched modal: stash into pending_modal with RouteModalAnswer
             // completion; pump_and_drive runs it via the existing exec_view machinery.
-            // On close the pump delivers the close command to `requester` via
-            // View::set_modal_answer and re-injects `then_command`.
-            /* program.pending_modal = Some((view, RouteModalAnswer { answer_to: requester, then_command })) */
+            // On close the pump delivers the modal's value() to `requester` via
+            // View::set_modal_data (not on cancel), then the close command via
+            // View::set_modal_answer, and re-injects `then_command`.
+            /* program.pending_modal = Some((view, RouteModalAnswer { answer_to: requester, then_command, deliver_data: true })) */
         }
         // … one arm per variant
     }

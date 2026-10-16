@@ -86,7 +86,12 @@ press-tracking are handlers, not loops. `execView` from a `Program` method
 becomes [`Program::exec_view_with`](../api/tvision_rs/app/struct.Program.html#method.exec_view_with)
 (result by value); `execView` from within a view becomes `Context::request_exec_view`
 (queues `Deferred::OpenModal`; reuses the existing `pending_modal` +
-`RouteModalAnswer` machinery; close command routed back via `set_modal_answer`).
+`RouteModalAnswer` machinery; the modal's record is routed back via
+`set_modal_data` unless the close command is `Command::CANCEL`, then the close
+command via `set_modal_answer`). As in C++, keys, commands, pastes and the
+mouse wheel go to the modal view alone while it runs, and a command it leaves
+unhandled is dropped; status-line keys still pre-route. Remaining difference:
+broadcasts queued under a modal reach the whole tree, not only the modal view.
 → [Modal execView](../port/modal.md)
 
 ### D10 · Data transfer → typed value protocol {#d10}
