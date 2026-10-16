@@ -6013,6 +6013,127 @@ mod tests {
         );
     }
 
+    /// **End-to-end: a `Table` header drag through the pump.** The table is
+    /// the tracked view, so the tracked moves and the release reach
+    /// `Table::handle_event` (localized against the origin its draw cached):
+    /// a separator drag resizes, a label drag moves the column, and the
+    /// release broadcasts `TABLE_COLUMNS_CHANGED` with the table's id.
+    #[test]
+    fn table_header_drags_end_to_end_through_pump() {
+        use crate::widgets::{ColumnSpec, Table, VecModel};
+
+        fn layout(program: &mut Program, id: ViewId) -> Vec<(usize, i32)> {
+            program
+                .group_mut()
+                .find_mut(id)
+                .and_then(|v| v.as_any_mut())
+                .and_then(|a| a.downcast_mut::<Table>())
+                .expect("table resolves")
+                .column_layout()
+                .iter()
+                .map(|s| (s.order, s.width))
+                .collect()
+        }
+
+        let ids: Rc<RefCell<Option<ViewId>>> = Rc::new(RefCell::new(None));
+        let ids_cap = ids.clone();
+        let (backend, _handle) = HeadlessBackend::new(80, 25);
+        let clock = Rc::new(ManualClock::new(0));
+        let mut program = Program::new(
+            Box::new(backend),
+            Box::new(clock),
+            Theme::classic_blue(),
+            move |r| {
+                let mut desktop = Desktop::new(r, |r2| Some(Desktop::init_background(r2)));
+                // Header at abs y 3; text from abs x 6: A at 6..10, its
+                // separator 10, B at 11..15, separator 15.
+                let rows = vec![vec!["a".to_string(), "b".to_string()]];
+                let table = Table::new(
+                    Rect::new(5, 3, 30, 8),
+                    vec![ColumnSpec::new("A", 4), ColumnSpec::new("B", 4)],
+                    None,
+                )
+                .with_model(Box::new(VecModel::new(rows)));
+                *ids_cap.borrow_mut() = Some(desktop.insert_view(Box::new(table)));
+                Some(Box::new(desktop))
+            },
+            |_r| None,
+            |_r| None,
+        );
+        let id = ids.borrow().expect("table id set");
+        program.out_events.clear();
+        program.out_events.push_back(Event::Broadcast {
+            command: Command::custom("test.noop"),
+            source: None,
+        });
+        program.pump_once();
+
+        // Resize A: press its separator, drag 3 right, release.
+        program.out_events.push_back(mouse_down_at(10, 3));
+        program.pump_once();
+        assert_eq!(program.capture_len(), 1, "the press is tracked");
+        program.out_events.push_back(mouse_move_at(13, 3));
+        program.pump_once();
+        assert_eq!(layout(&mut program, id), [(0, 7), (1, 4)], "live width");
+        program.out_events.push_back(mouse_up_at(13, 3));
+        program.pump_once();
+        assert_eq!(program.capture_len(), 0, "the release ends the hold");
+        assert!(
+            program.out_events.iter().any(|e| *e
+                == Event::Broadcast {
+                    command: Command::TABLE_COLUMNS_CHANGED,
+                    source: Some(id),
+                }),
+            "the release broadcasts with the table's id"
+        );
+
+        // Move B (now abs x 14..18) in front of A.
+        program.out_events.clear();
+        program.out_events.push_back(mouse_down_at(15, 3));
+        program.pump_once();
+        program.out_events.push_back(mouse_move_at(6, 3));
+        program.pump_once();
+        program.out_events.push_back(mouse_up_at(6, 3));
+        program.pump_once();
+        assert_eq!(layout(&mut program, id), [(1, 7), (0, 4)], "B leads");
+
+        // Right-click the header, pick the first popup item (B): it hides.
+        program.out_events.clear();
+        program.out_events.push_back(Event::MouseDown(MouseEvent {
+            position: Point::new(8, 3),
+            buttons: MouseButtons {
+                right: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        }));
+        program.pump_once();
+        assert_eq!(program.capture_len(), 1, "the popup session runs");
+        for k in [Key::Down, Key::Enter] {
+            program.out_events.push_back(key(k));
+            program.pump_once();
+        }
+        // Bounded: the posted toggle needs a pump or two to arrive.
+        for _ in 0..8 {
+            program.pump_once();
+        }
+        let hidden: Vec<bool> = program
+            .group_mut()
+            .find_mut(id)
+            .and_then(|v| v.as_any_mut())
+            .and_then(|a| a.downcast_mut::<Table>())
+            .expect("table resolves")
+            .column_layout()
+            .iter()
+            .map(|s| s.hidden)
+            .collect();
+        assert_eq!(
+            hidden,
+            [false, true],
+            "the popup's toggle reached the table"
+        );
+    }
+
     /// Press inside, drag outside, release: NO press fires (the C++ post-loop
     /// `if (down)` on the LAST MOVE's tracked containment) — through real pumps.
     #[test]
