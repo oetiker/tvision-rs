@@ -313,6 +313,16 @@ impl Command {
     /// column ascending). Unbound by default, like
     /// [`TABLE_SORT_NEXT`](Self::TABLE_SORT_NEXT).
     pub const TABLE_SORT_FLIP: Command = Command("tv.table_sort_flip");
+    /// Open a focused [`Table`](crate::widgets::Table)'s column popup at its
+    /// header: every column with a check mark, choosing one shows or hides it
+    /// (the same popup a right-click on the header opens). Unbound by
+    /// default, like [`TABLE_SORT_NEXT`](Self::TABLE_SORT_NEXT).
+    pub const TABLE_COLUMNS: Command = Command("tv.table_columns");
+    /// A [`Table`](crate::widgets::Table)'s column layout changed through the
+    /// user (a column resized, moved, shown or hidden); `source` is the
+    /// table's `ViewId`. Read the layout with `Table::column_layout` to
+    /// persist it.
+    pub const TABLE_COLUMNS_CHANGED: Command = Command("tv.table_columns_changed");
     /// Record the current input-line value into its history list — handled by
     /// `InputLine` when it loses focus.
     ///

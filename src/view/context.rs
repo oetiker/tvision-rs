@@ -733,6 +733,12 @@ impl<'a> DrawCtx<'a> {
         self.origin
     }
 
+    /// The size of the whole screen buffer (the root group's size), for
+    /// placing a [`popup_menu`](crate::menu::popup_menu) from a nested view.
+    pub fn screen_size(&self) -> Point {
+        Point::new(self.buffer.width() as i32, self.buffer.height() as i32)
+    }
+
     /// Write one cell at view-local `(x, y)` with `style`.
     ///
     /// A double-width `ch` sets the lead `wide` and the next cell `wide_trail`,
