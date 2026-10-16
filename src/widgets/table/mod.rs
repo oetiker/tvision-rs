@@ -35,8 +35,9 @@
 //! horizontal bar ([`Table::with_h_bar`]) shows and drives the offset
 //! ([`Table::h_offset`] / [`Table::set_h_offset`]); while the columns fit,
 //! the bar's range is 0. A resize changes the bars' page steps and the
-//! horizontal range; the table re-publishes them on its next event (a timer,
-//! a key, a window switch), since a resize hands it no [`Context`].
+//! horizontal range; the table re-publishes them at once (every framework
+//! resize path calls [`on_bounds_changed`](View::on_bounds_changed)), or on
+//! its next event after app code called `change_bounds` directly.
 //!
 //! # Columns
 //!
@@ -56,7 +57,8 @@
 //! - **Show/hide:** a right-click on the header (or
 //!   [`Command::TABLE_COLUMNS`]) opens a popup listing every column with a
 //!   check mark; choosing one shows or hides it. The last visible column
-//!   stays. Each item posts [`Table::toggle_column_command`].
+//!   stays: the popup cannot grey it out, so choosing it does nothing. Each
+//!   item posts [`Table::toggle_column_command`].
 //!
 //! [`ColumnSpec::resizable`] and [`ColumnSpec::movable`] turn the drags off
 //! per column. [`Table::column_layout`] / [`Table::set_column_layout`] read
@@ -86,6 +88,12 @@
 //! Enter without an open editor keeps its list meaning, and a double-click
 //! on a cell that is not editable still chooses (single mode) or toggles
 //! (multi mode) the row.
+//!
+//! The status line sees every key first. An app that binds F2 app-wide (the
+//! Turbo Vision `~F2~ Save` convention) turns F2 into its command before the
+//! table gets it, so keyboard editing is lost there; a double-click still
+//! opens the editor. Bind such keys only in a status def for the help
+//! context of the view that owns them.
 //!
 //! After a store the sort is re-applied and the focus follows the row's key.
 //! The editor stays over its cell through a re-sort, a horizontal scroll, a
@@ -777,15 +785,22 @@ impl View for Table {
     /// drops what the field shows. [`Command::VALID`] and a focus release
     /// leave the edit alone, and an edit whose cell is gone is discarded.
     /// Then the children are checked as usual.
+    ///
+    /// The [`Command::TABLE_CELL_EDITED`] broadcast of a commit made here is
+    /// queued; when the command closes a modal dialog, it is delivered after
+    /// the dialog is gone. Views outside the dialog receive it, but its
+    /// `source` names a table that no longer exists and views inside the
+    /// dialog never see it.
     fn valid(&mut self, cmd: Command, ctx: &mut Context) -> bool {
         self.edit_valid(cmd, ctx) && self.group.valid(cmd, ctx)
     }
 
     /// Resize the header and the body (grow modes), and mark the bars for a
     /// re-publish: the new size changes the vertical page step and the
-    /// horizontal range. There is no [`Context`] here, so the publish runs on
-    /// the table's next event (a timer, a key, a window switch), or right
-    /// away when the owner calls [`on_bounds_changed`](View::on_bounds_changed).
+    /// horizontal range. Every framework resize path then calls
+    /// [`on_bounds_changed`](View::on_bounds_changed), which publishes at
+    /// once. The mark is a fallback for app code that calls `change_bounds`
+    /// directly: the publish then runs on the table's next event.
     fn change_bounds(&mut self, bounds: Rect) {
         let old = self.group.state().size;
         self.group.change_bounds(bounds);
