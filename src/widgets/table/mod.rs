@@ -93,8 +93,11 @@
 //! and a table resize (a resize scrolls the cell back into view). A cell
 //! scrolled off screen hides the editor without ending the edit: the next
 //! key scrolls it back and goes to the editor. When the cell is gone (its
-//! row left the model, its column was hidden) the table's next event ends
-//! the edit, and a key that finds it gone is used up. A press on the header
+//! row left the model in a [`Table::set_model`] reload, its column was
+//! hidden) the edit ends without storing anything or showing a box — at once
+//! for a reload, at the table's next event for a hidden column — and the next
+//! key after that is used up, so an Enter meant for the editor cannot press
+//! the dialog's default button. A press on the header
 //! cancels the edit, and so does moving the focus to another row
 //! ([`Table::set_focused_key`], [`View::set_value`]).
 //!
@@ -319,6 +322,9 @@ pub struct Table {
     screen: Point,
     /// The open cell editor, if any.
     edit: Option<edit::CellEdit>,
+    /// An edit ended because its cell vanished: the next key is used up
+    /// (cleared by a click or a focus loss).
+    eat_key: bool,
 }
 
 impl Table {
@@ -366,6 +372,7 @@ impl Table {
             abs_origin: Point::new(0, 0),
             screen: Point::new(0, 0),
             edit: None,
+            eat_key: false,
         }
     }
 
@@ -434,7 +441,7 @@ impl Table {
         // An open edit survives the reload, typed text and all, while its row
         // is still there.
         if self.edit.is_some() && !self.edit_alive() {
-            self.cancel_edit(ctx);
+            self.end_dead_edit(ctx);
         }
     }
 
@@ -708,6 +715,9 @@ impl View for Table {
         self.ensure_published(ctx);
         self.group.set_state(flag, enable, ctx);
         if flag == StateFlag::Focused {
+            if !enable {
+                self.eat_key = false;
+            }
             self.edit_focus(enable, ctx);
         }
     }
@@ -723,6 +733,15 @@ impl View for Table {
 
     fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
         self.ensure_published(ctx);
+        match ev {
+            Event::KeyDown(_) if self.eat_key => {
+                self.eat_key = false;
+                ev.clear();
+                return;
+            }
+            Event::MouseDown(_) => self.eat_key = false,
+            _ => {}
+        }
         let used = if self.edit.is_some() {
             self.edit_event(ev, ctx)
         } else {
@@ -751,9 +770,13 @@ impl View for Table {
     }
 
     /// With a cell editor open, [`Command::CANCEL`] cancels the edit and any
-    /// other end command commits it first: a refused text shows its box and
-    /// vetoes the command, so a dialog's OK never drops what the field
-    /// shows. Then the children are checked as usual.
+    /// other command commits it first — a dialog's OK, but also a window's
+    /// [`Command::CLOSE`] and the program's [`Command::QUIT`], as C++
+    /// `TInputLine::valid` validates for every command but `cmCancel`. A
+    /// refused text shows its box and vetoes the command, so closing never
+    /// drops what the field shows. [`Command::VALID`] and a focus release
+    /// leave the edit alone, and an edit whose cell is gone is discarded.
+    /// Then the children are checked as usual.
     fn valid(&mut self, cmd: Command, ctx: &mut Context) -> bool {
         self.edit_valid(cmd, ctx) && self.group.valid(cmd, ctx)
     }

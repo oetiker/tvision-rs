@@ -12,10 +12,10 @@
 //! re-sort, a horizontal scroll, a column resize or move, a reload and a table
 //! resize (a resize also scrolls the cell into view). A cell scrolled off
 //! screen hides the editor but keeps the edit: the next key scrolls the cell
-//! back into view and goes to the editor. A cell that is gone (its row left
-//! the model, its column was hidden) ends the edit at the table's next event;
-//! a key that finds it gone is used up, so it cannot turn into a dialog
-//! action.
+//! back into view and goes to the editor. A cell that is gone ends the edit
+//! without storing it — at once when a reload removed its row, at the
+//! table's next event when its column was hidden — and the next key is used
+//! up, so it cannot turn into a dialog action.
 
 use super::body::{TEXT_X, row_layout};
 use super::layout::RowLayout;
@@ -276,6 +276,15 @@ impl Table {
         }
     }
 
+    /// Close an edit that is no longer alive. Unless the app dropped it, its
+    /// cell vanished under the user, so the next key (which was meant for the
+    /// editor) is used up rather than reaching the dialog.
+    pub(super) fn end_dead_edit(&mut self, ctx: &mut Context) {
+        let dropped = self.edit.as_ref().is_some_and(|e| e.dropped);
+        self.cancel_edit(ctx);
+        self.eat_key = !dropped;
+    }
+
     /// Scroll the edited cell back into view (columns and rows), publishing
     /// the bars, and lay the editor over it. Returns whether it is on screen.
     fn reveal_editor(&mut self, ctx: &mut Context) -> bool {
@@ -305,6 +314,11 @@ impl Table {
     /// ([`Command::VALID`]) and a focus release leave the edit alone.
     pub(super) fn edit_valid(&mut self, cmd: Command, ctx: &mut Context) -> bool {
         if self.edit.is_none() || cmd == Command::VALID || cmd == Command::RELEASED_FOCUS {
+            return true;
+        }
+        if !self.edit_alive() {
+            // Dropped, or its cell is gone: discarded, never stored.
+            self.cancel_edit(ctx);
             return true;
         }
         if cmd == Command::CANCEL {
@@ -422,9 +436,13 @@ impl Table {
             e.box_open = false;
         }
         if !self.edit_alive() {
-            let dropped = self.edit.as_ref().is_some_and(|e| e.dropped);
-            self.cancel_edit(ctx);
-            return is_key && !dropped;
+            self.end_dead_edit(ctx);
+            // A key that finds the cell gone is used up here.
+            if is_key && self.eat_key {
+                self.eat_key = false;
+                return true;
+            }
+            return false;
         }
         if !self.place_editor(false) && is_key && !self.reveal_editor(ctx) {
             // No room to show the cell at all.
@@ -452,7 +470,10 @@ impl Table {
                 let editor = self.edit.as_ref().map(|e| e.editor);
                 let inside = editor
                     .and_then(|id| self.group.child_mut(id))
-                    .is_some_and(|v| v.state().get_bounds().contains(me.position));
+                    .is_some_and(|v| {
+                        // A hidden editor is not under the pointer.
+                        v.state().state.visible && v.state().get_bounds().contains(me.position)
+                    });
                 if !inside {
                     self.cancel_edit(ctx);
                 }

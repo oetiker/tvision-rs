@@ -2291,3 +2291,67 @@ fn snapshot_cell_editor_opened() {
     fx.key(Key::F(2));
     insta::assert_snapshot!(fx.render(W as u16, H as u16));
 }
+
+#[test]
+fn a_click_on_a_hidden_editors_old_place_cancels_and_acts() {
+    let mut fx = editing();
+    fx.key(Key::F(2));
+    fx.type_text("zz");
+    fx.t().body_mut().lv_state().top_item = 1;
+    fx.render(W as u16, H as u16);
+    // The hidden editor's stale bounds are (5, 1)..(17, 2): click there.
+    fx.click(8, 1);
+    assert!(
+        !fx.t().is_editing(),
+        "the click is outside the (hidden) editor"
+    );
+    assert_eq!(fx.t().focused_key(), Some(RowKey::from("b2")), "and acts");
+    assert_eq!(fx.cell(0, 1), "web", "nothing stored");
+}
+
+#[test]
+fn valid_discards_a_dead_edit() {
+    let mut fx = editing();
+    fx.key(Key::F(2));
+    fx.type_text("zz");
+    fx.t().set_column_hidden(1, true);
+    let mut ok = false;
+    fx.with(|t, ctx| ok = t.valid(Command::OK, ctx));
+    assert!(ok);
+    assert!(!fx.t().is_editing());
+    assert_eq!(fx.cell(0, 1), "web", "a hidden column is not written");
+    fx.t().set_column_hidden(1, false);
+    fx.key(Key::F(2));
+    fx.type_text("zz");
+    fx.t().set_value(FieldValue::Text("c3".into()));
+    fx.with(|t, ctx| ok = t.valid(Command::OK, ctx));
+    assert!(ok);
+    assert_eq!(fx.cell(0, 1), "web", "a dropped edit is not written");
+}
+
+#[test]
+fn a_reload_that_removes_the_row_eats_the_next_key() {
+    let mut fx = editing();
+    fx.key(Key::F(2));
+    fx.type_text("zz");
+    let deferred = fx.with_deferred(|t, ctx| {
+        t.set_model(model(&ROWS[1..]), ctx);
+    });
+    assert!(!fx.t().is_editing(), "ended at once");
+    assert_eq!(message_box_text(&deferred), None, "no box for a reload");
+    // A timer broadcast in between does not use up the key.
+    fx.send(Event::Broadcast {
+        command: Command::custom("test.tick"),
+        source: None,
+    });
+    let (ev, _) = fx.send(Event::KeyDown(KeyEvent::new(
+        Key::Enter,
+        KeyModifiers::default(),
+    )));
+    assert!(ev.is_nothing(), "Enter does not reach the dialog");
+    let (ev, _) = fx.send(Event::KeyDown(KeyEvent::new(
+        Key::Enter,
+        KeyModifiers::default(),
+    )));
+    assert!(!ev.is_nothing(), "only that one key");
+}
