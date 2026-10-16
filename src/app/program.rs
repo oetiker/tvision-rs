@@ -278,13 +278,20 @@ fn initial_disabled_commands() -> CommandSet {
 // ---------------------------------------------------------------------------
 
 /// A capture handler that realizes modality: while it is on the
-/// [`CaptureStack`], keyboard and command events
-/// [`Pass`](CaptureFlow::Pass) through to normal routing and reach the modal
-/// view via focus; broadcast events also [`Pass`](CaptureFlow::Pass) and fan
-/// out to **all** views by design; positional (mouse) events are gated by
-/// `bounds` — inside → [`Pass`](CaptureFlow::Pass), outside →
-/// [`Consumed`](CaptureFlow::Consumed) (swallowed). This is the "a handler that
-/// consumes every otherwise-unhandled event *is* the modal loop" realization.
+/// [`CaptureStack`], positional (mouse) events are gated by `bounds`. Inside,
+/// they [`Pass`](CaptureFlow::Pass) to normal routing; outside, the frame
+/// returns [`Consumed`](CaptureFlow::Consumed). In practice an outside click
+/// never reaches the frame: `pump_once` runs an outside-click redirect first,
+/// which hands the event, localized, to the modal view alone (a history window
+/// closes on it, a plain dialog ignores it).
+///
+/// Every other event [`Pass`](CaptureFlow::Pass)es. Keys, commands, pastes and
+/// the mouse wheel then go to the modal view alone: `program_handle_event`
+/// reads [`CaptureStack::modal_view`] and hands them to `Group::deliver_to_modal`,
+/// as C++ `TGroup::execute` does, and drops a command the modal leaves
+/// unhandled. Broadcasts keep the root route and fan out to **all** views
+/// (deviation D9). This is the "a handler that consumes every
+/// otherwise-unhandled event *is* the modal loop" realization.
 ///
 /// It holds the modal view's [`ViewId`] (identity, per the capture contract) and
 /// its `bounds` in the root group's frame, so positional events can be hit-tested
@@ -318,8 +325,9 @@ impl CaptureHandler for ModalFrame {
     fn handle(&mut self, ev: &mut Event, _ctx: &mut Context) -> CaptureFlow {
         match ev {
             // Positional events: let them through only if they land on the modal
-            // view's bounds; otherwise swallow them so views beneath the modal
-            // never see them.
+            // view's bounds; otherwise consume them so views beneath the modal
+            // never see them. (The outside-click redirect in `pump_once` runs
+            // before the capture stack and normally handles these already.)
             Event::MouseDown(m) | Event::MouseUp(m) | Event::MouseMove(m) | Event::MouseAuto(m) => {
                 if self.bounds.contains(m.position) {
                     CaptureFlow::Pass
@@ -327,8 +335,9 @@ impl CaptureHandler for ModalFrame {
                     CaptureFlow::Consumed
                 }
             }
-            // Focused (keyboard/command) + broadcast events pass through to normal
-            // routing, which reaches the modal view because the group focuses it.
+            // Everything else passes. `program_handle_event` then delivers keys,
+            // commands, pastes and the wheel to the modal view alone
+            // (`Group::deliver_to_modal`); broadcasts fan out to the whole tree.
             _ => CaptureFlow::Pass,
         }
     }

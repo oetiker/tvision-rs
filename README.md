@@ -90,8 +90,9 @@ and verified in CI, so the docs never drift.
 Windows · dialogs · the desktop · pull-down menus · a status line · buttons,
 check boxes, radio buttons, input lines (with picture-mask & regex validators),
 list boxes (with incremental find/filter), a sortable multi-column table,
-scrollers and scroll bars, a full text editor, an outline viewer, a truecolor color picker, a splitter, file/directory
-dialogs, history lists, and a themeable palette. Rendering is a vendored ratatui cell-buffer with whole-tree
+scrollers and scroll bars, a full text editor, an outline viewer, a truecolor
+color picker, a splitter, file/directory dialogs, history lists, and a
+themeable palette. Rendering is a vendored ratatui cell-buffer with whole-tree
 diffing, behind a `Backend` trait (crossterm by default; a headless backend
 drives the snapshot tests).
 
