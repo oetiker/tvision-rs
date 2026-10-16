@@ -190,8 +190,8 @@ fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
 When a view wants to show a hardware cursor it sets
 [`State::cursor_vis`](../api/tvision_rs/view/struct.State.html) (via
 [`ViewState::show_cursor`](../api/tvision_rs/view/struct.ViewState.html#method.show_cursor))
-and also sets the cursor *shape*: underline for the normal insertion point
-(`normal_cursor`, the default) or block for overwrite mode (`block_cursor`),
+and also sets the cursor *shape*: the normal caret for the insertion point
+(`normal_cursor`, the default) or a block for overwrite mode (`block_cursor`),
 controlled by [`State::cursor_ins`](../api/tvision_rs/view/struct.State.html).
 
 ```rust
@@ -208,7 +208,7 @@ fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
         if k.key == tv::Key::Insert {
             self.insert_mode = !self.insert_mode;
             if self.insert_mode {
-                self.state.normal_cursor();   // underline = insert point
+                self.state.normal_cursor();   // normal caret = insert point
             } else {
                 self.state.block_cursor();    // block = overwrite
             }
@@ -236,10 +236,11 @@ renderer.render(|buf| { /* whole-tree redraw */ });
 
 `View::caret_size` follows the same current-child chain and reads
 `cursor_ins` on the focused view: `CARET_INSERT` (100, a block) when it is
-set, else `CARET_NORMAL` (1, a thin line). While the cursor is shown, the
-renderer passes this size to `Backend::set_caret_size`. The crossterm backend
-shows it as a blinking block or a blinking underline, and restores the
-terminal's own caret shape on exit and suspend.
+set, else `CARET_NORMAL` (1). While the cursor is shown, the renderer passes
+this size to `Backend::set_caret_size`. The crossterm backend shows
+`CARET_INSERT` as a blinking block and keeps the terminal's own caret shape
+for `CARET_NORMAL`, as the original's ncurses display does. It restores the
+terminal's caret shape on exit and suspend.
 
 A view that wants no cursor simply leaves `cursor_vis = false`; it never calls
 `show_cursor`. A view that loses focus keeps whatever `cursor_vis` value it
@@ -327,12 +328,19 @@ After `pump_once` returns, the outer `pump_and_drive` fires the optional
 
 ```rust
 # use tvision_rs as tv;
-# fn _demo(program: &mut tv::app::Program) {
+# fn _demo(program: &mut tv::app::Program, rx: std::sync::mpsc::Receiver<String>) {
 let refresh = tv::Command::custom("myapp.refresh");
 program.set_on_idle(move |p| {
     // Called on every idle pass — roughly every 20 ms with no user input.
     // Keep this callback cheap: it runs on the loop's frame cadence.
-    p.broadcast(refresh, None);
+    let mut got_data = false;
+    while let Ok(_line) = rx.try_recv() {
+        // ... store the line in state the views share ...
+        got_data = true;
+    }
+    if got_data {
+        p.broadcast(refresh, None); // only when there is something new
+    }
 });
 # }
 ```
