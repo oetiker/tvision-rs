@@ -76,7 +76,8 @@ the list-selected role; the set survives `set_model` and drops vanished keys.
 `selected_keys()`, `set_selected_keys(..)`, `clear_selection()`. Broadcast
 `Command::TABLE_SELECTION_CHANGED` (source = table id). Enter / double-click
 keep the ListViewer meaning (`select_item` → the C++ `cmListItemSelected`
-broadcast path the existing list viewers use).
+broadcast path the existing list viewers use) — Enter only while there is no
+cell cursor, see Phase C.
 
 ## Value (D10)
 
@@ -171,13 +172,21 @@ click on it toggles, Space and double-click toggle too. No column-0 `X`.
 - **Cell cursor.** Exists only when at least one visible column is editable:
   ←/→ move it between editable columns (auto-scrolling horizontally); it is
   drawn as a distinct colour on the focused row.
-- **Start editing:** F2, or double-click on an editable cell (in Multi mode a
-  double-click on a non-editable cell still toggles). Enter keeps its
-  ListViewer meaning (item selected).
+- **Start editing:** Enter or F2 on the cell cursor, or double-click on an
+  editable cell (in Multi mode a double-click on a non-editable cell still
+  toggles, and Space still marks). *User decision 2026-10-16
+  (spreadsheet style):* while there is a cell cursor and a focused row,
+  plain Enter opens the editor on the cursor cell, exactly like F2. Without
+  a cell cursor (no visible editable column) or without rows, Enter keeps
+  its ListViewer meaning (item selected / the dialog's default button).
+  Ctrl/Alt/Shift+Enter never edit. Enter still works where the app binds F2
+  in its status line.
 - **Editor:** an `InputLine` (with the column's validator) placed over the
   cell inside the table group, focused, pre-filled with the cell text, all
   selected. Enter commits → `set_cell`; on `Err(msg)` show `message_box` and
-  stay in the editor. Esc cancels. Losing focus cancels. Tab/Shift-Tab commit
+  stay in the editor. The committing Enter is used up (it neither re-opens
+  the editor nor reaches the dialog's default button) and the cell cursor
+  stays on the cell, so a second Enter edits it again. Esc cancels. Losing focus cancels. Tab/Shift-Tab commit
   and move to the next/previous editable cell on the same row.
 - After a commit the sort is re-applied; focus follows the row key.
   Broadcast `Command::TABLE_CELL_EDITED` (source = table id); the app reads

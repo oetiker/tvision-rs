@@ -6525,6 +6525,145 @@ mod tests {
         assert_eq!(table(&mut program, id).model().cell(0, 1), "y");
     }
 
+    /// **End-to-end: Enter edits a `Table` cell inside a dialog with a default
+    /// button.** Enter opens the editor on the cell cursor; the Enter that
+    /// commits is used up by the table (the dialog never broadcasts
+    /// `DEFAULT`) and leaves the cursor on the cell, so the next Enter edits it
+    /// again. Without a cell cursor Enter reaches the default button.
+    #[test]
+    fn table_enter_edits_and_never_presses_the_default_button_through_pump() {
+        use crate::dialog::Dialog;
+        use crate::widgets::{Button, ButtonFlags, ColumnSpec, Table, VecModel};
+
+        fn table(program: &mut Program, id: ViewId) -> &mut Table {
+            program
+                .group_mut()
+                .find_mut(id)
+                .and_then(|v| v.as_any_mut())
+                .and_then(|a| a.downcast_mut::<Table>())
+                .expect("table resolves")
+        }
+
+        let log: Rc<RefCell<Vec<Event>>> = Rc::new(RefCell::new(Vec::new()));
+        let log_cap = log.clone();
+        let ids: Rc<RefCell<Option<ViewId>>> = Rc::new(RefCell::new(None));
+        let ids_cap = ids.clone();
+        let (backend, _handle) = HeadlessBackend::new(80, 25);
+        let clock = Rc::new(ManualClock::new(0));
+        let mut program = Program::new(
+            Box::new(backend),
+            Box::new(clock),
+            Theme::classic_blue(),
+            move |r| {
+                let mut desktop = Desktop::new(r, |r2| Some(Desktop::init_background(r2)));
+                let mut d = Dialog::new(Rect::new(2, 2, 40, 14), Some("D".into()));
+                d.insert_child(Box::new(Button::new(
+                    Rect::new(24, 8, 34, 10),
+                    "O~K~",
+                    Command::OK,
+                    ButtonFlags {
+                        default: true,
+                        ..Default::default()
+                    },
+                )));
+                // Records the dialog's broadcasts; above the button, which
+                // uses up the `DEFAULT` it acts on, so it sees them first.
+                let mut probe = Probe::new(Rect::new(1, 10, 3, 11), '.', log_cap);
+                probe.st.options.selectable = false;
+                d.insert_child(Box::new(probe));
+                let rows = vec![
+                    vec!["a".to_string(), "b".to_string()],
+                    vec!["c".to_string(), "d".to_string()],
+                ];
+                let t = Table::new(
+                    Rect::new(1, 1, 31, 7),
+                    vec![
+                        ColumnSpec::new("A", 4),
+                        ColumnSpec::new("B", 4).editable(true),
+                    ],
+                    None,
+                )
+                .with_model(Box::new(VecModel::new(rows)));
+                // Inserted last, so it starts focused.
+                *ids_cap.borrow_mut() = Some(d.insert_child(Box::new(t)));
+                desktop.insert_view(Box::new(d));
+                Some(Box::new(desktop))
+            },
+            |_r| None,
+            |_r| None,
+        );
+        let id = ids.borrow().expect("table id set");
+        let defaults = |l: &Rc<RefCell<Vec<Event>>>| {
+            l.borrow()
+                .iter()
+                .filter(|e| {
+                    matches!(
+                        e,
+                        Event::Broadcast {
+                            command: Command::DEFAULT,
+                            ..
+                        }
+                    )
+                })
+                .count()
+        };
+        program.out_events.clear();
+        program.out_events.push_back(Event::Broadcast {
+            command: Command::custom("test.noop"),
+            source: None,
+        });
+        program.pump_once();
+
+        program.out_events.push_back(key(Key::Enter));
+        program.pump_once();
+        assert!(
+            table(&mut program, id).is_editing(),
+            "Enter opened the editor"
+        );
+
+        for k in [Key::Char('z'), Key::Enter] {
+            program.out_events.push_back(key(k));
+        }
+        for _ in 0..8 {
+            program.pump_once();
+        }
+        let t = table(&mut program, id);
+        assert!(!t.is_editing(), "the second Enter committed");
+        assert_eq!(t.model().cell(0, 1), "z");
+        assert_eq!(
+            t.focused_key(),
+            Some(crate::widgets::RowKey::from("0")),
+            "no move down"
+        );
+        assert_eq!(t.cursor_column(), Some(1));
+        assert_eq!(defaults(&log), 0, "the commit's Enter is not the dialog's");
+
+        // Bounded: the commit's focus and edit broadcasts drain first.
+        program.out_events.push_back(key(Key::Enter));
+        for _ in 0..8 {
+            program.pump_once();
+        }
+        assert!(
+            table(&mut program, id).is_editing(),
+            "the next Enter edits the same cell"
+        );
+        program.out_events.push_back(key(Key::Esc));
+        for _ in 0..8 {
+            program.pump_once();
+        }
+        assert!(!table(&mut program, id).is_editing());
+        assert_eq!(defaults(&log), 0);
+
+        // No cell cursor: Enter is the dialog's again.
+        table(&mut program, id).set_column_hidden(1, true);
+        program.out_events.push_back(key(Key::Enter));
+        for _ in 0..8 {
+            program.pump_once();
+        }
+        assert!(!table(&mut program, id).is_editing());
+        assert_eq!(defaults(&log), 1, "Enter pressed the default button");
+    }
+
     /// Press inside, drag outside, release: NO press fires (the C++ post-loop
     /// `if (down)` on the LAST MOVE's tracked containment) — through real pumps.
     #[test]

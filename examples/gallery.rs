@@ -595,9 +595,9 @@ fn listbox() -> Box<dyn View> {
 /// the window below the columns' `min_width`s and the columns scroll
 /// horizontally (the bottom bar, or ←/→ past the cell cursor's stops) while
 /// the check column stays put. Image and CPU % are editable: ←/→ move the cell
-/// cursor between them, F2 or a double-click opens an editor (Enter stores,
-/// Esc cancels, Tab moves on); CPU % takes only digits and a dot. No wrapper
-/// view is needed: the table publishes its ranges to the bars itself.
+/// cursor between them, Enter, F2 or a double-click opens an editor (Enter
+/// stores, Esc cancels, Tab moves on); CPU % takes only digits and a dot. No
+/// wrapper view is needed: the table publishes its ranges to the bars itself.
 fn table() -> Box<dyn View> {
     let mut win = Window::new(Rect::new(2, 1, 52, 16), Some("Table".to_string()), 1);
     let h_bar = win.standard_scroll_bar(ScrollBarOptions {

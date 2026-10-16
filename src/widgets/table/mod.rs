@@ -73,27 +73,31 @@
 //! into view; at the first or last one the keys scroll the columns as usual.
 //! A click on an editable cell puts the cursor there.
 //!
-//! F2, or a double-click on an editable cell, opens an
-//! [`InputLine`](crate::widgets::InputLine) over the cell, pre-filled with
-//! its text, all selected, with the column's
+//! Enter or F2 on the cell cursor, or a double-click on an editable cell,
+//! opens an [`InputLine`](crate::widgets::InputLine) over the cell,
+//! pre-filled with its text, all selected, with the column's
 //! [`validator`](ColumnSpec::validator) if it has one. Enter stores the text
 //! through [`TableModel::set_cell`]; a validator or a `set_cell` that refuses
-//! it shows its message in an error box and the editor stays open. Esc
-//! cancels; so does losing the focus or a click outside the editor. Tab and
-//! Shift-Tab store and open the next/previous editable cell of the row; past
-//! the last (first) one the edit ends and the Tab goes on, moving the focus
-//! as usual. An unchanged text stores nothing. A dialog's OK (any end command
-//! but Cancel, through [`View::valid`]) stores an open edit first, and a
-//! refusal keeps the dialog open; Cancel cancels it.
-//! Enter without an open editor keeps its list meaning, and a double-click
-//! on a cell that is not editable still chooses (single mode) or toggles
-//! (multi mode) the row.
+//! it shows its message in an error box and the editor stays open. After a
+//! store the cell cursor stays on the cell, so the next Enter edits it again;
+//! the Enter that stores does nothing else (it does not press the dialog's
+//! default button). Esc cancels; so does losing the focus or a click outside
+//! the editor. Tab and Shift-Tab store and open the next/previous editable
+//! cell of the row; past the last (first) one the edit ends and the Tab goes
+//! on, moving the focus as usual. An unchanged text stores nothing. A
+//! dialog's OK (any end command but Cancel, through [`View::valid`]) stores
+//! an open edit first, and a refusal keeps the dialog open; Cancel cancels
+//! it. Without a cell cursor (no visible editable column) or without rows,
+//! Enter keeps its list meaning and reaches the dialog's default button;
+//! with modifiers (Ctrl, Alt, Shift) it never edits. A double-click on a cell
+//! that is not editable still chooses (single mode) or toggles (multi mode)
+//! the row, and Space still marks it in multi mode.
 //!
 //! The status line sees every key first. An app that binds F2 app-wide (the
 //! Turbo Vision `~F2~ Save` convention) turns F2 into its command before the
-//! table gets it, so keyboard editing is lost there; a double-click still
-//! opens the editor. Bind such keys only in a status def for the help
-//! context of the view that owns them.
+//! table gets it; Enter and a double-click still open the editor there. Bind
+//! such keys only in a status def for the help context of the view that
+//! owns them.
 //!
 //! After a store the sort is re-applied and the focus follows the row's key.
 //! The editor stays over its cell through a re-sort, a horizontal scroll, a
@@ -750,6 +754,7 @@ impl View for Table {
             Event::MouseDown(_) => self.eat_key = false,
             _ => {}
         }
+        self.close_dropped_edit(ctx);
         let used = if self.edit.is_some() {
             self.edit_event(ev, ctx)
         } else {
