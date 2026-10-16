@@ -543,7 +543,10 @@ never `sleep` (this is also what makes timing deterministic under test, D11).
 > pre-process hot keys, Alt-N, the `cmQuit` catch, cmTile/cmCascade/cmDosShell
 > and `run_app`'s command handler do not see it. The status-line pre-route in
 > the pump (`TProgram::getEvent`) still runs first, so Alt-X still becomes
-> `cmQuit` — which the dialog ignores, as in C++.
+> `cmQuit` — which the dialog ignores, as in C++. C++ apps catch `cmHelp`
+> under a modal by overriding `TApplication::getEvent`; no successor hook
+> exists yet, so help from inside a modal needs the dialog (or a view that
+> embeds it) to handle `Command::HELP` itself.
 >
 > **Remaining deviation — broadcasts under a modal.** Positional and broadcast
 > events keep the root route under a modal. In C++ a broadcast a dialog view

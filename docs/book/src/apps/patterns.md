@@ -94,6 +94,14 @@ open. When a key matches an item of the current def (including hidden
 `key_item` bindings) and its command is enabled, the status line turns the key
 event into that command. The focused view never receives the key.
 
+While a modal runs, a command (from a status-line key, a button or
+`put_event`) goes to the modal alone, as in C++ `TGroup::execute`. A command
+the modal does not handle is dropped: the program-level command handler (for
+example `run_app`'s) does not see it. So `~F1~ Help`, or the Help button of a
+file dialog, does nothing under a modal unless the dialog handles
+`Command::HELP` itself. To add that, embed the dialog in your own view type
+(`#[delegate(to = dialog)]`) and handle the command in its `handle_event`.
+
 ```rust,ignore
 let defs = StatusDef::list()
     .def_one_of([HelpCtx::custom("app.containers")], |d| {
