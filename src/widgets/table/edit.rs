@@ -3,9 +3,10 @@
 //!
 //! The editor is a third child of the table's group, inserted on top of the
 //! rows and made current while it is open, so the keys reach it the normal
-//! way. The table takes the keys that end an edit before the group routes
-//! them: Enter commits, Esc cancels, Tab/Shift-Tab commit and open the
-//! next/previous editable cell of the row.
+//! way. Enter or F2 on the cell cursor opens it. The table takes the keys
+//! that end an edit before the group routes them: Enter commits (and is used
+//! up, the cursor stays on the cell), Esc cancels, Tab/Shift-Tab commit and
+//! open the next/previous editable cell of the row.
 //!
 //! The editor belongs to a row key and a model column, not to a screen
 //! position: every draw lays it over that cell again, so it follows a
@@ -285,6 +286,15 @@ impl Table {
         self.eat_key = !dropped;
     }
 
+    /// Close an edit the app dropped before the table routes an event, so
+    /// the event goes on as if there were no editor (an Enter opens the
+    /// cursor cell's editor).
+    pub(super) fn close_dropped_edit(&mut self, ctx: &mut Context) {
+        if self.edit.as_ref().is_some_and(|e| e.dropped) {
+            self.end_dead_edit(ctx);
+        }
+    }
+
     /// Scroll the edited cell back into view (columns and rows), publishing
     /// the bars, and lay the editor over it. Returns whether it is on screen.
     fn reveal_editor(&mut self, ctx: &mut Context) -> bool {
@@ -509,8 +519,9 @@ impl Table {
     }
 
     /// An event reaching the table while no editor is open: F2 edits the
-    /// cell under the cursor, a double-click on an editable cell edits that
-    /// cell. Returns whether `ev` was used.
+    /// cell under the cursor, and so does Enter while there is a cursor and a
+    /// focused row (else the table does not use Enter); a double-click on an
+    /// editable cell edits that cell. Returns whether `ev` was used.
     pub(super) fn start_event(&mut self, ev: &Event, ctx: &mut Context) -> bool {
         match *ev {
             Event::KeyDown(ke) if plain(ke) && !ke.modifiers.shift && ke.key == Key::F(2) => {
@@ -521,6 +532,18 @@ impl Table {
                     }
                     None => false,
                 }
+            }
+            Event::KeyDown(ke) if plain(ke) && !ke.modifiers.shift && ke.key == Key::Enter => {
+                let Some(col) = self.cursor_column() else {
+                    return false;
+                };
+                if self.focused_key().is_none() {
+                    return false;
+                }
+                // Used like F2 even when the cell cannot be shown, so it
+                // never presses the dialog's default button instead.
+                self.start_edit(col, ctx);
+                true
             }
             Event::MouseDown(me)
                 if me.flags.double_click && me.buttons.left && me.position.y >= 1 =>

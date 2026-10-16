@@ -1690,12 +1690,162 @@ fn typing_and_enter_commit_through_set_cell_and_broadcast() {
     assert!(t.body_mut().lv().state.state.focused);
 }
 
+fn enter() -> Event {
+    Event::KeyDown(KeyEvent::new(Key::Enter, KeyModifiers::default()))
+}
+
 #[test]
-fn enter_keeps_its_list_meaning_without_an_editor() {
+fn enter_opens_the_editor_on_the_cursor_cell() {
     let mut fx = editing();
-    let out = fx.key(Key::Enter);
-    assert!(!fx.t().is_editing());
+    let (ev, out) = fx.send(enter());
+    assert!(ev.is_nothing(), "Enter is used");
+    assert_eq!(fx.edit_at().map(|(k, c, _)| (k, c)), Some(("a1".into(), 1)));
+    assert_eq!(fx.editor_text().as_deref(), Some("web"));
     assert_eq!(edited(&out, fx.id), 0);
+    fx.key(Key::Esc);
+    fx.key(Key::Right);
+    fx.send(enter());
+    assert_eq!(
+        fx.edit_at().map(|(k, c, _)| (k, c)),
+        Some(("a1".into(), 3)),
+        "on the cursor's column"
+    );
+}
+
+#[test]
+fn enter_with_a_modifier_does_not_edit() {
+    let mut fx = editing();
+    for m in [
+        KeyModifiers {
+            ctrl: true,
+            ..Default::default()
+        },
+        KeyModifiers {
+            alt: true,
+            ..Default::default()
+        },
+        KeyModifiers {
+            shift: true,
+            ..Default::default()
+        },
+    ] {
+        fx.send(Event::KeyDown(KeyEvent::new(Key::Enter, m)));
+        assert!(!fx.t().is_editing(), "{m:?}");
+    }
+}
+
+#[test]
+fn enter_keeps_its_list_meaning_without_a_cell_cursor() {
+    // No editable column: Enter is not the table's, it reaches the dialog.
+    let mut fx = Fixture::table();
+    fx.focus(true);
+    let (ev, out) = fx.send(enter());
+    assert!(!ev.is_nothing(), "Enter bubbles");
+    assert!(!fx.t().is_editing());
+    assert!(out.is_empty());
+    // Editable columns, all hidden: no cursor either.
+    let mut fx = editing();
+    fx.t().set_column_hidden(1, true);
+    fx.t().set_column_hidden(3, true);
+    assert_eq!(fx.t().cursor_column(), None);
+    let (ev, _) = fx.send(enter());
+    assert!(!ev.is_nothing(), "Enter bubbles");
+    assert!(!fx.t().is_editing());
+}
+
+#[test]
+fn enter_without_rows_keeps_its_list_meaning() {
+    let mut fx = editing();
+    fx.set_model(&[]);
+    let (ev, _) = fx.send(enter());
+    assert!(!ev.is_nothing(), "no row to edit: Enter bubbles");
+    assert!(!fx.t().is_editing());
+}
+
+#[test]
+fn enter_without_room_for_the_editor_is_used_like_f2() {
+    // Only the header row: the cursor cell cannot be shown.
+    let mut fx = Fixture::new(
+        Table::new(Rect::new(0, 0, W, 1), edit_columns(), None).with_model(model(&ROWS)),
+    );
+    fx.focus(true);
+    assert_eq!(fx.t().cursor_column(), Some(1));
+    let (ev, _) = fx.send(enter());
+    assert!(ev.is_nothing(), "Enter does not reach the dialog");
+    assert!(!fx.t().is_editing(), "no editor opened");
+    let (ev, _) = fx.send(Event::KeyDown(KeyEvent::new(
+        Key::F(2),
+        KeyModifiers::default(),
+    )));
+    assert!(ev.is_nothing(), "the same as F2");
+    assert!(!fx.t().is_editing());
+}
+
+#[test]
+fn an_enter_commit_stays_on_the_cell_and_the_next_enter_edits_it_again() {
+    let mut fx = editing();
+    let id = fx.id;
+    fx.key(Key::Right);
+    fx.send(enter());
+    fx.type_text("7");
+    let (ev, out) = fx.send(enter());
+    assert!(ev.is_nothing(), "the commit's Enter is used, once");
+    assert!(!fx.t().is_editing(), "and does not open the editor again");
+    assert_eq!(fx.cell(0, 3), "7");
+    assert_eq!(edited(&out, id), 1);
+    assert_eq!(
+        fx.t().focused_key(),
+        Some(RowKey::from("a1")),
+        "no move down"
+    );
+    assert_eq!(fx.t().cursor_column(), Some(3), "the cursor stays");
+    let (ev, _) = fx.send(enter());
+    assert!(ev.is_nothing());
+    assert_eq!(
+        fx.edit_at().map(|(k, c, _)| (k, c)),
+        Some(("a1".into(), 3)),
+        "the same cell again"
+    );
+    assert_eq!(fx.editor_text().as_deref(), Some("7"));
+}
+
+#[test]
+fn enter_edits_in_multi_mode_and_space_still_toggles() {
+    let mut fx = Fixture::new(
+        Table::new(Rect::new(0, 0, W + 4, H), edit_columns(), None)
+            .with_model(model(&ROWS))
+            .with_selection_mode(SelectionMode::Multi),
+    );
+    fx.focus(true);
+    fx.key(Key::Char(' '));
+    assert_eq!(keys(fx.t().selected_keys()), ["a1"], "Space marks");
+    let (ev, _) = fx.send(enter());
+    assert!(ev.is_nothing());
+    assert_eq!(fx.edit_at().map(|(k, c, _)| (k, c)), Some(("a1".into(), 1)));
+    fx.key(Key::Esc);
+    assert_eq!(keys(fx.t().selected_keys()), ["a1"], "Enter marks nothing");
+    // A double-click on ID (not editable; text x 5..9 behind the check
+    // column) still toggles the row.
+    fx.send(mouse_down(6, 2, true));
+    assert_eq!(keys(fx.t().selected_keys()), ["a1", "b2"]);
+    assert!(!fx.t().is_editing());
+}
+
+#[test]
+fn enter_after_a_dropped_edit_opens_the_new_rows_editor() {
+    let mut fx = editing();
+    fx.key(Key::F(2));
+    fx.type_text("zz");
+    fx.t().set_value(FieldValue::Text("c3".into()));
+    let (ev, _) = fx.send(enter());
+    assert!(ev.is_nothing());
+    assert_eq!(
+        fx.edit_at().map(|(k, c, _)| (k, c)),
+        Some(("c3".into(), 1)),
+        "the dropped edit closed, the Enter went on"
+    );
+    assert_eq!(fx.editor_text().as_deref(), Some("cache"));
+    assert_eq!(fx.cell(0, 1), "web", "the dropped text is not stored");
 }
 
 #[test]
@@ -2349,9 +2499,11 @@ fn a_reload_that_removes_the_row_eats_the_next_key() {
         KeyModifiers::default(),
     )));
     assert!(ev.is_nothing(), "Enter does not reach the dialog");
+    assert!(!fx.t().is_editing(), "nor open an editor");
     let (ev, _) = fx.send(Event::KeyDown(KeyEvent::new(
         Key::Enter,
         KeyModifiers::default(),
     )));
-    assert!(!ev.is_nothing(), "only that one key");
+    assert!(ev.is_nothing());
+    assert!(fx.t().is_editing(), "only that one key: the next edits");
 }
