@@ -5,10 +5,14 @@
 //! widest-first column shrinking, ellipsis truncation, the header sort marker,
 //! and the stable sort.
 
+use std::fmt;
+use std::rc::Rc;
+
 use unicode_segmentation::UnicodeSegmentation;
 
 use super::model::TableModel;
 use crate::text;
+use crate::validate::Validator;
 
 /// Column alignment inside its cell.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -73,7 +77,45 @@ pub struct ColumnSpec {
     /// scrolls instead. A user resize sets it (and clears `flex`), so a
     /// dragged width holds.
     pub fixed: bool,
+    /// The user may edit the cells (default `false`): the cell cursor visits
+    /// the column and F2 or a double-click opens an editor on it.
+    pub editable: bool,
+    /// Builds a fresh [`Validator`] for every cell editor opened on this
+    /// column (none by default).
+    pub validator: Option<ValidatorFactory>,
 }
+
+/// A shareable factory of [`Validator`]s for a column's cell editors: each
+/// editor owns its validator, so the column keeps the recipe, not an
+/// instance. Two factories are equal only when they are the same one.
+#[derive(Clone)]
+pub struct ValidatorFactory(Rc<dyn Fn() -> Box<dyn Validator>>);
+
+impl ValidatorFactory {
+    /// Wrap `make`.
+    pub fn new(make: Box<dyn Fn() -> Box<dyn Validator>>) -> Self {
+        ValidatorFactory(Rc::from(make))
+    }
+
+    /// A new validator.
+    pub fn make(&self) -> Box<dyn Validator> {
+        (self.0)()
+    }
+}
+
+impl fmt::Debug for ValidatorFactory {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("ValidatorFactory")
+    }
+}
+
+impl PartialEq for ValidatorFactory {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for ValidatorFactory {}
 
 impl ColumnSpec {
     /// A left-aligned, visible column of preferred `width`, shrinkable to 1.
@@ -88,6 +130,8 @@ impl ColumnSpec {
             resizable: true,
             movable: true,
             fixed: false,
+            editable: false,
+            validator: None,
         }
     }
 
@@ -142,6 +186,22 @@ impl ColumnSpec {
     /// (default `false`; see [`fixed`](Self::fixed)).
     pub fn fixed(mut self, fixed: bool) -> Self {
         self.fixed = fixed;
+        self
+    }
+
+    /// Builder: whether the user may edit the cells (default `false`; see
+    /// [`editable`](Self::editable)).
+    pub fn editable(mut self, editable: bool) -> Self {
+        self.editable = editable;
+        self
+    }
+
+    /// Builder: give every cell editor on this column a validator from
+    /// `make` (a fresh one per editor), as
+    /// [`InputLine::set_validator`](crate::widgets::InputLine::set_validator)
+    /// would. It filters the typing and checks the text on commit.
+    pub fn validator(mut self, make: Box<dyn Fn() -> Box<dyn Validator>>) -> Self {
+        self.validator = Some(ValidatorFactory::new(make));
         self
     }
 }
