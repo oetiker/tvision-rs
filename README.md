@@ -89,8 +89,8 @@ and verified in CI, so the docs never drift.
 
 Windows · dialogs · the desktop · pull-down menus · a status line · buttons,
 check boxes, radio buttons, input lines (with picture-mask & regex validators),
-list boxes (with incremental find/filter), scrollers and scroll bars, a full text
-editor, an outline viewer, a truecolor color picker, a splitter, file/directory
+list boxes (with incremental find/filter), a sortable multi-column table,
+scrollers and scroll bars, a full text editor, an outline viewer, a truecolor color picker, a splitter, file/directory
 dialogs, history lists, and a themeable palette. Rendering is a vendored ratatui cell-buffer with whole-tree
 diffing, behind a `Backend` trait (crossterm by default; a headless backend
 drives the snapshot tests).
@@ -105,10 +105,11 @@ The faithful port is the foundation, not the finish line: I intend to grow the
 classic widget set with modern, native-Rust additions. A few have already landed —
 a **truecolor color picker** (a 24-bit successor to the original 16-color
 selector), a **multi-pane splitter**, a **regex validator** alongside the
-ported picture-mask one, and **incremental find/filter on list boxes** (type a
+ported picture-mask one, **incremental find/filter on list boxes** (type a
 query while a list is focused: highlights matched substrings and optionally
-self-filters to matching rows, with no separate input field needed) — and more
-are planned.
+self-filters to matching rows, with no separate input field needed), and a
+**table** with a click-to-sort header, columns the user can resize, move and
+hide, and in-place cell editing (adapted from tvdocker) — and more are planned.
 
 — [Tobi Oetiker](https://github.com/oetiker)
 

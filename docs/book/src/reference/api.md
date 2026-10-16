@@ -18,7 +18,7 @@ tv::Button` works), but the *documentation* lives in the owning module:
 | ----------- | ------------------------------------------------------------- |
 | `app`       | [`Program`](../api/tvision_rs/app/struct.Program.html), `Application`, the run loop |
 | `view`      | the [`View`](../api/tvision_rs/view/trait.View.html) trait, [`ViewState`](../api/tvision_rs/view/struct.ViewState.html), [`Context`](../api/tvision_rs/view/struct.Context.html), `Deferred` |
-| `widgets`   | the controls — [`Button`](../api/tvision_rs/widgets/struct.Button.html), check boxes, radio buttons, input lines, labels, list boxes, scroll bars, editors |
+| `widgets`   | the controls — [`Button`](../api/tvision_rs/widgets/struct.Button.html), check boxes, radio buttons, input lines, labels, list boxes, tables, scroll bars, editors |
 | `window`    | [`Window`](../api/tvision_rs/window/struct.Window.html) and its scroll-bar options |
 | `dialog`    | dialogs, message boxes, gather/scatter                        |
 | `desktop`   | the `Desktop` and its background                              |

@@ -68,7 +68,9 @@ The full set is in [Controls](../apps/controls.md) and
 | `clearEvent(event)` | `*ev = Event::Nothing` | |
 | `cmOK`, `cmCancel`, … | [`Command`](../api/tvision_rs/command/struct.Command.html) assoc consts | open newtype, namespaced |
 | `TCommandSet` (256-bit) | [`CommandSet`](../api/tvision_rs/command/struct.CommandSet.html) | `Program` stores the *disabled* set (denylist) |
-| `message(rcvr, evBroadcast, cmX, p)` | `ctx.broadcast(Command::X)` | |
+| `message(rcvr, evBroadcast, cmX, p)` | `ctx.broadcast(Command::X, source)` | `source: Option<ViewId>` stands in for `p`; queued, not synchronous |
+| `putEvent` | `ctx.put_event(ev)`; from outside a view [`Program::put_event`](../api/tvision_rs/app/struct.Program.html#method.put_event) / [`Program::broadcast`](../api/tvision_rs/app/struct.Program.html#method.broadcast) | events queue in order; none is overwritten |
+| `TEventQueue::doubleDelay` | [`Program::set_double_delay_ms`](../api/tvision_rs/app/struct.Program.html#method.set_double_delay_ms) | default 440 ms |
 | `message(...)` expecting a result | targeted query → `Option<T>` | |
 
 How events route is covered in [Events → enum + match](../port/events.md) and

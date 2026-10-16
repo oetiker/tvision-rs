@@ -18,7 +18,7 @@ answer, and the answer differs by what you are actually moving. tvision-rs gives
 |------|---------------------|-----------|
 | Field & record data (dialog ↔ controls) | [`FieldValue`] via `value()` / `set_value()`; groups gather/scatter an ordered `List` | [Dialogs & data](dialogs.md), [Third-party components](extensibility.md) |
 | Sync signals (sibling ↔ sibling) | Defaulted `View` trait methods brokered by the pump (`apply_scroll_sync`, `set_indicator_value`, `apply_page_sync`) | [Cross-view brokering & ViewId](../internals/brokering.md) |
-| By-value modal results | `Program::exec_view_with<R>` (result by value) or `Context::request_exec_view` (close command) | [Modal execView → one loop](../port/modal.md) |
+| By-value modal results | `Program::exec_view_with<R>` (result by value) or `Context::request_exec_view` (record via `set_modal_data`, then close command via `set_modal_answer`) | [Modal execView → one loop](../port/modal.md) |
 
 [`FieldValue`]: ../api/tvision_rs/data/enum.FieldValue.html
 
@@ -126,5 +126,5 @@ Not everything is forced into `FieldValue` or routed through the pump:
   `exec_view_with`, `request_exec_view`, and the Info-box worked example.
 - [Cross-view brokering & ViewId](../internals/brokering.md) — the pump as
   broker: sync signals, scrollbar/scroller coordination, and broadcasts.
-- [Deviations D1–D13](../reference/deviations.md#d10) — D10 is the typed value
+- [Deviations D1–D15](../reference/deviations.md#d10) — D10 is the typed value
   protocol that replaced the `getData`/`setData` record transfer.

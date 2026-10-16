@@ -15,12 +15,27 @@ mechanism; modality is one use of it.
 
 ## Modality as a handler
 
-The modal handler is `ModalFrame`. While it sits on the capture stack it lets
-keyboard, command, and broadcast events pass through to normal routing — which
-reaches the modal view because the group focuses it — while positional (mouse)
-events are gated by the modal view's bounds: inside, they pass; outside, they are
-consumed and swallowed, so views beneath the dialog never see the click. That
-gate is exactly what "modal" means.
+The modal handler is `ModalFrame`. While it sits on the capture stack,
+positional (mouse) events are gated by the modal view's bounds: inside, they
+pass to normal routing; outside, the pump hands them to the modal view alone
+(in its own coordinates), so views beneath the dialog never see the click. A
+plain dialog ignores such a click; a history popup closes on it. That gate is
+exactly what "modal" means.
+
+Keys, commands, pastes and the mouse wheel pass the frame, but they do not take
+the root route. The pump hands them to the modal view alone, as C++
+`TGroup::execute` does. So the menu bar's hot keys (Alt+F, F3), Alt+1..9 window
+selection, the `Command::QUIT` catch, Tile and Cascade, and `run_app`'s command
+callback do not act while a modal runs. A command the modal does not handle is
+dropped, not kept for later (the C++ `eventError` path). Status-line keys are
+still converted first, in the pre-route, so Alt+X still posts
+`Command::QUIT`, which a dialog ignores, as in C++.
+
+Broadcasts keep the root route and reach the whole tree, also those queued
+while the modal is open. In C++ a broadcast that a dialog view posts with
+`putEvent` reaches only the modal view; tvision-rs queues all broadcasts
+through one channel and cannot tell them apart, so receivers filter by
+`source`. A timer expiry also reaches the whole tree.
 
 ## `exec_view` steers the one loop
 
@@ -156,7 +171,7 @@ The full lifecycle of `exec_view` maps each C++ step to a tvision-rs equivalent:
 | `setCurrent(p, enterSelect)` | `group.set_current(id, SelectMode::Enter, &mut ctx)` |
 | Push capture — none in C++ | Push a `ModalFrame` onto the capture stack |
 | `p->execute()` — a nested loop | Steer the **same** pump loop; no new loop |
-| `ClearEvent` on every unhandled event | The `ModalFrame` swallows outside-bounds mouse events |
+| `p->handleEvent` on every event; `eventError` drops the rest | Keys, commands, pastes and the wheel go to the modal view alone; an unhandled command is dropped; outside-bounds mouse events go to the modal view |
 | Pop capture — none in C++ | Pop the `ModalFrame` |
 | `remove(p)`; restore focus | `group.remove(id, &mut ctx)`; restore previous current |
 | Restore command set | Restore `disabled_commands` |

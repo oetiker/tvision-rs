@@ -74,6 +74,14 @@ event *is* the modal loop. A timer expiry skips the capture stack: C++
 delivers it from `idle` inside the getEvent of every hold loop, so a drag or an
 open menu must not swallow it.
 
+While a modal view runs, `program_handle_event` does not use the root route
+for keys, commands, pastes and the mouse wheel. It hands them to the innermost
+modal view alone (`CaptureStack::modal_view`), as C++ `TGroup::execute` does,
+and drops a command the modal leaves unhandled. The program-level steps (menu
+bar hot keys, Alt+1..9, the `Command::QUIT` catch, Tile and Cascade,
+`run_app`'s callback) see none of these events. Mouse clicks and broadcasts
+keep the root route; broadcasts reach the whole tree.
+
 ### The deferred drain
 
 A view is borrowed *downward* during dispatch as `&mut dyn View` plus a
@@ -229,6 +237,7 @@ cursor — is placed on the renderer before the redraw step:
 ```rust,ignore
 // src/app/program.rs — end of pump_once
 let cursor = group.cursor_request()   // descends through current children
+    .filter(|p| root_extent.contains(*p)) // hidden past the screen edge
     .map(|p| p + group_origin)
     .map(|p| (p.x.max(0) as u16, p.y.max(0) as u16));
 renderer.set_cursor(cursor);
@@ -248,6 +257,13 @@ A view that wants no cursor simply leaves `cursor_vis = false`; it never calls
 `show_cursor`. A view that loses focus keeps whatever `cursor_vis` value it
 had, but the walk only descends through *focused* children, so the cursor is
 hidden automatically until the view is focused again.
+
+The walk also clips the cursor, as C++ `TVCursor` does. Each group on the
+chain returns `None` when it or its current child is hidden, when the cursor
+lies outside the child's extent, or when a visible sibling above the child in
+Z-order covers the cursor cell. So the cursor disappears when it is scrolled
+out of its field, when it is outside the window that holds it, past the screen
+edge, or under another window.
 
 **Sources:** `State::cursor_ins` / `block_cursor` / `normal_cursor` /
 `View::caret_size` in `src/view/view.rs`; `Group::cursor_request` /

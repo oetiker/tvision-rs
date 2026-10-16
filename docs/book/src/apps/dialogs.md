@@ -164,6 +164,10 @@ order via `set_value`. Children with no transferable value (labels, decorative
 views) are skipped in both directions; the list contains only the slots that
 produce a value, so the index order matches the sequence of *data-bearing* children.
 
+`Dialog::value()` returns the same record (`gather_list()`), so a dialog
+nested in another group, or a view that delegates `value` to a dialog, hands
+over its whole record through the ordinary `value()` call.
+
 ### The `Custom` seam and third-party controls
 
 For richer payloads — a date range, a colour swatch, a structured selection — a

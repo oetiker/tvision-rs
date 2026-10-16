@@ -49,16 +49,18 @@ The capture stack is the single backbone under several features that look
 unrelated on the surface:
 
 - **Modal dialogs.** A modal dialog pushes a `ModalFrame`. While it is on the
-  stack, keyboard, command, and broadcast events pass through (and reach the
-  dialog because the group focuses it); mouse events are gated by the dialog's
-  bounds — inside, they pass; outside, they are consumed and swallowed, so the
-  windows beneath never see the click. That gate is exactly what "modal" means.
-  See [Modal `execView`](modal.md).
+  stack, mouse events are gated by the dialog's bounds: inside, they pass;
+  outside, the pump hands them to the dialog alone, so the windows beneath never
+  see the click. That gate is exactly what "modal" means. Keys, commands,
+  pastes and the mouse wheel pass the frame and then go to the dialog alone;
+  broadcasts pass and reach the whole tree. See [Modal `execView`](modal.md).
 
 - **Window drag and resize.** Grabbing a window's title bar or a resize corner in
   the [`Frame`](../api/tvision_rs/frame/struct.Frame.html) pushes a drag handler that
   owns the mouse until you let go, translating each move into a new window
-  position or size.
+  position or size. The drag handler, the keyboard-resize handler and an open
+  menu consume every other event while they hold the input, broadcasts
+  included.
 
 - **Press-and-hold across the widgets.** When you press and hold on a control,
   the widget pushes a mouse-tracking capture that forwards masked move/auto-repeat

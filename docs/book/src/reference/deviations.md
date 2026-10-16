@@ -88,7 +88,10 @@ becomes [`Program::exec_view_with`](../api/tvision_rs/app/struct.Program.html#me
 (queues `Deferred::OpenModal`; reuses the existing `pending_modal` +
 `RouteModalAnswer` machinery; the modal's record is routed back via
 `set_modal_data` unless the close command is `Command::CANCEL`, then the close
-command via `set_modal_answer`).
+command via `set_modal_answer`). As in C++, keys, commands, pastes and the
+mouse wheel go to the modal view alone while it runs, and a command it leaves
+unhandled is dropped; status-line keys still pre-route. Remaining difference:
+broadcasts queued under a modal reach the whole tree, not only the modal view.
 → [Modal execView](../port/modal.md)
 
 ### D10 · Data transfer → typed value protocol {#d10}

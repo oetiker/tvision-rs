@@ -51,10 +51,14 @@ impl View for TwoPanes {
 }
 ```
 
-Do not use `View::on_bounds_changed` for this. The pump calls it only after it
-applies a bounds request made with `Context::request_bounds` (for example a
-window drag) and on a few window-chrome paths. It is not called for the views
-that a resize cascade reaches through `change_bounds`.
+[`View::on_bounds_changed`](../api/tvision_rs/view/trait.View.html#method.on_bounds_changed)
+is the second half of a resize. Every resize path (a window drag or
+`Context::request_bounds`, zoom, tile and cascade, a moved splitter divider, a
+terminal resize) ends with this call on the view it re-bounded, and a `Group`
+whose size changed forwards it to every child, so it reaches views at any
+depth. It gets a `Context`, so use it for work that needs one, such as
+publishing new scroll-bar limits; `Scroller` and the list viewers do this. Do
+the layout itself in `change_bounds`, which runs first.
 
 ## The cursor of an embedded terminal or custom view
 
@@ -76,7 +80,9 @@ if visible { st.show_cursor() } else { st.hide_cursor() }
 
 When the view loses focus the cursor disappears, and it comes back when focus
 returns. This is intended: one cursor exists on the screen, and it belongs to
-the view that receives the keys. Keep the position inside the view's size.
+the view that receives the keys. Keep the position inside the view's size:
+the pump hides a cursor that lies outside the view, outside an owner on the
+chain, past the screen edge, or under another window.
 
 ## Modal dialogs, help context and key bindings
 
