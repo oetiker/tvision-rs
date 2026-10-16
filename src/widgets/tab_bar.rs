@@ -19,7 +19,7 @@ use crate::event::{Event, Key, hot_key};
 use crate::theme::Role;
 use crate::view::{Context, DrawCtx, Point, Rect, View, ViewState};
 
-/// A horizontal single-row tab selector. See the [module docs](self).
+/// A horizontal single-row tab selector. See the module docs.
 pub struct TabBar {
     /// View state (geometry, flags) — the composition target.
     pub state: ViewState,

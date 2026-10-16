@@ -153,6 +153,14 @@ validator-transfer path. Focus behaviour is separate: see
   mirrors their value into its own scroll offset, and pushes range changes back
   to them. The wiring between a scroller and its bars is brokered by the event
   loop — see [Cross-view brokering](../internals/brokering.md).
+- [`Table`](../api/tvision_rs/widgets/table/struct.Table.html) (a tvision-rs extension;
+  Turbo Vision has no table): a multi-column list under a click-to-sort
+  header. Rows come from a `TableModel` and keep a stable `RowKey`, so focus and
+  the marked rows follow the record through a re-sort or reload. Columns can be
+  resized, moved and hidden with the mouse (`column_layout` /
+  `set_column_layout` save the arrangement), and cells of `editable` columns
+  are edited in place with Enter, F2 or a double-click. See the
+  [gallery](../gallery.md#table) for the full behaviour.
 
 ## Validators
 

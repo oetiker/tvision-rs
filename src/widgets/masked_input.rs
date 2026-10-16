@@ -4,7 +4,7 @@
 
 use crate::data::FieldValue;
 use crate::event::Event;
-use crate::view::{Context, DrawCtx, Group, Rect, View, ViewId, ViewState};
+use crate::view::{Context, DrawCtx, Group, Rect, View, ViewId};
 use crate::widgets::{InputLine, RevealEye, RevealEyeConfig};
 
 /// See the module docs.
@@ -89,12 +89,6 @@ impl MaskedInput {
 
 #[crate::delegate(to = group)]
 impl View for MaskedInput {
-    fn state(&self) -> &ViewState {
-        self.group.state()
-    }
-    fn state_mut(&mut self) -> &mut ViewState {
-        self.group.state_mut()
-    }
     fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
         Some(self)
     }

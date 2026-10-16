@@ -280,7 +280,7 @@ impl View for Desktop {
     /// each tileable window a cell. The first-visited (topmost) window takes the
     /// highest-numbered slot. If a cell would be zero-width or zero-height the
     /// layout is abandoned and bounds are left unchanged. `owner_size` is the
-    /// desktop size, fed to each child's size limits inside [`locate`].
+    /// desktop size, fed to each child's size limits inside `locate`.
     fn tile(&mut self, r: Rect) {
         let ids = self.group.tileable_ids(); // visit order
         let n = ids.len() as i32; // tileable window count
@@ -303,6 +303,9 @@ impl View for Desktop {
             }
             tile_num -= 1;
         }
+        // The windows were re-bounded here, not by the group cascade: let the
+        // caller's `on_bounds_changed` reach them.
+        self.group.mark_bounds_dirty();
     }
 
     /// Stack the tileable windows, each offset one cell down-and-right from the
@@ -343,6 +346,7 @@ impl View for Desktop {
                 cascade_num -= 1;
             }
         }
+        self.group.mark_bounds_dirty();
     }
 }
 

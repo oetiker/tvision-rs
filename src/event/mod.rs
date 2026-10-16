@@ -2,7 +2,7 @@
 //!
 //! [`Event`] is the sum type a [`View`](crate::view::View) matches arm-by-arm:
 //! mouse presses/releases/moves/wheel, key presses, commands, broadcasts,
-//! timer expiries, and paste. The keyboard side lives in the [`key`] submodule
+//! timer expiries, and paste. The keyboard side lives in the `key` submodule
 //! ([`Key`], [`KeyEvent`], [`KeyModifiers`]); the mouse record ([`MouseEvent`])
 //! and the [`EventMask`] opt-in for expensive event classes live here.
 //!
@@ -41,7 +41,7 @@ use crate::view::{Point, ViewId};
 
 /// An event a [`View`](crate::view::View) handles, matched arm-by-arm.
 ///
-/// Match on an `&Event` in [`View::handle`](crate::view::View::handle) to
+/// Match on an `&Event` in [`View::handle_event`](crate::view::View::handle_event) to
 /// selectively react to the cases you care about; return the event unchanged to
 /// let it propagate, or call [`Event::clear`] (or assign `*ev = Event::Nothing`)
 /// to consume it. [`Event::Nothing`] serves dual duty: it is both "no pending
@@ -115,7 +115,7 @@ pub enum Event {
 impl Event {
     /// Mark this event as handled by setting it to [`Event::Nothing`].
     ///
-    /// Call this inside a [`View::handle`](crate::view::View::handle)
+    /// Call this inside a [`View::handle_event`](crate::view::View::handle_event)
     /// implementation when your view has fully processed the event and no other
     /// view should see it. After `clear()` the caller can call
     /// [`is_nothing`](Self::is_nothing) to confirm the event was consumed.
@@ -227,20 +227,24 @@ pub struct MouseButtons {
 /// The magiblot `eventFlags: ushort` bitmask (`meMouseMoved = 0x01`,
 /// `meDoubleClick = 0x02`, `meTripleClick = 0x04`) becomes a struct-of-bools
 /// extending the 1992 guide's single `Double: Boolean` field.
-/// The 1992 guide's `DoubleDelay: Word` global (double-click interval in
-/// 1/18.2 s DOS timer ticks) has no equivalent: the double-click interval is
-/// determined by the OS/terminal and delivered by crossterm; it cannot be
-/// overridden at application level.
+/// The click count is computed by the event loop, as in magiblot's
+/// `TEventQueue::getMouseEvent`: a press with the same buttons on the same
+/// cell as the previous press, at most 440 ms later (the 1992 guide's
+/// `DoubleDelay` of 8 ticks × 55 ms), is a double click; the next such press is
+/// a triple click; the one after that is a single click again. Apps tune the
+/// interval with [`Program::set_double_delay_ms`](crate::app::Program::set_double_delay_ms).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MouseEventFlags {
-    /// This press completed a double click (two clicks within the platform
-    /// double-click interval).
+    /// This press completed a double click (the second press with the same
+    /// buttons on the same cell within the double-click interval, default
+    /// 440 ms).
     ///
     /// Check this flag in a [`Event::MouseDown`] handler to distinguish a
-    /// double-click from a single click. The timing interval is OS-defined and
-    /// delivered pre-computed by the crossterm backend.
+    /// double-click from a single click. The event loop computes it for every
+    /// backend; a flag a backend sets itself is overwritten.
     pub double_click: bool,
-    /// This press completed a triple click.
+    /// This press completed a triple click (the press after a double click,
+    /// same buttons, same cell, within the double-click interval).
     pub triple_click: bool,
     /// The mouse moved since the last event.
     pub mouse_moved: bool,

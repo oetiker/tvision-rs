@@ -20,7 +20,7 @@ that is native Rust.
   batches" are an efficiency, not a
   competing direction).
 - **`docs/PORTING-GUIDE.md`** — the deviation reference. We port *faithfully*
-  from the C++; this guide documents **only the places we deviate** (D1–D13),
+  from the C++; this guide documents **only the places we deviate** (D1–D15),
   each as *Baseline → Deviation → Integration*. Appendix A = C++→Rust symbol
   lookup. Appendix B = the **mechanical per-class porting recipe**.
 - **`docs/design/`** — design notes for cross-cutting seams (e.g.

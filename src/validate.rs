@@ -919,7 +919,7 @@ impl<'a> Picture<'a> {
 ///
 /// The matching engine is a recursive state machine. Its scan cursors are pure
 /// per-call scratch, not validator state, so — because the [`Validator`] methods
-/// are `&self` (object-safe) — that scratch lives in a transient [`Picture`]
+/// are `&self` (object-safe) — that scratch lives in a transient `Picture`
 /// created fresh per call. Operation is byte-level.
 ///
 /// # Turbo Vision heritage
@@ -1131,7 +1131,7 @@ impl RegexValidator {
 impl Validator for RegexValidator {
     /// The whole input matches the pattern (a complete, valid value).
     ///
-    /// The regex analogue of [`PicResult::Complete`] in the picture validator:
+    /// The regex analogue of `PicResult::Complete` in the picture validator:
     /// both the start and end anchors must be satisfied.
     fn is_valid(&self, s: &str) -> bool {
         let (dead, st) = self.walk(s);

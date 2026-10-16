@@ -372,7 +372,7 @@ impl OutlineViewerState {
 ///
 /// **Wiring caveat (no compile-time enforcement):** a concrete outline widget MUST
 /// delegate the relevant `View` methods to this module's free functions: [`ov_draw`],
-/// [`ov_handle_event`], [`ov_set_state`], and [`View::as_any_mut`](crate::view::View::as_any_mut)
+/// [`ov_handle_event`], [`ov_set_state`], and [`View::as_any_mut`]
 /// (the cross-view broker downcasts through it).
 ///
 /// # Turbo Vision heritage
@@ -916,7 +916,7 @@ pub fn adjust_focus<L: OutlineViewer + ?Sized>(
 /// focus.
 ///
 /// This is invoked automatically on first display or interaction via
-/// [`ensure_seeded`], so you only need to call it explicitly after mutating the
+/// `ensure_seeded`, so you only need to call it explicitly after mutating the
 /// tree (node inserted, removed, or expanded/collapsed programmatically).
 ///
 /// Internally this counts only the currently-visible nodes (collapsed subtrees
@@ -1552,7 +1552,7 @@ impl OutlineViewer for Outline {
     ///
     /// Unlike the C++ `TOutline::adjust`, which takes a raw node pointer,
     /// this implementation takes a DFS position index. It walks the owned tree
-    /// with [`set_expanded_at_pos`] to find and mutate the node — making the
+    /// with `set_expanded_at_pos` to find and mutate the node — making the
     /// shared traversal code position-keyed throughout rather than mixing
     /// positions and pointers.
     fn adjust(&mut self, pos: i32, expand: bool) {

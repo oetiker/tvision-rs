@@ -147,7 +147,7 @@ pub struct Button {
     /// [`GRAB_DEFAULT`](Button::GRAB_DEFAULT) / [`RELEASE_DEFAULT`](Button::RELEASE_DEFAULT)
     /// broadcasts. Read this field to query the live default state; to *change*
     /// it programmatically, send the appropriate broadcast or call
-    /// [`make_default`](Button::make_default).
+    /// `make_default`.
     pub am_default: bool,
     /// The in-flight press-flash timer, if armed.
     pub animation_timer: Option<TimerId>,
@@ -297,7 +297,7 @@ impl View for Button {
 
     /// Exposes the concrete `Button` so the pump's
     /// [`MakeButtonDefault`](crate::view::Deferred::MakeButtonDefault) broker can
-    /// downcast a sibling button and call [`make_default`](Button::make_default).
+    /// downcast a sibling button and call `make_default`.
     fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
         Some(self)
     }
@@ -531,7 +531,7 @@ impl View for Button {
 
     /// Flip the propagating flag (replicating the trait-default body, since Rust
     /// has no `super` for a default method) then, for [`StateFlag::Focused`], run
-    /// [`make_default`](Button::make_default). No explicit redraw is needed on
+    /// `make_default`. No explicit redraw is needed on
     /// select/activate (the whole tree is redrawn each pass).
     ///
     /// Replicate-then-extend (the `Group::set_state` shape): flip the flag and, on

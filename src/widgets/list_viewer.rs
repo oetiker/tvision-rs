@@ -30,7 +30,7 @@
 //! naming one of its bars as `source`, the list requests
 //! [`Deferred::ScrollSync`](crate::view::Deferred::ScrollSync); the pump
 //! reads both bars' `value`s and calls back through
-//! [`View::apply_scroll_sync`](crate::view::View::apply_scroll_sync) →
+//! [`View::apply_scroll_sync`] →
 //! [`apply_scroll`].
 //!
 //! ## Termination
@@ -292,9 +292,9 @@ impl ListRoles {
 ///
 /// **Wiring caveat (no compile-time enforcement):** a concrete list widget MUST
 /// delegate ALL of these `View` methods to this module's free functions:
-/// [`draw`], [`handle_event`], [`set_state`], [`View::cursor_request`](crate::view::View::cursor_request)
-/// → [`focused_cursor`], [`View::apply_scroll_sync`](crate::view::View::apply_scroll_sync)
-/// → [`apply_scroll`], and [`View::as_any_mut`](crate::view::View::as_any_mut)
+/// [`draw`], [`handle_event`], [`set_state`], [`View::cursor_request`]
+/// → [`focused_cursor`], [`View::apply_scroll_sync`]
+/// → [`apply_scroll`], and [`View::as_any_mut`]
 /// (the cross-view broker downcasts through it). In particular, forgetting to
 /// override `apply_scroll_sync` is **silent** — its base default is a no-op, so the
 /// widget compiles but loses all scrollbar read-sync with no error. (See `FakeList`
@@ -333,6 +333,16 @@ pub trait ListViewer: View {
     /// Override in a multi-select widget to mark additional items as selected.
     fn is_selected(&self, item: i32) -> bool {
         item == self.lv().focused
+    }
+
+    /// An optional per-item [`Role`] for a **normal** row — one that is neither
+    /// the focused cursor item nor selected. Only the role's **foreground** is
+    /// used: the row keeps the list's surface background, so a tinted row
+    /// still reads as part of the list. `None` (the default) keeps the plain
+    /// surface colour. A table uses it to tint a whole row (a dimmed or an
+    /// error row); the focused and selected colours always win over it.
+    fn item_role(&self, _item: i32) -> Option<Role> {
+        None
     }
 
     /// Called when the user commits to `item` (double-click, Space, or Enter).
@@ -1075,6 +1085,13 @@ pub fn draw<L: ListViewer + ?Sized>(this: &mut L, ctx: &mut DrawCtx) {
                 focused_color.unwrap_or(normal)
             } else if item < range && this.is_selected(item) {
                 selected
+            } else if item < range
+                && let Some(role) = this.item_role(item)
+            {
+                crate::color::Style {
+                    fg: ctx.style(role).fg,
+                    ..normal
+                }
             } else {
                 normal
             };
@@ -1126,7 +1143,7 @@ pub fn draw<L: ListViewer + ?Sized>(this: &mut L, ctx: &mut DrawCtx) {
 
 /// The view-local cursor position the focused cell sits at, or `None` if no
 /// focused cell is visible. Computed `&self`-only so a concrete widget can
-/// surface it via [`View::cursor_request`](crate::view::View::cursor_request).
+/// surface it via [`View::cursor_request`].
 ///
 /// The cursor position is derived on demand here — under the read-only `&self`
 /// draw and top-down cursor walk, `draw` does not place the cursor itself.

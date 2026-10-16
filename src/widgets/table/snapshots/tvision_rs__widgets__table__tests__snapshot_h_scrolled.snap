@@ -1,0 +1,25 @@
+---
+source: src/widgets/table/tests.rs
+expression: "fx.render(21, H as u16)"
+---
+size: 21x6
+cursor: hidden
+text:
+|     ME       STATE  |
+| [X] b        running|
+| [ ]          exited |
+| [ ] che      running|
+| [ ] rker-lo… paused |
+|                     |
+attr:
+|aaaaaaaaaaaaaaaaaaaaa|
+|bbbbbbbbbbbbbbbbbbbbb|
+|ccccccccccccccccccccc|
+|ccccccccccccccccccccc|
+|ccccccccccccccccccccc|
+|ccccccccccccccccccccc|
+legend:
+  . default
+  a fg=RGB(255,255,85) bg=RGB(0,0,170)
+  b fg=RGB(255,255,255) bg=RGB(0,170,0)
+  c fg=RGB(0,0,0) bg=RGB(0,170,170)

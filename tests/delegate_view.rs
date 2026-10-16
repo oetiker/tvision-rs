@@ -85,6 +85,10 @@ impl View for Spy {
         self.mark("cursor_request");
         None
     }
+    fn caret_size(&self) -> u8 {
+        self.mark("caret_size");
+        1
+    }
     fn find_mut(&mut self, _id: ViewId) -> Option<&mut dyn View> {
         self.mark("find_mut");
         None
@@ -238,6 +242,9 @@ fn delegate_forwards_every_known_view_method() {
     // -- cursor_request -----------------------------------------------------
     let _ = d.cursor_request();
 
+    // -- caret_size ---------------------------------------------------------
+    let _ = d.caret_size();
+
     // -- find_mut / remove_descendant / focus_descendant -------------------
     let id = ViewId::next();
     let _ = d.find_mut(id);
@@ -357,6 +364,7 @@ fn delegate_forwards_every_known_view_method() {
         "calc_bounds",
         "change_bounds",
         "cursor_request",
+        "caret_size",
         "find_mut",
         "remove_descendant",
         "focus_descendant",

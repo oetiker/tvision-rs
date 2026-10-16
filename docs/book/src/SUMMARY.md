@@ -35,6 +35,7 @@
 - [Keyboard & key mapping](apps/keyboard.md)
 - [Theming & colors](apps/theming.md)
 - [Text editing](apps/text-editing.md)
+- [Common app patterns](apps/patterns.md)
 
 # Widget Gallery
 
@@ -53,5 +54,5 @@
 
 - [How the API docs are organized](reference/api.md)
 - [C++ Turbo Vision → tvision-rs symbol map](reference/symbol-map.md)
-- [Deviations D1–D13](reference/deviations.md)
+- [Deviations D1–D15](reference/deviations.md)
 - [The screenshot tooling](reference/screenshots.md)

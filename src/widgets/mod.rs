@@ -16,7 +16,7 @@
 //! screen attributes, used only inside the old color dialog — is intentionally
 //! not ported. The color picker was rebuilt (see [`crate::dialog::ColorPicker`])
 //! and needs no mono-attribute selector; the general tabbed-selection idiom is
-//! covered by [`TabBar`](crate::widgets::TabBar).
+//! covered by [`TabBar`].
 
 mod button;
 mod cluster;
@@ -35,6 +35,7 @@ mod scroller;
 pub mod splitter;
 mod static_text;
 mod tab_bar;
+pub mod table;
 pub mod terminal;
 
 pub use button::{Button, ButtonFlags};
@@ -60,4 +61,8 @@ pub use scroller::Scroller;
 pub use splitter::{Constraints, DividerStyle, Orientation, Splitter};
 pub use static_text::{Label, ParamText, StaticText};
 pub use tab_bar::TabBar;
+pub use table::{
+    Align, ColumnSpec, ColumnState, RowKey, SelectionMode, SortDir, SortKey, Table, TableModel,
+    ValidatorFactory, VecModel,
+};
 pub use terminal::{Terminal, TextDevice};

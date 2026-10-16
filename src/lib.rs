@@ -125,6 +125,99 @@ pub use screen::{Buffer, Cell, DrawBuffer};
 pub use status::{HelpCtxRange, StatusColors, StatusDef, StatusItem, StatusLine};
 pub use theme::{Role, SurfaceRoles, Theme};
 pub use timer::{Clock, ManualClock, SystemClock, TimerId, TimerQueue};
+/// Embed-and-delegate: forward the un-written `View` methods to an inner view.
+///
+/// The delegate field owns the view's one `ViewState`, so the macro forwards
+/// `state`/`state_mut` too. This compiles and forwards everything:
+///
+/// ```
+/// use tvision_rs::{Group, Rect, View, delegate};
+///
+/// struct Panel {
+///     group: Group,
+/// }
+///
+/// #[delegate(to = group)]
+/// impl View for Panel {}
+///
+/// let p = Panel { group: Group::new(Rect::new(0, 0, 10, 5)) };
+/// assert_eq!(p.state().get_bounds(), Rect::new(0, 0, 10, 5));
+/// ```
+///
+/// A hand-written `state`/`state_mut` is accepted only when its body is the
+/// forwarder the macro would generate anyway. It is redundant; leave it out:
+///
+/// ```
+/// use tvision_rs::{Group, View, ViewState, delegate};
+///
+/// struct Panel {
+///     group: Group,
+/// }
+///
+/// #[delegate(to = group)]
+/// impl View for Panel {
+///     fn state(&self) -> &ViewState {
+///         self.group.state()
+///     }
+///     fn state_mut(&mut self) -> &mut ViewState {
+///         self.group.state_mut()
+///     }
+/// }
+/// ```
+///
+/// Parentheses around the receiver are accepted too:
+///
+/// ```
+/// use tvision_rs::{Group, View, ViewState, delegate};
+///
+/// struct Panel {
+///     group: Group,
+/// }
+///
+/// #[delegate(to = group)]
+/// impl View for Panel {
+///     fn state(&self) -> &ViewState {
+///         (self.group).state()
+///     }
+/// }
+/// ```
+///
+/// Any other `state`/`state_mut` body is a compile error: it would be a second
+/// `ViewState` that every forwarded method ignores.
+///
+/// ```compile_fail
+/// use tvision_rs::{Group, View, ViewState, delegate};
+///
+/// struct Panel {
+///     group: Group,
+///     st: ViewState,
+/// }
+///
+/// #[delegate(to = group)]
+/// impl View for Panel {
+///     fn state(&self) -> &ViewState {
+///         &self.st
+///     }
+///     fn state_mut(&mut self) -> &mut ViewState {
+///         &mut self.st
+///     }
+/// }
+/// ```
+///
+/// `skip(state)` / `skip(state_mut)` is rejected for the same reason. This
+/// example documents the rule; rustc would reject it anyway (E0046, missing
+/// required trait item), so the macro's check only gives a clearer message:
+///
+/// ```compile_fail
+/// use tvision_rs::{Group, View, delegate};
+///
+/// struct Panel {
+///     group: Group,
+/// }
+///
+/// #[delegate(to = group, skip(state))]
+/// impl View for Panel {}
+/// ```
 pub use tvision_rs_macros::delegate;
 pub use validate::{
     FilterValidator, LookupValidator, PXPictureValidator, RangeValidator, RegexError,
@@ -139,6 +232,7 @@ pub use widgets::PageStack;
 pub use widgets::TabBar;
 pub use widgets::{Button, ButtonFlags};
 pub use widgets::{CheckBoxes, Cluster, ClusterKind, MultiCheckBoxes, RadioButtons};
+pub use widgets::{ColumnSpec, ColumnState, RowKey, Table, TableModel, ValidatorFactory, VecModel};
 pub use widgets::{Constraints, DividerStyle, Orientation, Splitter};
 pub use widgets::{
     EditWindow, Editor, FindMode, InputLine, LimitMode, ListBox, ListRoles, ListViewer,

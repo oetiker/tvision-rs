@@ -101,7 +101,7 @@ struct Child {
 
 /// A view that owns and routes to a tree of child views.
 ///
-/// See the [module docs](self) for the sibling-ring↔`Vec` Z-order mapping. Build
+/// See the module docs for the sibling-ring↔`Vec` Z-order mapping. Build
 /// with [`Group::new`], add children with [`Group::insert`], and drive it as any
 /// other [`View`] (`draw` / `handle_event` / …).
 ///
@@ -121,6 +121,12 @@ pub struct Group {
     /// currency. Settled by [`View::settle_currency`]; cleared by any explicit
     /// [`set_current`](Group::set_current).
     currency_dirty: bool,
+    /// The children were re-bounded by a size-changing
+    /// [`change_bounds`](View::change_bounds) since the last
+    /// [`on_bounds_changed`](View::on_bounds_changed) — a pending request to
+    /// hand every child its own `on_bounds_changed` (the `Context`-bearing half
+    /// of the C++ child `changeBounds` cascade). Cleared when forwarded.
+    bounds_dirty: bool,
     /// Opt-in background surface: `Some((normal, inactive))` fills the group's
     /// extent before children draw, keyed on the group's own `focused` flag.
     /// `None` (the default) — the group paints nothing; children cover it.
@@ -158,8 +164,17 @@ impl Group {
             children: Vec::new(),
             current: None,
             currency_dirty: false,
+            bounds_dirty: false,
             surface: None,
         }
+    }
+
+    /// Record that the children were re-bounded outside
+    /// [`change_bounds`](View::change_bounds) (a container that lays its
+    /// children out itself), so the next
+    /// [`on_bounds_changed`](View::on_bounds_changed) forwards to every child.
+    pub(crate) fn mark_bounds_dirty(&mut self) {
+        self.bounds_dirty = true;
     }
 
     /// The current (selected) child's id, if any.
@@ -1120,6 +1135,26 @@ impl View for Group {
                 let r = self.children[i].view.calc_bounds(owner_size, delta);
                 self.children[i].view.change_bounds(r);
             }
+            self.bounds_dirty = true;
+        }
+    }
+
+    /// Forward [`on_bounds_changed`](View::on_bounds_changed) to every child when
+    /// the last [`change_bounds`](Self::change_bounds) resized them, so a list
+    /// viewer or scroller at any depth re-publishes its scroll-bar state. A move
+    /// without a size change re-bounds no child and forwards nothing.
+    ///
+    /// # Turbo Vision heritage
+    /// `TGroup::changeBounds` calls `changeBounds` on every child after a size
+    /// change, and `TListViewer`/`TScroller::changeBounds` re-publish inline.
+    /// Here `change_bounds` has no `Context`, so the re-publish half runs in this
+    /// hook; the dirty flag carries "the children were re-bounded" from one call
+    /// to the other.
+    fn on_bounds_changed(&mut self, ctx: &mut Context) {
+        if std::mem::take(&mut self.bounds_dirty) {
+            for child in self.children.iter_mut() {
+                child.view.on_bounds_changed(ctx);
+            }
         }
     }
 
@@ -1144,18 +1179,60 @@ impl View for Group {
 
     /// Descend into the `current` child to find where the hardware cursor should
     /// sit, accumulating the child's `origin` so the result is in this group's
-    /// coordinate frame. `None` if there is no current child or it wants no cursor
-    /// shown. The event loop walks this chain from the root to place the cursor.
+    /// coordinate frame. The event loop walks this chain from the root to place
+    /// the cursor.
+    ///
+    /// `None` (caret hidden) if there is no current child or it wants no cursor
+    /// shown, if this group or the child is hidden, if the caret lies outside the
+    /// child's extent, or if a visible sibling above the child in Z-order covers
+    /// the caret cell. Each level checks its own child, so a caret scrolled out
+    /// of any owner on the chain is hidden; the root's own extent is checked by
+    /// the caller.
     ///
     /// # Turbo Vision heritage
-    /// The group case of the focused-chain cursor walk (`TView::resetCursor`).
+    /// The group case of the focused-chain cursor walk (`TView::resetCursor`),
+    /// with the clipping of `TVCursor::computeCaretSize` / `caretCovered`
+    /// (`tvcursor.cpp`): there the walk runs bottom-up from the focused view;
+    /// here it runs top-down over the same chain and applies the same tests.
     fn cursor_request(&self) -> Option<Point> {
+        if !self.st.state.visible {
+            return None;
+        }
         let i = self.current.and_then(|id| self.index_of(id))?;
-        let child = &self.children[i];
-        child
-            .view
-            .cursor_request()
-            .map(|p| p + child.view.state().origin)
+        let cs = self.children[i].view.state();
+        if !cs.state.visible {
+            return None;
+        }
+        let p = self.children[i].view.cursor_request()?;
+        if !(0 <= p.x && p.x < cs.size.x && 0 <= p.y && p.y < cs.size.y) {
+            return None;
+        }
+        let p = p + cs.origin;
+        let covered = self.children[i + 1..].iter().any(|u| {
+            let us = u.view.state();
+            us.state.visible && us.get_bounds().contains(p)
+        });
+        if covered { None } else { Some(p) }
+    }
+
+    /// The caret size of the current child (recursively) — the view whose
+    /// caret [`cursor_request`](View::cursor_request) places. Falls back to
+    /// the group's own state when there is no current child.
+    ///
+    /// # Turbo Vision heritage
+    /// `TVCursor::decideCaretSize` reads `sfCursorIns` of the view whose
+    /// `resetCursor` runs: the focused leaf at the end of this chain.
+    fn caret_size(&self) -> u8 {
+        match self.current.and_then(|id| self.index_of(id)) {
+            Some(i) => self.children[i].view.caret_size(),
+            None => {
+                if self.st.state.cursor_ins {
+                    crate::backend::CARET_INSERT
+                } else {
+                    crate::backend::CARET_NORMAL
+                }
+            }
+        }
     }
 
     /// The group's [`View::find_mut`] override — the recursive tree-walk.
@@ -1412,7 +1489,7 @@ impl View for Group {
     /// `ctx.set_owner_size(self.size)` / restore so a child can read its owner's
     /// size (e.g. a window computing its zoomed bounds). The restore is
     /// **unconditional** because the actual routing lives in
-    /// [`route_event`](Self::route_event), which may `return` early — the bracket
+    /// `route_event`, which may `return` early — the bracket
     /// here guarantees a parent group's later sibling deliveries never see this
     /// group's size.
     ///
@@ -1443,6 +1520,44 @@ impl View for Group {
 }
 
 impl Group {
+    /// Hand a focused event or a mouse wheel to the executing modal view `id`
+    /// alone — the pump's realization of C++ `TGroup::execute` calling `p->handleEvent`
+    /// directly (tgroup.cpp:180), with none of this group's pre-/post-process
+    /// children involved. The modal sees this group as its owner: `ctx`
+    /// carries this group's size as the owner size (what keyboard
+    /// move/resize and zoom read) and the focused phase, both restored after.
+    ///
+    /// `exec_view` inserts the modal into the root group, so `id` is a direct
+    /// child; for a deeper `id` the view is found by id and the owner size is
+    /// left as the caller set it.
+    pub(crate) fn deliver_to_modal(&mut self, id: ViewId, ev: &mut Event, ctx: &mut Context) {
+        let Some(i) = self.index_of(id) else {
+            if let Some(v) = self.find_mut(id) {
+                v.handle_event(ev, ctx);
+            }
+            return;
+        };
+        let saved_owner_size = ctx.owner_size();
+        let saved_phase = ctx.phase();
+        ctx.set_owner_size(self.st.size);
+        ctx.set_phase(Phase::Focused);
+        // A mouse wheel carries a position: translate it into the modal's
+        // frame as `deliver` does, and propagate only the consumed state.
+        let origin = self.children[i].view.state().origin;
+        let mut local = ev.clone();
+        if let Some(p) = mouse_pos_mut(&mut local) {
+            *p -= origin;
+            self.children[i].view.handle_event(&mut local, ctx);
+            if local.is_nothing() {
+                ev.clear();
+            }
+        } else {
+            self.children[i].view.handle_event(ev, ctx);
+        }
+        ctx.set_phase(saved_phase);
+        ctx.set_owner_size(saved_owner_size);
+    }
+
     /// The three-phase router body of [`handle_event`](View::handle_event),
     /// extracted so the `owner_size` save/restore bracket in `handle_event` is
     /// unconditional even though this fn may `return` early.
@@ -2703,6 +2818,113 @@ mod tests {
         // No current child -> None.
         let empty = Group::new(Rect::new(0, 0, 20, 10));
         assert_eq!(empty.cursor_request(), None);
+    }
+
+    // -- 11b. cursor_request clips the caret (TVCursor::computeCaretSize) -----
+
+    /// A focused, cursor-visible probe at `bounds` with its cursor at `cursor`.
+    fn caret_probe(bounds: Rect, cursor: Point) -> Probe {
+        let mut p = Probe::new(bounds, 'A', Rc::new(RefCell::new(Vec::new())));
+        p.st.options.selectable = true;
+        p.st.state.focused = true;
+        p.st.state.cursor_vis = true;
+        p.st.cursor = cursor;
+        p
+    }
+
+    /// Insert `view` into `group` and make it current.
+    fn insert_current(group: &mut Group, view: Box<dyn View>) -> ViewId {
+        let mut out = VecDeque::new();
+        let mut timers = TimerQueue::new();
+        let id = group.insert(view);
+        with_ctx(&mut out, &mut timers, |ctx| {
+            group.set_current(Some(id), SelectMode::Normal, ctx)
+        });
+        id
+    }
+
+    #[test]
+    fn cursor_request_shows_caret_inside_view() {
+        let mut group = Group::new(Rect::new(0, 0, 20, 10));
+        insert_current(
+            &mut group,
+            Box::new(caret_probe(Rect::new(6, 4, 11, 9), Point::new(4, 4))),
+        );
+        assert_eq!(group.cursor_request(), Some(Point::new(10, 8)));
+    }
+
+    #[test]
+    fn cursor_request_hides_caret_beyond_view_width() {
+        let mut group = Group::new(Rect::new(0, 0, 20, 10));
+        // The probe is 5 wide: column 5 is the first cell past its right edge,
+        // although it still lies inside the group.
+        insert_current(
+            &mut group,
+            Box::new(caret_probe(Rect::new(6, 4, 11, 9), Point::new(5, 0))),
+        );
+        assert_eq!(group.cursor_request(), None);
+    }
+
+    #[test]
+    fn cursor_request_hides_caret_of_hidden_view() {
+        let mut group = Group::new(Rect::new(0, 0, 20, 10));
+        let id = insert_current(
+            &mut group,
+            Box::new(caret_probe(Rect::new(6, 4, 11, 9), Point::new(1, 1))),
+        );
+        group.child_mut(id).unwrap().state_mut().state.visible = false;
+        assert_eq!(group.cursor_request(), None);
+    }
+
+    #[test]
+    fn cursor_request_hides_caret_outside_owner() {
+        // The probe sticks out 3 columns to the left of the inner group; its
+        // caret at local (1, 0) lies at inner column -2.
+        let mut inner = Group::new(Rect::new(2, 2, 12, 6));
+        insert_current(
+            &mut inner,
+            Box::new(caret_probe(Rect::new(-3, 0, 5, 1), Point::new(1, 0))),
+        );
+        let mut outer = Group::new(Rect::new(0, 0, 20, 10));
+        insert_current(&mut outer, Box::new(inner));
+        assert_eq!(outer.cursor_request(), None);
+    }
+
+    #[test]
+    fn cursor_request_hides_caret_under_sibling_above() {
+        let mut group = Group::new(Rect::new(0, 0, 20, 10));
+        let id = insert_current(
+            &mut group,
+            Box::new(caret_probe(Rect::new(0, 0, 10, 5), Point::new(4, 2))),
+        );
+        // A non-current sibling above the probe in Z-order covers (4, 2).
+        group.insert(Box::new(Probe::new(
+            Rect::new(3, 1, 8, 4),
+            'B',
+            Rc::new(RefCell::new(Vec::new())),
+        )));
+        let mut out = VecDeque::new();
+        let mut timers = TimerQueue::new();
+        with_ctx(&mut out, &mut timers, |ctx| {
+            group.set_current(Some(id), SelectMode::Normal, ctx)
+        });
+        assert_eq!(group.cursor_request(), None);
+
+        // A sibling above that does not cover the caret cell leaves it shown.
+        let mut group = Group::new(Rect::new(0, 0, 20, 10));
+        let id = insert_current(
+            &mut group,
+            Box::new(caret_probe(Rect::new(0, 0, 10, 5), Point::new(4, 2))),
+        );
+        group.insert(Box::new(Probe::new(
+            Rect::new(5, 1, 8, 4),
+            'B',
+            Rc::new(RefCell::new(Vec::new())),
+        )));
+        with_ctx(&mut out, &mut timers, |ctx| {
+            group.set_current(Some(id), SelectMode::Normal, ctx)
+        });
+        assert_eq!(group.cursor_request(), Some(Point::new(4, 2)));
     }
 
     // -- 12. Z-reorder: put_in_front_of (the primitive) ----------------------

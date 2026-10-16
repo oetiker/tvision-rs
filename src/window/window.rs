@@ -435,7 +435,7 @@ impl Window {
 
     /// Override the drag mode after construction (the screen-edge limits the window
     /// honors while being dragged). Mirrors [`set_grow_mode`](Self::set_grow_mode):
-    /// a plain write to the embedded group's [`ViewState::drag_mode`].
+    /// a plain write to the embedded group's [`ViewState::drag_mode`](crate::view::ViewState::drag_mode).
     pub fn set_drag_mode(&mut self, drag_mode: DragMode) {
         self.group.state_mut().drag_mode = drag_mode;
     }
@@ -615,7 +615,7 @@ impl Window {
     /// [`fullscreen`](Self::fullscreen) and maximize). Toggling it:
     /// 1. flips the [`Frame`]'s `border_visible` (the inline downcast seam — the
     ///    only path that reaches the frame), and
-    /// 2. reflows content via [`reflow_client`](Self::reflow_client): the client
+    /// 2. reflows content via `reflow_client`: the client
     ///    area grows/shrinks by the border thickness, so each content child reacts
     ///    through its existing `grow_mode` plus a `(∓1, ∓1)` origin shift, exactly
     ///    as on a normal resize. Owned scroll bars are re-derived from the
@@ -833,6 +833,7 @@ impl Window {
         let owner_size = ctx.owner_size();
         let (_min, max) = View::size_limits(self, owner_size);
         self.locate(Rect::new(0, 0, max.x, max.y), owner_size);
+        View::on_bounds_changed(self, ctx);
         self.push_zoomed(true);
     }
 
@@ -843,6 +844,7 @@ impl Window {
         if let Some(r) = self.restore_rect.take() {
             let owner_size = ctx.owner_size();
             self.locate(r, owner_size);
+            View::on_bounds_changed(self, ctx);
         }
         self.push_zoomed(false);
     }
@@ -1085,6 +1087,8 @@ impl CaptureHandler for DragCapture {
             }
             // The drag is modal: swallow everything that is not a mouse-move/up
             // (auto-repeat, keys, commands, broadcasts) without moving the window.
+            // Timer expiries never get here (the pump routes them around the
+            // capture stack, as C++ `idle` delivers them inside the drag loop).
             _ => CaptureFlow::Consumed,
         }
     }
@@ -1474,9 +1478,9 @@ impl View for Window {
     /// * **Shift+Tab** → cycle focus backward + consume. Shift+Tab is `Key::Tab` +
     ///   the `shift` modifier (there is no separate back-tab key).
     /// * A surviving title-bar / bottom-corner / middle-button `MouseDown` →
-    ///   [`start_drag`](Self::start_drag) (which pushes a [`DragCapture`]).
+    ///   `start_drag` (which pushes a `DragCapture`).
     /// * **resize command** → enable the `Dragging` flag and push a
-    ///   [`KeyboardResizeCapture`] that handles arrow keys until Enter (accept) or
+    ///   `KeyboardResizeCapture` that handles arrow keys until Enter (accept) or
     ///   Esc (restore). The resize command is enabled in
     ///   [`set_state`](Self::set_state) when the window is selected and move or grow
     ///   is allowed.
@@ -1662,7 +1666,7 @@ impl View for Window {
     ///     [`handle_event`](Self::handle_event)).
     ///   - close: if close is allowed (handled in `handle_event`).
     ///   - resize: if move or grow is allowed (handled in `handle_event` →
-    ///     [`KeyboardResizeCapture`]).
+    ///     `KeyboardResizeCapture`).
     fn set_state(&mut self, flag: StateFlag, enable: bool, ctx: &mut Context) {
         // Compute BEFORE the closure borrows `ctx` (and `self` immutably).
         let has_div = flag == StateFlag::Selected && self.body_has_movable_divider();

@@ -245,6 +245,15 @@ as `Deferred`). Each consumer adds one `Deferred::Open*` variant + one
    into a shared cell the top-level (non-view) caller reads after the modal returns.
    *Use when a `Program` method — not a view — launched the modal and wants the
    value returned out* (`color_dialog`).
+4. **Generic `request_exec_view` + `set_modal_data`** (`Deferred::OpenModal` →
+   `RouteModalAnswer { deliver_data: true }`) — no new variants at all: the view
+   builds any modal (typically a `Dialog`) and calls
+   `ctx.request_exec_view(view, self_id, then_command)`. On a non-cancel close the
+   pump reads the modal's `value()` (a `Dialog`'s gathered `FieldValue::List`) and
+   calls `requester.set_modal_data(record)`, then `set_modal_answer(cmd)`, then
+   re-posts `then_command`. *Use for an app-defined form or picker opened from a
+   view; the checklist below is only needed for framework modals with a bespoke
+   completion.*
 
 ### Adding a new interactive modal-from-view — checklist
 
@@ -254,7 +263,7 @@ as `Deferred`). Each consumer adds one `Deferred::Open*` variant + one
 3. Pump apply-arm: build the dialog (reuse existing widgets), choose `initial_focus`,
    pick a `ModalCompletion::<Foo>Pick { …child ids… }`, set `pending_modal`.
 4. Completion arm in `apply_modal_completion`: resolve the modal's children by id,
-   flow back via one of the three styles above; return any `Event` to re-inject.
+   flow back via one of the styles above; return any `Event` to re-inject.
 5. If style 1, add a `set_modal_answer` override on the requester (+ `specs.rs`
    forwarder check). Layout snapshot test for the new dialog; a behavioral test that
    drives the pump and asserts the flow-back.

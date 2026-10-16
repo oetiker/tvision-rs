@@ -1,7 +1,7 @@
 //! Views, geometry, and the downward-context substrate.
 //!
 //! Carries the geometry primitives ([`Point`]/[`Rect`]), the global [`ViewId`]
-//! minter ([`id`]), the downward [`Context`] / [`DrawCtx`] types ([`context`]),
+//! minter (`id`), the downward [`Context`] / [`DrawCtx`] types (`context`),
 //! and the [`View`] trait + [`ViewState`] that every widget builds on.
 //!
 //! **Guide:** [The view tree](../../../internals/view-tree.html).

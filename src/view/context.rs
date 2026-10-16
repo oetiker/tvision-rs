@@ -319,7 +319,7 @@ pub enum Deferred {
 
     // -- the editor cross-view brokers ---------------------------
     /// **Indicator write**: update an editor's position/modified indicator.
-    /// Resolve `indicator` and call [`View::set_indicator_value`] — virtual
+    /// Resolve `indicator` and call [`View::set_indicator_value`](crate::view::View::set_indicator_value) — virtual
     /// dispatch, no downcast. The editor (a leaf) cannot mutate its sibling
     /// indicator inline. Touches the **view-tree** family.
     ///
@@ -404,7 +404,7 @@ pub enum Deferred {
     /// `&mut Context`, so it cannot reach its sibling button inline; it queues this
     /// and the pump resolves `button`, downcasts to
     /// [`Button`](crate::widgets::Button), and calls
-    /// [`make_default`](crate::widgets::Button::make_default) (which re-broadcasts a
+    /// `make_default` (which re-broadcasts a
     /// grab/release-default notification so the real default button relinquishes /
     /// retakes the look — that re-broadcast settling on the next pump is expected,
     /// like the other write-back brokers).
@@ -470,10 +470,11 @@ pub enum Deferred {
     /// `&mut Context`, never `&mut Program`) requests an arbitrary custom modal
     /// be run. The pump moves `view` into the loop-owned `pending_modal` slot with
     /// a `RouteModalAnswer` completion; the outer `pump_and_drive` runs it via the
-    /// existing single-loop `exec_view` machinery, then delivers the modal's close
-    /// command to `requester` (via
-    /// [`View::set_modal_answer`](crate::view::View::set_modal_answer)) and
-    /// re-injects `then_command`. The view-launched sibling of
+    /// existing single-loop `exec_view` machinery, then delivers the modal's
+    /// record (on a non-cancel close, via
+    /// [`View::set_modal_data`](crate::view::View::set_modal_data)) and its close
+    /// command (via [`View::set_modal_answer`](crate::view::View::set_modal_answer))
+    /// to `requester` and re-injects `then_command`. The view-launched sibling of
     /// [`Program::exec_view_with`](crate::app::Program::exec_view_with).
     ///
     /// Queued by [`Context::request_exec_view`]. The boxed view is owned by the
@@ -516,7 +517,7 @@ pub enum Deferred {
     // -- the per-role color-picker seam (theme editor) -----------
     /// Request the pump to open a [`ColorPicker`](crate::dialog::ColorPicker)
     /// dialog for a specific theme role component. A
-    /// [`ThemeEditorBody`](crate::dialog::ThemeEditorBody) leaf holds only
+    /// `ThemeEditorBody` leaf holds only
     /// `&mut Context` and cannot exec the dialog inline; it requests it here.
     /// The pump builds a 60×23 "Select Color" dialog and sets `pending_modal`
     /// with a `ThemeColorPick { editor_id, picker, role, fg }` completion,
@@ -732,6 +733,12 @@ impl<'a> DrawCtx<'a> {
         self.origin
     }
 
+    /// The size of the whole screen buffer (the root group's size), for
+    /// placing a [`popup_menu`](crate::menu::popup_menu) from a nested view.
+    pub fn screen_size(&self) -> Point {
+        Point::new(self.buffer.width() as i32, self.buffer.height() as i32)
+    }
+
     /// Write one cell at view-local `(x, y)` with `style`.
     ///
     /// A double-width `ch` sets the lead `wide` and the next cell `wide_trail`,
@@ -773,7 +780,7 @@ impl<'a> DrawCtx<'a> {
     /// Write `s` at view-local `(x, y)` with a fixed `style`, width-aware and
     /// clipped. Returns the number of columns actually written.
     ///
-    /// Delegates the wide-char and edge-straddle logic to [`text::draw_str`],
+    /// Delegates the wide-char and edge-straddle logic to [`text::draw_str`](crate::text::draw_str),
     /// exactly as `DrawBuffer::move_str_part` does — the string is written into
     /// the clipped sub-slice of the target buffer row, with `indent` /
     /// `text_indent` chosen so a glyph straddling either clip edge degrades the
@@ -812,7 +819,7 @@ impl<'a> DrawCtx<'a> {
     /// exactly like [`put_str`](Self::put_str). Returns columns written.
     ///
     /// A glyph straddling the `text_indent` boundary degrades to a space (the
-    /// `move_str_part` left-edge straddle), via [`text::draw_str`].
+    /// `move_str_part` left-edge straddle), via [`text::draw_str`](crate::text::draw_str).
     pub fn put_str_part(&mut self, x: i32, y: i32, s: &str, text_indent: i32, style: Style) -> i32 {
         if self.clip.is_empty() {
             return 0;
@@ -1288,7 +1295,7 @@ impl<'a> Context<'a> {
     /// Request the `button` be made (or un-made) the dialog's default —
     /// **deferred** ([`Deferred::MakeButtonDefault`]). The pump resolves `button`,
     /// downcasts to [`Button`](crate::widgets::Button), and calls
-    /// [`make_default`](crate::widgets::Button::make_default). A leaf view (the
+    /// `make_default`. A leaf view (the
     /// change-directory dialog's directory list, on a focus change) holds only
     /// `&mut Context` and cannot poke its sibling button inline; it requests the
     /// change here.
@@ -1444,6 +1451,15 @@ impl<'a> Context<'a> {
             .push(Deferred::RecordHistory { link, history_id });
     }
 
+    /// How many message boxes the deferred queue holds — lets a caller tell
+    /// whether a call it made (a validator's `error`) requested one.
+    pub(crate) fn message_boxes_requested(&self) -> usize {
+        self.deferred
+            .iter()
+            .filter(|d| matches!(d, Deferred::OpenMessageBox { .. }))
+            .count()
+    }
+
     /// Request a modal message box be opened from inside a downward-borrowed
     /// `&mut View` — **deferred** ([`Deferred::OpenMessageBox`]; the
     /// async-modal-from-a-view seam, `docs/design/async-modal-from-view.md`).
@@ -1475,24 +1491,46 @@ impl<'a> Context<'a> {
     }
 
     /// Request a generic view-launched modal (ExecView): run `view` as a modal,
-    /// then deliver its close command to `requester` (via
-    /// [`View::set_modal_answer`](crate::view::View::set_modal_answer)) and
-    /// re-inject `then_command`. The view-launched counterpart of
+    /// then hand its result back to `requester` and re-inject `then_command`.
+    /// The view-launched counterpart of
     /// [`Program::exec_view_with`](crate::app::Program::exec_view_with)
     /// (which a view cannot call — a view holds only `&mut Context`, never
     /// `&mut Program`). Queues [`Deferred::OpenModal`].
     ///
-    /// `then_command` is `None` for a fire-and-forget modal (e.g. a read-only info
-    /// dialog). To act on the result, the `requester` overrides
-    /// [`View::set_modal_answer`](crate::view::View::set_modal_answer) to cache
-    /// the close command and acts on `then_command` when it is re-posted.
+    /// When the modal closes with command `c`, the pump, while the modal is still
+    /// in the tree:
     ///
-    /// **Data-back path deliberately not built:** the result is the close command
-    /// only (via `RouteModalAnswer` → `set_modal_answer`). A future input-dialog
-    /// consumer that needs the modal's typed `value()` back would add a generic data
-    /// arm (read `modal_id.value()` → `requester.set_modal_data(…)`); no current
-    /// consumer needs it (the tcv Info box is read-only), so it is not shipped
-    /// untested (spec §3.4/§2.1).
+    /// 1. if `c != Command::CANCEL` and the modal's
+    ///    [`View::value`](crate::view::View::value) is `Some(record)`, calls
+    ///    `requester.set_modal_data(record)` — for a
+    ///    [`Dialog`](crate::dialog::Dialog) (or a type delegating `value` to one)
+    ///    the record is its [`gather_list`](crate::dialog::Dialog::gather_list);
+    /// 2. calls `requester.set_modal_answer(c)`;
+    /// 3. re-posts `then_command`, where the requester acts with a full `ctx`.
+    ///
+    /// This is C++ `if (execView(d) != cmCancel) d->getData(&rec);` split across
+    /// the two hooks. A requester removed while the modal ran receives nothing
+    /// (both deliveries resolve by id and drop silently). `then_command` is `None`
+    /// for a fire-and-forget modal (e.g. a read-only info dialog).
+    ///
+    /// ```rust,ignore
+    /// // In the launcher's handle_event:
+    /// let mut d = Dialog::new(Rect::new(0, 0, 40, 8), Some("Rename".into()));
+    /// d.insert_child(Box::new(InputLine::new(Rect::new(2, 2, 36, 3), 64, None, LimitMode::MaxBytes)));
+    /// // ... plus OK / Cancel buttons (`d.button_row(…)`).
+    /// let me = self.state().id().expect("launcher is in the tree");
+    /// ctx.request_exec_view(Box::new(d), me, Some(CM_RENAME_DONE));
+    ///
+    /// // In the launcher's View impl:
+    /// fn set_modal_data(&mut self, data: FieldValue) {
+    ///     if let FieldValue::List(v) = data
+    ///         && let Some(FieldValue::Text(name)) = v.into_iter().next()
+    ///     {
+    ///         self.pending_name = Some(name);
+    ///     }
+    /// }
+    /// // ... and on CM_RENAME_DONE: take `pending_name` and act on it.
+    /// ```
     pub fn request_exec_view(
         &mut self,
         view: Box<dyn crate::view::View>,
@@ -1563,7 +1601,7 @@ impl<'a> Context<'a> {
 
     /// Queue [`Deferred::OpenColorDialogForRole`] for the theme editor's per-role
     /// color picker — **deferred**. Called from
-    /// [`ThemeEditorBody::handle_event`](crate::dialog::ThemeEditorBody). The pump
+    /// `ThemeEditorBody::handle_event`. The pump
     /// builds a "Select Color" dialog seeded with `current` and stashes it into
     /// `pending_modal` with a `ThemeColorPick` completion; on OK the completion
     /// updates the `ThemeEditorBody`'s working theme for `role`/`fg`.

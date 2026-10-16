@@ -6,7 +6,7 @@
 //! 2. Runs the paint closure into the back buffer.
 //! 3. Diffs the back buffer against the front buffer.
 //! 4. Pushes changed cells to the backend.
-//! 5. Sets the cursor.
+//! 5. Sets the cursor and, while it is shown, the caret size.
 //! 6. Flushes.
 //! 7. Swaps back/front so the new frame becomes the reference for the next diff.
 //!
@@ -34,6 +34,9 @@ pub struct Renderer {
     current: usize,
     /// Desired hardware cursor position: `Some((x,y))` or `None` (hidden).
     cursor: Option<(u16, u16)>,
+    /// Desired caret size (see [`Backend::set_caret_size`]), sent while the
+    /// cursor is shown.
+    caret_size: u8,
 }
 
 impl Renderer {
@@ -47,6 +50,7 @@ impl Renderer {
             buffers: [Buffer::new(w, h), Buffer::new(w, h)],
             current: 0,
             cursor: None,
+            caret_size: crate::backend::CARET_NORMAL,
         }
     }
 
@@ -56,7 +60,7 @@ impl Renderer {
     /// 2. Calls `paint` with a mutable reference to the back buffer.
     /// 3. Diffs the back buffer against the front buffer.
     /// 4. Pushes changed cells to the backend.
-    /// 5. Sets the cursor.
+    /// 5. Sets the cursor and, while it is shown, the caret size.
     /// 6. Flushes.
     /// 7. Swaps back/front.
     ///
@@ -80,6 +84,9 @@ impl Renderer {
         // Push changes to the backend.
         self.backend.draw(&diff);
         self.backend.set_cursor(self.cursor);
+        if self.cursor.is_some() {
+            self.backend.set_caret_size(self.caret_size);
+        }
         self.backend.flush();
 
         // Swap: the back buffer is now the reference for the next frame.
@@ -89,6 +96,12 @@ impl Renderer {
     /// Set the desired cursor position (used by the next [`render`](Self::render) call).
     pub fn set_cursor(&mut self, pos: Option<(u16, u16)>) {
         self.cursor = pos;
+    }
+
+    /// Set the desired caret size (used by the next [`render`](Self::render)
+    /// call while the cursor is shown). See [`Backend::set_caret_size`].
+    pub fn set_caret_size(&mut self, size: u8) {
+        self.caret_size = size;
     }
 
     /// Borrow the backend.

@@ -116,6 +116,46 @@ query and highlight or self-filter while focused — see
 {{#rustdoc_include ../../../examples/gallery.rs:listbox}}
 ```
 
+### Table
+
+A tvision-rs extension (Turbo Vision has no table): a column header over a
+scrolling row list. Rows come from a `TableModel` (`VecModel` for plain
+strings) and carry a stable `RowKey`, so focus and the marked rows follow the
+record through a re-sort or a `set_model` reload. Click a column label to sort
+by it, click again to flip; numbers sort numerically. Columns shrink widest
+first to fit (never below `min_width`), cut text with `…`, and can be hidden;
+a `flex` column takes the spare width when the table is wider than its
+columns. Columns that do not fit at their `min_width` scroll horizontally:
+←/→ or the horizontal bar (`with_h_bar`) move them, the header moves along,
+the check column stays put. Resize the window in the demo to see both.
+Drag the separator right of a label to resize that column (it then keeps that
+width), drag a label to move the column (a marker shows where it lands), and
+right-click the header to show or hide columns from a popup; `TABLE_COLUMNS`
+opens the same popup from a key or menu. Each of these broadcasts
+`TABLE_COLUMNS_CHANGED`; `column_layout()` / `set_column_layout()` save and
+restore the arrangement. `resizable(false)` / `movable(false)` lock a column.
+In `SelectionMode::Multi` the rows get a leading check column drawn like
+check boxes: click a row's `[ ]` box, or press Space, to mark it. The table
+broadcasts `TABLE_SORT_CHANGED`, `TABLE_SELECTION_CHANGED` and, in single
+mode, `LIST_ITEM_SELECTED`, each with the table's id as `source`; its value is
+the focused key (single) or the list of marked keys (multi). Keyboard sorting
+is opt-in: bind keys to `TABLE_SORT_NEXT` / `TABLE_SORT_FLIP`.
+Columns built `editable(true)` are edited in place: the focused row shows a
+cell cursor that ←/→ move between them, and Enter, F2 or a double-click opens
+an input line over the cell (with the column's `validator`, if any). Enter
+stores the text through `TableModel::set_cell` (a refusal shows its message
+and keeps the editor open) and leaves the cursor on the cell, Esc or a click
+elsewhere cancels, Tab/Shift-Tab store and move to the next/previous editable
+cell; a store re-sorts and broadcasts `TABLE_CELL_EDITED`. Without an editable
+column Enter keeps its list meaning and presses the dialog's default button.
+In the demo, Image and CPU % are editable.
+
+{{#include screens/table.html}}
+
+```rust,ignore
+{{#rustdoc_include ../../../examples/gallery.rs:table}}
+```
+
 ### Outline
 
 A collapsible tree viewer built from a `Node` tree, with horizontal and vertical

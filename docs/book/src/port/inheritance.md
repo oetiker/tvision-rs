@@ -87,6 +87,16 @@ error, so a typo can't silently turn into a forward. Real embedders such as
 `Terminal` (`#[delegate(to = scroller)]`) and `Desktop` (`#[delegate(to =
 group)]`) reuse their inner view this way.
 
+> **One `ViewState`.** The delegate field owns the view's state, so do not
+> write `state`/`state_mut` in a `#[delegate]` impl. An override that returns a
+> `ViewState` of the outer type would be a second state that every forwarded
+> method (`set_state`, `change_bounds`, `calc_bounds`, ...) ignores: the focus
+> flag and the geometry would land on the inner view. The macro rejects such an
+> override, and `skip(state)` / `skip(state_mut)`, with a compile error. It
+> accepts only the plain forwarder `self.<field>.state()`, which is redundant.
+> Keep the state in the delegate field, or implement `View` by hand without
+> `#[delegate]`.
+
 > **When you add a `View` method, add its forwarder too.** The macro keeps a
 > hand-maintained mirror of `trait View`. A missing *required* method fails to
 > compile, but a new *defaulted* one would silently not forward; a behavioural

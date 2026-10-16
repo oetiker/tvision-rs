@@ -43,6 +43,7 @@ use crate::screen::{Buffer, Cell};
 pub struct HeadlessHandle {
     buffer: Rc<RefCell<Buffer>>,
     cursor: Rc<StdCell<Option<(u16, u16)>>>,
+    caret_size: Rc<StdCell<u8>>,
     events: Rc<RefCell<VecDeque<Event>>>,
     clipboard: Rc<RefCell<String>>,
     /// The PRIMARY selection — a second, independent buffer. Separate from
@@ -89,6 +90,13 @@ impl HeadlessHandle {
     /// The current cursor position: `Some((x, y))` when visible, `None` when hidden.
     pub fn cursor(&self) -> Option<(u16, u16)> {
         self.cursor.get()
+    }
+
+    /// The caret size last set by the renderer (see
+    /// [`Backend::set_caret_size`](crate::backend::Backend::set_caret_size));
+    /// [`CARET_NORMAL`](crate::backend::CARET_NORMAL) until a caret is shown.
+    pub fn caret_size(&self) -> u8 {
+        self.caret_size.get()
     }
 
     /// The backend's clipboard text, or `None` if nothing has been written or
@@ -169,6 +177,7 @@ impl HeadlessBackend {
         let shared = HeadlessHandle {
             buffer: Rc::new(RefCell::new(Buffer::new(width, height))),
             cursor: Rc::new(StdCell::new(None)),
+            caret_size: Rc::new(StdCell::new(crate::backend::CARET_NORMAL)),
             events: Rc::new(RefCell::new(VecDeque::new())),
             clipboard: Rc::new(RefCell::new(String::new())),
             primary: Rc::new(RefCell::new(String::new())),
@@ -201,6 +210,11 @@ impl Backend for HeadlessBackend {
         self.shared.cursor.set(pos);
     }
 
+    /// Record the caret size for [`HeadlessHandle::caret_size`].
+    fn set_caret_size(&mut self, size: u8) {
+        self.shared.caret_size.set(size);
+    }
+
     /// Pop the front event from the queue, or `None` if the queue is empty.
     ///
     /// **Never blocks** regardless of `timeout`.  This is the determinism
@@ -212,7 +226,7 @@ impl Backend for HeadlessBackend {
     /// Store `text` in the shared internal buffer; always returns `false`.
     ///
     /// Headless deliberately does **not** run the production
-    /// [`ClipboardChain`](super::clipboard::ClipboardChain) — it is the test
+    /// `ClipboardChain` — it is the test
     /// fake: no OS clipboard, no OSC 52 bytes, just a plain string tests can
     /// read via [`HeadlessHandle::clipboard`] and seed via
     /// [`HeadlessHandle::set_clipboard`].

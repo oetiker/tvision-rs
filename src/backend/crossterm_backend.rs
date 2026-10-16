@@ -66,7 +66,7 @@ use std::io::{self, Stdout, Write as _};
 use std::time::Duration;
 
 use crossterm::{
-    cursor::{Hide, MoveTo, Show},
+    cursor::{Hide, MoveTo, SetCursorStyle, Show},
     event::{
         self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
         KeyCode, KeyEventKind, KeyModifiers as CKeyModifiers, MouseEventKind,
@@ -127,14 +127,19 @@ pub struct CrosstermBackend {
     out: Stdout,
     color_depth: ColorDepth,
     clipboard: ClipboardChain,
+    /// The caret size last sent to the terminal; `None` until the first one,
+    /// and again after a resume (the restore reset the terminal's shape).
+    caret_size: Option<u8>,
 }
 
-/// Undo the terminal setup: disable mouse capture, leave the alternate screen,
-/// disable raw mode.  Best-effort and idempotent — safe to call more than once
+/// Undo the terminal setup: restore the user's caret shape, disable mouse
+/// capture, leave the alternate screen, disable raw mode.  Best-effort and
+/// idempotent — safe to call more than once
 /// (`Drop`, the panic hook, and the signal thread may each run it).
 fn restore_terminal() {
     let _ = execute!(
         io::stdout(),
+        SetCursorStyle::DefaultUserShape,
         DisableBracketedPaste,
         DisableMouseCapture,
         LeaveAlternateScreen
@@ -268,6 +273,7 @@ impl CrosstermBackend {
             // failure is swallowed inside (clipboard absence must not fail
             // backend construction).
             clipboard: ClipboardChain::with_os_native(),
+            caret_size: None,
         })
     }
 }
@@ -339,6 +345,30 @@ impl Backend for CrosstermBackend {
         }
     }
 
+    /// Map the caret size onto a terminal cursor style, as the terminal
+    /// platform layer of the original does: the full-cell caret (100) is made
+    /// "very visible" — here a blinking block — and every other size keeps the
+    /// terminal's own caret shape. Sent only when the size changes.
+    ///
+    /// # Turbo Vision heritage
+    /// Ports `NcursesDisplay::setCaretSize` (`ncurdisp.cpp:86-97`):
+    /// `curs_set(size == 100 ? 2 : 1)`, where `1` is the terminal's normal
+    /// caret. ncurses' "very visible" (terminfo `cvvis`) varies by terminal;
+    /// a block is the portable way to show it. `DisplayBuffer::flushScreen`
+    /// (`dispbuff.cpp:220-221`) likewise calls `setCaretSize` only on change.
+    fn set_caret_size(&mut self, size: u8) {
+        if self.caret_size == Some(size) {
+            return;
+        }
+        self.caret_size = Some(size);
+        let style = if size == crate::backend::CARET_INSERT {
+            SetCursorStyle::BlinkingBlock
+        } else {
+            SetCursorStyle::DefaultUserShape
+        };
+        let _ = queue!(self.out, style);
+    }
+
     fn poll_event(&mut self, timeout: Option<Duration>) -> Option<Event> {
         let timeout = timeout.unwrap_or(Duration::MAX);
         if event::poll(timeout).ok()? {
@@ -377,6 +407,8 @@ impl Backend for CrosstermBackend {
     fn resume(&mut self) {
         // Best-effort re-setup — mirror the setup in with_color_depth but skip
         // hook installation (already done once-per-process in the constructor).
+        // The suspend restored the user's caret shape; re-send ours next frame.
+        self.caret_size = None;
         let _ = enable_raw_mode();
         let _ = execute!(
             self.out,
