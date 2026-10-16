@@ -17,9 +17,9 @@ use std::{env, io};
 use tvision_rs::{
     Button, ButtonFlags, ButtonRowAlign, CD_NORMAL, ChDirDialog, CheckBoxes, Color, ColorPicker,
     ColumnSpec, Command, Constraints, Context, CrosstermBackend, Desktop, Dialog, EditWindow,
-    Event, FD_OPEN_BUTTON, FieldValue, FileDialog, GrowMode, HistoryWindow, InputLine, Key,
-    KeyEvent, Label, ListBox, MaskedInput, Memo, Menu, MenuBar, MenuBox, Node, Outline,
-    OutlineViewer, Program, RadioButtons, Rect, RevealEyeConfig, RowKey, ScrollBar,
+    Event, FD_OPEN_BUTTON, FieldValue, FileDialog, FilterValidator, GrowMode, HistoryWindow,
+    InputLine, Key, KeyEvent, Label, ListBox, MaskedInput, Memo, Menu, MenuBar, MenuBox, Node,
+    Outline, OutlineViewer, Program, RadioButtons, Rect, RevealEyeConfig, RowKey, ScrollBar,
     ScrollBarOptions, SelectionMode, Splitter, StaticText, StatusDef, StatusLine, SystemClock,
     THistory, Tab, Table, Terminal, TextDevice, Theme, VecModel, View, ViewId, Window, alt,
     delegate, history_add, ov_update,
@@ -592,8 +592,11 @@ fn listbox() -> Box<dyn View> {
 /// follow the record through a re-sort or a `set_model` reload. The Image
 /// column is `flex`: widen the window and it takes the spare width. Shrink
 /// the window below the columns' `min_width`s and the columns scroll
-/// horizontally (←/→ or the bottom bar) while the check column stays put. No
-/// wrapper view is needed: the table publishes its ranges to the bars itself.
+/// horizontally (the bottom bar, or ←/→ past the cell cursor's stops) while
+/// the check column stays put. Image and CPU % are editable: ←/→ move the cell
+/// cursor between them, F2 or a double-click opens an editor (Enter stores,
+/// Esc cancels, Tab moves on); CPU % takes only digits and a dot. No wrapper
+/// view is needed: the table publishes its ranges to the bars itself.
 fn table() -> Box<dyn View> {
     let mut win = Window::new(Rect::new(2, 1, 52, 16), Some("Table".to_string()), 1);
     let h_bar = win.standard_scroll_bar(ScrollBarOptions {
@@ -628,9 +631,16 @@ fn table() -> Box<dyn View> {
         inner,
         vec![
             ColumnSpec::new("Name", 8).min_width(8),
-            ColumnSpec::new("Image", 11).min_width(10).flex(1),
+            ColumnSpec::new("Image", 11)
+                .min_width(10)
+                .flex(1)
+                .editable(true),
             ColumnSpec::new("State", 8).min_width(8),
-            ColumnSpec::new("CPU %", 6).min_width(6).right(),
+            ColumnSpec::new("CPU %", 6)
+                .min_width(6)
+                .right()
+                .editable(true)
+                .validator(Box::new(|| Box::new(FilterValidator::new("0123456789.")))),
         ],
         Some(v_bar),
     )
