@@ -442,6 +442,9 @@ pub struct Editor {
     /// mouse-tracking capture can localize absolute mouse coords (the same
     /// `abs_origin` pattern buttons use).
     abs_origin: Point,
+    /// Size of the whole screen, cached by `draw` (`DrawCtx::screen_size`)
+    /// so the right-click popup is placed against the screen, not the owner.
+    screen: Point,
     /// Per-hold mouse-track state — `Some` while a hold is in flight (see
     /// [`EditorTrack`]). Guards the tracked `MouseMove`/`MouseAuto`/wheel/
     /// `MouseUp` arms against stray events.
@@ -519,6 +522,7 @@ impl Editor {
             replace_str: String::new(),
             editor_flags: 0,
             abs_origin: Point::new(0, 0),
+            screen: Point::new(0, 0),
             track: None,
             pending_replace_answer: None,
         };
@@ -1915,6 +1919,7 @@ impl View for Editor {
         // to localize absolute mouse coords (the same `abs_origin` pattern
         // buttons use).
         self.abs_origin = ctx.origin();
+        self.screen = ctx.screen_size();
         if self.draw_line != self.delta.y {
             self.draw_ptr = self.line_move(self.draw_ptr, self.delta.y - self.draw_line);
             self.draw_line = self.delta.y;
@@ -2053,7 +2058,16 @@ impl View for Editor {
                             "Ctrl-U",
                         )
                         .build();
-                    popup_menu(global, menu, ctx.owner_size(), ctx);
+                    // `global` is in screen coordinates, so the popup is
+                    // placed against the screen. Before the first draw the
+                    // screen size is unknown; the owner's size is the best
+                    // bound there is.
+                    let screen = if self.screen.x > 0 && self.screen.y > 0 {
+                        self.screen
+                    } else {
+                        ctx.owner_size()
+                    };
+                    popup_menu(global, menu, screen, ctx);
                     ev.clear();
                     return;
                 }
@@ -3947,6 +3961,58 @@ mod tests {
             e.draw(&mut dc);
         });
         insta::assert_snapshot!(screen.snapshot());
+    }
+
+    /// **The right-click popup is placed against the screen**, not against
+    /// the editor's owner: the click position is in screen coordinates, so
+    /// clamping it into the (smaller) owner moved the popup away from the
+    /// click.
+    #[test]
+    fn right_click_popup_is_placed_against_the_screen() {
+        use crate::backend::{HeadlessBackend, Renderer};
+        use crate::event::{MouseButtons, MouseEvent};
+        use crate::screen::Buffer;
+        use crate::theme::Theme;
+
+        let theme = Theme::classic_blue();
+        let mut e = Editor::new(Rect::new(40, 10, 60, 15), None, None, None, 1024);
+        let (backend, _screen) = HeadlessBackend::new(80, 25);
+        let mut r = Renderer::new(Box::new(backend));
+        r.render(|buf: &mut Buffer| {
+            let bounds = e.state.get_bounds();
+            let mut dc = DrawCtx::new(buf, &theme, bounds, bounds.a);
+            e.draw(&mut dc);
+        });
+        let mut cx = Cx::new();
+        let mut ev = Event::MouseDown(MouseEvent {
+            position: Point::new(2, 1),
+            buttons: MouseButtons {
+                right: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        {
+            let mut ctx = cx.ctx();
+            // The editor's owner (its window interior) is far smaller than
+            // the screen.
+            ctx.set_owner_size(Point::new(22, 7));
+            e.handle_event(&mut ev, &mut ctx);
+        }
+        assert!(ev.is_nothing());
+        let bounds = cx
+            .deferred
+            .iter()
+            .find_map(|d| match d {
+                Deferred::OpenMenuBox { bounds, .. } => Some(*bounds),
+                _ => None,
+            })
+            .expect("a popup opens");
+        assert_eq!(
+            (bounds.a.x, bounds.a.y),
+            (42, 12),
+            "the popup opens below-right of the click at (42, 11)"
+        );
     }
 
     // -- Memo ----------------------------------------------------------------
