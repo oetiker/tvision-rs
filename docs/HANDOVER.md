@@ -32,8 +32,10 @@ author.
 
 **Next candidates:** a way for apps to catch commands under a modal (C++
 overrides `getEvent`, for example for cmHelp); broadcasts queued under a modal
-still reach the whole tree (D9 deviation); Editor popup placement uses the
-owner size as screen size; Table minors (resize anchor drift under h-offset
+still reach the whole tree, while drag, keyboard-resize and menu holds swallow
+them (both D9; C++ delivers idle broadcasts inside the hold, so an idle-hook
+refresh can be lost); stale capture comments after the timer bypass
+(`MouseTrackCapture` doc in capture.rs, `KeyboardResizeCapture`); Table minors (resize anchor drift under h-offset
 clamp, popup cannot grey the last visible column, last cell of a filling last
 column resizes instead of sorting); tvdocker's `LogView`, an `InputLine`
 placeholder + Ctrl+U/Ctrl+W.

@@ -64,13 +64,22 @@ two-stage reviewed; C++ faithfulness settled every review dispute.
   `ins_toggles_cursor_ins` no longer sees another test's emacs preset.
 - **Rustdoc** (`4434146`): 122 warnings → 0 under `RUSTDOCFLAGS=-D warnings`.
 
-**Gate on the integrated branch (79bc571):** 1672 workspace tests (twice),
-clippy, fmt, `cargo doc -D warnings`.
+- **Final whole-branch review fixes** (`47082a9`..`df66614`): timer expiries
+  bypass the capture stack, like C++ `TProgram::idle` firing inside every hold
+  loop (`tprogram.cpp:134-149`); the mouse wheel goes to the modal view
+  (`tgroup.cpp:173-186`); the Editor popup is clamped to the screen, not the
+  owner; generic `Align`/`SelectionMode`/`SortDir`/`SortKey` left the crate
+  root before their first release; docs say where queued events go under a
+  modal or a hold.
+
+**Gate on the integrated branch (ea41092):** 1676 workspace tests, clippy,
+fmt, examples, `cargo doc -D warnings`.
 
 **Found, not fixed:** apps cannot catch a command (for example cmHelp) under a
-modal, as C++ apps do by overriding `getEvent`; `deliver_to_modal` handles only
-a modal in the root group (always true today); the Editor's right-click popup
-gets its owner size as the screen size (`editor.rs` ~2056); Table minors: the
+modal, as C++ apps do by overriding `getEvent`; drag, keyboard-resize and menu
+holds swallow broadcasts (C++ delivers idle broadcasts inside the hold);
+`deliver_to_modal` handles only a modal in the root group (always true today);
+Table minors: the
 resize anchor drifts when the h offset is clamped mid-drag, the popup cannot
 grey out the last visible column, and the last cell of a filling last column
 resizes instead of sorting.
