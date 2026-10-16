@@ -9,10 +9,13 @@
 //!
 //! The editor belongs to a row key and a model column, not to a screen
 //! position: every draw lays it over that cell again, so it follows a
-//! re-sort, a horizontal scroll, a column resize or move and a table resize
-//! (a resize also scrolls the cell into view). When the cell is not on screen
-//! (scrolled away, its column hidden, its row gone) the editor hides and the
-//! table's next event cancels the edit.
+//! re-sort, a horizontal scroll, a column resize or move, a reload and a table
+//! resize (a resize also scrolls the cell into view). A cell scrolled off
+//! screen hides the editor but keeps the edit: the next key scrolls the cell
+//! back into view and goes to the editor. A cell that is gone (its row left
+//! the model, its column was hidden) ends the edit at the table's next event;
+//! a key that finds it gone is used up, so it cannot turn into a dialog
+//! action.
 
 use super::body::{TEXT_X, row_layout};
 use super::layout::RowLayout;
@@ -42,6 +45,9 @@ pub(super) struct CellEdit {
     /// it causes does not cancel the edit. Cleared by the next focus gain,
     /// key or click.
     box_open: bool,
+    /// Dropped without a [`Context`] (a programmatic focus move): hidden, and
+    /// closed at the next event, which goes on as if there were no editor.
+    dropped: bool,
 }
 
 impl TableData {
@@ -154,7 +160,11 @@ impl Table {
         };
         let (editor, key, col) = (e.editor, e.key.clone(), e.col);
         let size = self.group.state().size;
-        let disp = self.data.borrow().display_of(&key);
+        let disp = if e.dropped {
+            None
+        } else {
+            self.data.borrow().display_of(&key)
+        };
         if let Some(disp) = disp
             && reveal
         {
@@ -207,6 +217,7 @@ impl Table {
             key,
             col,
             box_open: false,
+            dropped: false,
         });
         if !self.place_editor(true) {
             self.close_editor(ctx);
@@ -233,6 +244,78 @@ impl Table {
         self.close_editor(ctx);
     }
 
+    /// Whether the edited cell still exists: the edit was not dropped, its
+    /// row is in the model and its column is visible and editable.
+    pub(super) fn edit_alive(&self) -> bool {
+        let Some(e) = &self.edit else {
+            return false;
+        };
+        let d = self.data.borrow();
+        !e.dropped
+            && d.display_of(&e.key).is_some()
+            && d.columns
+                .get(e.col)
+                .is_some_and(|c| c.editable && !c.hidden)
+    }
+
+    /// Drop the edit without a [`Context`] when focus moves to another row
+    /// than `key`'s: the editor hides and the next event closes it.
+    pub(super) fn drop_edit_unless(&mut self, key: &RowKey) {
+        if let Some(e) = &mut self.edit
+            && e.key != *key
+        {
+            e.dropped = true;
+        }
+    }
+
+    /// Cancel the edit when focus moves to another row than `key`'s, so the
+    /// editor and the focused row never disagree.
+    pub(super) fn cancel_edit_unless(&mut self, key: &RowKey, ctx: &mut Context) {
+        if self.edit.as_ref().is_some_and(|e| e.key != *key) {
+            self.cancel_edit(ctx);
+        }
+    }
+
+    /// Scroll the edited cell back into view (columns and rows), publishing
+    /// the bars, and lay the editor over it. Returns whether it is on screen.
+    fn reveal_editor(&mut self, ctx: &mut Context) -> bool {
+        let Some(e) = &self.edit else {
+            return false;
+        };
+        let (key, col) = (e.key.clone(), e.col);
+        let size_x = self.group.state().size.x;
+        let disp = {
+            let mut d = self.data.borrow_mut();
+            d.reveal_col(size_x, col);
+            d.display_of(&key)
+        };
+        if let Some(disp) = disp {
+            // The edited row is the focused one: focusing it again scrolls it
+            // into view and moves the vertical bar.
+            list_viewer::focus_item_num(self.body_mut(), disp as i32, ctx);
+        }
+        self.publish_h(ctx);
+        self.place_editor(false)
+    }
+
+    /// The dialog's [`valid`](View::valid) check with an editor open:
+    /// [`Command::CANCEL`] cancels the edit; any other end command commits
+    /// it, and a refusal (its box is up) vetoes the command, like a field
+    /// whose validator refuses. The status check
+    /// ([`Command::VALID`]) and a focus release leave the edit alone.
+    pub(super) fn edit_valid(&mut self, cmd: Command, ctx: &mut Context) -> bool {
+        if self.edit.is_none() || cmd == Command::VALID || cmd == Command::RELEASED_FOCUS {
+            return true;
+        }
+        if cmd == Command::CANCEL {
+            self.cancel_edit(ctx);
+            return true;
+        }
+        let closed = self.commit_edit(ctx);
+        self.drain(ctx);
+        closed
+    }
+
     /// Store the editor's text: the column's validator must accept it, then
     /// the model's [`set_cell`](super::TableModel::set_cell). A refusal shows
     /// its message box and keeps the editor open. On success the sort is
@@ -248,9 +331,13 @@ impl Table {
             self.close_editor(ctx);
             return true;
         };
+        let boxes = ctx.message_boxes_requested();
         if !editor.valid(Command::OK, ctx) {
-            // The validator popped its error box and re-focused the editor.
-            self.box_opened();
+            // The validator re-focused the editor; it may have popped an
+            // error box (the base validator shows none).
+            if ctx.message_boxes_requested() > boxes {
+                self.box_opened();
+            }
             return false;
         }
         let text = editor.data.clone();
@@ -284,6 +371,10 @@ impl Table {
                 // model keyed by a cell).
                 let idx = {
                     let mut d = self.data.borrow_mut();
+                    // A re-keyed row keeps its mark.
+                    if new_key != key && d.selected.remove(&key) {
+                        d.selected.insert(new_key.clone());
+                    }
                     d.reorder();
                     d.prune_selection();
                     d.pending.push(Command::TABLE_CELL_EDITED);
@@ -318,18 +409,27 @@ impl Table {
 
     /// An event reaching the table while an editor is open: Enter commits,
     /// Esc cancels, Tab/Shift-Tab commit and move to the next/previous
-    /// editable cell of the row; a press outside the editor cancels (and
-    /// goes on). An editor whose cell left the screen is cancelled first.
-    /// Returns whether `ev` was used.
+    /// editable cell of the row (past the last/first one the edit ends and
+    /// Tab goes on, so the focus moves); a press outside the editor cancels
+    /// (and goes on). A key that finds the editor scrolled off screen scrolls
+    /// it back first; one that finds the cell gone ends the edit and is used
+    /// up (unless the app dropped the edit). Returns whether `ev` was used.
     pub(super) fn edit_event(&mut self, ev: &Event, ctx: &mut Context) -> bool {
-        if matches!(ev, Event::KeyDown(_) | Event::MouseDown(_))
+        let is_key = matches!(ev, Event::KeyDown(_));
+        if (is_key || matches!(ev, Event::MouseDown(_)))
             && let Some(e) = &mut self.edit
         {
             e.box_open = false;
         }
-        if !self.place_editor(false) {
+        if !self.edit_alive() {
+            let dropped = self.edit.as_ref().is_some_and(|e| e.dropped);
             self.cancel_edit(ctx);
-            return false;
+            return is_key && !dropped;
+        }
+        if !self.place_editor(false) && is_key && !self.reveal_editor(ctx) {
+            // No room to show the cell at all.
+            self.cancel_edit(ctx);
+            return true;
         }
         match *ev {
             Event::KeyDown(ke) if plain(ke) && ke.key == Key::Enter => {
@@ -342,12 +442,11 @@ impl Table {
             }
             Event::KeyDown(ke) if !ke.modifiers.ctrl && !ke.modifiers.alt && ke.key == Key::Tab => {
                 let col = self.edit.as_ref().map(|e| e.col);
-                if self.commit_edit(ctx)
-                    && let Some(col) = col
-                {
-                    self.edit_neighbour(col, !ke.modifiers.shift, ctx);
+                if !self.commit_edit(ctx) {
+                    return true;
                 }
-                true
+                // Past the last stop the Tab goes on and moves the focus.
+                col.is_some_and(|col| self.edit_neighbour(col, !ke.modifiers.shift, ctx))
             }
             Event::MouseDown(me) => {
                 let editor = self.edit.as_ref().map(|e| e.editor);
@@ -365,8 +464,9 @@ impl Table {
 
     /// Open the editor on the editable column after (`forwards`) or before
     /// model column `col` on the focused row; past either end the cursor
-    /// stays on `col` and no editor opens.
-    fn edit_neighbour(&mut self, col: usize, forwards: bool, ctx: &mut Context) {
+    /// stays on `col` and no editor opens. Returns whether there was a
+    /// neighbour.
+    fn edit_neighbour(&mut self, col: usize, forwards: bool, ctx: &mut Context) -> bool {
         let next = {
             let d = self.data.borrow();
             let cols = d.editable_cols();
@@ -378,8 +478,12 @@ impl Table {
                 }
             })
         };
-        if let Some(next) = next {
-            self.start_edit(next, ctx);
+        match next {
+            Some(next) => {
+                self.start_edit(next, ctx);
+                true
+            }
+            None => false,
         }
     }
 

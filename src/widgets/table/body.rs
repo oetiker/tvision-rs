@@ -157,7 +157,7 @@ impl TableBody {
         l.column_at(x - TEXT_X, d.h_offset) == Some(0)
     }
 
-    /// ←/→ (no Ctrl/Alt) move the cell cursor to the previous/next editable
+    /// ←/→ (no Ctrl/Alt/Shift) move the cell cursor to the previous/next editable
     /// column, scrolling it into view; returns whether the key was used. With
     /// no cell cursor, or at the first/last editable column, the key is left
     /// to [`scroll_key`](Self::scroll_key), so the columns past the cursor's
@@ -166,7 +166,8 @@ impl TableBody {
         let Event::KeyDown(ke) = *ev else {
             return false;
         };
-        if ke.modifiers.ctrl || ke.modifiers.alt {
+        // Shift+←/→ stay free (they bubble).
+        if ke.modifiers.ctrl || ke.modifiers.alt || ke.modifiers.shift {
             return false;
         }
         let forwards = match ke.key {
@@ -201,9 +202,13 @@ impl TableBody {
         true
     }
 
-    /// Put the cell cursor on the editable column under view-local `x`, if
-    /// there is one.
-    fn cursor_to(&mut self, x: i32) {
+    /// A left press at view-local `at` on a row's editable cell puts the
+    /// cell cursor there.
+    fn cursor_to(&mut self, at: Point, left: bool) {
+        if !left || at.y + self.lv.top_item >= self.lv.range {
+            return;
+        }
+        let x = at.x;
         let mut d = self.data.borrow_mut();
         let l = row_layout(&d, self.lv.state.size.x);
         let col = l
@@ -237,14 +242,15 @@ impl TableBody {
         ctx.put_str(x0, y, &text, style);
     }
 
-    /// ←/→ (no Ctrl/Alt) scroll the columns one cell while they overflow the
+    /// ←/→ (no Ctrl/Alt/Shift) scroll the columns one cell while they overflow the
     /// view; returns whether the key was used. A table without overflow lets
     /// the keys bubble.
     fn scroll_key(&mut self, ev: &Event, ctx: &mut Context) -> bool {
         let Event::KeyDown(ke) = *ev else {
             return false;
         };
-        if ke.modifiers.ctrl || ke.modifiers.alt {
+        // Shift+←/→ stay free (they bubble).
+        if ke.modifiers.ctrl || ke.modifiers.alt || ke.modifiers.shift {
             return false;
         }
         let step = match ke.key {
@@ -386,7 +392,7 @@ impl View for TableBody {
             return;
         }
         if let Event::MouseDown(me) = *ev {
-            self.cursor_to(me.position.x);
+            self.cursor_to(me.position, me.buttons.left);
         }
         let check_click = match *ev {
             Event::MouseDown(me) if !me.flags.double_click && self.on_check_cell(me.position.x) => {

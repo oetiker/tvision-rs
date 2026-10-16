@@ -63,6 +63,6 @@ pub use static_text::{Label, ParamText, StaticText};
 pub use tab_bar::TabBar;
 pub use table::{
     Align, ColumnSpec, ColumnState, RowKey, SelectionMode, SortDir, SortKey, Table, TableModel,
-    VecModel,
+    ValidatorFactory, VecModel,
 };
 pub use terminal::{Terminal, TextDevice};

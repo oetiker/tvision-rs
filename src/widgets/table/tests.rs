@@ -1877,14 +1877,26 @@ fn tab_and_shift_tab_commit_and_move_along_the_row() {
     assert!(ev.is_nothing());
     assert_eq!(fx.cell(0, 3), "7");
     assert_eq!(fx.edit_at().map(|(k, c, _)| (k, c)), Some(("a1".into(), 1)));
+    fx.type_text("app");
     let (ev, _) = fx.send(shift_tab());
-    assert!(ev.is_nothing());
-    assert!(!fx.t().is_editing(), "nothing before the first stop: done");
+    assert!(
+        !ev.is_nothing(),
+        "nothing before the first stop: the Tab goes on and moves the focus"
+    );
+    assert_eq!(fx.cell(0, 1), "app", "stored first");
+    assert!(!fx.t().is_editing());
     assert_eq!(fx.t().cursor_column(), Some(1));
     fx.key(Key::Right);
     fx.key(Key::F(2));
-    fx.key(Key::Tab);
-    assert!(!fx.t().is_editing(), "nothing after the last stop: done");
+    let (ev, _) = fx.send(Event::KeyDown(KeyEvent::new(
+        Key::Tab,
+        KeyModifiers::default(),
+    )));
+    assert!(
+        !ev.is_nothing(),
+        "nothing after the last stop: the Tab goes on"
+    );
+    assert!(!fx.t().is_editing());
     assert_eq!(fx.t().cursor_column(), Some(3));
 }
 
@@ -1943,9 +1955,15 @@ fn the_editor_follows_an_h_scroll_and_a_frozen_check_column() {
         !fx.t().editor_mut().unwrap().state().state.visible,
         "scrolled out: hidden"
     );
-    fx.key(Key::Char('q'));
-    assert!(!fx.t().is_editing(), "the next event cancels");
-    assert_eq!(fx.cell(0, 3), "12.5");
+    let (ev, _) = fx.send(Event::KeyDown(KeyEvent::new(
+        Key::Char('7'),
+        KeyModifiers::default(),
+    )));
+    assert!(ev.is_nothing(), "the key went to the editor");
+    assert!(fx.t().is_editing(), "the edit outlives the scroll");
+    assert_eq!(fx.t().h_offset(), 11, "the key scrolled the cell back");
+    assert!(fx.t().editor_mut().unwrap().state().state.visible);
+    assert_eq!(fx.editor_text().as_deref(), Some("7"));
 }
 
 #[test]
@@ -2014,11 +2032,20 @@ fn a_resize_keeps_the_editor_on_its_cell() {
 }
 
 #[test]
-fn set_model_cancels_the_edit() {
+fn a_reload_keeps_the_edit_while_its_row_exists() {
     let mut fx = editing();
     fx.key(Key::F(2));
-    fx.set_model(&ROWS);
-    assert!(!fx.t().is_editing());
+    fx.type_text("api");
+    let mut rows = ROWS;
+    rows[0][1] = "nginx";
+    fx.set_model(&rows);
+    assert!(fx.t().is_editing(), "the row is still there");
+    assert_eq!(fx.editor_text().as_deref(), Some("api"), "typed text kept");
+    fx.key(Key::Enter);
+    assert_eq!(fx.cell(0, 1), "api", "last writer wins");
+    fx.key(Key::F(2));
+    fx.set_model(&ROWS[1..]);
+    assert!(!fx.t().is_editing(), "a1 left the model");
 }
 
 #[test]
@@ -2035,5 +2062,232 @@ fn snapshot_cell_editor() {
     fx.key(Key::Down);
     fx.key(Key::F(2));
     fx.type_text("postgres");
+    insta::assert_snapshot!(fx.render(W as u16, H as u16));
+}
+
+#[test]
+fn enter_and_esc_on_an_off_screen_editor_stay_with_the_editor() {
+    // Vertical: the wheel (here: top_item) scrolls the edited row away.
+    let mut fx = editing();
+    fx.key(Key::F(2));
+    fx.type_text("zz");
+    fx.t().body_mut().lv_state().top_item = 2;
+    fx.render(W as u16, H as u16);
+    assert!(!fx.t().editor_mut().unwrap().state().state.visible);
+    let (ev, out) = fx.send(Event::KeyDown(KeyEvent::new(
+        Key::Enter,
+        KeyModifiers::default(),
+    )));
+    assert!(ev.is_nothing(), "Enter does not reach the dialog");
+    assert_eq!(fx.cell(0, 1), "zz", "and it stored the text");
+    assert_eq!(edited(&out, fx.id), 1);
+    assert_eq!(fx.t().body_mut().lv().top_item, 0, "the row is back");
+    fx.key(Key::F(2));
+    fx.t().body_mut().lv_state().top_item = 2;
+    fx.render(W as u16, H as u16);
+    let (ev, _) = fx.send(Event::KeyDown(KeyEvent::new(
+        Key::Esc,
+        KeyModifiers::default(),
+    )));
+    assert!(ev.is_nothing(), "Esc does not close the dialog");
+    assert!(!fx.t().is_editing());
+}
+
+#[test]
+fn a_key_that_finds_the_cell_gone_is_used_up() {
+    let mut fx = editing();
+    fx.key(Key::F(2));
+    fx.t().set_column_hidden(1, true);
+    let (ev, _) = fx.send(Event::KeyDown(KeyEvent::new(
+        Key::Enter,
+        KeyModifiers::default(),
+    )));
+    assert!(ev.is_nothing(), "not the dialog's default button");
+    assert!(!fx.t().is_editing());
+}
+
+#[test]
+fn valid_ok_commits_and_cancel_cancels() {
+    let mut fx = editing();
+    let id = fx.id;
+    fx.key(Key::F(2));
+    fx.type_text("api");
+    let mut ok = false;
+    let out = fx.with(|t, ctx| ok = t.valid(Command::OK, ctx));
+    assert!(ok);
+    assert_eq!(fx.cell(0, 1), "api", "OK stored the open edit");
+    assert_eq!(edited(&out, id), 1);
+    assert!(!fx.t().is_editing());
+    fx.key(Key::F(2));
+    fx.type_text("zzz");
+    let mut valid = false;
+    fx.with(|t, ctx| valid = t.valid(Command::VALID, ctx));
+    assert!(valid && fx.t().is_editing(), "the status check leaves it");
+    fx.with(|t, ctx| ok = t.valid(Command::CANCEL, ctx));
+    assert!(ok);
+    assert!(!fx.t().is_editing());
+    assert_eq!(fx.cell(0, 1), "api");
+}
+
+#[test]
+fn valid_ok_with_a_refused_edit_vetoes_and_keeps_the_editor() {
+    let rows = ROWS
+        .iter()
+        .map(|r| r.iter().map(|s| s.to_string()).collect())
+        .collect();
+    let mut fx = Fixture::new(
+        Table::new(Rect::new(0, 0, W, H), edit_columns(), None)
+            .with_model(Box::new(ReadOnly(VecModel::new(rows)))),
+    );
+    fx.focus(true);
+    fx.key(Key::F(2));
+    fx.type_text("new");
+    let mut ok = true;
+    let deferred = fx.with_deferred(|t, ctx| ok = t.valid(Command::OK, ctx));
+    assert!(!ok, "the dialog stays open");
+    assert_eq!(message_box_text(&deferred).as_deref(), Some("read-only"));
+    assert!(fx.t().is_editing());
+}
+
+/// Refuses everything and, like the base validator, shows no box.
+struct Silent;
+impl crate::validate::Validator for Silent {
+    fn is_valid(&self, _s: &str) -> bool {
+        false
+    }
+}
+
+#[test]
+fn a_refusal_without_a_box_does_not_block_the_focus_loss_cancel() {
+    let mut cols = edit_columns();
+    cols[1] = cols[1].clone().validator(Box::new(|| Box::new(Silent)));
+    let mut fx =
+        Fixture::new(Table::new(Rect::new(0, 0, W, H), cols, None).with_model(model(&ROWS)));
+    fx.focus(true);
+    fx.key(Key::F(2));
+    fx.key(Key::Enter);
+    assert!(fx.t().is_editing(), "refused");
+    fx.focus(false);
+    assert!(!fx.t().is_editing(), "no box took the focus: cancel");
+}
+
+/// Rows keyed by their NAME cell, so editing NAME re-keys the row.
+struct KeyedByName(VecModel);
+impl TableModel for KeyedByName {
+    fn row_count(&self) -> usize {
+        self.0.row_count()
+    }
+    fn cell(&self, row: usize, col: usize) -> std::borrow::Cow<'_, str> {
+        self.0.cell(row, col)
+    }
+    fn row_key(&self, row: usize) -> RowKey {
+        RowKey(self.0.cell(row, 1).into_owned())
+    }
+    fn set_cell(&mut self, row: usize, col: usize, text: &str) -> Result<(), String> {
+        self.0.set_cell(row, col, text)
+    }
+}
+
+#[test]
+fn a_re_keyed_row_keeps_its_mark() {
+    let rows = ROWS
+        .iter()
+        .map(|r| r.iter().map(|s| s.to_string()).collect())
+        .collect();
+    let mut fx = Fixture::new(
+        Table::new(Rect::new(0, 0, 40, H), edit_columns(), None)
+            .with_model(Box::new(KeyedByName(VecModel::new(rows))))
+            .with_selection_mode(SelectionMode::Multi),
+    );
+    fx.focus(true);
+    fx.key(Key::Char(' '));
+    assert_eq!(keys(fx.t().selected_keys()), ["web"]);
+    fx.key(Key::F(2));
+    fx.type_text("api");
+    fx.key(Key::Enter);
+    assert_eq!(
+        keys(fx.t().selected_keys()),
+        ["api"],
+        "the mark moved along"
+    );
+    assert_eq!(fx.t().focused_key(), Some(RowKey::from("api")));
+}
+
+#[test]
+fn moving_the_focus_to_another_row_ends_the_edit() {
+    let mut fx = editing();
+    fx.key(Key::F(2));
+    fx.with(|t, ctx| {
+        t.set_focused_key(&RowKey::from("a1"), ctx);
+    });
+    assert!(fx.t().is_editing(), "the same row keeps it");
+    fx.with(|t, ctx| {
+        t.set_focused_key(&RowKey::from("c3"), ctx);
+    });
+    assert!(!fx.t().is_editing());
+    // Without a context: hidden at once, closed by the next event, which goes on.
+    fx.key(Key::F(2));
+    fx.t().set_value(FieldValue::Text("a1".into()));
+    fx.render(W as u16, H as u16);
+    assert!(!fx.t().editor_mut().unwrap().state().state.visible);
+    let (ev, _) = fx.send(Event::KeyDown(KeyEvent::new(
+        Key::Down,
+        KeyModifiers::default(),
+    )));
+    assert!(ev.is_nothing(), "Down moved the rows");
+    assert!(!fx.t().is_editing());
+    assert_eq!(fx.t().focused_key(), Some(RowKey::from("b2")));
+}
+
+#[test]
+fn a_left_click_on_an_editable_cell_moves_the_cell_cursor() {
+    let mut fx = editing();
+    fx.click(27, 2);
+    assert_eq!(fx.t().cursor_column(), Some(3));
+    fx.click(19, 2);
+    assert_eq!(
+        fx.t().cursor_column(),
+        Some(3),
+        "a read-only cell leaves it"
+    );
+    let right = Event::MouseDown(MouseEvent {
+        position: Point::new(8, 2),
+        buttons: MouseButtons {
+            right: true,
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    fx.send(right);
+    assert_eq!(fx.t().cursor_column(), Some(3), "a right press leaves it");
+    fx.click(8, 5);
+    assert_eq!(fx.t().cursor_column(), Some(3), "below the last row");
+}
+
+#[test]
+fn shift_arrows_leave_the_cell_cursor_and_bubble() {
+    let mut fx = editing();
+    let (ev, _) = fx.send(Event::KeyDown(KeyEvent::new(
+        Key::Right,
+        KeyModifiers {
+            shift: true,
+            ..Default::default()
+        },
+    )));
+    assert!(!ev.is_nothing());
+    assert_eq!(fx.t().cursor_column(), Some(1));
+}
+
+#[test]
+fn validator_factory_is_exported_from_the_crate_root() {
+    let f = crate::ValidatorFactory::new(Box::new(|| Box::new(Silent)));
+    assert!(!f.make().is_valid("x"));
+}
+
+#[test]
+fn snapshot_cell_editor_opened() {
+    let mut fx = editing();
+    fx.key(Key::Down);
+    fx.key(Key::F(2));
     insta::assert_snapshot!(fx.render(W as u16, H as u16));
 }

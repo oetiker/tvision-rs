@@ -78,18 +78,25 @@
 //! through [`TableModel::set_cell`]; a validator or a `set_cell` that refuses
 //! it shows its message in an error box and the editor stays open. Esc
 //! cancels; so does losing the focus or a click outside the editor. Tab and
-//! Shift-Tab store and open the next/previous editable cell of the row (past
-//! the last one the edit just ends). An unchanged text stores nothing.
+//! Shift-Tab store and open the next/previous editable cell of the row; past
+//! the last (first) one the edit ends and the Tab goes on, moving the focus
+//! as usual. An unchanged text stores nothing. A dialog's OK (any end command
+//! but Cancel, through [`View::valid`]) stores an open edit first, and a
+//! refusal keeps the dialog open; Cancel cancels it.
 //! Enter without an open editor keeps its list meaning, and a double-click
 //! on a cell that is not editable still chooses (single mode) or toggles
 //! (multi mode) the row.
 //!
 //! After a store the sort is re-applied and the focus follows the row's key.
 //! The editor stays over its cell through a re-sort, a horizontal scroll, a
-//! column resize or move and a table resize (a resize scrolls the cell back
-//! into view); once its cell is off screen (scrolled away, its column
-//! hidden) the editor hides and the table's next event cancels the edit. A
-//! press on the header and [`Table::set_model`] cancel it too.
+//! column resize or move, a [`Table::set_model`] reload (with the typed text)
+//! and a table resize (a resize scrolls the cell back into view). A cell
+//! scrolled off screen hides the editor without ending the edit: the next
+//! key scrolls it back and goes to the editor. When the cell is gone (its
+//! row left the model, its column was hidden) the table's next event ends
+//! the edit, and a key that finds it gone is used up. A press on the header
+//! cancels the edit, and so does moving the focus to another row
+//! ([`Table::set_focused_key`], [`View::set_value`]).
 //!
 //! # Data
 //!
@@ -422,10 +429,13 @@ impl Table {
     /// sort is re-applied, marks of vanished rows are dropped, and the scroll
     /// bar's range is updated. Does not broadcast.
     pub fn set_model(&mut self, model: Box<dyn TableModel>, ctx: &mut Context) {
-        // The edited cell may be gone or hold other text now.
-        self.cancel_edit(ctx);
         let idx = self.load_model(model);
         self.publish(idx, ctx);
+        // An open edit survives the reload, typed text and all, while its row
+        // is still there.
+        if self.edit.is_some() && !self.edit_alive() {
+            self.cancel_edit(ctx);
+        }
     }
 
     /// Swap in `model`, re-apply the sort and prune the marks; return the
@@ -532,6 +542,9 @@ impl Table {
     pub fn set_focused_key(&mut self, key: &RowKey, ctx: &mut Context) -> bool {
         self.ensure_published(ctx);
         let idx = self.data.borrow().display_of(key);
+        if idx.is_some() {
+            self.cancel_edit_unless(key, ctx);
+        }
         match idx {
             Some(i) => {
                 list_viewer::focus_item_num(self.body_mut(), i as i32, ctx);
@@ -737,6 +750,14 @@ impl View for Table {
         self.drain(ctx);
     }
 
+    /// With a cell editor open, [`Command::CANCEL`] cancels the edit and any
+    /// other end command commits it first: a refused text shows its box and
+    /// vetoes the command, so a dialog's OK never drops what the field
+    /// shows. Then the children are checked as usual.
+    fn valid(&mut self, cmd: Command, ctx: &mut Context) -> bool {
+        self.edit_valid(cmd, ctx) && self.group.valid(cmd, ctx)
+    }
+
     /// Resize the header and the body (grow modes), and mark the bars for a
     /// re-publish: the new size changes the vertical page step and the
     /// horizontal range. There is no [`Context`] here, so the publish runs on
@@ -788,8 +809,10 @@ impl View for Table {
     fn set_value(&mut self, v: FieldValue) {
         match (self.selection_mode(), v) {
             (SelectionMode::Single, FieldValue::Text(k)) => {
-                let idx = self.data.borrow().display_of(&RowKey(k));
+                let key = RowKey(k);
+                let idx = self.data.borrow().display_of(&key);
                 if let Some(i) = idx {
+                    self.drop_edit_unless(&key);
                     self.place_focus(i);
                 }
             }
