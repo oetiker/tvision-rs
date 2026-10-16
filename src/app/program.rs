@@ -6194,6 +6194,133 @@ mod tests {
         );
     }
 
+    /// **End-to-end: a `Table` cell edit through the pump.** F2 opens the
+    /// editor; a commit the model refuses opens an error box (a real modal
+    /// that takes the window's focus) and the edit survives it, so the user
+    /// fixes the text and commits again; a click on another control cancels.
+    #[test]
+    fn table_cell_edit_survives_its_error_box_through_pump() {
+        use crate::widgets::{ColumnSpec, InputLine, Table, TableModel, VecModel};
+        use crate::window::Window;
+        use std::borrow::Cow;
+
+        /// Refuses any text with an `x` in it.
+        struct NoX(VecModel);
+        impl TableModel for NoX {
+            fn row_count(&self) -> usize {
+                self.0.row_count()
+            }
+            fn cell(&self, row: usize, col: usize) -> Cow<'_, str> {
+                self.0.cell(row, col)
+            }
+            fn row_key(&self, row: usize) -> crate::widgets::RowKey {
+                self.0.row_key(row)
+            }
+            fn set_cell(&mut self, row: usize, col: usize, text: &str) -> Result<(), String> {
+                if text.contains('x') {
+                    return Err("no x".into());
+                }
+                self.0.set_cell(row, col, text)
+            }
+        }
+
+        fn table(program: &mut Program, id: ViewId) -> &mut Table {
+            program
+                .group_mut()
+                .find_mut(id)
+                .and_then(|v| v.as_any_mut())
+                .and_then(|a| a.downcast_mut::<Table>())
+                .expect("table resolves")
+        }
+
+        let ids: Rc<RefCell<Option<ViewId>>> = Rc::new(RefCell::new(None));
+        let ids_cap = ids.clone();
+        let (backend, _handle) = HeadlessBackend::new(80, 25);
+        let clock = Rc::new(ManualClock::new(0));
+        let mut program = Program::new(
+            Box::new(backend),
+            Box::new(clock),
+            Theme::classic_blue(),
+            move |r| {
+                let mut desktop = Desktop::new(r, |r2| Some(Desktop::init_background(r2)));
+                let mut win = Window::new(Rect::new(2, 2, 40, 12), Some("T".into()), 1);
+                let rows = vec![vec!["a".to_string(), "b".to_string()]];
+                let t = Table::new(
+                    Rect::new(1, 1, 31, 7),
+                    vec![
+                        ColumnSpec::new("A", 4),
+                        ColumnSpec::new("B", 4).editable(true),
+                    ],
+                    None,
+                )
+                .with_model(Box::new(NoX(VecModel::new(rows))));
+                // Another control, abs (3..22, 10); the table goes on top, so
+                // it starts focused.
+                win.insert_child(Box::new(InputLine::with_limit(Rect::new(1, 8, 20, 9), 20)));
+                *ids_cap.borrow_mut() = Some(win.insert_child(Box::new(t)));
+                desktop.insert_view(Box::new(win));
+                Some(Box::new(desktop))
+            },
+            |_r| None,
+            |_r| None,
+        );
+        let id = ids.borrow().expect("table id set");
+        program.out_events.clear();
+        program.out_events.push_back(Event::Broadcast {
+            command: Command::custom("test.noop"),
+            source: None,
+        });
+        program.pump_once();
+
+        program.out_events.push_back(key(Key::F(2)));
+        program.pump_once();
+        assert!(table(&mut program, id).is_editing(), "F2 opened the editor");
+
+        // "x" replaces the selected "b"; Enter is refused with a box, which the
+        // queued OK closes.
+        program.out_events.push_back(key(Key::Char('x')));
+        program.out_events.push_back(key(Key::Enter));
+        program.out_events.push_back(Event::Command(Command::OK));
+        for _ in 0..8 {
+            program.pump_and_drive();
+        }
+        assert!(
+            table(&mut program, id).is_editing(),
+            "the error box did not cancel the edit"
+        );
+        assert_eq!(table(&mut program, id).model().cell(0, 1), "b");
+
+        // The editor still has the keys: fix the text and commit.
+        program.out_events.clear();
+        for k in [Key::Backspace, Key::Char('y'), Key::Enter] {
+            program.out_events.push_back(key(k));
+            program.pump_once();
+        }
+        assert!(!table(&mut program, id).is_editing());
+        assert_eq!(table(&mut program, id).model().cell(0, 1), "y");
+        assert!(
+            program.out_events.iter().any(|e| *e
+                == Event::Broadcast {
+                    command: Command::TABLE_CELL_EDITED,
+                    source: Some(id),
+                }),
+            "the commit broadcasts with the table's id"
+        );
+
+        // A click on the other control takes the focus: the edit is cancelled.
+        program.out_events.clear();
+        program.out_events.push_back(key(Key::F(2)));
+        program.pump_once();
+        assert!(table(&mut program, id).is_editing());
+        program.out_events.push_back(mouse_down_at(5, 10));
+        // Bounded: the focus broadcasts queued ahead of the click drain first.
+        for _ in 0..8 {
+            program.pump_once();
+        }
+        assert!(!table(&mut program, id).is_editing(), "focus loss cancels");
+        assert_eq!(table(&mut program, id).model().cell(0, 1), "y");
+    }
+
     /// Press inside, drag outside, release: NO press fires (the C++ post-loop
     /// `if (down)` on the LAST MOVE's tracked containment) — through real pumps.
     #[test]

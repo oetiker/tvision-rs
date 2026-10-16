@@ -114,6 +114,14 @@ pub trait TableModel {
     fn row_role(&self, _row: usize) -> Option<Role> {
         None
     }
+
+    /// Store `text` in cell (`row`, `col`) — a cell editor committing on an
+    /// [`editable`](super::ColumnSpec::editable) column. `Err(message)`
+    /// refuses the text: the table shows `message` in an error box and keeps
+    /// the editor open. The default refuses every edit with `"read-only"`.
+    fn set_cell(&mut self, _row: usize, _col: usize, _text: &str) -> Result<(), String> {
+        Err("read-only".to_string())
+    }
 }
 
 /// A [`TableModel`] over `Vec<Vec<String>>`.
@@ -182,6 +190,20 @@ impl TableModel for VecModel {
     fn row_role(&self, row: usize) -> Option<Role> {
         self.roles.get(row).copied().flatten()
     }
+
+    /// Replace the cell's text. A row too short for `col` is padded with
+    /// empty cells; a missing row is an error.
+    fn set_cell(&mut self, row: usize, col: usize, text: &str) -> Result<(), String> {
+        let r = self
+            .rows
+            .get_mut(row)
+            .ok_or_else(|| format!("no row {row}"))?;
+        if r.len() <= col {
+            r.resize(col + 1, String::new());
+        }
+        r[col] = text.to_string();
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -229,5 +251,32 @@ mod tests {
         assert_eq!(m.row_role(0), None);
         assert_eq!(m.row_role(1), Some(Role::Error));
         assert_eq!(m.row_role(2), None);
+    }
+
+    #[test]
+    fn vec_model_set_cell_writes_pads_and_rejects_missing_rows() {
+        let mut m = VecModel::new(vec![vec!["a".into()]]);
+        assert_eq!(m.set_cell(0, 0, "x"), Ok(()));
+        assert_eq!(m.cell(0, 0), "x");
+        assert_eq!(m.set_cell(0, 2, "z"), Ok(()), "a short row is padded");
+        assert_eq!(m.rows()[0], ["x", "", "z"]);
+        assert!(m.set_cell(1, 0, "?").is_err(), "no such row");
+    }
+
+    #[test]
+    fn set_cell_defaults_to_read_only() {
+        struct Fixed;
+        impl TableModel for Fixed {
+            fn row_count(&self) -> usize {
+                1
+            }
+            fn cell(&self, _: usize, _: usize) -> Cow<'_, str> {
+                Cow::Borrowed("v")
+            }
+            fn row_key(&self, _: usize) -> RowKey {
+                RowKey::from("k")
+            }
+        }
+        assert_eq!(Fixed.set_cell(0, 0, "w"), Err("read-only".to_string()));
     }
 }

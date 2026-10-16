@@ -9,7 +9,8 @@ use crate::widgets::list_viewer::{self, ListViewer, ListViewerState};
 
 use std::borrow::Cow;
 
-use super::layout::{ColumnSpec, RowLayout, format_line, header_line};
+use super::edit::cell_x;
+use super::layout::{ColumnSpec, RowLayout, format_line, header_line, slice_cols};
 use super::model::{RowKey, TableModel};
 use super::{SelectionMode, Shared, TableData};
 use crate::widgets::cluster::check_box;
@@ -156,14 +157,100 @@ impl TableBody {
         l.column_at(x - TEXT_X, d.h_offset) == Some(0)
     }
 
-    /// ←/→ (no Ctrl/Alt) scroll the columns one cell while they overflow the
+    /// ←/→ (no Ctrl/Alt/Shift) move the cell cursor to the previous/next editable
+    /// column, scrolling it into view; returns whether the key was used. With
+    /// no cell cursor, or at the first/last editable column, the key is left
+    /// to [`scroll_key`](Self::scroll_key), so the columns past the cursor's
+    /// stops can still be scrolled to.
+    fn cursor_key(&mut self, ev: &Event, ctx: &mut Context) -> bool {
+        let Event::KeyDown(ke) = *ev else {
+            return false;
+        };
+        // Shift+←/→ stay free (they bubble).
+        if ke.modifiers.ctrl || ke.modifiers.alt || ke.modifiers.shift {
+            return false;
+        }
+        let forwards = match ke.key {
+            Key::Left => false,
+            Key::Right => true,
+            _ => return false,
+        };
+        let off = {
+            let mut d = self.data.borrow_mut();
+            let cols = d.editable_cols();
+            let Some(i) = d
+                .cursor_col()
+                .and_then(|c| cols.iter().position(|&x| x == c))
+            else {
+                return false;
+            };
+            let next = if forwards {
+                cols.get(i + 1).copied()
+            } else {
+                i.checked_sub(1).map(|j| cols[j])
+            };
+            let Some(next) = next else {
+                return false;
+            };
+            d.cursor = Some(next);
+            d.reveal_col(self.lv.state.size.x, next)
+                .then_some(d.h_offset)
+        };
+        if let (Some(off), Some(h)) = (off, self.lv.h_scroll_bar) {
+            ctx.request_scroll_bar_params(h, Some(off), None, None, None, None);
+        }
+        true
+    }
+
+    /// A left press at view-local `at` on a row's editable cell puts the
+    /// cell cursor there.
+    fn cursor_to(&mut self, at: Point, left: bool) {
+        if !left || at.y + self.lv.top_item >= self.lv.range {
+            return;
+        }
+        let x = at.x;
+        let mut d = self.data.borrow_mut();
+        let l = row_layout(&d, self.lv.state.size.x);
+        let col = l
+            .column_at(x - TEXT_X, d.h_offset)
+            .and_then(|lc| d.model_col(lc))
+            .filter(|&c| d.columns[c].editable);
+        if col.is_some() {
+            d.cursor = col;
+        }
+    }
+
+    /// Paint the cell cursor over the focused row's cell in the cursor
+    /// column, while the rows have the focus.
+    fn draw_cursor(&self, ctx: &mut DrawCtx) {
+        let lv = &self.lv;
+        let y = lv.focused - lv.top_item;
+        if !lv.state.state.focused || lv.range <= 0 || !(0..lv.state.size.y).contains(&y) {
+            return;
+        }
+        let d = self.data.borrow();
+        let Some((x0, x1)) = d
+            .cursor_col()
+            .and_then(|c| cell_x(&d, &self.layout, lv.state.size.x, c))
+        else {
+            return;
+        };
+        drop(d);
+        let text = slice_cols(&self.get_text(lv.focused), x0 - TEXT_X, x1 - x0);
+        let style = ctx.style(Role::TableCellCursor);
+        ctx.fill(Rect::new(x0, y, x1, y + 1), ' ', style);
+        ctx.put_str(x0, y, &text, style);
+    }
+
+    /// ←/→ (no Ctrl/Alt/Shift) scroll the columns one cell while they overflow the
     /// view; returns whether the key was used. A table without overflow lets
     /// the keys bubble.
     fn scroll_key(&mut self, ev: &Event, ctx: &mut Context) -> bool {
         let Event::KeyDown(ke) = *ev else {
             return false;
         };
-        if ke.modifiers.ctrl || ke.modifiers.alt {
+        // Shift+←/→ stay free (they bubble).
+        if ke.modifiers.ctrl || ke.modifiers.alt || ke.modifiers.shift {
             return false;
         }
         let step = match ke.key {
@@ -291,16 +378,21 @@ impl View for TableBody {
         // viewer's own indent stays 0.
         self.lv.indent = 0;
         list_viewer::draw(self, ctx);
+        self.draw_cursor(ctx);
     }
 
-    /// The shared list-viewer handling, plus: ←/→ scroll the columns while
-    /// they overflow, and in multi mode a single click on a row's check cell
-    /// also toggles that row's mark (after the click focused it). A
-    /// double-click already toggles through `select_item`.
+    /// The shared list-viewer handling, plus: ←/→ move the cell cursor, or
+    /// scroll the columns while they overflow; a click on an editable cell
+    /// puts the cell cursor there; in multi mode a single click on a row's
+    /// check cell also toggles that row's mark (after the click focused it).
+    /// A double-click already toggles through `select_item`.
     fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
-        if self.scroll_key(ev, ctx) {
+        if self.cursor_key(ev, ctx) || self.scroll_key(ev, ctx) {
             ev.clear();
             return;
+        }
+        if let Event::MouseDown(me) = *ev {
+            self.cursor_to(me.position, me.buttons.left);
         }
         let check_click = match *ev {
             Event::MouseDown(me) if !me.flags.double_click && self.on_check_cell(me.position.x) => {

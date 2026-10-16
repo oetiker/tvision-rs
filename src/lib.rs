@@ -232,7 +232,7 @@ pub use widgets::PageStack;
 pub use widgets::TabBar;
 pub use widgets::{
     Align, ColumnSpec, ColumnState, RowKey, SelectionMode, SortDir, SortKey, Table, TableModel,
-    VecModel,
+    ValidatorFactory, VecModel,
 };
 pub use widgets::{Button, ButtonFlags};
 pub use widgets::{CheckBoxes, Cluster, ClusterKind, MultiCheckBoxes, RadioButtons};

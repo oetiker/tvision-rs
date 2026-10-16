@@ -313,6 +313,10 @@ impl Command {
     /// column ascending). Unbound by default, like
     /// [`TABLE_SORT_NEXT`](Self::TABLE_SORT_NEXT).
     pub const TABLE_SORT_FLIP: Command = Command("tv.table_sort_flip");
+    /// A [`Table`](crate::widgets::Table) cell editor committed a new text
+    /// that the model accepted; `source` is the table's `ViewId`. Read the
+    /// value from `Table::model` (or the app's own copy of the data).
+    pub const TABLE_CELL_EDITED: Command = Command("tv.table_cell_edited");
     /// Open a focused [`Table`](crate::widgets::Table)'s column popup at its
     /// header: every column with a check mark, choosing one shows or hides it
     /// (the same popup a right-click on the header opens). Unbound by

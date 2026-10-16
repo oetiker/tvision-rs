@@ -1451,6 +1451,15 @@ impl<'a> Context<'a> {
             .push(Deferred::RecordHistory { link, history_id });
     }
 
+    /// How many message boxes the deferred queue holds — lets a caller tell
+    /// whether a call it made (a validator's `error`) requested one.
+    pub(crate) fn message_boxes_requested(&self) -> usize {
+        self.deferred
+            .iter()
+            .filter(|d| matches!(d, Deferred::OpenMessageBox { .. }))
+            .count()
+    }
+
     /// Request a modal message box be opened from inside a downward-borrowed
     /// `&mut View` — **deferred** ([`Deferred::OpenMessageBox`]; the
     /// async-modal-from-a-view seam, `docs/design/async-modal-from-view.md`).
