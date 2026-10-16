@@ -24,12 +24,14 @@ moves it into a dated, versioned section when a release is cut.
   and `set_column_layout` save and restore the arrangement, and every change
   by the user broadcasts `Command::TABLE_COLUMNS_CHANGED`.
 - **`Table` cells can be edited in place.** Columns marked `editable` get a
-  cell cursor (Left/Right); F2 or a double-click opens an input line over the
-  cell, Enter or Tab stores the text through `TableModel::set_cell`, Esc
-  cancels, and a rejected value shows a message box and keeps the editor open.
-  An open edit is stored when its dialog or window closes with any command but
-  Cancel (a rejected value stops the close); a click elsewhere, or a reload
-  that removes the row, discards it. Each stored edit broadcasts
+  black-on-gray cell cursor (Left/Right); Enter, F2 or a double-click opens an
+  input line over the cell, Enter or Tab stores the text through
+  `TableModel::set_cell`, Esc cancels, and a rejected value shows a message box
+  and keeps the editor open. In a dialog whose table has an editable column,
+  Enter therefore edits the cell instead of pressing the default button.
+- An open `Table` cell edit is stored when its dialog or window closes with any
+  command but Cancel (a rejected value stops the close); a click elsewhere, or
+  a reload that removes the row, discards it. Each stored edit broadcasts
   `Command::TABLE_CELL_EDITED`.
 - **Background work can post events.** `Program::put_event` and
   `Program::broadcast` queue an event or a broadcast from the idle hook (or any

@@ -72,7 +72,15 @@ two-stage reviewed; C++ faithfulness settled every review dispute.
   root before their first release; docs say where queued events go under a
   modal or a hold.
 
-**Gate on the integrated branch (ea41092):** 1676 workspace tests, clippy,
+- **Enter edits, user decision 2026-10-16** (`a4e8759`, `4d9523d`, `676d818`):
+  after trying the table the user asked for spreadsheet-style Enter. With a
+  cell cursor and a focused row, Enter opens the editor like F2 and is always
+  consumed; Enter commits and the cursor stays on the cell. Without a cell
+  cursor Enter still reaches the dialog's default button. `TableCellCursor`
+  became black on light gray, because white on blue was the input line's
+  colour and the cell cursor looked like an open editor.
+
+**Gate on the integrated branch (333e580):** 1684 workspace tests, clippy,
 fmt, examples, `cargo doc -D warnings`.
 
 **Found, not fixed:** apps cannot catch a command (for example cmHelp) under a
