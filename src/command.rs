@@ -315,7 +315,9 @@ impl Command {
     pub const TABLE_SORT_FLIP: Command = Command("tv.table_sort_flip");
     /// A [`Table`](crate::widgets::Table) cell editor committed a new text
     /// that the model accepted; `source` is the table's `ViewId`. Read the
-    /// value from `Table::model` (or the app's own copy of the data).
+    /// value from `Table::model` (or the app's own copy of the data). An
+    /// edit committed by the command that closes a modal dialog arrives
+    /// after the dialog is gone (see `Table::valid`).
     pub const TABLE_CELL_EDITED: Command = Command("tv.table_cell_edited");
     /// Open a focused [`Table`](crate::widgets::Table)'s column popup at its
     /// header: every column with a check mark, choosing one shows or hides it

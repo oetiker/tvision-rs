@@ -956,7 +956,10 @@ impl CaptureHandler for MenuSession {
             // evMouseAuto: execute() has NO evMouseAuto arm (no auto-repeat /
             // press-hold in a menu). Consume to keep the session modal.
             Event::MouseAuto(_) => CaptureFlow::Consumed,
-            // Anything else (Timer, Nothing): consume to keep the session modal.
+            // Anything else (Nothing): consume to keep the session modal.
+            // Timer expiries never get here: the pump routes them around the
+            // capture stack, as C++ `idle` delivers them inside execute()'s
+            // `getEvent`.
             _ => CaptureFlow::Consumed,
         }
     }

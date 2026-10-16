@@ -917,6 +917,14 @@ impl Program {
     /// application between [`pump_once`](Self::pump_once) calls — injects an
     /// event. Views use [`Context::put_event`] instead.
     ///
+    /// The idle hook also runs while a modal is open. Then a queued command or
+    /// key reaches only the modal and is dropped if the modal does not handle
+    /// it, as in C++ `TGroup::execute`. While a drag holds the input, a queued
+    /// command or key is discarded, as the C++ hold loops discard it. To tell
+    /// views to refresh, use
+    /// [`broadcast`](Self::broadcast): broadcasts and timer expiries reach the
+    /// whole tree also under a modal (D9).
+    ///
     /// # Turbo Vision heritage
     /// Ports `TProgram::putEvent` (`tprogram.cpp`). C++ holds one `pending`
     /// event and a second `putEvent` overwrites the first; here the events
@@ -927,7 +935,9 @@ impl Program {
 
     /// Queue a broadcast of `command` for the loop. `source` names the view the
     /// broadcast is about, or `None`. The broadcast is delivered on a later pump
-    /// pass, to every view in the tree.
+    /// pass, to every view in the tree, also while a modal is open (D9). A
+    /// window drag or an open menu discards a broadcast that arrives while it
+    /// holds the input.
     ///
     /// # Turbo Vision heritage
     /// The successor to `message(app, evBroadcast, command, infoPtr)` from an
@@ -2493,7 +2503,18 @@ impl Program {
                         if !modal_handled {
                             // Offer to the capture stack first; if consumed, skip view
                             // routing.
-                            let consumed = captures.dispatch(&mut ev, &mut ctx);
+                            //
+                            // A timer expiry bypasses the captures. C++ delivers it
+                            // from `TProgram::idle` as a synchronous
+                            // `message(this, evBroadcast, cmTimerExpired, id)`
+                            // (tprogram.cpp:212-228), and `idle` runs inside every
+                            // `getEvent` — also the ones in a mouse hold
+                            // (`TView::mouseEvent`, tview.cpp:636), a window drag
+                            // and `TMenuView::execute`. The hold never sees the
+                            // expiry, so it cannot discard it; a one-shot timer
+                            // must not be lost while a drag or a menu is open.
+                            let consumed = !matches!(ev, Event::Timer(_))
+                                && captures.dispatch(&mut ev, &mut ctx);
                             if !consumed {
                                 let modal = captures.modal_view();
                                 program_handle_event(
@@ -3987,11 +4008,18 @@ fn program_handle_event(
     // the application group's pre-/post-process views (the menu bar's hot
     // keys and accelerators) and `TProgram`/`TApplication::handleEvent`
     // (Alt-N, cmQuit, cmTile/cmCascade, cmDosShell, the app command slot)
-    // never run for it. Positional and broadcast events keep the root route
-    // below: the ModalFrame already gates mouse events to the modal's bounds,
-    // and broadcasts fan out by design (see `ModalFrame`).
+    // never run for it. The mouse wheel goes the same way: it is not a
+    // positional event in C++ (`positionalEvents = evMouse & ~evMouseWheel`),
+    // so the root route would fan it out to every view behind the modal,
+    // while C++ `execute` hands it to the modal alone. Positional and
+    // broadcast events keep the root route below: the ModalFrame already
+    // gates mouse events to the modal's bounds (outside clicks go to the
+    // modal itself), and broadcasts fan out by design (see `ModalFrame`).
     if let Some(id) = modal
-        && matches!(ev, Event::KeyDown(_) | Event::Command(_) | Event::Paste(_))
+        && matches!(
+            ev,
+            Event::KeyDown(_) | Event::Command(_) | Event::Paste(_) | Event::MouseWheel(_)
+        )
     {
         group.deliver_to_modal(id, ev, ctx);
         // eventError: an unconsumed command is dropped, not queued for the
@@ -6192,6 +6220,182 @@ mod tests {
             [false, true],
             "the popup's toggle reached the table"
         );
+    }
+
+    /// Program with a desktop holding a timer-logging [`Probe`] and the view
+    /// `extra` builds; returns it with the probe log and the clock handle.
+    fn timer_hold_program(
+        extra: impl FnOnce() -> Box<dyn View> + 'static,
+    ) -> (Program, Rc<RefCell<Vec<Event>>>, Rc<ManualClock>) {
+        let log: Rc<RefCell<Vec<Event>>> = Rc::new(RefCell::new(Vec::new()));
+        let log_cap = log.clone();
+        let (backend, _handle) = HeadlessBackend::new(80, 25);
+        let clock = Rc::new(ManualClock::new(0));
+        let mut program = Program::new(
+            Box::new(backend),
+            Box::new(clock.clone()),
+            Theme::classic_blue(),
+            move |r| {
+                let mut desktop = Desktop::new(r, |r2| Some(Desktop::init_background(r2)));
+                desktop.insert_view(Box::new(Probe::new(
+                    Rect::new(60, 20, 62, 21),
+                    'p',
+                    log_cap,
+                )));
+                desktop.insert_view(extra());
+                Some(Box::new(desktop))
+            },
+            |_r| None,
+            |_r| None,
+        );
+        program.out_events.clear();
+        program.out_events.push_back(Event::Broadcast {
+            command: Command::custom("test.noop"),
+            source: None,
+        });
+        program.pump_once();
+        (program, log, clock)
+    }
+
+    /// Drive a one-shot timer that expires while a capture hold (started by
+    /// `press`) is on top, then release; return how many expiries reached
+    /// the probe.
+    fn timer_ticks_across_hold(
+        program: &mut Program,
+        log: &Rc<RefCell<Vec<Event>>>,
+        clock: &ManualClock,
+        press: Event,
+        release: Event,
+    ) -> usize {
+        program
+            .timers
+            .set_timer(0, std::time::Duration::from_millis(10), None);
+        program.out_events.push_back(press);
+        program.pump_once();
+        assert_eq!(program.capture_len(), 1, "the press started a capture hold");
+        clock.advance(20);
+        for _ in 0..4 {
+            program.pump_once();
+        }
+        assert_eq!(program.capture_len(), 1, "the hold is still on top");
+        program.out_events.push_back(release);
+        for _ in 0..4 {
+            program.pump_once();
+        }
+        assert_eq!(program.capture_len(), 0, "the release ended the hold");
+        log.borrow()
+            .iter()
+            .filter(|e| matches!(e, Event::Timer(_)))
+            .count()
+    }
+
+    /// **A one-shot timer survives a `Table` header drag** (a
+    /// `MouseTrackCapture` hold). C++ `TProgram::idle` broadcasts
+    /// `cmTimerExpired` synchronously from inside the hold loop's `getEvent`,
+    /// so the hold never gets to discard it.
+    #[test]
+    fn timer_reaches_views_during_table_header_drag() {
+        use crate::widgets::{ColumnSpec, Table, VecModel};
+        let (mut program, log, clock) = timer_hold_program(|| {
+            let rows = vec![vec!["a".to_string(), "b".to_string()]];
+            Box::new(
+                Table::new(
+                    Rect::new(5, 3, 30, 8),
+                    vec![ColumnSpec::new("A", 4), ColumnSpec::new("B", 4)],
+                    None,
+                )
+                .with_model(Box::new(VecModel::new(rows))),
+            )
+        });
+        let n = timer_ticks_across_hold(
+            &mut program,
+            &log,
+            &clock,
+            mouse_down_at(15, 3),
+            mouse_up_at(15, 3),
+        );
+        assert_eq!(n, 1, "the expiry reached the views during the drag");
+    }
+
+    /// **A one-shot timer survives a window drag** (the `DragCapture` hold,
+    /// which consumes everything else, broadcasts included).
+    #[test]
+    fn timer_reaches_views_during_window_drag() {
+        let (mut program, log, clock) = timer_hold_program(|| {
+            Box::new(crate::window::Window::new(
+                Rect::new(10, 5, 40, 15),
+                Some("W".into()),
+                0,
+            ))
+        });
+        let n = timer_ticks_across_hold(
+            &mut program,
+            &log,
+            &clock,
+            mouse_down_at(20, 5),
+            mouse_up_at(22, 6),
+        );
+        assert_eq!(n, 1, "the expiry reached the views during the drag");
+    }
+
+    /// **The mouse wheel under a modal reaches the modal alone.** C++
+    /// `TGroup::execute` hands every event to the modal view; the wheel is
+    /// not positional, so the root route would fan it out to the desktop.
+    #[test]
+    fn wheel_under_modal_does_not_reach_views_behind_it() {
+        let log: Rc<RefCell<Vec<Event>>> = Rc::new(RefCell::new(Vec::new()));
+        let log_cap = log.clone();
+        let inner_log: Rc<RefCell<Vec<Event>>> = Rc::new(RefCell::new(Vec::new()));
+        let (backend, _handle) = HeadlessBackend::new(80, 25);
+        let clock = Rc::new(ManualClock::new(0));
+        let mut program = Program::new(
+            Box::new(backend),
+            Box::new(clock),
+            Theme::classic_blue(),
+            move |r| {
+                let mut desktop = Desktop::new(r, |r2| Some(Desktop::init_background(r2)));
+                desktop.insert_view(Box::new(Probe::new(
+                    Rect::new(60, 20, 62, 21),
+                    'p',
+                    log_cap,
+                )));
+                Some(Box::new(desktop))
+            },
+            |_r| None,
+            |_r| None,
+        );
+        let mut d = crate::dialog::Dialog::new(Rect::new(5, 3, 45, 15), Some("T".into()));
+        d.insert_child(Box::new(Probe::new(
+            Rect::new(1, 1, 3, 2),
+            'i',
+            inner_log.clone(),
+        )));
+        program.out_events.clear();
+        program.out_events.push_back(Event::MouseWheel(MouseEvent {
+            position: Point::new(61, 20),
+            wheel: crate::event::MouseWheel::Down,
+            ..Default::default()
+        }));
+        program
+            .out_events
+            .push_back(Event::Command(Command::CANCEL));
+        program.exec_view(Box::new(d));
+        let wheels = |l: &Rc<RefCell<Vec<Event>>>| {
+            l.borrow()
+                .iter()
+                .filter_map(|e| match e {
+                    Event::MouseWheel(m) => Some(m.position),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        assert!(
+            wheels(&log).is_empty(),
+            "a view behind the modal saw the wheel"
+        );
+        // The dialog's own view got it, in its owner's frame (the dialog's
+        // origin (5, 3) and the probe's (1, 1) subtracted).
+        assert_eq!(wheels(&inner_log), [Point::new(55, 16)]);
     }
 
     /// **End-to-end: a `Table` cell edit through the pump.** F2 opens the

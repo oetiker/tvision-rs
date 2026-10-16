@@ -1752,8 +1752,13 @@ pub const FD_CLEAR_BUTTON: u16 = 0x0008;
 /// Insert a "Help" button (posts `Command::HELP`; does not close the dialog).
 ///
 /// The help button is never the default and never triggers path validation.
-/// Wire a `Command::HELP` handler in the owning program to make it useful.
 /// May be OR-ed with any other button flag.
+///
+/// While the dialog runs modally, `Command::HELP` reaches only the dialog,
+/// which ignores it, and is then dropped: a program-level command handler
+/// (for example `run_app`'s) never sees it. To show help, embed the dialog in
+/// your own view type (`#[delegate(to = dialog)]`) and handle `Command::HELP`
+/// in that view's `handle_event`.
 ///
 /// # Turbo Vision heritage
 ///
@@ -1794,7 +1799,9 @@ pub const CD_NO_LOAD_DIR: u16 = 0x0001;
 ///
 /// Pass this flag in `opts` to [`ChDirDialog::new`] to insert an extra Help
 /// button that posts `Command::HELP`. Omit it (or use [`CD_NORMAL`]) when
-/// context-sensitive help is not needed.
+/// context-sensitive help is not needed. As with [`FD_HELP_BUTTON`], the
+/// command reaches only the modal dialog: handle it in a view that embeds
+/// the dialog, not at program level.
 pub const CD_HELP_BUTTON: u16 = 0x0002;
 
 // Change-directory dialog text. (There is no drive selector — no drives.)

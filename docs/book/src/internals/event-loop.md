@@ -70,7 +70,9 @@ commands flow through untouched (see [Commands & events](../apps/commands.md)).
 What survives is offered to the [capture stack](#the-capture-stack) first; only if
 no handler consumes it does it go to the normal view-tree walk
 (`program_handle_event`). A modal handler that consumes every otherwise-unhandled
-event *is* the modal loop.
+event *is* the modal loop. A timer expiry skips the capture stack: C++
+delivers it from `idle` inside the getEvent of every hold loop, so a drag or an
+open menu must not swallow it.
 
 ### The deferred drain
 

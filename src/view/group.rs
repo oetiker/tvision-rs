@@ -1520,8 +1520,8 @@ impl View for Group {
 }
 
 impl Group {
-    /// Hand a focused event to the executing modal view `id` alone — the
-    /// pump's realization of C++ `TGroup::execute` calling `p->handleEvent`
+    /// Hand a focused event or a mouse wheel to the executing modal view `id`
+    /// alone — the pump's realization of C++ `TGroup::execute` calling `p->handleEvent`
     /// directly (tgroup.cpp:180), with none of this group's pre-/post-process
     /// children involved. The modal sees this group as its owner: `ctx`
     /// carries this group's size as the owner size (what keyboard
@@ -1541,7 +1541,19 @@ impl Group {
         let saved_phase = ctx.phase();
         ctx.set_owner_size(self.st.size);
         ctx.set_phase(Phase::Focused);
-        self.children[i].view.handle_event(ev, ctx);
+        // A mouse wheel carries a position: translate it into the modal's
+        // frame as `deliver` does, and propagate only the consumed state.
+        let origin = self.children[i].view.state().origin;
+        let mut local = ev.clone();
+        if let Some(p) = mouse_pos_mut(&mut local) {
+            *p -= origin;
+            self.children[i].view.handle_event(&mut local, ctx);
+            if local.is_nothing() {
+                ev.clear();
+            }
+        } else {
+            self.children[i].view.handle_event(ev, ctx);
+        }
         ctx.set_phase(saved_phase);
         ctx.set_owner_size(saved_owner_size);
     }

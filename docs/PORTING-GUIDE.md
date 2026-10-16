@@ -536,12 +536,17 @@ never `sleep` (this is also what makes timing deterministic under test, D11).
 > let Alt-N and the `cmQuit → end_state` catch run under a modal. Now
 > `program_handle_event` takes the innermost modal view
 > (`CaptureStack::modal_view`). While it is set, focused events (key, command,
-> paste) go to that view alone (`Group::deliver_to_modal`, which gives it the
-> root's size as owner size). An unconsumed command is dropped. The menu bar's
+> paste) and the mouse wheel (not positional in C++, so the root route would fan
+> it out behind the modal) go to that view alone (`Group::deliver_to_modal`,
+> which gives it the root's size as owner size). An unconsumed command is
+> dropped. The menu bar's
 > pre-process hot keys, Alt-N, the `cmQuit` catch, cmTile/cmCascade/cmDosShell
 > and `run_app`'s command handler do not see it. The status-line pre-route in
 > the pump (`TProgram::getEvent`) still runs first, so Alt-X still becomes
-> `cmQuit` — which the dialog ignores, as in C++.
+> `cmQuit` — which the dialog ignores, as in C++. C++ apps catch `cmHelp`
+> under a modal by overriding `TApplication::getEvent`; no successor hook
+> exists yet, so help from inside a modal needs the dialog (or a view that
+> embeds it) to handle `Command::HELP` itself.
 >
 > **Remaining deviation — broadcasts under a modal.** Positional and broadcast
 > events keep the root route under a modal. In C++ a broadcast a dialog view

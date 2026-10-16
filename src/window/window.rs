@@ -1087,6 +1087,8 @@ impl CaptureHandler for DragCapture {
             }
             // The drag is modal: swallow everything that is not a mouse-move/up
             // (auto-repeat, keys, commands, broadcasts) without moving the window.
+            // Timer expiries never get here (the pump routes them around the
+            // capture stack, as C++ `idle` delivers them inside the drag loop).
             _ => CaptureFlow::Consumed,
         }
     }
