@@ -1520,6 +1520,32 @@ impl View for Group {
 }
 
 impl Group {
+    /// Hand a focused event to the executing modal view `id` alone — the
+    /// pump's realization of C++ `TGroup::execute` calling `p->handleEvent`
+    /// directly (tgroup.cpp:180), with none of this group's pre-/post-process
+    /// children involved. The modal sees this group as its owner: `ctx`
+    /// carries this group's size as the owner size (what keyboard
+    /// move/resize and zoom read) and the focused phase, both restored after.
+    ///
+    /// `exec_view` inserts the modal into the root group, so `id` is a direct
+    /// child; for a deeper `id` the view is found by id and the owner size is
+    /// left as the caller set it.
+    pub(crate) fn deliver_to_modal(&mut self, id: ViewId, ev: &mut Event, ctx: &mut Context) {
+        let Some(i) = self.index_of(id) else {
+            if let Some(v) = self.find_mut(id) {
+                v.handle_event(ev, ctx);
+            }
+            return;
+        };
+        let saved_owner_size = ctx.owner_size();
+        let saved_phase = ctx.phase();
+        ctx.set_owner_size(self.st.size);
+        ctx.set_phase(Phase::Focused);
+        self.children[i].view.handle_event(ev, ctx);
+        ctx.set_phase(saved_phase);
+        ctx.set_owner_size(saved_owner_size);
+    }
+
     /// The three-phase router body of [`handle_event`](View::handle_event),
     /// extracted so the `owner_size` save/restore bracket in `handle_event` is
     /// unconditional even though this fn may `return` early.

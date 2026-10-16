@@ -1235,14 +1235,16 @@ impl Program {
     /// instead requests one through the deferred channel
     /// (`Deferred::OpenModal` + a posted completion command).
     ///
-    /// **Program-level handling runs during the modal pump.** Under the single
-    /// loop, the nested [`pump_once`](Self::pump_once) calls below still run
-    /// [`program_handle_event`] every iteration — so the Alt-N window-selection
-    /// block and the quit catch are live *during* the modal. A `Command::QUIT`
-    /// arriving while a modal is open therefore ends the modal (with `QUIT`) and
-    /// quits the app, even from inside a dialog. This is intentional UX (and a
-    /// deliberate deviation from the original's modal dispatch, which would have
-    /// discarded it and left the modal open).
+    /// **Only the modal view handles focused events during the modal pump.**
+    /// While the [`ModalFrame`] is on the capture stack, keys, commands and
+    /// pastes go to the modal view alone, as `TGroup::execute` hands them to
+    /// `p->handleEvent`. A command it does not consume is dropped
+    /// (`eventError`): the menu bar, the Alt-N window selection, the quit
+    /// catch, cmTile/cmCascade/cmDosShell and the application command handler
+    /// of [`run_app`](Self::run_app) do not see it. So a `Command::QUIT` — for
+    /// example from the status line's Alt-X — leaves the modal open. The
+    /// status line still sees keys and clicks first, as in
+    /// `TProgram::getEvent`.
     ///
     /// **HEADLESS HANG WARNING:** [`pump_once`](Self::pump_once) does not block on a
     /// headless backend, so the inner `while end_state.is_none()` loop spins until
@@ -3979,11 +3981,31 @@ fn program_handle_event(
     renderer: &mut Renderer,
     shell_msg_hook: &Option<Box<dyn Fn() -> String>>,
 ) {
-    // Modal-isolation note: program-level interception (this Alt-N block + the
-    // cmQuit catch below) is NOT suppressed while a modal is active. C++'s nested
-    // `p->execute()` (tgroup.cpp:205) structurally avoids it by dispatching to the
-    // dialog's handleEvent, not TProgram's; tvision-rs's single loop runs this on every
-    // pump, including modal pumps (the deviation documented on `exec_view`).
+    // While a modal view executes, a focused event (key, command, paste) goes
+    // to that view alone, and nothing program-level sees it. C++
+    // `TGroup::execute` (tgroup.cpp:173-186) calls the modal view's own
+    // `handleEvent` and hands what is left to `eventError`, which drops it:
+    // the application group's pre-/post-process views (the menu bar's hot
+    // keys and accelerators) and `TProgram`/`TApplication::handleEvent`
+    // (Alt-N, cmQuit, cmTile/cmCascade, cmDosShell, the app command slot)
+    // never run for it. Positional and broadcast events keep the root route
+    // below: the ModalFrame already gates mouse events to the modal's bounds,
+    // and broadcasts fan out by design (see `ModalFrame`).
+    if let Some(id) = modal
+        && matches!(ev, Event::KeyDown(_) | Event::Command(_) | Event::Paste(_))
+    {
+        group.deliver_to_modal(id, ev, ctx);
+        // eventError: an unconsumed command is dropped, not queued for the
+        // application's command handler.
+        if matches!(ev, Event::Command(_)) {
+            ev.clear();
+        }
+        return;
+    }
+
+    // No modal executes past this point for focused events (see the early
+    // return above), so the program-level steps below are TProgram /
+    // TApplication::handleEvent proper.
     //
     // Alt+digit window selection (cmSelectWindowNum). Faithful TProgram::handleEvent
     // order: the Alt-N block runs BEFORE the group dispatch. The window NUMBER is an
@@ -4023,22 +4045,7 @@ fn program_handle_event(
         }
     }
 
-    // While a modal view executes, a focused event (key, command, paste) goes
-    // to that view alone. C++ `TGroup::execute` (tgroup.cpp:180) calls the
-    // modal view's own `handleEvent`, so the application group's pre-/post-
-    // process views — the menu bar's title hot keys and item accelerators —
-    // never see it. Routing through the root group here would run its
-    // pre-process phase and fire the menu bar under the dialog. Positional
-    // and broadcast events keep the root route: the ModalFrame already gates
-    // mouse events to the modal's bounds, and broadcasts fan out by design.
-    match modal {
-        Some(id) if matches!(ev, Event::KeyDown(_) | Event::Command(_) | Event::Paste(_)) => {
-            if let Some(v) = group.find_mut(id) {
-                v.handle_event(ev, ctx);
-            }
-        }
-        _ => group.handle_event(ev, ctx),
-    }
+    group.handle_event(ev, ctx);
 
     // C++: endModal(cmQuit); clearEvent(event).
     if *ev == Event::Command(Command::QUIT) {
@@ -8384,34 +8391,29 @@ mod tests {
         assert!(!more.down, "the focused '~M~ore' button ignored the letter");
     }
 
-    /// `Command::QUIT` during a modal (the non-obvious edge). Inside the modal,
-    /// `Event::Command(Command::QUIT)` is caught by `program_handle_event` ->
-    /// `end_state = Some(QUIT)`. The inner loop exits, `valid_end(QUIT)` ->
-    /// `group.valid(QUIT)` -> true (the dialog's `valid` defers to the group, no
-    /// child vetoes QUIT), so `exec_view` returns `QUIT` and pops the frame.
-    ///
-    /// **This asserts a DELIBERATE DEVIATION (D9).** Under the single loop,
-    /// `program_handle_event` (the quit catch) runs during the modal pump, so a
-    /// quit command ends the modal with `QUIT` and quits the app. The original's
-    /// modal dispatch never reached its program-level quit catch, so there the
-    /// command would have been discarded and the modal would stay open. We keep our
-    /// behavior (see `exec_view`'s doc); the assertions below verify it (no hang,
-    /// no panic, frame popped).
+    /// `Command::QUIT` during a modal is dropped, as in C++: `TGroup::execute`
+    /// hands it to the dialog, which ignores it, and `eventError` discards it
+    /// (tgroup.cpp:167-182) — `TProgram::handleEvent`'s quit catch never runs.
+    /// The modal stays open; the queued cmCancel then ends it.
     #[test]
-    fn exec_view_cm_quit_ends_modal_deviation_from_cpp() {
+    fn exec_view_cm_quit_is_dropped_like_cpp() {
         let (mut program, _screen, _clock) = program_with_desktop(40, 12);
 
         program.out_events.push_back(Event::Command(Command::QUIT));
+        program
+            .out_events
+            .push_back(Event::Command(Command::CANCEL));
 
         let dialog = Dialog::new(Rect::new(4, 2, 36, 10), Some("Setup".into()));
         let result = program.exec_view(Box::new(dialog));
 
         assert_eq!(
             result,
-            Command::QUIT,
-            "cmQuit during a modal ends the modal with cmQuit (caller propagates)"
+            Command::CANCEL,
+            "cmQuit did not end the modal; the following cmCancel did"
         );
-        assert_eq!(program.capture_len(), 0, "ModalFrame popped on cmQuit");
+        assert_eq!(program.capture_len(), 0, "ModalFrame popped");
+        assert_eq!(program.end_state(), None, "the app loop was not ended");
     }
 
     /// A sibling view in the ROOT group whose `valid` vetoes one specific command
@@ -9766,6 +9768,115 @@ mod tests {
         program.pump_once(); // highlight File, NO box
         program.out_events.push_back(key(Key::Down));
         program.pump_once(); // bar kbDown → autoSelect → open File box
+    }
+
+    /// A 60×20 program with a menu bar and a Dialog at (10,4)-(50,16) set up
+    /// as `exec_view` does (modal state, focus, ModalFrame), settled. Returns
+    /// the program and the dialog id.
+    fn program_with_modal_dialog() -> (Program, crate::view::ViewId) {
+        program_with_modal(Box::new(Dialog::new(
+            Rect::new(10, 4, 50, 16),
+            Some("D".into()),
+        )))
+    }
+
+    /// [`program_with_modal_dialog`] for any modal view.
+    fn program_with_modal(view: Box<dyn View>) -> (Program, crate::view::ViewId) {
+        let (mut program, _bar_id, _baseline) = program_with_menu_bar(60, 20);
+        let id = program.group_mut().insert(view);
+        if let Some(v) = program.group_mut().find_mut(id) {
+            let st = v.state_mut();
+            st.options.selectable = false;
+            st.state.modal = true;
+        }
+        program.with_ctx(|g, ctx| g.set_current(Some(id), SelectMode::Enter, ctx));
+        let bounds = program
+            .group_mut()
+            .find_mut(id)
+            .unwrap()
+            .state()
+            .get_bounds();
+        program.captures.push(Box::new(ModalFrame::new(id, bounds)));
+        for _ in 0..3 {
+            program.pump_once();
+        }
+        program.out_events.clear();
+        (program, id)
+    }
+
+    /// A modal dialog still sees the application as its owner: keyboard
+    /// move (cmResize, Ctrl-F5) moves it by one cell per arrow. Regression:
+    /// the direct modal dispatch once left the owner size at (0,0), and the
+    /// first arrow collapsed the dialog to an empty rect.
+    #[test]
+    fn modal_dialog_keyboard_move_uses_owner_size() {
+        let (mut program, id) = program_with_modal_dialog();
+        program.enable_command(Command::RESIZE);
+        program.put_event(Event::Command(Command::RESIZE));
+        program.pump_once();
+        program.put_event(key(Key::Right));
+        program.pump_once();
+        program.put_event(key(Key::Enter));
+        program.pump_once();
+        let b = program
+            .group_mut()
+            .find_mut(id)
+            .unwrap()
+            .state()
+            .get_bounds();
+        assert_eq!(b, Rect::new(11, 4, 51, 16), "moved one cell right");
+    }
+
+    /// cmZoom on a modal window maximizes it to its owner, the application
+    /// (60×20) — not to the (0,0) owner size of a bare direct dispatch.
+    #[test]
+    fn modal_window_zoom_fills_the_owner() {
+        let win = crate::window::Window::new(Rect::new(10, 4, 30, 10), Some("W".into()), 0);
+        let (mut program, id) = program_with_modal(Box::new(win));
+        program.put_event(Event::Command(Command::ZOOM));
+        program.pump_once();
+        let b = program
+            .group_mut()
+            .find_mut(id)
+            .unwrap()
+            .state()
+            .get_bounds();
+        assert_eq!(b, Rect::new(0, 0, 60, 20), "zoomed to the owner's extent");
+    }
+
+    /// Under a modal, a command the dialog does not consume is dropped, as
+    /// C++ `TGroup::execute` → `eventError` drops it (tgroup.cpp:167-182):
+    /// TProgram/TApplication::handleEvent never runs. So cmQuit does not end
+    /// the loop, and an app command is not queued for `run_app`'s handler.
+    /// Control: without a modal both reach the program level.
+    #[test]
+    fn unconsumed_commands_under_modal_are_dropped() {
+        let app_cmd = Command::custom("test.app-cmd");
+
+        let (mut program, _bar, _b) = program_with_menu_bar(60, 20);
+        program.put_event(Event::Command(app_cmd));
+        program.pump_once();
+        assert_eq!(
+            program.app_commands.iter().copied().collect::<Vec<_>>(),
+            [app_cmd],
+            "control: an app command is queued for run_app"
+        );
+        program.put_event(Event::Command(Command::QUIT));
+        program.pump_once();
+        assert_eq!(program.end_state(), Some(Command::QUIT), "control: quit");
+
+        let (mut program, id) = program_with_modal_dialog();
+        program.put_event(Event::Command(app_cmd));
+        program.pump_once();
+        assert!(
+            program.app_commands.is_empty(),
+            "an app command under a modal is not queued for later"
+        );
+        program.put_event(Event::Command(Command::QUIT));
+        program.pump_once();
+        assert_eq!(program.end_state(), None, "cmQuit under a modal is dropped");
+        assert_eq!(program.capture_len(), 1, "the dialog stays open");
+        assert!(program.group_mut().find_mut(id).is_some());
     }
 
     /// Menu-bar keys do not fire while a modal dialog executes. C++
@@ -11155,16 +11266,19 @@ mod tests {
 
         #[test]
         fn accelerator_fires_during_a_modal() {
-            // Push a ModalFrame directly (a dialog is open), then inject Alt-X.
-            // Because the getEvent pre-routing runs BEFORE captures.dispatch, the
-            // status line still sees the key, transforms it to cmQuit, and it
-            // routes -> end_state set. BITE: moving the pre-route to AFTER
-            // captures.dispatch makes this fail (the ModalFrame would gate, and the
-            // raw keyDown — not yet a command — would never reach the status line).
+            // A probe view is the executing modal; inject Alt-X. Because the
+            // getEvent pre-routing runs BEFORE captures.dispatch, the status line
+            // still sees the key and transforms it to cmQuit, which then goes to
+            // the modal view alone (TGroup::execute) — not to the program's quit
+            // catch. BITE: moving the pre-route to AFTER captures.dispatch makes
+            // this fail (the probe would get the raw key, not cmQuit).
             let (mut program, _handle, _sl, _mb) = program_full(40, 10);
-            // A synthetic modal occupying a central rect.
-            let modal_id = ViewId::next();
+            let log = Rc::new(RefCell::new(Vec::new()));
             let bounds = Rect::new(5, 3, 35, 8);
+            let modal_id =
+                program
+                    .group_mut()
+                    .insert(Box::new(Probe::new(bounds, 'M', log.clone())));
             program
                 .captures
                 .push(Box::new(ModalFrame::new(modal_id, bounds)));
@@ -11172,28 +11286,34 @@ mod tests {
 
             program.out_events.push_back(alt_x());
             program.pump_once();
+            assert!(
+                log.borrow().contains(&Event::Command(Command::QUIT)),
+                "Alt-X reaches the status line even with a modal open, and its \
+                 cmQuit goes to the modal view: {:?}",
+                log.borrow()
+            );
             assert_eq!(
                 program.end_state(),
-                Some(Command::QUIT),
-                "Alt-X reaches the status line even with a modal open (pre-route is BEFORE dispatch)"
+                None,
+                "the modal view ignores cmQuit; it is dropped, the loop goes on"
             );
         }
 
-        /// Positive end-to-end: Alt-X pre-queued, then exec_view drives the modal
-        /// loop — the accelerator ends the modal (returns QUIT). Mirrors the C++
-        /// "cmQuit from a modal" path our exec_view documents.
+        /// End-to-end: Alt-X pre-queued, then exec_view drives the modal loop.
+        /// As in C++, the status line turns it into cmQuit, the dialog ignores
+        /// it and `eventError` drops it — the modal stays open. The queued Esc
+        /// (the dialog's cmCancel) then ends it.
         #[test]
-        fn alt_x_ends_an_exec_view_modal() {
+        fn alt_x_does_not_end_an_exec_view_modal() {
             let (mut program, _handle, _sl, _mb) = program_full(40, 10);
-            // Pre-queue Alt-X so the first modal pump pre-routes it -> cmQuit ->
-            // end_state, ending exec_view (else it would spin on headless).
             program.out_events.push_back(alt_x());
+            program.out_events.push_back(key(Key::Esc));
             let dialog = crate::dialog::Dialog::new(Rect::new(8, 3, 32, 7), Some("Modal".into()));
             let result = program.exec_view(Box::new(dialog));
             assert_eq!(
                 result,
-                Command::QUIT,
-                "the modal ended on the Alt-X accelerator"
+                Command::CANCEL,
+                "Alt-X did not end the modal; Esc did"
             );
         }
 
@@ -11216,27 +11336,33 @@ mod tests {
             //   pump 2 (MouseUp):   MouseTrackCapture (top of stack) forwards the
             //                       localized MouseUp to the status line; its MouseUp
             //                       arm fires cmQuit and clears. The capture pops.
-            //   pump 3:             the posted cmQuit routes to the cmQuit catch.
+            //   pump 3:             the posted cmQuit goes to the modal view alone
+            //                       (TGroup::execute), here a logging probe.
             //
             // BITE: removing the mouseDown pre-route arm makes the modal gate eat the
-            // click -> the line never posts -> end_state stays None -> red.
+            // click -> the line never posts -> the probe never sees cmQuit -> red.
             let (mut program, _handle, _sl, _mb) = program_full(40, 10);
-            let modal_id = ViewId::next();
             // Modal covers rows 0..9 — the whole screen EXCEPT the status-line row.
+            let log = Rc::new(RefCell::new(Vec::new()));
+            let modal_bounds = Rect::new(0, 0, 40, 9);
+            let modal_id =
+                program
+                    .group_mut()
+                    .insert(Box::new(Probe::new(modal_bounds, 'M', log.clone())));
             program
                 .captures
-                .push(Box::new(ModalFrame::new(modal_id, Rect::new(0, 0, 40, 9))));
+                .push(Box::new(ModalFrame::new(modal_id, modal_bounds)));
 
             program.out_events.push_back(mouse_down_at(2, 9));
             program.pump_once(); // pre-route delivers MouseDown: arms tracking, no command yet
             program.out_events.push_back(mouse_up_at(2, 9));
             program.pump_once(); // MouseTrackCapture delivers MouseUp -> status line fires cmQuit
-            program.pump_once(); // posted cmQuit routes -> cmQuit catch
-            assert_eq!(
-                program.end_state(),
-                Some(Command::QUIT),
+            program.pump_once(); // posted cmQuit routes to the modal view
+            assert!(
+                log.borrow().contains(&Event::Command(Command::QUIT)),
                 "a click on the status line is pre-routed even past a modal gate that excludes it"
             );
+            assert_eq!(program.end_state(), None, "cmQuit under a modal is dropped");
         }
 
         #[test]
