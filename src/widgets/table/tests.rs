@@ -1763,6 +1763,25 @@ fn enter_without_rows_keeps_its_list_meaning() {
 }
 
 #[test]
+fn enter_without_room_for_the_editor_is_used_like_f2() {
+    // Only the header row: the cursor cell cannot be shown.
+    let mut fx = Fixture::new(
+        Table::new(Rect::new(0, 0, W, 1), edit_columns(), None).with_model(model(&ROWS)),
+    );
+    fx.focus(true);
+    assert_eq!(fx.t().cursor_column(), Some(1));
+    let (ev, _) = fx.send(enter());
+    assert!(ev.is_nothing(), "Enter does not reach the dialog");
+    assert!(!fx.t().is_editing(), "no editor opened");
+    let (ev, _) = fx.send(Event::KeyDown(KeyEvent::new(
+        Key::F(2),
+        KeyModifiers::default(),
+    )));
+    assert!(ev.is_nothing(), "the same as F2");
+    assert!(!fx.t().is_editing());
+}
+
+#[test]
 fn an_enter_commit_stays_on_the_cell_and_the_next_enter_edits_it_again() {
     let mut fx = editing();
     let id = fx.id;

@@ -519,10 +519,9 @@ impl Table {
     }
 
     /// An event reaching the table while no editor is open: F2 edits the
-    /// cell under the cursor, and so does Enter when the editor opens (there
-    /// is a cursor and a focused row; else Enter keeps its list meaning); a
-    /// double-click on an editable cell edits that cell. Returns whether `ev`
-    /// was used.
+    /// cell under the cursor, and so does Enter while there is a cursor and a
+    /// focused row (else the table does not use Enter); a double-click on an
+    /// editable cell edits that cell. Returns whether `ev` was used.
     pub(super) fn start_event(&mut self, ev: &Event, ctx: &mut Context) -> bool {
         match *ev {
             Event::KeyDown(ke) if plain(ke) && !ke.modifiers.shift && ke.key == Key::F(2) => {
@@ -534,9 +533,18 @@ impl Table {
                     None => false,
                 }
             }
-            Event::KeyDown(ke) if plain(ke) && !ke.modifiers.shift && ke.key == Key::Enter => self
-                .cursor_column()
-                .is_some_and(|col| self.start_edit(col, ctx)),
+            Event::KeyDown(ke) if plain(ke) && !ke.modifiers.shift && ke.key == Key::Enter => {
+                let Some(col) = self.cursor_column() else {
+                    return false;
+                };
+                if self.focused_key().is_none() {
+                    return false;
+                }
+                // Used like F2 even when the cell cannot be shown, so it
+                // never presses the dialog's default button instead.
+                self.start_edit(col, ctx);
+                true
+            }
             Event::MouseDown(me)
                 if me.flags.double_click && me.buttons.left && me.position.y >= 1 =>
             {

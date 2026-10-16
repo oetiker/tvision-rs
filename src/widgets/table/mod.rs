@@ -88,8 +88,10 @@
 //! dialog's OK (any end command but Cancel, through [`View::valid`]) stores
 //! an open edit first, and a refusal keeps the dialog open; Cancel cancels
 //! it. Without a cell cursor (no visible editable column) or without rows,
-//! Enter keeps its list meaning and reaches the dialog's default button;
-//! with modifiers (Ctrl, Alt, Shift) it never edits. A double-click on a cell
+//! the table does not use Enter, so it reaches the dialog's default button;
+//! with a cursor and a row it is always the table's, like F2, even when the
+//! cell has no room to show an editor. With modifiers (Ctrl, Alt, Shift)
+//! Enter never edits. A double-click on a cell
 //! that is not editable still chooses (single mode) or toggles (multi mode)
 //! the row, and Space still marks it in multi mode.
 //!
