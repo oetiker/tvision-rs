@@ -5,6 +5,76 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## tvdocker feedback, part 2: Table v2, resize cascade, cursor clip, modal routing, caret (2026-10-15/16)
+
+Continues the entry below on the same branch. The user tried the Table demo and
+asked for all former "out of scope" items (spec `# v2 additions` in
+`docs/specs/2026-10-14-table-widget.md`) and for every side bug found on the
+way. Each piece was implemented by a fresh agent in its own worktree and
+two-stage reviewed; C++ faithfulness settled every review dispute.
+
+**Table v2** (`src/widgets/table/`):
+- **Check column** (`c8237e9`, `1e01ed3`): Multi mode draws a frozen `[ ]`/`[X]`
+  column with the CheckBoxes glyphs; the user rejected an `X` in column 0.
+- **Phase A, layout** (`cae33ba`..`c7ae0ad`): `ColumnSpec::flex`, horizontal
+  scroll by display cells with the check column frozen, `layout::RowLayout`
+  as the per-width geometry, optional h bar.
+- **Phase B, header** (`fa4333f`..`020a875`): separator drag resizes (clamped
+  to `min_width.max(1)..=MAX_COLUMN_WIDTH`, 1024, in every path, because
+  `pad_cell` allocates the full column width while drawing), label drag moves,
+  right-click `popup_menu` shows/hides (last visible column guarded), header
+  sorts on release. `ColumnSpec::{resizable, movable, fixed}`; `fixed` exists
+  because the widest-first shrink otherwise took a dragged width straight back.
+  `column_layout`/`set_column_layout` with `ColumnState` (also carries `flex`
+  and `fixed`), `TABLE_COLUMNS`, `TABLE_COLUMNS_CHANGED`. New
+  `DrawCtx::screen_size()`. Popup labels drop `~` (the menu has no escape).
+- **Phase C, cell editing** (`949b3d1`..`508b1d4`): `ColumnSpec::editable` +
+  validator factory, `TableModel::set_cell` (default `Err("read-only")`), a cell
+  cursor (`Role::TableCellCursor`), F2/double-click open an `InputLine` that is
+  bound to a row key + model column and re-placed on every draw. Review rounds
+  closed three silent text-loss paths: an off-screen edit survives and the next
+  key scrolls it back; `Table::valid` commits on every non-CANCEL command (veto
+  on `set_cell` Err, like C++ `TInputLine::valid`); `set_model` keeps the edit
+  when its row and column survive. A dead edit is never committed and eats the
+  next key, so Enter cannot reach the dialog's default button.
+
+**Framework fixes:**
+- **Resize cascade** (`3f881be`, `729c6cc`, `e2b071f`): `on_bounds_changed` now
+  reaches nested scroll views on every resize path (grow-mode cascade, zoom,
+  tile, splitter divider incl. keyboard moves) via a `bounds_dirty` flag.
+- **Cursor clip** (`60f6405`, `e9264cf`): the hardware cursor is hidden when the
+  caret is outside its view, its owners, the screen, or under a sibling, like
+  C++ `TVCursor`.
+- **Idle hook can post** (`75e94c5`): `Program::put_event`/`broadcast`; the
+  rustdoc and `internals/event-loop.md` no longer claim a capability that did
+  not exist, nor that the status line gets `NO_CONTEXT`.
+- **Modal routing** (`7d68f38`, `96bb005`, `55ba6ea`): under a modal, keys,
+  commands and pastes go to the modal view only, like `TGroup::execute`; the
+  status line keeps its pre-route. The first version left the modal's owner
+  size at 0×0 (Ctrl-F5 collapsed the dialog); `Group::deliver_to_modal` now
+  sets it. The program-level tail (Alt-N, cmQuit, TILE/CASCADE, queued app
+  commands) no longer runs under a modal; D9 in PORTING-GUIDE was rewritten.
+  Recorded remaining deviation (D9): broadcasts queued while a modal runs still
+  reach the whole tree.
+- **Caret shape** (`5e86ce6`, `1c85df5`): C++ `decideCaretSize` ported;
+  `Backend::set_caret_size` (new `View::caret_size` forwarder in the macro
+  specs). Crossterm: INSERT size → blinking block, otherwise
+  `DefaultUserShape` (`ncurdisp.cpp:86-97`); restored on exit and suspend.
+- **Flaky test** (`08191c4`): `GlobalKeymapGuard` is thread-local, so
+  `ins_toggles_cursor_ins` no longer sees another test's emacs preset.
+- **Rustdoc** (`4434146`): 122 warnings → 0 under `RUSTDOCFLAGS=-D warnings`.
+
+**Gate on the integrated branch (79bc571):** 1672 workspace tests (twice),
+clippy, fmt, `cargo doc -D warnings`.
+
+**Found, not fixed:** apps cannot catch a command (for example cmHelp) under a
+modal, as C++ apps do by overriding `getEvent`; `deliver_to_modal` handles only
+a modal in the root group (always true today); the Editor's right-click popup
+gets its owner size as the screen size (`editor.rs` ~2056); Table minors: the
+resize anchor drifts when the h offset is clamped mid-drag, the popup cannot
+grey out the last visible column, and the last cell of a filling last column
+resizes instead of sorting.
+
 ## tvdocker feedback: double-click, modal data-back, delegate guard, Table (2026-10-15)
 
 The author of tvdocker (github.com/supertorpe/tvdocker, a Docker TUI on
