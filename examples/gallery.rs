@@ -14,15 +14,16 @@
 
 use std::{env, io};
 
+use tvision_rs::widgets::table::SelectionMode;
 use tvision_rs::{
     Button, ButtonFlags, ButtonRowAlign, CD_NORMAL, ChDirDialog, CheckBoxes, Color, ColorPicker,
     ColumnSpec, Command, Constraints, Context, CrosstermBackend, Desktop, Dialog, EditWindow,
     Event, FD_OPEN_BUTTON, FieldValue, FileDialog, FilterValidator, GrowMode, HistoryWindow,
     InputLine, Key, KeyEvent, Label, ListBox, MaskedInput, Memo, Menu, MenuBar, MenuBox, Node,
     Outline, OutlineViewer, Program, RadioButtons, Rect, RevealEyeConfig, RowKey, ScrollBar,
-    ScrollBarOptions, SelectionMode, Splitter, StaticText, StatusDef, StatusLine, SystemClock,
-    THistory, Tab, Table, Terminal, TextDevice, Theme, VecModel, View, ViewId, Window, alt,
-    delegate, history_add, ov_update,
+    ScrollBarOptions, Splitter, StaticText, StatusDef, StatusLine, SystemClock, THistory, Tab,
+    Table, Terminal, TextDevice, Theme, VecModel, View, ViewId, Window, alt, delegate, history_add,
+    ov_update,
 };
 
 /// How a specimen is shown. Most widgets are leaf controls hosted in a dialog on
