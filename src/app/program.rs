@@ -3998,11 +3998,18 @@ fn program_handle_event(
     // the application group's pre-/post-process views (the menu bar's hot
     // keys and accelerators) and `TProgram`/`TApplication::handleEvent`
     // (Alt-N, cmQuit, cmTile/cmCascade, cmDosShell, the app command slot)
-    // never run for it. Positional and broadcast events keep the root route
-    // below: the ModalFrame already gates mouse events to the modal's bounds,
-    // and broadcasts fan out by design (see `ModalFrame`).
+    // never run for it. The mouse wheel goes the same way: it is not a
+    // positional event in C++ (`positionalEvents = evMouse & ~evMouseWheel`),
+    // so the root route would fan it out to every view behind the modal,
+    // while C++ `execute` hands it to the modal alone. Positional and
+    // broadcast events keep the root route below: the ModalFrame already
+    // gates mouse events to the modal's bounds (outside clicks go to the
+    // modal itself), and broadcasts fan out by design (see `ModalFrame`).
     if let Some(id) = modal
-        && matches!(ev, Event::KeyDown(_) | Event::Command(_) | Event::Paste(_))
+        && matches!(
+            ev,
+            Event::KeyDown(_) | Event::Command(_) | Event::Paste(_) | Event::MouseWheel(_)
+        )
     {
         group.deliver_to_modal(id, ev, ctx);
         // eventError: an unconsumed command is dropped, not queued for the
@@ -6319,6 +6326,66 @@ mod tests {
             mouse_up_at(22, 6),
         );
         assert_eq!(n, 1, "the expiry reached the views during the drag");
+    }
+
+    /// **The mouse wheel under a modal reaches the modal alone.** C++
+    /// `TGroup::execute` hands every event to the modal view; the wheel is
+    /// not positional, so the root route would fan it out to the desktop.
+    #[test]
+    fn wheel_under_modal_does_not_reach_views_behind_it() {
+        let log: Rc<RefCell<Vec<Event>>> = Rc::new(RefCell::new(Vec::new()));
+        let log_cap = log.clone();
+        let inner_log: Rc<RefCell<Vec<Event>>> = Rc::new(RefCell::new(Vec::new()));
+        let (backend, _handle) = HeadlessBackend::new(80, 25);
+        let clock = Rc::new(ManualClock::new(0));
+        let mut program = Program::new(
+            Box::new(backend),
+            Box::new(clock),
+            Theme::classic_blue(),
+            move |r| {
+                let mut desktop = Desktop::new(r, |r2| Some(Desktop::init_background(r2)));
+                desktop.insert_view(Box::new(Probe::new(
+                    Rect::new(60, 20, 62, 21),
+                    'p',
+                    log_cap,
+                )));
+                Some(Box::new(desktop))
+            },
+            |_r| None,
+            |_r| None,
+        );
+        let mut d = crate::dialog::Dialog::new(Rect::new(5, 3, 45, 15), Some("T".into()));
+        d.insert_child(Box::new(Probe::new(
+            Rect::new(1, 1, 3, 2),
+            'i',
+            inner_log.clone(),
+        )));
+        program.out_events.clear();
+        program.out_events.push_back(Event::MouseWheel(MouseEvent {
+            position: Point::new(61, 20),
+            wheel: crate::event::MouseWheel::Down,
+            ..Default::default()
+        }));
+        program
+            .out_events
+            .push_back(Event::Command(Command::CANCEL));
+        program.exec_view(Box::new(d));
+        let wheels = |l: &Rc<RefCell<Vec<Event>>>| {
+            l.borrow()
+                .iter()
+                .filter_map(|e| match e {
+                    Event::MouseWheel(m) => Some(m.position),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        assert!(
+            wheels(&log).is_empty(),
+            "a view behind the modal saw the wheel"
+        );
+        // The dialog's own view got it, in its owner's frame (the dialog's
+        // origin (5, 3) and the probe's (1, 1) subtracted).
+        assert_eq!(wheels(&inner_log), [Point::new(55, 16)]);
     }
 
     /// **End-to-end: a `Table` cell edit through the pump.** F2 opens the
