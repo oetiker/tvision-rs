@@ -156,11 +156,15 @@ event. With no input they come about every 20 ms, sooner when a timer is due.
   `draw`; the next redraw shows the change. To make views react, it queues an
   event with `Program::broadcast(REFRESH, None)` or `Program::put_event(ev)`.
   The event is delivered on the next pump pass, not inside the callback.
-  Queue it only when new data arrived, not on every pass.
+  Queue it only when new data arrived, not on every pass. Use `broadcast` for
+  refreshes: a broadcast reaches the whole tree also under a modal, but a
+  command or key queued with `put_event` while a modal is open reaches only the
+  modal and is dropped if the modal does not handle it.
 - A view-owned periodic timer:
   [`Context::set_timer`](../api/tvision_rs/view/struct.Context.html#method.set_timer)
   with a period. Each expiry arrives as `Event::Timer(id)` and is delivered to
-  every view in the tree like a broadcast, also while a modal is open. The view
+  every view in the tree like a broadcast, also while a modal is open, a window
+  or a column is dragged, or a menu is open. The view
   can drain a channel and call `ctx.broadcast(REFRESH, None)` so other views
   update themselves. The timer is not tied to its view: call
   `ctx.kill_timer(id)` when the work ends.

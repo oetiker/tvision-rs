@@ -917,6 +917,14 @@ impl Program {
     /// application between [`pump_once`](Self::pump_once) calls — injects an
     /// event. Views use [`Context::put_event`] instead.
     ///
+    /// The idle hook also runs while a modal is open. Then a queued command or
+    /// key reaches only the modal and is dropped if the modal does not handle
+    /// it, as in C++ `TGroup::execute`. While a drag holds the input, a queued
+    /// command or key is discarded, as the C++ hold loops discard it. To tell
+    /// views to refresh, use
+    /// [`broadcast`](Self::broadcast): broadcasts and timer expiries reach the
+    /// whole tree also under a modal (D9).
+    ///
     /// # Turbo Vision heritage
     /// Ports `TProgram::putEvent` (`tprogram.cpp`). C++ holds one `pending`
     /// event and a second `putEvent` overwrites the first; here the events
@@ -927,7 +935,9 @@ impl Program {
 
     /// Queue a broadcast of `command` for the loop. `source` names the view the
     /// broadcast is about, or `None`. The broadcast is delivered on a later pump
-    /// pass, to every view in the tree.
+    /// pass, to every view in the tree, also while a modal is open (D9). A
+    /// window drag or an open menu discards a broadcast that arrives while it
+    /// holds the input.
     ///
     /// # Turbo Vision heritage
     /// The successor to `message(app, evBroadcast, command, infoPtr)` from an
