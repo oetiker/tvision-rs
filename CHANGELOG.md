@@ -68,6 +68,13 @@ moves it into a dated, versioned section when a release is cut.
 
 ### Fixed
 
+- **Timers fire while a window or column is dragged or a menu is open.**
+  Before, a timer that expired during the drag or while the menu was open was
+  lost, so a one-shot timer never fired at all.
+- **The mouse wheel stays inside a modal dialog.** A wheel turn over the
+  dialog no longer scrolls a list, table or editor behind it.
+- The editor's right-click menu inside a window now opens at the pointer;
+  before, it could jump to the top-left corner of the screen.
 - **Scroll bars follow window resizes.** Lists and scrollable views inside a
   window now update their scroll bars when the window is resized, zoomed,
   tiled or cascaded, when a splitter divider moves, or when the terminal size
