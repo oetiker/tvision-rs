@@ -12,7 +12,7 @@
 //!
 //! ## State
 //!
-//! The session holds a **stack of levels** ([`MenuLevel`]), one per open bar/box,
+//! The session holds a **stack of levels** (`MenuLevel`), one per open bar/box,
 //! each carrying its `view_id`, a **clone** of its `menu`, its `current` highlight
 //! index, its `bounds` (cached at open — a box never moves), and an `is_bar` flag
 //! (a bar is one row, a box a vertical column). Cloning the menu at open freezes
@@ -43,12 +43,12 @@
 //! The mouse arms cover press/release/move plus item tracking and the parent-level
 //! hit gates, with per-level transient flags for the "last opened title", "mouse
 //! has landed on an item", and "first event of this level". Keyboard and mouse
-//! share one re-apply [`run`](MenuSession::run) loop tail (set highlight → reset
+//! share one re-apply `run` loop tail (set highlight → reset
 //! the last-opened marker → open gate → command result → pop / re-apply). The open
 //! gate re-applies the triggering mouse event into the freshly-opened child; the
 //! child-pop records the parent's last-opened title and default (the "click an
 //! open title to close it" mechanism). The bar's mouse-down activation lives in
-//! [`menu_view::handle_event`] ([`activate_mouse`]). The per-session
+//! [`menu_view::handle_event`](crate::menu::menu_view::handle_event) ([`activate_mouse`]). The per-session
 //! [`put_click_event_on_exit`](MenuSession) flag (`true` for a bar/box, `false`
 //! for a context popup) gates the bottom-level exit-click re-post.
 //!
@@ -59,7 +59,7 @@
 //! clone's [`Menu::default`]) and no exit-click re-post (the [`popup_menu`]
 //! constructor sets [`put_click_event_on_exit`](MenuSession) to `false`). The
 //! [`popup_menu`] free function builds and runs it (placement via
-//! [`auto_place_popup`]). A popup needs no extra accelerator handling of its own:
+//! `auto_place_popup`). A popup needs no extra accelerator handling of its own:
 //! it is run modally the instant it opens, so the session already owns the event
 //! loop and the flat loop's hotkey handling covers it (see [`popup_menu`]).
 //!
@@ -1110,7 +1110,7 @@ pub fn activate_mouse(
 // TMenuPopup — a standalone popup menu (popupMenu, popupmnu.cpp)
 // ---------------------------------------------------------------------------
 
-/// Open a standalone context popup [`MenuBox`] near `where_`, run as a single-box
+/// Open a standalone context popup [`MenuBox`](crate::menu::MenuBox) near `where_`, run as a single-box
 /// [`MenuSession`] on the capture stack.
 ///
 /// This is a single box level (no bar above it) consuming events on the capture
@@ -1128,7 +1128,7 @@ pub fn activate_mouse(
 /// the root group size.
 ///
 /// This function returns immediately; the chosen command arrives later via
-/// [`Context::post`] (in [`end_session_with`](MenuSession::end_session_with)) when
+/// [`Context::post`] (in `end_session_with`) when
 /// the user selects an item, reaching the active routing. A popup needs no separate
 /// accelerator handling: it is run modally and the session owns the event loop, so
 /// the flat loop's hotkey handling already covers it.

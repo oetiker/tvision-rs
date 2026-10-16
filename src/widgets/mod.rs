@@ -16,7 +16,7 @@
 //! screen attributes, used only inside the old color dialog — is intentionally
 //! not ported. The color picker was rebuilt (see [`crate::dialog::ColorPicker`])
 //! and needs no mono-attribute selector; the general tabbed-selection idiom is
-//! covered by [`TabBar`](crate::widgets::TabBar).
+//! covered by [`TabBar`].
 
 mod button;
 mod cluster;

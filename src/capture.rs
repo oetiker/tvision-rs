@@ -7,7 +7,7 @@
 //! consumes every otherwise-unhandled event *is* the modal loop. Handlers hold a
 //! [`ViewId`], never a view reference. The live event loop in
 //! [`Program`](crate::app::Program) owns this stack and drives
-//! [`CaptureStack::dispatch`]; the [`tests`] module here hand-plays the loop to
+//! [`CaptureStack::dispatch`]; the `tests` module here hand-plays the loop to
 //! prove the protocol composes.
 //!
 //! **Guide:** [Event capture](../../../port/capture.html).
@@ -72,7 +72,7 @@ pub trait CaptureHandler {
         None
     }
 
-    /// Returns `true` if this handler is a modal-bounds gate (a [`ModalFrame`]
+    /// Returns `true` if this handler is a modal-bounds gate (a [`ModalFrame`](crate::app::ModalFrame)
     /// equivalent).  Used by the pump's outside-modal redirect to distinguish a
     /// true modal frame from other capture handlers that also have a `view()`
     /// (drag, menu-box, etc.).  **Default is `false`** — only `ModalFrame`
@@ -322,7 +322,7 @@ impl CaptureStack {
             .and_then(|h| if h.is_modal_gate() { h.view() } else { None })
     }
 
-    /// Returns the help context from an active [`MenuSession`] on the stack, if
+    /// Returns the help context from an active [`MenuSession`](crate::menu::MenuSession) on the stack, if
     /// any. Consults **only the topmost handler**: a menu preempts the help
     /// context iff it is the topmost capture handler, matching C++
     /// `TopView()->getHelpCtx()` where `TopView()` is the active `TMenuView`.

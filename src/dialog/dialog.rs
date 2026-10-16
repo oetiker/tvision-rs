@@ -142,7 +142,7 @@ impl Dialog {
     /// Face widths follow the dialog's [`ButtonLayout`](crate::dialog::ButtonLayout)
     /// and minimum (see [`set_button_layout`](Self::set_button_layout) /
     /// [`set_button_min_width`](Self::set_button_min_width)); the default is
-    /// `Classic` at [`STD_BUTTON`], i.e. every face a fixed 10 columns. Switch to
+    /// `Classic` at [`STD_BUTTON`](crate::dialog::STD_BUTTON), i.e. every face a fixed 10 columns. Switch to
     /// `Uniform` or `Ragged` for labels longer than the minimum ("Discard", "Keep
     /// editing"), which would otherwise render hard against the drop shadow.
     pub fn button_row(

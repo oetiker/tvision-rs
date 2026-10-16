@@ -2,7 +2,7 @@
 //!
 //! [`Event`] is the sum type a [`View`](crate::view::View) matches arm-by-arm:
 //! mouse presses/releases/moves/wheel, key presses, commands, broadcasts,
-//! timer expiries, and paste. The keyboard side lives in the [`key`] submodule
+//! timer expiries, and paste. The keyboard side lives in the `key` submodule
 //! ([`Key`], [`KeyEvent`], [`KeyModifiers`]); the mouse record ([`MouseEvent`])
 //! and the [`EventMask`] opt-in for expensive event classes live here.
 //!
@@ -41,7 +41,7 @@ use crate::view::{Point, ViewId};
 
 /// An event a [`View`](crate::view::View) handles, matched arm-by-arm.
 ///
-/// Match on an `&Event` in [`View::handle`](crate::view::View::handle) to
+/// Match on an `&Event` in [`View::handle_event`](crate::view::View::handle_event) to
 /// selectively react to the cases you care about; return the event unchanged to
 /// let it propagate, or call [`Event::clear`] (or assign `*ev = Event::Nothing`)
 /// to consume it. [`Event::Nothing`] serves dual duty: it is both "no pending
@@ -115,7 +115,7 @@ pub enum Event {
 impl Event {
     /// Mark this event as handled by setting it to [`Event::Nothing`].
     ///
-    /// Call this inside a [`View::handle`](crate::view::View::handle)
+    /// Call this inside a [`View::handle_event`](crate::view::View::handle_event)
     /// implementation when your view has fully processed the event and no other
     /// view should see it. After `clear()` the caller can call
     /// [`is_nothing`](Self::is_nothing) to confirm the event was consumed.

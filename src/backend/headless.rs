@@ -226,7 +226,7 @@ impl Backend for HeadlessBackend {
     /// Store `text` in the shared internal buffer; always returns `false`.
     ///
     /// Headless deliberately does **not** run the production
-    /// [`ClipboardChain`](super::clipboard::ClipboardChain) — it is the test
+    /// `ClipboardChain` — it is the test
     /// fake: no OS clipboard, no OSC 52 bytes, just a plain string tests can
     /// read via [`HeadlessHandle::clipboard`] and seed via
     /// [`HeadlessHandle::set_clipboard`].

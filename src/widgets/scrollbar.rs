@@ -118,8 +118,8 @@ impl Part {
 /// then call [`set_params`](Self::set_params) (or the convenience wrappers) to
 /// configure the range. When the user interacts with the bar it broadcasts
 /// [`Command::SCROLL_BAR_CHANGED`]; a paired scroller or list viewer listens
-/// for this broadcast and syncs its own position. See the [module-level
-/// documentation](self) for the full broadcast and press-and-hold protocol.
+/// for this broadcast and syncs its own position. See the module-level
+/// documentation for the full broadcast and press-and-hold protocol.
 ///
 /// # Turbo Vision heritage
 ///
@@ -189,10 +189,10 @@ impl ScrollBar {
     /// keyboard events reach it only through post-processing (enabled via
     /// [`with_keyboard`](Self::with_keyboard)).
     ///
-    /// Arrow/page glyph characters are read from [`Context::glyphs`] at draw
+    /// Arrow/page glyph characters are read from [`DrawCtx::glyphs`](crate::view::DrawCtx::glyphs) at draw
     /// time — they are not stored on the widget itself.
     ///
-    /// [`ofSelectable`]: crate::view::ViewOptions::selectable
+    /// [`ofSelectable`]: crate::view::Options::selectable
     pub fn new(bounds: Rect) -> Self {
         let mut state = ViewState::new(bounds);
         let vertical = state.size.x == 1;
@@ -266,7 +266,7 @@ impl ScrollBar {
     /// `a_max` is floored to `a_min`; `a_value` is clamped to `[a_min, a_max]`.
     /// If `value` changed, broadcasts [`Command::SCROLL_BAR_CHANGED`] so that
     /// a linked scroller or list viewer can sync its own position (see the
-    /// [module-level broadcast docs](self)). Steps are set unconditionally at
+    /// module-level broadcast docs). Steps are set unconditionally at
     /// the end, regardless of whether the value or range changed.
     ///
     /// The display is repainted automatically on the next whole-tree redraw pass

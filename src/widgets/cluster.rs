@@ -864,13 +864,13 @@ pub struct CheckBoxes {
 
 #[crate::delegate(to = cluster, skip(apply_scroll_sync, as_any_mut, focus_descendant, grabs_focus_on_click, set_value, value))]
 impl View for CheckBoxes {
-    /// This cluster's packed bit word as [`FieldValue::Bits`] (a bitmask). Ports
+    /// This cluster's packed bit word as [`FieldValue::Bits`](crate::data::FieldValue::Bits) (a bitmask). Ports
     /// `TCluster::getData` (copies `value`).
     fn value(&self) -> Option<crate::data::FieldValue> {
         Some(crate::data::FieldValue::Bits(self.cluster.value))
     }
 
-    /// Load a [`FieldValue::Bits`] bit word; other variants are ignored. Ports
+    /// Load a [`FieldValue::Bits`](crate::data::FieldValue::Bits) bit word; other variants are ignored. Ports
     /// `TCluster::setData`.
     fn set_value(&mut self, v: crate::data::FieldValue) {
         if let crate::data::FieldValue::Bits(bits) = v {
@@ -911,13 +911,13 @@ pub struct RadioButtons {
 
 #[crate::delegate(to = cluster, skip(apply_scroll_sync, as_any_mut, focus_descendant, grabs_focus_on_click, set_value, value))]
 impl View for RadioButtons {
-    /// This cluster's value as [`FieldValue::Bits`] (the selected index). Ports
+    /// This cluster's value as [`FieldValue::Bits`](crate::data::FieldValue::Bits) (the selected index). Ports
     /// `TCluster::getData`.
     fn value(&self) -> Option<crate::data::FieldValue> {
         Some(crate::data::FieldValue::Bits(self.cluster.value))
     }
 
-    /// Load a [`FieldValue::Bits`] (the selected index); other variants ignored.
+    /// Load a [`FieldValue::Bits`](crate::data::FieldValue::Bits) (the selected index); other variants ignored.
     fn set_value(&mut self, v: crate::data::FieldValue) {
         if let crate::data::FieldValue::Bits(bits) = v {
             self.cluster.value = bits;

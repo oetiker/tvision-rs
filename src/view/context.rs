@@ -319,7 +319,7 @@ pub enum Deferred {
 
     // -- the editor cross-view brokers ---------------------------
     /// **Indicator write**: update an editor's position/modified indicator.
-    /// Resolve `indicator` and call [`View::set_indicator_value`] — virtual
+    /// Resolve `indicator` and call [`View::set_indicator_value`](crate::view::View::set_indicator_value) — virtual
     /// dispatch, no downcast. The editor (a leaf) cannot mutate its sibling
     /// indicator inline. Touches the **view-tree** family.
     ///
@@ -404,7 +404,7 @@ pub enum Deferred {
     /// `&mut Context`, so it cannot reach its sibling button inline; it queues this
     /// and the pump resolves `button`, downcasts to
     /// [`Button`](crate::widgets::Button), and calls
-    /// [`make_default`](crate::widgets::Button::make_default) (which re-broadcasts a
+    /// `make_default` (which re-broadcasts a
     /// grab/release-default notification so the real default button relinquishes /
     /// retakes the look — that re-broadcast settling on the next pump is expected,
     /// like the other write-back brokers).
@@ -517,7 +517,7 @@ pub enum Deferred {
     // -- the per-role color-picker seam (theme editor) -----------
     /// Request the pump to open a [`ColorPicker`](crate::dialog::ColorPicker)
     /// dialog for a specific theme role component. A
-    /// [`ThemeEditorBody`](crate::dialog::ThemeEditorBody) leaf holds only
+    /// `ThemeEditorBody` leaf holds only
     /// `&mut Context` and cannot exec the dialog inline; it requests it here.
     /// The pump builds a 60×23 "Select Color" dialog and sets `pending_modal`
     /// with a `ThemeColorPick { editor_id, picker, role, fg }` completion,
@@ -780,7 +780,7 @@ impl<'a> DrawCtx<'a> {
     /// Write `s` at view-local `(x, y)` with a fixed `style`, width-aware and
     /// clipped. Returns the number of columns actually written.
     ///
-    /// Delegates the wide-char and edge-straddle logic to [`text::draw_str`],
+    /// Delegates the wide-char and edge-straddle logic to [`text::draw_str`](crate::text::draw_str),
     /// exactly as `DrawBuffer::move_str_part` does — the string is written into
     /// the clipped sub-slice of the target buffer row, with `indent` /
     /// `text_indent` chosen so a glyph straddling either clip edge degrades the
@@ -819,7 +819,7 @@ impl<'a> DrawCtx<'a> {
     /// exactly like [`put_str`](Self::put_str). Returns columns written.
     ///
     /// A glyph straddling the `text_indent` boundary degrades to a space (the
-    /// `move_str_part` left-edge straddle), via [`text::draw_str`].
+    /// `move_str_part` left-edge straddle), via [`text::draw_str`](crate::text::draw_str).
     pub fn put_str_part(&mut self, x: i32, y: i32, s: &str, text_indent: i32, style: Style) -> i32 {
         if self.clip.is_empty() {
             return 0;
@@ -1295,7 +1295,7 @@ impl<'a> Context<'a> {
     /// Request the `button` be made (or un-made) the dialog's default —
     /// **deferred** ([`Deferred::MakeButtonDefault`]). The pump resolves `button`,
     /// downcasts to [`Button`](crate::widgets::Button), and calls
-    /// [`make_default`](crate::widgets::Button::make_default). A leaf view (the
+    /// `make_default`. A leaf view (the
     /// change-directory dialog's directory list, on a focus change) holds only
     /// `&mut Context` and cannot poke its sibling button inline; it requests the
     /// change here.
@@ -1592,7 +1592,7 @@ impl<'a> Context<'a> {
 
     /// Queue [`Deferred::OpenColorDialogForRole`] for the theme editor's per-role
     /// color picker — **deferred**. Called from
-    /// [`ThemeEditorBody::handle_event`](crate::dialog::ThemeEditorBody). The pump
+    /// `ThemeEditorBody::handle_event`. The pump
     /// builds a "Select Color" dialog seeded with `current` and stashes it into
     /// `pending_modal` with a `ThemeColorPick` completion; on OK the completion
     /// updates the `ThemeEditorBody`'s working theme for `role`/`fg`.

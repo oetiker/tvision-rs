@@ -280,7 +280,7 @@ impl View for Desktop {
     /// each tileable window a cell. The first-visited (topmost) window takes the
     /// highest-numbered slot. If a cell would be zero-width or zero-height the
     /// layout is abandoned and bounds are left unchanged. `owner_size` is the
-    /// desktop size, fed to each child's size limits inside [`locate`].
+    /// desktop size, fed to each child's size limits inside `locate`.
     fn tile(&mut self, r: Rect) {
         let ids = self.group.tileable_ids(); // visit order
         let n = ids.len() as i32; // tileable window count

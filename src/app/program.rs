@@ -383,7 +383,7 @@ struct FullscreenSlot {
 }
 
 /// Ports `TProgram` (`tprogram.cpp`). The original derived an application class
-/// from this root by inheritance; here [`Application`] embeds a `Program` and
+/// from this root by inheritance; here [`Application`](crate::app::Application) embeds a `Program` and
 /// forwards to it (deviation D2), and the single event loop replaces the nested
 /// modal loops (deviation D9).
 pub struct Program {
@@ -1392,7 +1392,7 @@ impl Program {
     /// Build and run a single-line input dialog at an explicit `Rect`. The modal
     /// insertion / teardown lives here in [`Program`] and the typed value currency
     /// carries the scatter (seed) / gather (read-back). Construction is split out
-    /// into the pure [`build_input_box`](crate::dialog::build_input_box) builder.
+    /// into the pure `build_input_box` builder.
     ///
     /// `label` is the prompt drawn left of the field; `initial` is the starting
     /// text, seeded into the input line with select-all; `limit` caps the field's
@@ -1681,7 +1681,7 @@ impl Program {
         Some(desk.insert_and_focus(view, &mut ctx))
     }
 
-    /// Show a file-open dialog and return the chosen [`PathBuf`], or `None` on
+    /// Show a file-open dialog and return the chosen [`PathBuf`](std::path::PathBuf), or `None` on
     /// cancel. Runs a [`FileDialog`](crate::dialog::FileDialog) modally and reads
     /// back the resolved filename.
     ///

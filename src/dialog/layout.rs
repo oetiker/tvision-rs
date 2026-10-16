@@ -10,7 +10,7 @@ use crate::view::Point;
 /// [`button_row`](crate::dialog::Dialog::button_row); the autosize
 /// [`ButtonLayout`](crate::dialog::ButtonLayout)s widen past it when a label needs
 /// the room. Ten columns is what the conventional labels come to anyway — "Cancel"
-/// is 6 columns plus [`BUTTON_TEXT_PADDING`].
+/// is 6 columns plus `BUTTON_TEXT_PADDING`.
 pub const STD_BUTTON: Point = Point::new(10, 2);
 /// Cells between adjacent buttons in a button row.
 pub const BUTTON_GAP: i32 = 2;

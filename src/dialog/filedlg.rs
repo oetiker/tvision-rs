@@ -75,7 +75,7 @@ impl DirEntry {
 
     /// Borrow the rendered display text, including any tree-glyph prefix.
     ///
-    /// Read by [`DirListBox::get_text`] on every draw; do not use this to
+    /// Read by `DirListBox::get_text` on every draw; do not use this to
     /// extract a bare directory name — strip the glyph prefix or read
     /// [`dir`](DirEntry::dir) instead.
     pub fn text(&self) -> &str {
@@ -124,10 +124,10 @@ pub const FA_DIREC: u8 = 0x10;
 ///
 /// `name` is an owned `String` and the struct derives `Clone`.
 ///
-/// `attr`, `time`, and `size` are populated by [`FileList::raw_from_fs`] /
-/// [`FileList::build_listing`]: `size` is `meta.len()` (saturated to `i32`),
+/// `attr`, `time`, and `size` are populated by `FileList::raw_from_fs` /
+/// `FileList::build_listing`: `size` is `meta.len()` (saturated to `i32`),
 /// `time` is the `modified()` mtime packed into the DOS `ftime` bitfield by
-/// [`pack_dos_time`], and `attr` carries [`FA_DIREC`] for directories.
+/// `pack_dos_time`, and `attr` carries [`FA_DIREC`] for directories.
 ///
 /// # Turbo Vision heritage
 /// Ports `TSearchRec` (`filedial.cpp`); its fixed-length `char name[]` (kept
@@ -375,7 +375,7 @@ impl DirListBox {
 
     /// Wire the owning change-directory dialog's change-dir button id (set after
     /// assembly, once the button's id is known). Read only by
-    /// [`set_state`](DirListBox::set_state) to make that button (un-)default on a
+    /// `set_state` to make that button (un-)default on a
     /// focus change.
     pub fn set_chdir_button(&mut self, id: crate::view::ViewId) {
         self.chdir_button = Some(id);
@@ -615,7 +615,7 @@ impl crate::view::View for DirListBox {
     /// The leaf list cannot poke its sibling button directly, so it requests the
     /// change through the pump's
     /// [`MakeButtonDefault`](crate::view::Deferred::MakeButtonDefault) broker via
-    /// [`Context::make_button_default`]. `chdir_button` is `None` when there is no
+    /// [`Context::make_button_default`](crate::view::Context::make_button_default). `chdir_button` is `None` when there is no
     /// change-directory owner, so this is then a no-op.
     fn set_state(
         &mut self,
@@ -683,7 +683,7 @@ impl crate::view::View for DirListBox {
 ///
 /// `search` is the one method whose comparator is **non-obvious**: it must
 /// compare via [`search_rec_compare`] over raw [`SearchRec`]s, **not** over
-/// [`get_text`](ListViewer::get_text) (which appends `/` to dir names and would
+/// [`get_text`](crate::widgets::ListViewer::get_text) (which appends `/` to dir names and would
 /// mis-order). The key carries an `attr` of [`FA_DIREC`] when the
 /// [`shift_state`](crate::widgets::list_viewer::SortedSearch::shift_state)
 /// holds [`KB_SHIFT`](crate::widgets::list_viewer::KB_SHIFT) or the typed prefix
@@ -701,7 +701,7 @@ impl crate::view::View for DirListBox {
 /// On every focus change the list broadcasts a "file focused" command (subject =
 /// the focused entry), and on double-click/Enter it broadcasts a "file
 /// double-clicked" command. Both are wired via the `on_focus_changed` hook
-/// ([`ListViewer::on_focus_changed`]) and the `select_item` override; the focused
+/// ([`ListViewer::on_focus_changed`](crate::widgets::ListViewer::on_focus_changed)) and the `select_item` override; the focused
 /// record is resolved through the pump's
 /// [`ResolveFocusedFile`](crate::view::Deferred::ResolveFocusedFile) broker — the
 /// broadcast itself is payload-less and carries a resolvable source id.
@@ -1144,7 +1144,7 @@ impl crate::view::View for FileList {
 ///
 /// ## Structural shape
 ///
-/// This **embeds** an [`InputLine`] and forwards the un-overridden
+/// This **embeds** an [`InputLine`](crate::widgets::InputLine) and forwards the un-overridden
 /// [`View`](crate::view::View) methods (embed-and-delegate composition) — only
 /// `handle_event` and `as_any_mut` differ. `value`/`set_value` are NOT
 /// overridden, so they forward to the inner `InputLine`.
@@ -1219,7 +1219,7 @@ impl FileInputLine {
 
     /// Push a new wildcard mask into the field's cache.
     ///
-    /// Called by [`FileDialog::valid`]'s wildcard branch whenever the user
+    /// Called by [`FileDialog::valid`](crate::view::View::valid)'s wildcard branch whenever the user
     /// navigates with a new mask (e.g. `*.txt`). Without this update, the
     /// next directory-focus broadcast would still append the stale mask when
     /// formatting a directory entry as `"dirname/<old_mask>"`. Call this before
@@ -1365,7 +1365,7 @@ fn pack_dos_time(t: &std::time::SystemTime) -> i32 {
 /// (`directory` / `wild_card`), set at construction and refreshed by
 /// [`set_dir_info`](FileInfoPane::set_dir_info) when the dialog re-reads with a
 /// new mask. The focused record is cached in `file_block`. The pane is drawn in
-/// the [`Role::InfoPane`] color; the path line is `directory` concatenated with
+/// the [`Role::InfoPane`](crate::theme::Role::InfoPane) color; the path line is `directory` concatenated with
 /// `wild_card` (the dialog guarantees `directory` ends with `/`).
 ///
 /// # Turbo Vision heritage
@@ -1425,7 +1425,7 @@ impl FileInfoPane {
     }
 
     /// Update the cached directory / wildcard ([`FileDialog`]'s `reset_current`
-    /// and [`FileDialog::valid`]'s navigate branches drive this when the dialog
+    /// and [`FileDialog::valid`](crate::view::View::valid)'s navigate branches drive this when the dialog
     /// (re-)reads the directory).
     pub fn set_dir_info(&mut self, directory: impl Into<String>, wild_card: impl Into<String>) {
         self.directory = directory.into();
@@ -1445,7 +1445,7 @@ impl crate::view::View for FileInfoPane {
     /// Line 0 = the directory + wildcard path; line 1 = the focused name + (when
     /// named) its size left-aligned at `size.x-38` and its date as
     /// `Mon DD, YYYY HH:MMa/p` in the right columns; remaining rows cleared. All
-    /// text in [`Role::InfoPane`].
+    /// text in [`Role::InfoPane`](crate::theme::Role::InfoPane).
     fn draw(&mut self, ctx: &mut crate::view::DrawCtx) {
         let color = ctx.style(crate::theme::Role::InfoPane);
         let w = self.state.size.x;
@@ -1741,7 +1741,7 @@ pub const FD_REPLACE_BUTTON: u16 = 0x0004;
 ///
 /// Signals the caller (via `Command::FILE_CLEAR`) that the associated file
 /// should be cleared/unlinked. The dialog's `valid()` always passes for this
-/// command (no path check), and [`FileDialog::value`] returns an empty string.
+/// command (no path check), and [`FileDialog::value`](crate::view::View::value) returns an empty string.
 /// Combine with [`FD_OPEN_BUTTON`] or [`FD_OK_BUTTON`] to offer both open and
 /// clear choices in the same dialog.
 ///
@@ -1761,7 +1761,7 @@ pub const FD_CLEAR_BUTTON: u16 = 0x0008;
 pub const FD_HELP_BUTTON: u16 = 0x0010;
 /// Skip the initial directory read when the dialog opens.
 ///
-/// By default [`FileDialog::reset_current`] reads the process current directory
+/// By default [`FileDialog::reset_current`](crate::view::View::reset_current) reads the process current directory
 /// into the file list on first show. Pass `FD_NO_LOAD_DIR` to suppress that
 /// read — useful when the dialog is constructed before its owner is on screen,
 /// or when the listing is populated by other means. May be OR-ed with any
@@ -2129,15 +2129,15 @@ impl FileDialog {
     /// to `directory`.
     ///
     /// Steps: expand the field text against `directory`
-    /// ([`expand_path`]), then split off the filename ([`split_dir_file`]); when
+    /// (`expand_path`), then split off the filename (`split_dir_file`); when
     /// the resolved path is a **bare directory** (no filename part) the wildcard is
     /// appended. With native paths the wildcard *is* its own filename, so
     /// `self.wild_card` is appended directly.
     ///
     /// `&mut self` (not `&self`): it reads the [`FileInputLine`] via `child_mut`.
-    /// It is only called from [`valid`](FileDialog::valid) (which has `&mut self`)
-    /// and refreshes [`resolved_name`](FileDialog::resolved_name) so the `&self`
-    /// [`value`](FileDialog::value) can return the result without `child_mut`.
+    /// It is only called from [`valid`](crate::view::View::valid) (which has `&mut self`)
+    /// and refreshes `resolved_name` so the `&self`
+    /// [`value`](crate::view::View::value) can return the result without `child_mut`.
     pub fn get_file_name(&mut self) -> String {
         let field_text = self
             .dialog
@@ -2407,7 +2407,7 @@ impl crate::view::View for FileDialog {
     /// - cancel / file-clear → `true` (always valid, *after* the group check —
     ///   file-clear must still pass the group).
     ///
-    /// Refreshes [`resolved_name`](FileDialog::resolved_name) via `get_file_name`
+    /// Refreshes `resolved_name` via `get_file_name`
     /// for every non-VALID command, so the `&self` `value()` is current after any
     /// such call — including the cancel / file-clear path that returns before the
     /// branches.
@@ -2488,7 +2488,7 @@ impl crate::view::View for FileDialog {
         Some(crate::data::FieldValue::Text(self.resolved_name.clone()))
     }
 
-    /// Pre-fill the filename field from a [`FieldValue::Text`].
+    /// Pre-fill the filename field from a [`FieldValue::Text`](crate::data::FieldValue::Text).
     ///
     /// Use this before the dialog opens to seed the field with a default path (the
     /// scatter half of dialog data transfer). Note that `set_value` cannot also
@@ -2794,7 +2794,7 @@ impl crate::view::View for ChDirDialog {
     ///   starts with `/` append a trailing `/`; otherwise return leaving the event
     ///   uncleared (it passes through — it is not cleared).
     ///
-    /// Both feed the shared navigate tail ([`navigate_to`](ChDirDialog::navigate_to)):
+    /// Both feed the shared navigate tail (`navigate_to`):
     /// re-read the directory → reflect in the path input line → focus the dir list,
     /// then clear.
     fn handle_event(&mut self, ev: &mut crate::event::Event, ctx: &mut crate::view::Context) {

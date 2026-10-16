@@ -30,7 +30,7 @@
 //! naming one of its bars as `source`, the list requests
 //! [`Deferred::ScrollSync`](crate::view::Deferred::ScrollSync); the pump
 //! reads both bars' `value`s and calls back through
-//! [`View::apply_scroll_sync`](crate::view::View::apply_scroll_sync) →
+//! [`View::apply_scroll_sync`] →
 //! [`apply_scroll`].
 //!
 //! ## Termination
@@ -292,9 +292,9 @@ impl ListRoles {
 ///
 /// **Wiring caveat (no compile-time enforcement):** a concrete list widget MUST
 /// delegate ALL of these `View` methods to this module's free functions:
-/// [`draw`], [`handle_event`], [`set_state`], [`View::cursor_request`](crate::view::View::cursor_request)
-/// → [`focused_cursor`], [`View::apply_scroll_sync`](crate::view::View::apply_scroll_sync)
-/// → [`apply_scroll`], and [`View::as_any_mut`](crate::view::View::as_any_mut)
+/// [`draw`], [`handle_event`], [`set_state`], [`View::cursor_request`]
+/// → [`focused_cursor`], [`View::apply_scroll_sync`]
+/// → [`apply_scroll`], and [`View::as_any_mut`]
 /// (the cross-view broker downcasts through it). In particular, forgetting to
 /// override `apply_scroll_sync` is **silent** — its base default is a no-op, so the
 /// widget compiles but loses all scrollbar read-sync with no error. (See `FakeList`
@@ -1143,7 +1143,7 @@ pub fn draw<L: ListViewer + ?Sized>(this: &mut L, ctx: &mut DrawCtx) {
 
 /// The view-local cursor position the focused cell sits at, or `None` if no
 /// focused cell is visible. Computed `&self`-only so a concrete widget can
-/// surface it via [`View::cursor_request`](crate::view::View::cursor_request).
+/// surface it via [`View::cursor_request`].
 ///
 /// The cursor position is derived on demand here — under the read-only `&self`
 /// draw and top-down cursor walk, `draw` does not place the cursor itself.

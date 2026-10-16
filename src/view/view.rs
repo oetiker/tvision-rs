@@ -250,7 +250,7 @@ pub enum Phase {
 /// - **Fill the entire owner** (e.g. a text viewer inside a window):
 ///   use [`GrowMode::grow_all()`].
 /// - **Fixed size, just anchor to the right edge** (e.g. a vertical scrollbar):
-///   `hi_x = true; fixed = true` (or use [`Window::standard_scroll_bar`]).
+///   `hi_x = true; fixed = true` (or use [`Window::standard_scroll_bar`](crate::window::Window::standard_scroll_bar)).
 /// - **Desktop window, scales with the desktop**:
 ///   `hi_x = true; hi_y = true; rel = true` — all edges scale proportionally.
 ///

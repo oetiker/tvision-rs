@@ -101,7 +101,7 @@ struct Child {
 
 /// A view that owns and routes to a tree of child views.
 ///
-/// See the [module docs](self) for the sibling-ring↔`Vec` Z-order mapping. Build
+/// See the module docs for the sibling-ring↔`Vec` Z-order mapping. Build
 /// with [`Group::new`], add children with [`Group::insert`], and drive it as any
 /// other [`View`] (`draw` / `handle_event` / …).
 ///
@@ -1489,7 +1489,7 @@ impl View for Group {
     /// `ctx.set_owner_size(self.size)` / restore so a child can read its owner's
     /// size (e.g. a window computing its zoomed bounds). The restore is
     /// **unconditional** because the actual routing lives in
-    /// [`route_event`](Self::route_event), which may `return` early — the bracket
+    /// `route_event`, which may `return` early — the bracket
     /// here guarantees a parent group's later sibling deliveries never see this
     /// group's size.
     ///

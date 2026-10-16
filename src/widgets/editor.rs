@@ -1327,7 +1327,7 @@ impl Editor {
 
     /// Find `needle` from the cursor; on a hit, select it and track the cursor.
     /// This is the low-level search primitive; the interactive Find / Replace
-    /// dialogs drive it through [`do_search_replace`].
+    /// dialogs drive it through `do_search_replace`.
     ///
     /// Context-free: instead of flushing inline, this only records the scroll
     /// target; the actual flush happens on the next `handle_event` boundary.
@@ -2380,7 +2380,7 @@ impl View for Editor {
     }
 
     /// Cache the user's answer to the "Replace this occurrence?" prompt, routed
-    /// back from the message box. Consumed by [`do_search_replace`] on the next
+    /// back from the message box. Consumed by `do_search_replace` on the next
     /// search-again dispatch.
     fn set_modal_answer(&mut self, cmd: crate::command::Command) {
         self.pending_replace_answer = Some(cmd);
@@ -2539,7 +2539,7 @@ impl Editor {
 /// embed-and-delegate wrapper over [`Editor`]; the only behavioural differences
 /// from the base editor are: it swallows a plain `Tab` keypress (so Tab navigates
 /// the dialog rather than inserting), and it exposes its text as a typed
-/// [`FieldValue`] for dialog gather/scatter.
+/// [`FieldValue`](crate::data::FieldValue) for dialog gather/scatter.
 ///
 /// A memo reuses the editor's drawing and so its scroller colors; it carries no
 /// separate palette of its own.
@@ -2635,7 +2635,7 @@ impl View for Memo {
 ///
 /// Save-as (an explicit Save-As command, or saving an untitled buffer) opens a
 /// file dialog through [`Context::request_save_as_dialog`]: the loop builds and
-/// runs the dialog, the completion sets `file_name` plus [`pending_title_update`]
+/// runs the dialog, the completion sets `file_name` plus `pending_title_update`
 /// and re-injects a Save command, which writes the file and broadcasts a
 /// title-update (refreshing the hosting [`EditWindow`]'s frame title).
 ///
@@ -2984,8 +2984,8 @@ pub(crate) fn editor_mut(v: &mut dyn View) -> Option<&mut Editor> {
 /// + a few text columns. Ports `minEditWinSize` (`teditwnd.cpp:29`).
 pub(crate) const MIN_EDIT_WIN_SIZE: Point = Point::new(24, 6);
 
-/// A [`Window`] hosting a [`FileEditor`] with two scroll bars and an
-/// [`Indicator`]. An embed-and-delegate wrapper over [`Window`]; the constructor
+/// A [`Window`](crate::window::Window) hosting a [`FileEditor`] with two scroll bars and an
+/// [`Indicator`]. An embed-and-delegate wrapper over [`Window`](crate::window::Window); the constructor
 /// wires the editor to the (initially hidden) scroll bars and indicator by id.
 ///
 /// The 24×6 minimum (`minEditWinSize`, `MIN_EDIT_WIN_SIZE`) is pushed into the
