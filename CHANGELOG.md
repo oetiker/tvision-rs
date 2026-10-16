@@ -27,8 +27,10 @@ moves it into a dated, versioned section when a release is cut.
   cell cursor (Left/Right); F2 or a double-click opens an input line over the
   cell, Enter or Tab stores the text through `TableModel::set_cell`, Esc
   cancels, and a rejected value shows a message box and keeps the editor open.
-  An open edit is stored when the dialog is closed with OK and survives a
-  reload of the rows; each stored edit broadcasts `Command::TABLE_CELL_EDITED`.
+  An open edit is stored when its dialog or window closes with any command but
+  Cancel (a rejected value stops the close); a click elsewhere, or a reload
+  that removes the row, discards it. Each stored edit broadcasts
+  `Command::TABLE_CELL_EDITED`.
 - **Background work can post events.** `Program::put_event` and
   `Program::broadcast` queue an event or a broadcast from the idle hook (or any
   code holding the `Program`); it is delivered on the next pass of the loop.
@@ -53,8 +55,6 @@ moves it into a dated, versioned section when a release is cut.
   Cascade no longer act behind it, and a command the dialog does not handle is
   dropped instead of running after the dialog closes. Status-line keys still
   work, as in Turbo Vision.
-- Clicking a `Table` header label now sorts on release; a press that turns into
-  a drag moves the column instead.
 - **`#[delegate]` refuses a second `ViewState`.** A `#[delegate(to = field)]`
   impl whose `state`/`state_mut` returns anything but `self.field.state()` /
   `self.field.state_mut()` no longer compiles. Such a view looked unfocused
