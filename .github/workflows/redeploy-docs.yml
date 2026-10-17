@@ -65,10 +65,17 @@ jobs:
             exit 0
           fi
           TAG="v$VERSION"
+          # The endpoint answers 404 for a missing tag and for a draft. Any
+          # other error (a rate limit, an outage) must fail the run, not pass
+          # for "nothing to deploy".
           if ! RELEASE=$(gh api "repos/$REPO/releases/tags/$TAG" \
-                         --jq '[.draft, (.published_at // "")] | @tsv' 2>/dev/null); then
-            echo "::notice::no published GitHub release $TAG; nothing to deploy"
-            exit 0
+                         --jq '[.draft, (.published_at // "")] | @tsv' 2>api-error.txt); then
+            if grep -q 'HTTP 404' api-error.txt; then
+              echo "::notice::no published GitHub release $TAG; nothing to deploy"
+              exit 0
+            fi
+            echo "::error::reading release $TAG failed: $(cat api-error.txt)"
+            exit 1
           fi
           DRAFT=$(printf '%s' "$RELEASE" | cut -f1)
           PUBLISHED=$(printf '%s' "$RELEASE" | cut -f2)
