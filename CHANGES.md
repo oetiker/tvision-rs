@@ -3,16 +3,24 @@
 All notable changes to tvision-rs will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+except that the first subsection is called `New` rather than `Added`. The release
+workflow matches on `### New`; renaming it silently drops the section from the
+release notes.
 
-The `Unreleased` section accumulates changes on `main`; the release workflow
-moves it into a dated, versioned section when a release is cut.
+This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+The `[Unreleased]` section accumulates changes on `main`; the release moves it
+into a dated, versioned section.
+
+## [Unreleased]
 
 ### New
 
 ### Changed
+
+- Releases now go through a release pull request. Once it is merged, the
+  version tag, the crates.io upload of `tvision-rs-macros` and `tvision-rs`,
+  the GitHub release and the versioned documentation follow automatically.
 
 ### Fixed
 
