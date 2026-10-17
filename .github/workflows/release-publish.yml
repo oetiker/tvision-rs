@@ -1,0 +1,58 @@
+name: Publish release (automatic)
+
+# Tags and publishes the release once its pull request merges (D28).
+#
+# There is deliberately no workflow_dispatch. Publishing should be a
+# consequence of merging a release pull request, never something started from
+# a dropdown. A failed run is finished by re-running its failed jobs: it reads
+# the same version from CHANGES.md, and the crates.io job skips a crate whose
+# version is already published.
+#
+# The versioned docs for the release are deployed by redeploy-docs.yml, which
+# runs when this workflow completes.
+on:
+  push:
+    branches: [main]
+    paths:
+      - CHANGES.md
+
+concurrency:
+  group: release-publish
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    uses: oposs/repo-infra/.github/workflows/ri-publish-tag.yml@v2
+    permissions:
+      contents: write
+      pull-requests: read
+
+  # Publishes tvision-rs-macros before tvision-rs. Each crate needs a Trusted
+  # Publisher on crates.io for repository oetiker/tvision-rs and the workflow
+  # file release-publish.yml; the ones registered for release.yml do not carry
+  # over.
+  crates:
+    needs: [publish]
+    if: needs.publish.outputs.release_id != ''
+    uses: oposs/repo-infra/.github/workflows/ri-publish-crates-io.yml@v2
+    permissions:
+      contents: read
+      id-token: write
+    with:
+      head: ${{ needs.publish.outputs.head }}
+
+  # finalize needs every other job of this file; check verifies it (D30).
+  finalize:
+    needs: [publish, crates]
+    if: needs.publish.outputs.release_id != ''
+    uses: oposs/repo-infra/.github/workflows/ri-publish-finalize.yml@v2
+    permissions:
+      contents: write
+      actions: write
+    with:
+      release_id: ${{ needs.publish.outputs.release_id }}
+      tag: ${{ needs.publish.outputs.tag }}
+      head: ${{ needs.publish.outputs.head }}
