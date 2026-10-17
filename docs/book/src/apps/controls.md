@@ -10,7 +10,7 @@ drive them. The names follow the `tv::` house style with no `T` prefix
 ## Buttons
 
 A [`Button`](../api/tvision_rs/widgets/struct.Button.html) is a clickable command
-button — a boxed, shadowed title with an optional `~`-marked hotkey. Pressing it
+button: a boxed, shadowed title with an optional `~`-marked hotkey. Pressing it
 (mouse, `Alt`+hotkey, or focused `Space`) fires its command, either posted as a
 normal command event or, when the button is flagged broadcast, sent as a
 broadcast. The default button additionally responds to `Enter`. A keyboard press
@@ -29,8 +29,8 @@ let ok = Button::new(bounds, "~O~K", Command::OK, ButtonFlags { default: true, .
 
 {{#include ../screens/button.html}}
 
-A runnable, captured example of every control on this page — buttons, check
-boxes, radio buttons, input lines, and more — is in the
+A runnable, captured example of every control on this page (buttons, check
+boxes, radio buttons, input lines, and more) is in the
 [widget gallery](../gallery.md).
 
 ## Check boxes & radio buttons
@@ -41,15 +41,15 @@ branches on a
 [`ClusterKind`](../api/tvision_rs/widgets/enum.ClusterKind.html), wrapped by three
 named types:
 
-- [`CheckBoxes`](../api/tvision_rs/widgets/struct.CheckBoxes.html) — independent
+- [`CheckBoxes`](../api/tvision_rs/widgets/struct.CheckBoxes.html): independent
   on/off boxes (` [X] `); any combination may be set.
-- [`RadioButtons`](../api/tvision_rs/widgets/struct.RadioButtons.html) — mutually
+- [`RadioButtons`](../api/tvision_rs/widgets/struct.RadioButtons.html): mutually
   exclusive options (` (•) `); exactly one is selected.
-- [`MultiCheckBoxes`](../api/tvision_rs/widgets/struct.MultiCheckBoxes.html) —
+- [`MultiCheckBoxes`](../api/tvision_rs/widgets/struct.MultiCheckBoxes.html):
   multi-state boxes that cycle through more than two values.
 
 A cluster lays its items out top-to-bottom and wraps into a new column when the
-height is exceeded — the bounds height is the column-break period. The selected
+height is exceeded; the bounds height is the column-break period. The selected
 value is read and written through the [data protocol](dialogs.md) like every
 other control, so a dialog gathers and scatters cluster state automatically.
 
@@ -64,15 +64,15 @@ and wide text behave correctly.
 ### Read-only fields (rstv extension)
 
 `set_read_only(true)` makes a field refuse every change to its text while
-leaving it fully navigable. This is **not** the same as disabling it: a disabled
+leaving it fully navigable. Disabling a field is different: a disabled
 view is skipped by focus entirely, so a value too wide for its cell can never be
 scrolled into view, selected, or copied. A read-only field still takes focus,
-moves its caret, scrolls, select-alls and copies — only typing, deleting,
+moves its caret, scrolls, select-alls and copies. Only typing, deleting,
 cutting and pasting are refused.
 
 Each refusal consumes the event and broadcasts `InputLine::READ_ONLY_REJECTED`
 with the field's own `ViewId` as the source, so the owner can tell the user
-*which* field would not budge and why — the widget deliberately says nothing on
+*which* field would not budge and why. The widget says nothing on
 its own, because only the owner knows the reason. Cut and paste are also grayed
 in the command set, so the menu route cannot do what the keyboard route refuses.
 
@@ -93,9 +93,9 @@ server-maintained, computed, or merely not-yet-unlocked.
 ### Which end of a long value shows (rstv extension)
 
 A value wider than its field can only show one end of itself. `set_value`
-select-alls, so by default the view sits at the **tail** — Turbo Vision's
-behaviour, and the right one for a field whose first keystroke should replace
-the value. It is the wrong one for data whose *front* identifies it, where the
+select-alls, so by default the view sits at the **tail**. This is Turbo Vision's
+behaviour, and it suits a field whose first keystroke should replace
+the value. For data whose *front* identifies it, the
 operator is left reading `…,dc=example,dc=org`.
 
 ```rust
@@ -107,24 +107,24 @@ line.set_value_position(ValuePosition::Start); // show the head, caret homed
 # }
 ```
 
-This governs `set_value` only — both the plain text path and the
+This governs `set_value` only: both the plain text path and the
 validator-transfer path. Focus behaviour is separate: see
 `set_select_all_on_focus`.
 
 ## Labels & static text
 
-- [`StaticText`](../api/tvision_rs/widgets/struct.StaticText.html) — a read-only,
-  word-wrapped block of text. Not selectable; it just paints.
-- [`ParamText`](../api/tvision_rs/widgets/struct.ParamText.html) — a `StaticText`
+- [`StaticText`](../api/tvision_rs/widgets/struct.StaticText.html): a read-only,
+  word-wrapped block of text. It is not selectable and only paints.
+- [`ParamText`](../api/tvision_rs/widgets/struct.ParamText.html): a `StaticText`
   variant whose content you set at runtime.
-- [`Label`](../api/tvision_rs/widgets/struct.Label.html) — a single-line caption
+- [`Label`](../api/tvision_rs/widgets/struct.Label.html): a single-line caption
   **linked** to another control. Clicking the label, or pressing its `~`-marked
   hotkey, focuses the linked control, and the label highlights while that control
   holds focus. The link is a view handle, not a pointer.
 
 ## List boxes, scrollers & scroll bars
 
-- [`ListBox`](../api/tvision_rs/widgets/struct.ListBox.html) — a scrollable list of
+- [`ListBox`](../api/tvision_rs/widgets/struct.ListBox.html): a scrollable list of
   string items. Populate it after inserting it into a group (a `Context` is
   needed to publish the scroll range to its bars), then it handles selection and
   navigation for you. [`SortedListBox`](../api/tvision_rs/widgets/struct.SortedListBox.html)
@@ -135,24 +135,24 @@ validator-transfer path. Focus behaviour is separate: see
   `FindMode::Highlight` owns the query and highlights the matched substring in
   every visible row; `FindMode::Filter` additionally self-filters the list to
   rows that contain the query (showing `No match: <query>` when nothing survives).
-  `FindMode::Off` is the default — the classic type-to-jump lookup is unchanged
+  `FindMode::Off` is the default; the classic type-to-jump lookup is unchanged
   for existing consumers. While find is active, printable keys (including Space)
   append to the query, Backspace deletes, and Esc clears (an empty-query Esc still
   propagates so a host dialog can close). The current query is readable via
   `find_query()` and clearable externally via `clear_find()`. Every query change
-  broadcasts `Command::LIST_FIND_CHANGED` with the list's own `ViewId` as `source`
-  — the same notify-by-broadcast pattern
-  [`ScrollBar`](../api/tvision_rs/widgets/struct.ScrollBar.html) uses — so a host
+  broadcasts `Command::LIST_FIND_CHANGED` with the list's own `ViewId` as `source`,
+  the same notify-by-broadcast pattern
+  [`ScrollBar`](../api/tvision_rs/widgets/struct.ScrollBar.html) uses, so a host
   can mirror the query or drive an async search.
-- [`ScrollBar`](../api/tvision_rs/widgets/struct.ScrollBar.html) — a vertical or
+- [`ScrollBar`](../api/tvision_rs/widgets/struct.ScrollBar.html): a vertical or
   horizontal bar (orientation inferred from its 1×N or N×1 bounds). It broadcasts
   a *changed* message when its value moves, naming itself as the source so a
   two-bar owner can tell which bar fired.
-- [`Scroller`](../api/tvision_rs/widgets/struct.Scroller.html) — the base for
+- [`Scroller`](../api/tvision_rs/widgets/struct.Scroller.html): the base for
   scrollable content. It references two sibling scroll bars on the window frame,
   mirrors their value into its own scroll offset, and pushes range changes back
   to them. The wiring between a scroller and its bars is brokered by the event
-  loop — see [Cross-view brokering](../internals/brokering.md).
+  loop; see [Cross-view brokering](../internals/brokering.md).
 - [`Table`](../api/tvision_rs/widgets/table/struct.Table.html) (a tvision-rs extension;
   Turbo Vision has no table): a multi-column list under a click-to-sort
   header. Rows come from a `TableModel` and keep a stable `RowKey`, so focus and
@@ -165,12 +165,12 @@ validator-transfer path. Focus behaviour is separate: see
 ## Validators
 
 A validator gates what an input line accepts.
-[`Validator`](../api/tvision_rs/validate/trait.Validator.html) is a trait — an
+[`Validator`](../api/tvision_rs/validate/trait.Validator.html) is a trait; an
 input line holds one as a boxed trait object *(the Rust-idiomatic successor to
 C++ `TValidator`'s abstract base class)*. With no validator,
 every keystroke is accepted. The trait has two checkpoints: `is_valid_input`
 runs as each character is typed (and may auto-fill or modify the buffer), while
-`is_valid` runs the final-form check when the field must be fully valid — on
+`is_valid` runs the final-form check when the field must be fully valid: on
 focus-release or when a modal dialog's OK button is pressed.
 
 The concrete validators port the Turbo Vision set, plus one Rust-native
@@ -197,8 +197,8 @@ command `Command::RELEASED_FOCUS`.
 
 For an `InputLine` with a validator, this is wired automatically: the input line
 sets `ofValidate` for you, and its `valid` override calls the validator's
-`validate` method. If the field is not yet valid, `valid` returns `false` —
-which causes `Group::focus_child` to refuse the focus transfer and keep the
+`validate` method. If the field is not yet valid, `valid` returns `false`,
+and `Group::focus_child` refuses the focus transfer and keeps the
 cursor in the current field.
 
 ```rust
@@ -227,22 +227,22 @@ validate gate).
 
 Validation runs at two moments:
 
-1. **Focus release** — `valid(Command::RELEASED_FOCUS)`: only the *current*
+1. **Focus release**: `valid(Command::RELEASED_FOCUS)`: only the *current*
    (focused) control is asked. The group's `valid` override for this command
    delegates to the current child exclusively (`src/view/group.rs`).
-2. **Modal close** — `valid(cmd)` for any other command (e.g. `Command::OK`):
+2. **Modal close**: `valid(cmd)` for any other command (for example `Command::OK`):
    the group walks **all** children, calling `valid` on each and stopping at the
    first that returns `false` (a `firstThat` walk).
 
-This means you can also call `group.valid(Command::OK, ctx)` programmatically —
-from a button handler for instance — to force a full validation pass without
+You can also call `group.valid(Command::OK, ctx)` programmatically,
+from a button handler for instance, to force a full validation pass without
 closing the dialog. The dialog's own `handle_event` for `Command::OK` runs
 exactly this check before it calls `ctx.end_modal(Command::OK)`.
 
 Source: `src/view/group.rs` (`Group::valid`), `src/dialog/dialog.rs`
 (`Dialog::handle_event` OK branch).
 
-> **Turbo Vision heritage:** `TGroup::valid` had the same two arms — one for
+> **Turbo Vision heritage:** `TGroup::valid` had the same two arms: one for
 > `cmReleasedFocus` (current only) and one for all other commands (all children).
 > tvision-rs ports both behaviors verbatim.
 
@@ -254,13 +254,13 @@ returns `false`, the validator's
 called. This is where the user sees an informational message box explaining what
 is wrong.
 
-A leaf view cannot run a modal dialog inline — it holds only `&mut Context`, not
+A leaf view cannot run a modal dialog inline: it holds only `&mut Context`, never
 the `Program`. Instead, `error` requests the message box through the async-modal
 seam:
 [`Context::request_message_box`](../api/tvision_rs/view/struct.Context.html#method.request_message_box)
 queues a `Deferred::RequestMessageBox` entry; the event loop builds and runs the
 dialog at the end of the current pump tick. The call parameters include an
-optional `answer_to: Option<ViewId>` and `then_command: Option<Command>` — when
+optional `answer_to: Option<ViewId>` and `then_command: Option<Command>`. When
 these are `None` (the validator error case), the message box is **informational
 only**: the user clicks OK, the box closes, and focus returns to the invalid
 field. No round-trip answer is needed.
@@ -306,8 +306,8 @@ impl Validator for NoSpaceValidator {
 }
 ```
 
-The provided `validate` method calls `is_valid` and then `error` for you —
-override `is_valid` and `error` rather than `validate` itself.
+The provided `validate` method calls `is_valid` and then `error` for you;
+override `is_valid` and `error` instead of `validate` itself.
 
 Source: `src/validate.rs` (`Validator::error`, `FilterValidator::error`),
 `src/view/context.rs` (`Context::request_message_box`).
@@ -354,8 +354,8 @@ is exceeded. Access the store directly with
 [`history_count(id)`](../api/tvision_rs/widgets/fn.history_count.html) when you
 need to pre-populate or audit entries.
 
-The icon is **not selectable** — clicking it does not steal focus from the linked
-input — and it opts into **post-processing** so it sees key events after the
+The icon is **not selectable** (clicking it does not steal focus from the linked
+input), and it opts into **post-processing** so it sees key events after the
 focused input, leaving the `↓` arrow key available as a keyboard trigger.
 
 Source: `src/widgets/history.rs` (`THistory`, `HistoryViewer`, `HistoryWindow`,
@@ -364,13 +364,13 @@ Source: `src/widgets/history.rs` (`THistory`, `HistoryViewer`, `HistoryWindow`,
 > **Turbo Vision heritage:** `THistory` / `THistoryViewer` / `THistoryWindow`
 > port one-to-one. The global byte store (`histlist.cpp`) is reimplemented as a
 > thread-local `Vec<HistRec>`, dropping the original front-sentinel bookkeeping
-> in favor of a cleaner read contract.
+> for a simpler read contract.
 
 ## Where to go next
 
-- [Dialogs & data](dialogs.md) — put these controls in a modal dialog and gather
+- [Dialogs & data](dialogs.md): put these controls in a modal dialog and gather
   their values.
-- [Commands & events](commands.md) — how a button's command flows through the
+- [Commands & events](commands.md): how a button's command flows through the
   event model, and how to enable or disable it.
-- [Writing your own View](../internals/custom-view.md) — build a control of your
+- [Writing your own View](../internals/custom-view.md): build a control of your
   own.

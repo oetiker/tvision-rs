@@ -10,10 +10,10 @@ covers both halves: the key model your `View`s see, and the configurable
 A keystroke is a physical [`Key`](../api/tvision_rs/event/enum.Key.html) plus a
 separate [`KeyModifiers`](../api/tvision_rs/event/struct.KeyModifiers.html) channel,
 bundled into a [`KeyEvent`](../api/tvision_rs/event/struct.KeyEvent.html). There are
-deliberately **no** modifier-combined variants: keys and modifiers are always
+**no** modifier-combined variants: keys and modifiers are always
 separate. `Ctrl+C` is
 `Key::Char('c')` with `ctrl` set; `Shift+Tab` is `Key::Tab` with `shift`;
-`Alt+F3` is `Key::F(3)` with `alt`. The enum holds only base keys — characters,
+`Alt+F3` is `Key::F(3)` with `alt`. The enum holds only base keys: characters,
 function keys, and the navigation/editing keys (`Enter`, `Tab`, arrows, `Home`,
 `PageUp`, `Insert`, `Delete`, …). The three logical modifiers `shift`, `ctrl`,
 and `alt` collapse the platform's left/right distinctions *(mirroring the C++
@@ -24,7 +24,7 @@ Two helpers bridge the old DOS conventions into this model:
 - [`ctrl_to_arrow`](../api/tvision_rs/event/fn.ctrl_to_arrow.html) maps the WordStar
   Ctrl-letter diamond (`Ctrl+S`/`D`/`E`/`X` and friends) to the equivalent arrow
   and navigation keys, clearing all modifiers on a match and passing everything
-  else through unchanged — a faithful port of `ctrlToArrow`.
+  else through unchanged. It is a faithful port of `ctrlToArrow`.
 - [`hot_key`](../api/tvision_rs/event/fn.hot_key.html) extracts the `~`-delimited
   accelerator character from a label (uppercased), so a button or menu item
   knows which `Alt+` chord activates it.
@@ -33,7 +33,7 @@ Two helpers bridge the old DOS conventions into this model:
 
 Text input does not hard-wire keys to editing actions. Instead a
 [`Keymap`](../api/tvision_rs/keymap/struct.Keymap.html) maps a **chord** to a
-[`Command`](../api/tvision_rs/command/struct.Command.html) by name — the same
+[`Command`](../api/tvision_rs/command/struct.Command.html) by name, in the same
 data-driven shape as a VS Code keybindings file. A chord is one keystroke, or
 two for a prefix sequence in the classic `Ctrl-K`/`Ctrl-Q` editor style. You
 describe chords as strings: space-separated strokes, each a `+`-joined list of
@@ -49,10 +49,11 @@ km.unbind("ctrl+s");
 ```
 
 Keystrokes are **normalized** before lookup so the presets stay small and the
-historic behaviours survive: alphabetic characters lowercase and drop `shift`
+historic behaviours survive. Alphabetic characters lowercase and drop `shift`
 (`ctrl+q a` equals `ctrl+q A`), and the cursor-pad keys drop `shift` too, since
-`Shift+Left` is a *selection* modifier handled inside the widget, not a distinct
-binding. Keys where shift carries meaning — `Shift+Insert` for paste — keep it.
+`Shift+Left` is a *selection* modifier handled inside the widget and has no
+binding of its own. Keys where shift carries meaning, such as `Shift+Insert` for
+paste, keep it.
 
 Resolving a stroke (optionally combined with a pending prefix) yields a
 [`Resolve`](../api/tvision_rs/keymap/enum.Resolve.html): a fully matched `Command`,
@@ -80,15 +81,14 @@ tv::keymap::set_global(tv::keymap::Keymap::cua());
 ```
 
 Widgets consult it via
-[`resolve_global`](../api/tvision_rs/keymap/fn.resolve_global.html); you rarely call
-that yourself, but it is how a custom text view would join the same binding
-scheme.
+[`resolve_global`](../api/tvision_rs/keymap/fn.resolve_global.html). You rarely call
+that yourself; a custom text view calls it to join the same binding scheme.
 
 ## Where to go next
 
-- [Commands & events](commands.md) — what those resolved `Command`s do once a
+- [Commands & events](commands.md): what those resolved `Command`s do once a
   view consumes them.
-- [Text editing](text-editing.md) — the `Memo`, `Editor` and input-line widgets
+- [Text editing](text-editing.md): the `Memo`, `Editor` and input-line widgets
   the keymap drives.
-- [Events → enum + match](../port/events.md) — the design behind the decomposed
+- [Events → enum + match](../port/events.md): the design behind the decomposed
   `Key`/`KeyModifiers` model, for Turbo Vision veterans.

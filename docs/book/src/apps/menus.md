@@ -9,9 +9,9 @@ to a view. The data lives in [`tv::menu`](../api/tvision_rs/menu/index.html) and
 
 ## The menu bar
 
-A menu is a [`Menu`](../api/tvision_rs/menu/struct.Menu.html) — an ordered list of
+A menu is a [`Menu`](../api/tvision_rs/menu/struct.Menu.html): an ordered list of
 entries plus a default selection. You rarely build one by hand; instead you chain
-a [`MenuBuilder`](../api/tvision_rs/menu/struct.MenuBuilder.html) — a fluent
+a [`MenuBuilder`](../api/tvision_rs/menu/struct.MenuBuilder.html), a fluent
 builder where each call appends one
 [`MenuItem`](../api/tvision_rs/menu/enum.MenuItem.html) and returns `self`
 *(the idiomatic successor to C++'s `operator+` chains)*:
@@ -31,18 +31,18 @@ let menu = Menu::builder()
     .build();
 ```
 
-Three things to notice:
+Notes on the example:
 
 - **`~`-marked labels.** The tildes bracket the hot-letter (`"~F~ile"` highlights
   the `F`). Submenus take an
-  [`alt()`](../api/tvision_rs/menu/fn.alt.html) accelerator — a convenience that
+  [`alt()`](../api/tvision_rs/menu/fn.alt.html) accelerator, a convenience that
   builds an `Alt`+`<char>` key.
 - **Three entry kinds.** `command` / `command_key` append a
   [`MenuItem::Command`](../api/tvision_rs/menu/enum.MenuItem.html) (the latter adds
   an accelerator key plus the shortcut text shown at the right, like `"F3"`);
   `submenu` appends a nested menu; `separator` appends a divider.
-- **It is just data.** Choosing an item emits its
-  [`Command`](../api/tvision_rs/command/struct.Command.html) as an event — the menu
+- **A menu is data.** Choosing an item emits its
+  [`Command`](../api/tvision_rs/command/struct.Command.html) as an event; the menu
   never *does* anything itself. See [Commands & events](commands.md) for how that
   command reaches a handler, and for how a greyed-out (`disabled`) item is driven
   by command enable/disable state.
@@ -64,14 +64,14 @@ full menu as a corner popup. With the `File` menu pulled down it looks like this
 
 The complete factory is in
 [`examples/hello.rs`](https://github.com/oetiker/tvision-rs/blob/main/examples/hello.rs)
-— see [Your first app](../getting-started/first-app.md); the runnable menu/status
+(see [Your first app](../getting-started/first-app.md)); the runnable menu/status
 sources are the `menubar` and `statusline` entries in the
 [widget gallery](../gallery.md).
 
 ## The status line
 
-A status line is a `Vec<`[`StatusDef`](../api/tvision_rs/status/struct.StatusDef.html)`>`
-— a list of *definitions*, each owning a list of
+A status line is a `Vec<`[`StatusDef`](../api/tvision_rs/status/struct.StatusDef.html)`>`:
+a list of *definitions*, each owning a list of
 [`StatusItem`](../api/tvision_rs/status/struct.StatusItem.html)s, built with
 [`StatusDef::list()`](../api/tvision_rs/status/struct.StatusDefListBuilder.html):
 
@@ -85,14 +85,14 @@ let defs = StatusDef::list()
     .build();
 ```
 
-Each item carries display text, an optional accelerator key, and a command —
+Each item carries display text, an optional accelerator key, and a command;
 clicking the label or pressing the key fires that command. Hand the `defs` to a
 [`StatusLine`](../api/tvision_rs/status/status_line/struct.StatusLine.html) and
 return it from your `init_status_line` factory.
 
-A **hidden hotkey binding** is an item with no text — use the `key_item` builder
+A **hidden hotkey binding** is an item with no text, built with the `key_item` builder
 method. It draws nothing and consumes no width, but its accelerator still fires
-globally — the standard trick for app-wide shortcuts like `Shift-Del` ⇒ Cut
+globally. This is the standard trick for app-wide shortcuts like `Shift-Del` ⇒ Cut
 *(the C++ equivalent was `TStatusItem(0, key, cmd)`).*
 
 ## Context-sensitive help
@@ -100,8 +100,8 @@ globally — the standard trick for app-wide shortcuts like `Shift-Del` ⇒ Cut
 This is what a multiple-`StatusDef` list is *for*. Each def carries a
 [`HelpCtxRange`](../api/tvision_rs/status/enum.HelpCtxRange.html); the status line
 shows the items of the **first def whose range matches the current help
-context**. Most apps need only one universal def — that is what `def_all`
-([`HelpCtxRange::All`](../api/tvision_rs/status/enum.HelpCtxRange.html)) builds — but
+context**. Most apps need only one universal def, which is what `def_all`
+([`HelpCtxRange::All`](../api/tvision_rs/status/enum.HelpCtxRange.html)) builds, but
 you can register a `def_one_of(...)` whose items appear only while a particular
 context is active, so the bottom line changes as focus moves between an editor, a
 browser, and so on.
@@ -121,7 +121,7 @@ whole UI.
 ## Context-sensitive hints
 
 Beyond switching which status-line items appear, the status line can show a
-**free-form hint string** to the right of the items — a short message that
+**free-form hint string** to the right of the items: a short message that
 changes as the focused view changes context. This is the `hint` provider.
 
 By default no hint is shown (`None`). Install one with
@@ -156,8 +156,8 @@ let line = StatusLine::new(Rect::new(0, 23, 80, 24), defs)
 ```
 
 The `Program` idle loop reads the focused view's `help_ctx` from its `ViewState`
-and calls `StatusLine::set_help_ctx` at the start of each pump — so the hint
-updates automatically as the user moves focus. The status line re-draws itself
+and calls `StatusLine::set_help_ctx` at the start of each pump, so the hint
+updates as the user moves focus. The status line re-draws itself
 when the context changes (it skips the redraw if the context has not changed,
 making it idempotent).
 
@@ -171,8 +171,8 @@ Source: `src/status/status_line.rs` (`StatusLine::set_hint`, `StatusLine::with_h
 
 ## See also
 
-- [Your first app](../getting-started/first-app.md) — the menu bar and status
+- [Your first app](../getting-started/first-app.md): the menu bar and status
   line wired into a running program.
-- [Commands & events](commands.md) — how a chosen item's command is dispatched,
+- [Commands & events](commands.md): how a chosen item's command is dispatched,
   and how disabled items track command state.
-- [Keyboard & key mapping](keyboard.md) — accelerators and the global key model.
+- [Keyboard & key mapping](keyboard.md): accelerators and the global key model.

@@ -1,21 +1,20 @@
 # Commands & events
 
-The things that *happen* in your app — clicking OK, choosing a menu item, a
-scrollbar moving — travel through the view tree as **commands** and **events**.
-A button does not call a function directly; it emits a command, and some view up
-the tree decides what to do with it. This indirection is what lets the same
-`Command::OK` come from a button, a menu, or a keystroke and be handled in
+The things that *happen* in your app (clicking OK, choosing a menu item, a
+scrollbar moving) travel through the view tree as **commands** and **events**.
+A button does not call a function directly. It emits a command, and some view up
+the tree decides what to do with it. Because of this indirection the same
+`Command::OK` can come from a button, a menu, or a keystroke and be handled in
 exactly one place.
 
 ## Commands
 
 A [`Command`](../api/tvision_rs/command/struct.Command.html) is an opaque token
 naming an intent. The framework ships a standard vocabulary as associated
-constants — `Command::OK`, `Command::CANCEL`, `Command::QUIT`, `Command::CLOSE`,
-and so on. A command is not an integer: its identity is a namespaced
-`&'static str` (so `Command::OK` is `"tv.ok"`), making app- and view-defined
-commands collision-safe by construction *(the standard names map one-to-one onto
-the C++ `cm*` constants)*. Mint your own with
+constants: `Command::OK`, `Command::CANCEL`, `Command::QUIT`, `Command::CLOSE`,
+and so on. A command's identity is a namespaced `&'static str` (so `Command::OK`
+is `"tv.ok"`), which keeps app- and view-defined commands from colliding
+*(the standard names map one-to-one onto the C++ `cm*` constants)*. Mint your own with
 [`Command::custom`](../api/tvision_rs/command/struct.Command.html#method.custom),
 under a dotted prefix of your own:
 
@@ -43,11 +42,11 @@ tree is the subject of [The event loop in depth](../internals/event-loop.md).)
 
 ## Enabling & graying out
 
-Every command is **enabled by default**. To make a command unavailable —
-graying out the menu items and buttons that emit it — disable it. When you hold
+Every command is **enabled by default**. To make a command unavailable, which
+grays out the menu items and buttons that emit it, disable it. When you hold
 the top-level handle (an app `main`, startup, a test), call
 [`Program::disable_command`](../api/tvision_rs/app/struct.Program.html#method.disable_command)
-/ `enable_command`; from inside a view, where you only have a downward-borrowed
+/ `enable_command`. From inside a view, where you only have a downward-borrowed
 `Context`, request it deferred via `ctx.disable_command(cmd)` /
 `ctx.enable_command(cmd)`. A view can ask whether a command is currently live
 with `ctx.command_enabled(cmd)`, which answers from a per-pump snapshot.
@@ -62,10 +61,10 @@ app.enable_command(tv::Command::SAVE);
 ```
 
 Internally `Program` stores the *disabled* set (a denylist), so a brand-new
-custom command is enabled the moment it exists — there is no registration step.
+custom command is enabled the moment it exists, with no registration step.
 Five window commands (`ZOOM`, `CLOSE`, `RESIZE`, `NEXT`, `PREV`) start disabled
 and are granted only while a window is selected. The disabled command set is a
-[`CommandSet`](../api/tvision_rs/command/struct.CommandSet.html) — a set of commands
+[`CommandSet`](../api/tvision_rs/command/struct.CommandSet.html), a set of commands
 with `+=` / `-=` / union / intersection operators *(the successor to C++
 `TCommandSet`)*.
 
@@ -77,7 +76,7 @@ grayed or active.
 ## Broadcasts
 
 A targeted command goes to whoever handles it; a **broadcast** is offered to
-*every* interested view. Broadcasts are how sibling views coordinate — a
+*every* interested view. Sibling views coordinate through broadcasts: a
 scrollbar tells its scroller it moved, a list tells its dialog an item was
 chosen. Emit one through the context:
 
@@ -91,22 +90,23 @@ ctx.broadcast(tv::Command::SCROLL_BAR_CHANGED, Some(my_id));
 A broadcast is an
 [`Event::Broadcast { command, source }`](../api/tvision_rs/event/enum.Event.html).
 The `source` is an optional [`ViewId`](../api/tvision_rs/view/struct.ViewId.html)
-naming *which view the broadcast is about* — the resolvable successor to C++'s
-`infoPtr` void-pointer. It is a filter, not a payload: a receiver checks "is this
-broadcast from the scrollbar I care about?" and ignores the rest. `None` means
+naming *which view the broadcast is about*. It is the resolvable successor to C++'s
+`infoPtr` void-pointer, and a receiver uses it as a filter: it checks "is this
+broadcast from the scrollbar I care about?" and ignores the rest. It carries no
+payload. `None` means
 the broadcast concerns no particular view. List find-mode uses the same pattern:
 a list box broadcasts `Command::LIST_FIND_CHANGED` with its own `ViewId` as
 `source` whenever the typed query changes, so a host can mirror the query or
 kick off an async search. Because a leaf view cannot reach across the tree to its
 sibling, the event loop itself brokers the read/write between the two views when
-it applies the broadcast — see
+it applies the broadcast; see
 [Cross-view brokering & ViewId](../internals/brokering.md).
 
 ## Where to go next
 
-- [Menus, status line & help](menus.md) — the views that *emit* commands and
+- [Menus, status line & help](menus.md): the views that *emit* commands and
   gray themselves out.
-- [Events → enum + match](../port/events.md) — the design behind `enum Event`
+- [Events → enum + match](../port/events.md): the design behind `enum Event`
   and why `infoPtr` became `source`, for Turbo Vision veterans.
-- [The event loop in depth](../internals/event-loop.md) — how a command is
+- [The event loop in depth](../internals/event-loop.md): how a command is
   routed through the tree.
