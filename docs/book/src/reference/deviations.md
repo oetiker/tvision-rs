@@ -1,18 +1,18 @@
 # Differences from C++ Turbo Vision
 
 tvision-rs is a *faithful* port of magiblot's C++ Turbo Vision: class structure,
-method names, control flow, and behaviour are reproduced as-is — **except** in
-the handful of places where a line-by-line port is impossible or unwise in Rust.
+method names, control flow, and behaviour are reproduced as-is, **except** in
+the places where a line-by-line port is impossible or unwise in Rust.
 Each such place is a numbered difference. If a behaviour is *not* on this list,
 it was ported straight from the C++.
 
-Each difference carries a tag: most are **forced** (Rust literally won't compile
-the direct port) or **chosen** (the direct port compiles, but a modern construct
-is clearly better); a few are tagged by scope (**minor** / **moderate**) where
+Each difference carries a tag: most are **forced** (Rust won't compile the
+direct port) or **chosen** (the direct port compiles, but a modern construct
+fits better); a few are tagged by scope (**minor** / **moderate**) where
 the change is small and self-contained.
 
 This page is the at-a-glance list. Every entry links to the Part II chapter that
-tells its story, and — where one type carries the difference — to that type's API
+covers it and, where one type carries the difference, to that type's API
 reference. Other pages cite an entry by its stable anchor (for example
 [difference D2](#d2)).
 
@@ -32,7 +32,7 @@ values. → [Constant families](../port/constants.md)
 *forced.* The class tree becomes a
 [`View`](../api/tvision_rs/view/trait.View.html) trait with default methods plus a
 [`ViewState`](../api/tvision_rs/view/struct.ViewState.html) struct held by
-composition; "subclass `TWindow`" becomes embed-and-delegate — hold a
+composition; "subclass `TWindow`" becomes embed-and-delegate: hold a
 [`Window`](../api/tvision_rs/window/struct.Window.html), forward the methods you
 don't change. → [Inheritance](../port/inheritance.md)
 

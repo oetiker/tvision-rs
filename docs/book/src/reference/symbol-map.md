@@ -1,15 +1,15 @@
 # C++ Turbo Vision → `tv::` symbol map
 
-A terse lookup for translating a C++ Turbo Vision symbol into its tvision-rs
+A lookup table for translating a C++ Turbo Vision symbol into its tvision-rs
 equivalent (the `tvision-rs` crate, imported as `tv`). This is the *what*; the *why*
 lives in [The Idiomatic Port](../port/faithful.md) and the summary in
 [Differences from C++ Turbo Vision](deviations.md).
 
 Two mechanical rules cover most of the table:
 
-- **Drop the `T` prefix and namespace under `tv::`** — `TButton` → `tv::Button`.
+- **Drop the `T` prefix and namespace under `tv::`**: `TButton` → `tv::Button`.
 - **`cmFoo` / `hcFoo` constant families** become associated consts on an open
-  newtype — `cmOK` → [`tv::Command::OK`](../api/tvision_rs/command/struct.Command.html),
+  newtype: `cmOK` → [`tv::Command::OK`](../api/tvision_rs/command/struct.Command.html),
   `hcNoContext` → [`tv::HelpCtx::NO_CONTEXT`](../api/tvision_rs/help/struct.HelpCtx.html).
 
 ## Core types
@@ -123,7 +123,7 @@ the data protocol in [Dialogs & data](../apps/dialogs.md).
 
 | C++ Turbo Vision | tvision-rs (Rust) |
 | ---------------- | -------------- |
-| `drawHide` / `drawShow` / `drawUnder*` / buffered group | dropped — whole-tree redraw + diff |
+| `drawHide` / `drawShow` / `drawUnder*` / buffered group | dropped (whole-tree redraw + diff) |
 | `TStreamable` / `TResourceFile` | dropped (serde if revived) |
 | `forEach` / `firstThat` / `TSortedCollection` | iterators / `Vec<T: Ord>` |
 
@@ -132,6 +132,6 @@ Rationale for each removal is in
 
 ---
 
-> Anything not in this table ports verbatim — same name (minus the `T`), same
+> Anything not in this table ports verbatim: same name (minus the `T`), same
 > method, same behaviour. For the differences that *do* change a symbol, see
 > [Differences from C++ Turbo Vision](deviations.md).
