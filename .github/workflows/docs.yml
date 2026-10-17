@@ -40,7 +40,7 @@ jobs:
     # intermittently failed with "Deployment failed, try again later".
     if: github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'Release v')
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Install tmux (for screenshots)
@@ -57,7 +57,7 @@ jobs:
       - name: Build integrated site (guide + api)
         run: cargo xtask docs
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: docs-dev
           path: docs/book/book
@@ -71,12 +71,12 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           sparse-checkout: .github/scripts
 
       - name: Download dev docs
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: docs-dev
           path: new-docs
