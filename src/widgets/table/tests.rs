@@ -729,6 +729,30 @@ fn snapshot_hidden_column() {
 }
 
 #[test]
+fn snapshot_separators_header() {
+    let mut fx = Fixture::new(
+        Table::new(Rect::new(0, 0, W, H), columns(), None)
+            .with_separators(Separators::Header)
+            .with_model(model(&ROWS)),
+    );
+    fx.focus(true);
+    fx.key(Key::Down);
+    insta::assert_snapshot!(fx.render(W as u16, H as u16));
+}
+
+#[test]
+fn snapshot_separators_all() {
+    let mut fx = Fixture::new(
+        Table::new(Rect::new(0, 0, W, H), columns(), None)
+            .with_separators(Separators::All)
+            .with_model(model(&ROWS)),
+    );
+    fx.focus(true);
+    fx.key(Key::Down);
+    insta::assert_snapshot!(fx.render(W as u16, H as u16));
+}
+
+#[test]
 fn snapshot_row_role() {
     let rows: Vec<Vec<String>> = ROWS
         .iter()
@@ -1471,6 +1495,20 @@ fn a_tilde_in_a_label_does_not_become_a_popup_hotkey() {
 fn the_fixed_builder_sets_the_flag() {
     assert!(ColumnSpec::new("A", 4).fixed(true).fixed);
     assert!(!ColumnSpec::new("A", 4).fixed);
+}
+
+#[test]
+fn with_separators_sets_the_mode() {
+    let t = Table::new(Rect::new(0, 0, W, H), columns(), None);
+    assert_eq!(
+        t.separators(),
+        Separators::None,
+        "blank separators by default"
+    );
+    let t = t.with_separators(Separators::Header);
+    assert_eq!(t.separators(), Separators::Header);
+    let t = t.with_separators(Separators::All);
+    assert_eq!(t.separators(), Separators::All);
 }
 
 // -- cell editing ----------------------------------------------------------------
