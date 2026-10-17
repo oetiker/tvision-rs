@@ -2,13 +2,13 @@
 
 In C++ Turbo Vision, a view's runtime condition is packed into `ushort` bit
 words: `state` holds the `sf*` flags, `options` the `of*` flags, plus
-`growMode` (`gf*`), `dragMode` (`dm*`) and `eventMask`. You set a bit with
-`state |= sfFocused` and test one with `if (state & sfFocused)`. Compact, but
-untyped and opaque — the compiler can't tell you `sfFocused` belongs to `state`
-and not `options`.
+`growMode` (`gf*`), `dragMode` (`dm*`) and `eventMask`. Code sets a bit with
+`state |= sfFocused` and tests one with `if (state & sfFocused)`. This is
+compact but untyped: the compiler cannot tell that `sfFocused` belongs to
+`state` and not to `options`.
 
-We have the bytes to spare, so tvision-rs turns each flag word into a plain
-struct of named `bool` fields. The bit just becomes a field:
+Memory is no longer that scarce, so tvision-rs turns each flag word into a plain
+struct of named `bool` fields. Each bit becomes a field:
 
 ```rust
 # use tvision_rs as tv;
@@ -32,40 +32,40 @@ old `0x0001`-style constant left to a comment:
 | `dragMode` | [`DragMode`](../api/tvision_rs/view/struct.DragMode.html)   | `dmLimitLoY` → `limit_lo_y`    |
 
 A combined constant such as `gfGrowAll` (four `gf*` bits OR'd together) becomes
-a constructor — `GrowMode::grow_all()` — rather than a single field, since it
-was never a single bit in the first place.
+a constructor, `GrowMode::grow_all()`, instead of a single field, since it
+was never a single bit.
 
-A handful of flags fell away with their reason for existing: `sfExposed` and
+A few flags fell away with their reason for existing: `sfExposed` and
 `ofBuffered` were caches for partial-repaint occlusion, and tvision-rs redraws
 the whole tree and diffs it (see [Drawing & backends](../internals/drawing.md)),
 so there is nothing to cache.
 
 ## Reading vs. flipping
 
-A bare read is just field access on the snapshot returned by `state()` /
+A read is field access on the snapshot returned by `state()` /
 `options()`. *Flipping* a flag is where Turbo Vision's `setState(flag, on)`
-mattered: it didn't only toggle a bit, it fired side effects — redrawing,
-broadcasting a focus change, cascading into children. tvision-rs keeps that verb
+mattered: besides toggling a bit, it fired side effects such as redrawing,
+broadcasting a focus change, and cascading into children. tvision-rs keeps that verb
 where the side effects live, as
 [`View::set_state`](../api/tvision_rs/view/trait.View.html#method.set_state) over a
-small [`StateFlag`](../api/tvision_rs/view/enum.StateFlag.html) enum — the named
+small [`StateFlag`](../api/tvision_rs/view/enum.StateFlag.html) enum: the named
 subset of `sf*` (`Active`, `Selected`, `Focused`, `Dragging`) that the focus and
 activation machinery propagates. Flags with no propagation (visibility, cursor
 shape) are set directly on the struct, never through this hook.
 
-Most application code touches neither directly: it uses the friendly verbs that
-wrap them — `view.show()` / `view.hide()` for visibility, and command
+Most application code touches neither directly. It uses the verbs that
+wrap them: `view.show()` / `view.hide()` for visibility, and command
 enable/disable through the command set (`Context::disable_command`,
-which the menus and status line mirror) rather than poking a bit.
+which the menus and status line mirror) instead of setting a bit.
 
 ## Beyond the view: `WindowFlags`
 
-The same treatment reaches the `wf*` decoration word. A window's
+The `wf*` decoration word gets the same treatment. A window's
 [`WindowFlags`](../api/tvision_rs/window/struct.WindowFlags.html) carries `r#move`
-(can be dragged — `wfMove`, spelled with a raw identifier because `move` is a
-Rust keyword), `grow`, `close` and `zoom`. A default window sets all four, just
-as the C++ ctor does `flags = wfMove | wfGrow | wfClose | wfZoom`. Those bools
-then gate behaviour exactly as the bits did — a `cmClose` acts only when `close`
+(can be dragged, `wfMove`, spelled with a raw identifier because `move` is a
+Rust keyword), `grow`, `close` and `zoom`. A default window sets all four, as
+the C++ ctor does with `flags = wfMove | wfGrow | wfClose | wfZoom`. Those bools
+gate behaviour as the bits did: a `cmClose` acts only when `close`
 is set, and dragging is enabled when `r#move` or `grow` is.
 
 For the runtime mechanics of how these flags steer dispatch and focus, see
