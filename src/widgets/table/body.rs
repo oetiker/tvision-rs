@@ -72,10 +72,21 @@ impl View for TableHeader {
         let sort = d
             .sort
             .and_then(|(c, dir)| d.col_order.iter().position(|&m| m == c).map(|p| (p, dir)));
-        let labels = header_line(&d.display_columns(), &l.widths[l.frozen..], sort);
+        let sep = d.separators;
+        let labels = header_line(
+            &d.display_columns(),
+            &l.widths[l.frozen..],
+            sort,
+            sep.header_char(),
+        );
         // The labels scroll with the rows; the check column's header cell is
         // blank.
-        ctx.put_str(TEXT_X, 0, &l.compose("", &labels, d.h_offset), style);
+        ctx.put_str(
+            TEXT_X,
+            0,
+            &l.compose("", &labels, d.h_offset, sep.header_char()),
+            style,
+        );
         if let Some(x) = d.drop_x {
             ctx.put_char(x, 0, DROP_MARK, ctx.style(Role::ListFocused));
         }
@@ -301,7 +312,8 @@ impl ListViewer for TableBody {
             model: &*d.model,
             cols: &d.col_order,
         };
-        let line = format_line(&model, row, rest_widths, &self.display);
+        let sep = d.separators;
+        let line = format_line(&model, row, rest_widths, &self.display, sep.row_char());
         let check = if l.frozen > 0 {
             let marked = d
                 .key_at(item as usize)
@@ -310,7 +322,7 @@ impl ListViewer for TableBody {
         } else {
             String::new()
         };
-        l.compose(&check, &line, d.h_offset)
+        l.compose(&check, &line, d.h_offset, sep.row_char())
     }
 
     fn is_selected(&self, item: i32) -> bool {

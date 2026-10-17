@@ -51,6 +51,43 @@ impl SortDir {
     }
 }
 
+/// The glyph of a visible column separator: the light box-drawing vertical,
+/// one display cell wide (the character the frame and the status line use).
+const SEPARATOR_RULE: char = '│';
+
+/// Which column separators a [`Table`](super::Table) draws between its
+/// columns. A separator is always one cell wide — this only chooses whether
+/// that cell holds a visible rule, so the layout never shifts.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Separators {
+    /// One blank cell between columns — no visible rule (the default).
+    #[default]
+    None,
+    /// A `│` rule in the header row only, so the resize handle is visible;
+    /// the rows keep blank separators.
+    Header,
+    /// A `│` rule in the header and between every row's cells.
+    All,
+}
+
+impl Separators {
+    /// The character a header separator cell draws.
+    pub(crate) fn header_char(self) -> char {
+        match self {
+            Separators::None => ' ',
+            Separators::Header | Separators::All => SEPARATOR_RULE,
+        }
+    }
+
+    /// The character a row separator cell draws.
+    pub(crate) fn row_char(self) -> char {
+        match self {
+            Separators::All => SEPARATOR_RULE,
+            Separators::None | Separators::Header => ' ',
+        }
+    }
+}
+
 /// One column of a [`Table`](super::Table).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ColumnSpec {
@@ -223,9 +260,9 @@ pub fn check_column() -> ColumnSpec {
 }
 
 /// Prefix `rest` (an already joined line) with the check-column cell `check`
-/// of width `w0`, using the same one-space separator as the other columns.
-/// A zero-width check column (no room at all) adds nothing.
-pub fn with_check_cell(w0: i32, check: &str, rest: String) -> String {
+/// of width `w0`, separated by `sep` exactly as the other columns are. A
+/// zero-width check column (no room at all) adds nothing.
+pub fn with_check_cell(w0: i32, check: &str, rest: String, sep: char) -> String {
     if w0 <= 0 {
         return rest;
     }
@@ -233,7 +270,7 @@ pub fn with_check_cell(w0: i32, check: &str, rest: String) -> String {
     if rest.is_empty() {
         cell
     } else {
-        format!("{cell} {rest}")
+        format!("{cell}{sep}{rest}")
     }
 }
 
@@ -382,12 +419,13 @@ impl RowLayout {
 
     /// The on-screen text of a row: the `frozen` cell text (the check cell),
     /// then the scrolling `rest` (a full-width line over
-    /// `widths[frozen..]`) cut to the view from `offset`.
-    pub fn compose(&self, frozen: &str, rest: &str, offset: i32) -> String {
+    /// `widths[frozen..]`) cut to the view from `offset`. `sep` is the
+    /// character the separator cells hold (see [`Separators`]).
+    pub fn compose(&self, frozen: &str, rest: &str, offset: i32, sep: char) -> String {
         let shown = slice_cols(rest, self.clamp(offset), self.view);
         match self.frozen {
             0 => shown,
-            _ => with_check_cell(self.widths[0], frozen, shown),
+            _ => with_check_cell(self.widths[0], frozen, shown, sep),
         }
     }
 
@@ -520,15 +558,19 @@ pub fn pad_cell(cell: &str, width: i32, align: Align) -> String {
     format!("{head}…{}", " ".repeat(width - 1 - used))
 }
 
-/// Join the cells of the visible, non-zero-width columns with one space.
-fn join_cells<'a>(widths: &[i32], cells: impl Iterator<Item = (usize, String)> + 'a) -> String {
+/// Join the cells of the visible, non-zero-width columns with `sep`.
+fn join_cells<'a>(
+    widths: &[i32],
+    cells: impl Iterator<Item = (usize, String)> + 'a,
+    sep: char,
+) -> String {
     let mut line = String::new();
     for (i, cell) in cells {
         if widths.get(i).copied().unwrap_or(0) <= 0 {
             continue;
         }
         if !line.is_empty() {
-            line.push(' ');
+            line.push(sep);
         }
         line.push_str(&cell);
     }
@@ -536,12 +578,13 @@ fn join_cells<'a>(widths: &[i32], cells: impl Iterator<Item = (usize, String)> +
 }
 
 /// The rendered text of model row `row`: each visible column padded or
-/// truncated to its width, separated by one space.
+/// truncated to its width, separated by `sep`.
 pub fn format_line(
     model: &dyn TableModel,
     row: usize,
     widths: &[i32],
     cols: &[ColumnSpec],
+    sep: char,
 ) -> String {
     join_cells(
         widths,
@@ -549,13 +592,19 @@ pub fn format_line(
             let w = widths.get(i).copied().unwrap_or(0);
             (i, pad_cell(&model.cell(row, i), w, c.align))
         }),
+        sep,
     )
 }
 
 /// The header text: the labels laid out like [`format_line`], the sorted
 /// column's label carrying `▲`/`▼`. A label too long for its column is cut so
 /// the marker stays visible.
-pub fn header_line(cols: &[ColumnSpec], widths: &[i32], sort: Option<(usize, SortDir)>) -> String {
+pub fn header_line(
+    cols: &[ColumnSpec],
+    widths: &[i32],
+    sort: Option<(usize, SortDir)>,
+    sep: char,
+) -> String {
     join_cells(
         widths,
         cols.iter().enumerate().map(|(i, c)| {
@@ -576,6 +625,7 @@ pub fn header_line(cols: &[ColumnSpec], widths: &[i32], sort: Option<(usize, Sor
             };
             (i, cell)
         }),
+        sep,
     )
 }
 
@@ -664,7 +714,7 @@ mod tests {
         // 10 + 8 + one separator = 19 fits exactly.
         assert_eq!(layout_widths(&cols, 19), vec![10, 0, 8]);
         let m = model(&[&["a", "b", "c"]]);
-        let line = format_line(&m, 0, &[10, 0, 8], &cols);
+        let line = format_line(&m, 0, &[10, 0, 8], &cols, ' ');
         assert_eq!(line, "a          c       ");
         assert_eq!(text::width(&line), 19);
         assert!(layout_widths(&[col("A", 3).hidden(true)], 10) == vec![0]);
@@ -699,26 +749,32 @@ mod tests {
     fn format_line_pads_and_truncates_to_the_cell() {
         let cols = [col("C1", 5), col("C2", 8), col("C3", 6)];
         let m = model(&[&["c1", "very-long-name-here", "running"]]);
-        assert_eq!(format_line(&m, 0, &[4, 7, 5], &cols), "c1   very-l… runn…");
+        assert_eq!(
+            format_line(&m, 0, &[4, 7, 5], &cols, ' '),
+            "c1   very-l… runn…"
+        );
         let cols = [col("N", 3).right()];
-        assert_eq!(format_line(&model(&[&["7"]]), 0, &[3], &cols), "  7");
+        assert_eq!(format_line(&model(&[&["7"]]), 0, &[3], &cols, ' '), "  7");
     }
 
     #[test]
     fn header_line_marks_sort_direction() {
         let cols = [col("ID", 10), col("NAME", 12), col("STATE", 8)];
         let widths = [10, 12, 8];
-        assert!(header_line(&cols, &widths, Some((1, SortDir::Asc))).contains("NAME ▲"));
-        assert!(header_line(&cols, &widths, Some((1, SortDir::Desc))).contains("NAME ▼"));
-        assert!(!header_line(&cols, &widths, None).contains('▲'));
+        assert!(header_line(&cols, &widths, Some((1, SortDir::Asc)), ' ').contains("NAME ▲"));
+        assert!(header_line(&cols, &widths, Some((1, SortDir::Desc)), ' ').contains("NAME ▼"));
+        assert!(!header_line(&cols, &widths, None, ' ').contains('▲'));
     }
 
     #[test]
     fn header_line_keeps_the_marker_when_the_label_is_cut() {
         let cols = [col("STATUS", 5)];
-        assert_eq!(header_line(&cols, &[5], Some((0, SortDir::Asc))), "ST… ▲");
-        assert_eq!(header_line(&cols, &[1], Some((0, SortDir::Desc))), "▼");
-        assert_eq!(header_line(&cols, &[5], None), "STAT…");
+        assert_eq!(
+            header_line(&cols, &[5], Some((0, SortDir::Asc)), ' '),
+            "ST… ▲"
+        );
+        assert_eq!(header_line(&cols, &[1], Some((0, SortDir::Desc)), ' '), "▼");
+        assert_eq!(header_line(&cols, &[5], None, ' '), "STAT…");
     }
 
     #[test]
@@ -773,11 +829,16 @@ mod tests {
         let w = layout_widths(&cols, 12);
         assert_eq!(w, vec![3, 4, 3], "the check column never shrinks");
         let m = model(&[&["alpha", "beta"]]);
-        let line = with_check_cell(w[0], "[X]", format_line(&m, 0, &w[1..], &cols[1..]));
+        let line = with_check_cell(
+            w[0],
+            "[X]",
+            format_line(&m, 0, &w[1..], &cols[1..], ' '),
+            ' ',
+        );
         assert_eq!(line, "[X] alp… be…");
         assert_eq!(text::width(&line), 12, "fills avail exactly");
-        assert_eq!(with_check_cell(0, "[X]", "rest".into()), "rest");
-        assert_eq!(with_check_cell(3, "[ ]", String::new()), "[ ]");
+        assert_eq!(with_check_cell(0, "[X]", "rest".into(), ' '), "rest");
+        assert_eq!(with_check_cell(3, "[ ]", String::new(), ' '), "[ ]");
     }
 
     #[test]
@@ -868,9 +929,15 @@ mod tests {
         assert_eq!((l.frozen_width, l.content, l.view), (4, 13, 12));
         assert_eq!(l.max_offset(), 1);
         let rest = "aaaaaa bbbbbb";
-        assert_eq!(l.compose("[X]", rest, 0), "[X] aaaaaa bbbbb");
-        assert_eq!(l.compose("[X]", rest, 1), "[X] aaaaa bbbbbb");
-        assert_eq!(l.compose("[X]", rest, 9), "[X] aaaaa bbbbbb", "clamped");
+        assert_eq!(l.compose("[X]", rest, 0, ' '), "[X] aaaaaa bbbbb");
+        assert_eq!(l.compose("[X]", rest, 1, ' '), "[X] aaaaa bbbbbb");
+        assert_eq!(
+            l.compose("[X]", rest, 9, ' '),
+            "[X] aaaaa bbbbbb",
+            "clamped"
+        );
+        // With a visible rule the check separator is the rule too.
+        assert_eq!(l.compose("[X]", rest, 0, '│'), "[X]│aaaaaa bbbbb");
         // Hit test: the frozen cell, then the scrolled columns.
         assert_eq!(l.column_at(1, 1), Some(0));
         assert_eq!(l.column_at(3, 1), None, "frozen separator");
@@ -897,7 +964,73 @@ mod tests {
         let cols = [col("A", 5), col("B", 0), col("C", 5)];
         assert_eq!(layout_widths(&cols, 11), vec![5, 0, 5]);
         let m = model(&[&["a", "b", "c"]]);
-        assert_eq!(text::width(&format_line(&m, 0, &[5, 0, 5], &cols)), 11);
+        assert_eq!(text::width(&format_line(&m, 0, &[5, 0, 5], &cols, ' ')), 11);
+    }
+
+    #[test]
+    fn separators_choose_the_join_glyph_without_shifting_the_layout() {
+        let cols = [col("ID", 4), col("NAME", 8), col("STATE", 6)];
+        let widths = [4, 8, 6];
+        let m = model(&[&["a1", "web", "running"]]);
+
+        // The default draws one blank cell between columns.
+        assert_eq!(
+            header_line(&cols, &widths, None, Separators::None.header_char()),
+            "ID   NAME     STATE "
+        );
+        assert_eq!(
+            format_line(&m, 0, &widths, &cols, Separators::None.row_char()),
+            "a1   web      runni…"
+        );
+
+        // Header: a `│` rule in the label row only; the rows keep spaces.
+        assert_eq!(
+            header_line(&cols, &widths, None, Separators::Header.header_char()),
+            "ID  │NAME    │STATE "
+        );
+        assert_eq!(
+            format_line(&m, 0, &widths, &cols, Separators::Header.row_char()),
+            "a1   web      runni…",
+            "rows keep the blank separator"
+        );
+
+        // All: the rule in the header and between every row's cells.
+        assert_eq!(
+            header_line(&cols, &widths, None, Separators::All.header_char()),
+            "ID  │NAME    │STATE "
+        );
+        assert_eq!(
+            format_line(&m, 0, &widths, &cols, Separators::All.row_char()),
+            "a1  │web     │runni…"
+        );
+
+        // A rule is one cell wide, so it never changes the line's width.
+        for sep in [Separators::None, Separators::Header, Separators::All] {
+            let head = header_line(&cols, &widths, None, sep.header_char());
+            let row = format_line(&m, 0, &widths, &cols, sep.row_char());
+            assert_eq!(text::width(&head) as i32, line_width(&widths));
+            assert_eq!(text::width(&row) as i32, line_width(&widths));
+        }
+    }
+
+    #[test]
+    fn the_separator_rule_lands_on_the_resize_handle_cell() {
+        // The rule is drawn on the very cell `separator_at` reports, so a
+        // header drag with a rule on still resizes the same column.
+        let cols = [col("A", 4), col("B", 4)];
+        let l = RowLayout::new(&cols, 0, 9);
+        assert_eq!(l.widths, vec![4, 4]);
+        let head = header_line(&cols, &l.widths, None, Separators::Header.header_char());
+        assert_eq!(head.chars().nth(4), Some(SEPARATOR_RULE));
+        assert_eq!(l.separator_at(4, 0), Some(0));
+        let row = format_line(
+            &model(&[&["a", "b"]]),
+            0,
+            &l.widths,
+            &cols,
+            Separators::All.row_char(),
+        );
+        assert_eq!(row.chars().nth(4), Some(SEPARATOR_RULE));
     }
 
     /// A model whose display text is not its sort key (the tvdocker
