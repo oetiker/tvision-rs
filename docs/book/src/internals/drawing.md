@@ -1,11 +1,11 @@
 # Drawing & backends
 
-An tvision-rs app never writes to the terminal directly. Every view paints into an
+A tvision-rs app never writes to the terminal directly. Every view paints into an
 in-memory grid; once per frame the framework diffs that grid against the previous
 one and pushes *only the changed cells* to a pluggable backend. This is the
-[whole-tree-redraw-plus-diff draw model](../port/draw.md) — there is no
-damage-tracking, no per-view "dirty" bookkeeping. A view's only job is to fill in
-its cells; keeping terminal I/O bounded is the diff's job.
+[whole-tree-redraw-plus-diff draw model](../port/draw.md), with no
+damage-tracking and no per-view "dirty" bookkeeping. A view fills in
+its cells; the diff keeps terminal I/O bounded.
 
 ## The cell and the draw buffer
 
@@ -16,9 +16,9 @@ and trailing halves of a double-width glyph. It is the Rust form of magiblot's
 `TScreenCell`.
 
 A view does not poke cells one at a time. It fills a
-[`DrawBuffer`](../api/tvision_rs/screen/struct.DrawBuffer.html) — a single fixed-width
-*row* of cells under construction — then blits that row. Writes past the buffer's
-width are clipped automatically. Text goes in through width-aware primitives, so
+[`DrawBuffer`](../api/tvision_rs/screen/struct.DrawBuffer.html), a single fixed-width
+*row* of cells under construction, then blits that row. Writes past the buffer's
+width are clipped. Text goes in through width-aware primitives, so
 truncation and double-width handling are shared with the rest of the renderer.
 
 ```rust
@@ -33,20 +33,20 @@ b.move_str(0, "Hello", style);
 # }
 ```
 
-> In the typed cell model, `move_char` always writes both char and style — there
+> In the typed cell model, `move_char` always writes both char and style; there
 > is no retain-sentinel. To update only the character or only the style, use
 > `put_char` / `put_attribute`.
 
 ## The back buffer and the diff
 
 The full view tree is painted into a
-[`Buffer`](../api/tvision_rs/screen/struct.Buffer.html) — the screen-sized grid,
+[`Buffer`](../api/tvision_rs/screen/struct.Buffer.html), the screen-sized grid,
 always rooted at `(0, 0)`. Each frame the renderer keeps **two** buffers: the
 *back* buffer (painted this frame) and the *front* buffer (last frame, the diff
 reference). [`Buffer::diff`](../api/tvision_rs/screen/struct.Buffer.html#method.diff)
-walks the two grids and returns just the cells that changed, with double-width
-lead/trail cells handled correctly. The algorithm is adapted from ratatui, minus
-its `skip` opt-out — there is nothing to skip when you repaint everything.
+walks the two grids and returns the cells that changed, handling double-width
+lead/trail cells. The algorithm is adapted from ratatui without
+its `skip` opt-out, since a full repaint leaves nothing to skip.
 
 ## The Renderer cycle
 
@@ -80,21 +80,21 @@ Two implementations ship:
 | [`CrosstermBackend`](../api/tvision_rs/backend/struct.CrosstermBackend.html) | Production. Wraps crossterm; sets up raw mode, the alternate screen, and mouse capture, and restores the terminal on `Drop`. |
 | [`HeadlessBackend`](../api/tvision_rs/backend/struct.HeadlessBackend.html) | Tests. An in-memory grid that never blocks: `poll_event` pops a queued event or returns immediately, so tests drive the loop deterministically. |
 
-The headless backend is the verification backbone of the whole port: a widget is
+The port's tests are built on the headless backend: a widget is
 rendered onto it and its grid is compared, via the frozen `screen::snapshot`
 format, against a golden string.
 
 ## Clipping to owner bounds
 
 Every view paints through a
-[`DrawCtx`](../api/tvision_rs/view/struct.DrawCtx.html) — the clipped, themed
-writer handed down from its parent group. The key property is the clip rect:
-a `DrawCtx` carries an **absolute** clip rectangle already intersected with
-its parent's clip rectangle, and every cell write is silently discarded if it
+[`DrawCtx`](../api/tvision_rs/view/struct.DrawCtx.html), the clipped, themed
+writer handed down from its parent group.
+A `DrawCtx` carries an **absolute** clip rectangle already intersected with
+its parent's clip rectangle, and every cell write is discarded if it
 falls outside that rect. A view can never paint outside the bounds its owner
 carved out for it, regardless of what coordinates it writes to.
 
-The clip is set up automatically when a group descends into a child's `draw`:
+The clip is set up when a group descends into a child's `draw`:
 
 ```rust,ignore
 // src/view/group.rs — Group::draw (simplified)
@@ -114,8 +114,8 @@ unchanged, but the writes that land outside the clip are dropped in the buffer
 writer.
 
 Because clips are intersected at each level of the tree, a deeply nested view
-automatically inherits the intersection of all its ancestors' clips. There is
-no separate `getClipRect` call before drawing — the `DrawCtx` already carries
+inherits the intersection of all its ancestors' clips. There is
+no separate `getClipRect` call before drawing; the `DrawCtx` already carries
 the correct clip.
 
 ```rust,ignore
@@ -136,9 +136,9 @@ pub fn sub(&mut self, area_local: Rect) -> DrawCtx<'_> {
 
 This is the `getClipRect` successor: in C++ a view called `getClipRect` before
 writing to avoid painting into occluded regions. In tvision-rs there is nothing
-to call — the clip comes down with the `DrawCtx`, and the draw code never needs
-to query or adjust it. It is used only for correctness (a view must not paint
-outside its bounds), never to minimize writes (that is the diff's job).
+to call: the clip comes down with the `DrawCtx`, and the draw code never needs
+to query or adjust it. It serves correctness (a view must not paint
+outside its bounds); minimizing writes is left to the diff.
 
 **Sources:** `DrawCtx::sub` and `DrawCtx::clip` in `src/view/context.rs`;
 `Group::draw` in `src/view/group.rs`.
@@ -146,7 +146,7 @@ outside its bounds), never to minimize writes (that is the diff's job).
 > **Turbo Vision heritage:** `TView::getClipRect` (`tview.cpp`) returned the
 > intersection of the view's bounds with the visible area; views checked it
 > before writing. In tvision-rs the intersected clip is pre-computed and
-> carried by `DrawCtx`; views write unconditionally and the clip silently
+> carried by `DrawCtx`; views write unconditionally and the clip
 > discards out-of-bounds cells.
 
 ## Colour depth

@@ -1,27 +1,27 @@
 # Deferred effects
 
-When a view handles an event, it can read and mutate *itself* freely — it holds
+When a view handles an event, it can read and mutate *itself* freely, since it holds
 `&mut self`. What it cannot do is reach *up* or *sideways* through the view tree.
 During dispatch the tree is a live `&mut` borrow stack (root → desktop → window →
 the view being handled). Every ancestor above the current view is already
 `&mut`-borrowed on that stack, and a fresh `find_mut(id)` from the root would
-alias it. The borrow checker forbids it, and that is the *point*: it makes the
+alias it. The borrow checker forbids it, by design: it makes the
 Turbo Vision "a view can call up its owner chain" pattern impossible to do
 unsafely.
 
 So any action a view wants that touches **loop-owned state it cannot borrow
-inline** is *deferred*. The view does not perform the effect — it **requests** it
+inline** is *deferred*. The view does not perform the effect. It **requests** it
 through its [`Context`](../api/tvision_rs/view/struct.Context.html), and the event
 loop **applies** it after dispatch unwinds and the root is free again.
 
 ## What "loop-owned state" means
 
-These are the things a downward-borrowed view literally cannot reach:
+A downward-borrowed view cannot reach:
 
 - the program's **capture stack** (modal frames, drag handlers, menu sessions),
 - the **command set** (enable/disable, which the menus and status line mirror),
-- **any other view** addressed by [`ViewId`](../api/tvision_rs/view/struct.ViewId.html)
-  — a parent, a sibling scrollbar, the clipboard editor in another window,
+- **any other view** addressed by [`ViewId`](../api/tvision_rs/view/struct.ViewId.html),
+  such as a parent, a sibling scrollbar, the clipboard editor in another window,
 - the **modal loop** itself (ending it with a result command).
 
 A view that wants to move itself, close itself, focus a sibling, or end a modal
@@ -64,7 +64,7 @@ for effect in effects {
 }
 ```
 
-The variants fall into a few **disjoint families** by which state they touch —
+The variants fall into a few **disjoint families** by which state they touch:
 capture stack, command set, view tree, loop `end_state`. Because no single
 dispatch ever queues two conflicting effects on the *same* piece of state,
 draining in insertion order is order-equivalent: same-family items keep their
@@ -72,7 +72,7 @@ relative order, and cross-family order never changes the result. One ordering
 fact is load-bearing: `PushCapture` applies *after* dispatch, so a freshly pushed
 handler sees the *next* event, never the one that pushed it.
 
-This drain is what lets a button request `end_modal(Command::OK)` from deep
+This drain lets a button request `end_modal(Command::OK)` from deep
 inside a dialog, a window request its own `Close`, a dragged frame request new
 `ChangeBounds`, a scroller stay in sync with a sibling scrollbar it can never
 touch directly, and a list view launch a custom modal via `OpenModal` (reusing
@@ -82,23 +82,22 @@ in the loop is in [The event loop in depth](event-loop.md).
 
 ## Adding a new deferred effect
 
-The whole point of the single-enum design is that a new capability is **additive
-and local** — it never churns a signature or every call site. To add one:
+With the single-enum design a new capability is **additive
+and local**: it changes no signature and no call site. To add one:
 
 1. **Add a variant** to [`Deferred`](../api/tvision_rs/view/enum.Deferred.html),
    carrying whatever data the apply step needs (typically a `ViewId` plus
    parameters). Note which state family it touches.
-2. **Add a request method** to `Context` that pushes that variant — the view-side
+2. **Add a request method** to `Context` that pushes that variant. This is the view-side
    entry point.
 3. **Add the match arm** to the `pump_once` drain that performs the effect against
    the now-reachable loop-owned state.
 
-That is the entire seam. Contrast it with the boundary the queue deliberately
-keeps *out*: posted events and broadcasts are **not** deferred effects — they feed
-back into the *input* stream and are routed as events at the top of the next pump,
-not applied to state at the bottom of this one. `Deferred` means "mutate
+Posted events and broadcasts stay outside the queue. They are **not** deferred
+effects: they feed back into the *input* stream and are routed as events at the
+top of the next pump instead of being applied to state at the bottom of this one. `Deferred` means "mutate
 loop/tree state after this dispatch"; posting means "produce an event to route
-later." Keeping the two apart is what keeps each principled.
+later."
 
 The conceptual rationale and the C++ patterns each variant replaces are covered
 from the porting angle in [The Deferred channel](../port/deferred.md).

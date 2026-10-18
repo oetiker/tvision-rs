@@ -1,67 +1,66 @@
 # Dropped & changed
 
 Most of the differences in this part *transform* a Turbo Vision concept into an
-idiomatic Rust shape. A few instead **drop** machinery outright, or keep a thing
-deliberately *unchanged* where you might expect a rewrite. This page collects
-those.
+idiomatic Rust shape. A few **drop** machinery outright, or keep something
+*unchanged* where a rewrite might be expected. This page collects those.
 
-## Streaming & persistence — dropped
+## Streaming & persistence: dropped
 
 Turbo Vision shipped its own object-serialization framework: `TStreamable`, the
 `ipstream`/`opstream` byte streams, a `TStreamableClass` type registry with
 factory functions, and `TResourceFile` resource files built on top. All of it
-existed because 1991 C++ had no reflection and no standard serialization — so
-Turbo Vision hand-rolled both.
+existed because 1991 C++ had no reflection and no standard serialization, so
+Turbo Vision built both itself.
 
-Rust does not need any of that. The port **does not carry the machinery
-forward**: there is no `read`/`write`/`build` on views, no `streamableName`, no
-class registry. Nothing in the core depends on it, so dropping it cost nothing.
+The port **does not carry the machinery forward**: there is no
+`read`/`write`/`build` on views, no `streamableName`, no class registry. Nothing
+in the core depends on it, so dropping it cost nothing.
 
-If persistence is ever wanted, the answer is
+If persistence is wanted later, the plan is
 [`serde`](https://serde.rs/) (plus `typetag` for trait objects) on the
-*specific* data worth saving — not a framework-wide streaming layer. Resource
-files, if revived, become serde config or embedded assets, scoped to the real
+*specific* data worth saving, without a framework-wide streaming layer. Resource
+files, if revived, become serde config or embedded assets, scoped to the actual
 need.
 
-This has one knock-on effect you can see elsewhere in the port: because command
-identities no longer need a stable integer for a stream format, they became
-namespaced strings instead of small integers — see [Constant families → open
+This has one visible effect elsewhere in the port: because command
+identities no longer need a stable integer for a stream format, they are
+namespaced strings instead of small integers; see [Constant families → open
 newtypes](constants.md).
 
-> **Looking for `getData`/`setData`?** That is *not* dropped — it became the
+> **Looking for `getData`/`setData`?** That is *not* dropped. It became the
 > typed value protocol. See [Dialogs & data](../apps/dialogs.md).
 
-## Damage tracking & buffered drawing — dropped
+## Damage tracking & buffered drawing: dropped
 
-Turbo Vision's `drawHide`/`drawShow`/`drawUnder*` dance and its group-buffered,
+Turbo Vision's `drawHide`/`drawShow`/`drawUnder*` calls and its group-buffered,
 occlusion-aware writes were an optimization for slow hardware: avoid touching
-cells you do not have to. The port replaces that whole scheme with **whole-tree
-redraw plus a back-buffer diff** — draw everything into a buffer, compare it to
-the last frame, and emit only the cells that actually changed. The optimization
+cells that need no change. The port replaces that scheme with **whole-tree
+redraw plus a back-buffer diff**: draw everything into a buffer, compare it to
+the last frame, and emit only the cells that changed. The optimization
 moves from per-write bookkeeping to one diff at the end.
 
-You never call `lock`/`unlock` or reason about what is occluded; you just draw.
+Views never call `lock`/`unlock` or reason about what is occluded; they draw.
 The mechanics are in [Drawing & backends](../internals/drawing.md); the
 rationale is [The draw model](draw.md).
 
-## Coordinates stay `i32` — deliberately *unchanged*
+## Coordinates stay `i32` (*unchanged*)
 
-magiblot's coordinates are plain C++ `int`. The port keeps them as **`i32`**,
-not `usize` or `u16`. This is a faithfulness decision, not an oversight.
+magiblot's coordinates are plain C++ `int`. The port keeps them as **`i32`**
+instead of `usize` or `u16`, for faithfulness.
 
-Turbo Vision routinely computes *negative* and off-screen coordinates — a view
+Turbo Vision routinely computes *negative* and off-screen coordinates: a view
 scrolled partly above its owner, a delta that goes negative mid-calculation, a
 rectangle intersected down to nothing. An unsigned type would underflow on
-exactly the arithmetic Turbo Vision does every frame. Keeping the signed width
-means the geometry math in [`Point`](../api/tvision_rs/view/struct.Point.html) and
+the arithmetic Turbo Vision does every frame. With the signed width, the
+geometry math in [`Point`](../api/tvision_rs/view/struct.Point.html) and
 [`Rect`](../api/tvision_rs/view/struct.Rect.html) ports line-for-line from the C++
 and behaves identically at the edges.
 
-So when you see `i32` on a bounds calculation and reach for "shouldn't that be
-`usize`?" — no. The signedness is load-bearing.
+An `i32` on a bounds calculation is intentional; changing it to `usize` would
+break the negative cases above.
 
 ---
 
-The at-a-glance list of every difference lives in
-[Differences from C++ Turbo Vision](../reference/deviations.md), and the terse
+The list of every difference lives in
+[Differences from C++ Turbo Vision](../reference/deviations.md), and the
 C++→Rust name lookup is the [symbol map](../reference/symbol-map.md).

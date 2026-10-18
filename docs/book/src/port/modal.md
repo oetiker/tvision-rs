@@ -6,11 +6,11 @@ suspended on the call stack while the inner one runs, and the modal view ends it
 by calling `endModal`. The same trick drives `dragView` and a pressed button's
 press-and-hold tracking.
 
-Rust will not let you do that. A nested loop would have to re-borrow the view
-tree that the outer loop already holds `&mut` to — the borrow checker refuses,
-and there is no `&mut self`-reentrancy to lean on. So the nested loops collapse
-into **one** non-recursive event loop, and modality becomes a handler on the
-capture stack rather than a new loop. [Event capture](capture.md) is the general
+Rust does not allow this. A nested loop would have to re-borrow the view
+tree that the outer loop already holds `&mut` to; the borrow checker refuses,
+and there is no `&mut self` reentrancy to rely on. The nested loops therefore
+collapse into **one** non-recursive event loop, and modality becomes a handler
+on the capture stack instead of a new loop. [Event capture](capture.md) is the general
 mechanism; modality is one use of it.
 
 ## Modality as a handler
@@ -20,18 +20,18 @@ positional (mouse) events are gated by the modal view's bounds: inside, they
 pass to normal routing; outside, the pump hands them to the modal view alone
 (in its own coordinates), so views beneath the dialog never see the click. A
 plain dialog ignores such a click; a history popup closes on it. That gate is
-exactly what "modal" means.
+what "modal" means here.
 
 Keys, commands, pastes and the mouse wheel pass the frame, but they do not take
 the root route. The pump hands them to the modal view alone, as C++
-`TGroup::execute` does. So the menu bar's hot keys (Alt+F, F3), Alt+1..9 window
+`TGroup::execute` does. The menu bar's hot keys (Alt+F, F3), Alt+1..9 window
 selection, the `Command::QUIT` catch, Tile and Cascade, and `run_app`'s command
 callback do not act while a modal runs. A command the modal does not handle is
-dropped, not kept for later (the C++ `eventError` path). Status-line keys are
+dropped instead of kept for later (the C++ `eventError` path). Status-line keys are
 still converted first, in the pre-route, so Alt+X still posts
 `Command::QUIT`, which a dialog ignores, as in C++.
 
-Broadcasts keep the root route and reach the whole tree, also those queued
+Broadcasts keep the root route and reach the whole tree, including those queued
 while the modal is open. In C++ a broadcast that a dialog view posts with
 `putEvent` reaches only the modal view; tvision-rs queues all broadcasts
 through one channel and cannot tell them apart, so receivers filter by
@@ -46,8 +46,8 @@ current, pushes a `ModalFrame`, then runs the *same*
 the view calls [`end_modal`](../api/tvision_rs/view/struct.Context.html#method.end_modal),
 setting the end state. Then it pops the frame, removes the view, restores the
 previous focus and command set, and returns the chosen
-[`Command`](../api/tvision_rs/command/struct.Command.html). No new loop is spun —
-`exec_view` just steers the one loop that was already running.
+[`Command`](../api/tvision_rs/command/struct.Command.html). No new loop is
+started; `exec_view` steers the loop that was already running.
 
 See [Dialogs & data](../apps/dialogs.md) for the user-facing recipe, [Event
 capture](capture.md) for the mechanism modality shares with drag/resize and
@@ -56,7 +56,7 @@ what each `pump_once` turn does.
 
 ## Choosing the right launch path
 
-How you launch a modal depends on **what calls it**:
+The way to launch a modal depends on **what calls it**:
 
 | Caller | Launch method | Result delivery |
 |--------|---------------|-----------------|
@@ -77,9 +77,9 @@ C++ `execView` returns a `ushort` end command; the caller then reads results out
 of the still-live dialog with `getData` before it is destroyed. tvision-rs keeps
 that shape with
 [`Program::exec_view_with`](../api/tvision_rs/app/struct.Program.html#method.exec_view_with):
-it runs the modal, then — at the **pre-drop window**, while the view is still in
-the tree — hands your `extract` closure the modal's `&mut dyn View` and the end
-command. Whatever the closure returns is handed straight back, **by value**:
+it runs the modal, then, at the **pre-drop window** while the view is still in
+the tree, hands the caller's `extract` closure the modal's `&mut dyn View` and
+the end command. Whatever the closure returns is passed back **by value**:
 
 ```rust,ignore
 let chosen: Option<Color> = program.exec_view_with(Box::new(dialog), |modal, cmd| {
@@ -92,12 +92,12 @@ let chosen: Option<Color> = program.exec_view_with(Box::new(dialog), |modal, cmd
 The result type `R` is named by the caller, never by the framework. A single
 field crosses as a [`FieldValue`](../api/tvision_rs/data/enum.FieldValue.html)
 via `View::value`; a richer native value (a `Color`, a whole `Theme`) is returned
-directly from `extract` — `Color`/`Theme` are deliberately not `FieldValue`s.
+directly from `extract`; `Color`/`Theme` are intentionally not `FieldValue`s.
 
 ## Launching a modal from a view: `Context::request_exec_view`
 
 Use `request_exec_view` when the modal is triggered from inside a `handle_event`
-implementation (i.e., from any `View`). The worked example is `tcv`'s Info box:
+implementation (that is, from any `View`). The worked example is `tcv`'s Info box:
 the `DirBox` list view builds a custom read-only `Dialog` and launches it when
 the user presses Enter or double-clicks an entry.
 
@@ -125,11 +125,11 @@ fn open_info(&mut self, ctx: &mut Context) {
 bottom of the same turn, stashes the boxed `Dialog` into `pending_modal` with a
 `RouteModalAnswer { answer_to: id, then_command: None, deliver_data: true }` completion, and runs it
 via the existing single-loop machinery. When the user presses OK (which posts
-`Command::CANCEL` — the read-only-info convention: dismiss = `cmCancel`) the
-pump delivers that command to `DirBox` via `set_modal_answer`. The base default
-for `set_modal_answer` silently discards the command, which is correct here —
-the Info box is read-only and `then_command` is `None`, so no follow-up action
-is needed.
+`Command::CANCEL`, following the read-only-info convention dismiss = `cmCancel`)
+the pump delivers that command to `DirBox` via `set_modal_answer`. The base
+default for `set_modal_answer` silently discards the command, which is correct
+here: the Info box is read-only and `then_command` is `None`, so no follow-up
+action is needed.
 
 ### Getting the data back
 
@@ -169,18 +169,18 @@ The full lifecycle of `exec_view` maps each C++ step to a tvision-rs equivalent:
 | `saveOwner`; insert into desktop | Root-insert into the program's group (not the desktop); own the view |
 | `setState(sfModal, True)` | `state.state.modal = true` (direct field write) |
 | `setCurrent(p, enterSelect)` | `group.set_current(id, SelectMode::Enter, &mut ctx)` |
-| Push capture — none in C++ | Push a `ModalFrame` onto the capture stack |
-| `p->execute()` — a nested loop | Steer the **same** pump loop; no new loop |
+| Push capture (none in C++) | Push a `ModalFrame` onto the capture stack |
+| `p->execute()`, a nested loop | Steer the **same** pump loop; no new loop |
 | `p->handleEvent` on every event; `eventError` drops the rest | Keys, commands, pastes and the wheel go to the modal view alone; an unhandled command is dropped; outside-bounds mouse events go to the modal view |
-| Pop capture — none in C++ | Pop the `ModalFrame` |
+| Pop capture (none in C++) | Pop the `ModalFrame` |
 | `remove(p)`; restore focus | `group.remove(id, &mut ctx)`; restore previous current |
 | Restore command set | Restore `disabled_commands` |
 | Return `endState` | Return the `Command` that was passed to `end_modal` |
 
-The capture-stack push and pop are the key addition over the C++ design: they
+The capture-stack push and pop are the main addition over the C++ design: they
 replace the nested loop's ability to intercept all events while the dialog runs.
-Because the push is immediate (not deferred — `exec_view` holds `&mut self`
-directly), the `ModalFrame` is live from the very first pump pass inside the
+Because the push is immediate (not deferred, since `exec_view` holds `&mut self`
+directly), the `ModalFrame` is live from the first pump pass inside the
 modal.
 
 **Sources:** `exec_view_with_completion` in `src/app/program.rs`;
@@ -193,7 +193,7 @@ modal.
 
 ## The modal loop (Execute)
 
-tvision-rs has **one** event loop, period. The `Program::run` skeleton is:
+tvision-rs has **one** event loop. The `Program::run` skeleton is:
 
 ```rust,ignore
 // src/app/program.rs — Program::run (simplified)
@@ -231,9 +231,9 @@ the outer `run` loop and the inner `exec_view` loop is only *which end-state
 terminates them*: the outer loop ends when the whole application quits; the
 inner loop ends when a view inside the dialog calls `end_modal`. When the
 inner loop exits it restores `end_state` to its pre-modal value, so the outer
-loop does not spuriously see the modal's end command.
+loop does not see the modal's end command.
 
-A modal that opens another modal (e.g. a file dialog opening a history popup)
+A modal that opens another modal (for example a file dialog opening a history popup)
 adds a second `exec_view` frame on top; this is safe because each frame owns
 its own `end_state` snapshot and its own `ModalFrame` on the capture stack.
 
@@ -274,15 +274,15 @@ fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
 # }
 ```
 
-The deferred drain — which runs every pump pass after dispatch — picks up the
-`EndModal` effect and writes `end_state = Some(cmd)`. On the very next
+The deferred drain, which runs every pump pass after dispatch, picks up the
+`EndModal` effect and writes `end_state = Some(cmd)`. On the next
 iteration of `exec_view`'s `while end_state.is_none()` loop, the condition
 becomes false and the loop exits.
 
-From **top-level code** (outside a view, holding `&mut Program`) you can call
+**Top-level code** (outside a view, holding `&mut Program`) can call
 [`Program::end_modal`](../api/tvision_rs/app/struct.Program.html#method.end_modal)
-directly — it sets `end_state` without the deferred queue, which is useful in
-tests where you want to terminate a headless modal after pre-queuing events.
+directly. It sets `end_state` without the deferred queue, which is useful in
+tests that terminate a headless modal after pre-queuing events.
 
 Rule of thumb: view code → `ctx.end_modal`; program-level code → `Program::end_modal`.
 

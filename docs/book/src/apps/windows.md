@@ -6,7 +6,7 @@ views of every tvision-rs program: a full-screen container that holds a patterne
 background and any number of overlapping windows. Both *embed a*
 [`Group`](../api/tvision_rs/view/struct.Group.html) and delegate the
 [`View`](../api/tvision_rs/view/trait.View.html) trait to it (the embed-and-delegate
-pattern — see [Inheritance → trait + composition](../port/inheritance.md)), so a
+pattern; see [Inheritance → trait + composition](../port/inheritance.md)), so a
 desktop *is* a view and a window *is* a view: you insert windows into a desktop,
 and child controls into a window *(these are the tvision-rs equivalents of the C++
 `TDeskTop`/`TWindow` pair)*.
@@ -14,7 +14,7 @@ and child controls into a window *(these are the tvision-rs equivalents of the C
 ## The desktop
 
 You rarely build a [`Desktop`](../api/tvision_rs/desktop/struct.Desktop.html) by hand
-at runtime — the application skeleton's `init_desktop` factory does it for you. In
+at runtime; the application skeleton's `init_desktop` factory does it for you. In
 the `hello` example that factory insets the bounds one row below the menu bar and
 one above the status line, then calls
 [`Desktop::new`](../api/tvision_rs/desktop/struct.Desktop.html#method.new) with a
@@ -33,12 +33,12 @@ all three factories into the program at construction:
 A [`Window`](../api/tvision_rs/window/struct.Window.html) is constructed with its
 bounds, an optional title, and a *window number* (`1`–`9` become the
 `Alt-1`…`Alt-9` selectors; `0` means "no number"). By default it is movable,
-resizable, closable and zoomable — all four
+resizable, closable and zoomable: all four
 [`WindowFlags`](../api/tvision_rs/window/struct.WindowFlags.html) start true
 *(corresponding to the C++ `wfMove | wfGrow | wfClose | wfZoom` flags)*.
 
 To put a window on screen at construction time, insert it into the desktop. At
-runtime — from inside the run loop — open one through the program, which inserts
+runtime, from inside the run loop, open one through the program, which inserts
 it into the desktop *and* gives it focus in one step:
 
 ```rust
@@ -54,7 +54,7 @@ prog.desktop_insert(Box::new(win));
 
 To give a window scroll bars, call
 [`Window::standard_scroll_bar`](../api/tvision_rs/window/struct.Window.html#method.standard_scroll_bar)
-with [`ScrollBarOptions`](../api/tvision_rs/window/struct.ScrollBarOptions.html) — its
+with [`ScrollBarOptions`](../api/tvision_rs/window/struct.ScrollBarOptions.html): its
 `vertical` flag selects the right edge (else the bottom), and `handle_keyboard`
 opts the bar into post-processing of the focused chain's arrow keys. It inserts
 the bar on the correct edge and returns its `ViewId`. For child controls, use
@@ -62,25 +62,25 @@ the bar on the correct edge and returns its `ViewId`. For child controls, use
 
 ## Z-order, focus and window commands
 
-Windows overlap, and the **topmost** one is the active window — it draws its
+Windows overlap, and the **topmost** one is the active window. It draws its
 frame in the active style and receives keyboard events. The active window enables
 the five window-management commands while it is selected; they are disabled
-otherwise (the framework starts them off — see [Commands & events](commands.md)):
+otherwise (the framework starts them off; see [Commands & events](commands.md)):
 
 | Command | `hello` key | Effect |
 | ------- | ----------- | ------ |
 | `Command::NEXT` | `F6` | Cycle focus to the next window |
-| `Command::PREV` | — | Send the active window to the back |
+| `Command::PREV` | none | Send the active window to the back |
 | `Command::ZOOM` | `F5` | Toggle between restored size and filling the desktop |
 | `Command::CLOSE` | `Alt-F3` | Close the active window |
-| `Command::RESIZE` | — | Enter keyboard move/resize mode (arrows, `Enter`/`Esc`) |
-| `Command::FULLSCREEN` | — | Cycle the active window through Off/Desktop/Screen (no default key; example binds F4) |
+| `Command::RESIZE` | none | Enter keyboard move/resize mode (arrows, `Enter`/`Esc`) |
+| `Command::FULLSCREEN` | none | Cycle the active window through Off/Desktop/Screen (no default key; example binds F4) |
 
 The keys above are the bindings the `hello` example installs on its status line
 and menu; the commands themselves carry no built-in key.
 
 You can also drag a window by its title bar to move it, or by a bottom corner to
-resize it — the desktop routes the click and the window starts the drag. The drag
+resize it; the desktop routes the click and the window starts the drag. The drag
 runs as a capture handler on the single event loop, with no nested loop
 (see [Modal execView → one loop + capture](../port/modal.md)) *(C++ used a
 dedicated `dragView` nested-mouse-loop for this)*.
@@ -112,24 +112,24 @@ win.maximize(ctx);             // grow to fill the owner
 # }
 ```
 
-### How it works — composable primitives
+### Composable primitives
 
 `set_fullscreen` is a thin composer over three independent primitives that apps
 can also call directly:
 
-- **`set_bordered(bool, ctx)` / `bordered() -> bool`** — show or hide the frame
+- **`set_bordered(bool, ctx)` / `bordered() -> bool`**: show or hide the frame
   border. Toggling it reflows content through each child's existing
   [grow modes](#grow-modes-anchoring-edges): every content child resizes and
   shifts by the border thickness, and owned scroll bars re-anchor to the new
   client edge. Idempotent.
-- **`maximize(ctx)` / `restore(ctx)` / `is_maximized() -> bool`** — one unified
+- **`maximize(ctx)` / `restore(ctx)` / `is_maximized() -> bool`**: one
   maximize/restore slot, shared by `Command::ZOOM` and `Fullscreen::Desktop` so
   they cannot desync. `maximize` fills the owner; `restore` returns to the saved
   pre-maximize bounds.
-- **`client_rect() -> Rect`** — the content area: inset by the frame when
+- **`client_rect() -> Rect`**: the content area: inset by the frame when
   bordered, full extent when frameless, *minus* any scroll-bar lanes (the right
   column for a vertical bar, the bottom row for a horizontal one). Content placed
-  at `client_rect` always fills right up to the bars without overlapping them,
+  at `client_rect` fills up to the bars without overlapping them,
   regardless of border state.
 
 For `Fullscreen::Screen`, the pump calls
@@ -145,7 +145,7 @@ them into a most-equal grid;
 [`Desktop::cascade`](../api/tvision_rs/desktop/struct.Desktop.html#method.cascade)
 stacks them stepped down and to the right. Both skip windows that are not visible
 or not marked tileable, and both leave a window's bounds unchanged when it will
-not fit — a safe no-op. Note that `Window` does **not** set the tileable option
+not fit. Note that `Window` does **not** set the tileable option
 for you; opt a window in explicitly:
 
 ```rust
@@ -159,11 +159,11 @@ win.state_mut().options.tileable = true;
 The `hello` example wires `Command::TILE` / `Command::CASCADE` menu items that
 route to these calls, so its three demo windows rearrange on command.
 
-## Splitter — resizable panes
+## Splitter: resizable panes
 
 A [`Splitter`](../api/tvision_rs/widgets/splitter/struct.Splitter.html) divides a
 rectangle into N panes along one axis, separated by 1-cell divider seams that the
-user can drag to resize. It is the idiomatic way to build IDE-style or
+user can drag to resize. Use it to build IDE-style or
 file-manager-style layouts inside a window.
 
 ### Axes and panes
@@ -192,7 +192,7 @@ much space a pane claims along the axis:
 
 | Constructor | Meaning |
 | --- | --- |
-| `Constraints::flex()` | Elastic — takes its share of remaining space (weight 1) |
+| `Constraints::flex()` | Elastic: takes its share of remaining space (weight 1) |
 | `Constraints::weight(w)` | Elastic with a custom weight |
 | `Constraints::fixed(n)` | Pinned to exactly `n` cells |
 | `.min(n)` builder | Minimum size in cells |
@@ -205,7 +205,7 @@ how a seam looks and behaves:
 | Variant | Look | Draggable? |
 | --- | --- | --- |
 | `Line` (default) | Always-visible `│` / `─` | Yes |
-| `Handle` | Clean — only a grab nub at midpoint | Yes |
+| `Handle` | Only a grab nub at midpoint | Yes |
 | `Hidden` | Invisible in normal use | Only in resize mode |
 | `Locked` | Invisible and immovable | Never |
 
@@ -220,7 +220,7 @@ cycle the resize target between the window itself and each splitter divider;
 `Enter` commits; `Esc` cancels. `Locked` seams are skipped when cycling.
 
 While the **window** is the active target, plain arrows **move** the window and
-`Shift`+arrows **resize** (grow) it — matching the classic `TView::change`
+`Shift`+arrows **resize** (grow) it, matching the classic `TView::change`
 contract. `Ctrl` scales the step to ±8 cells horizontally / ±4 vertically, so
 `Ctrl`+arrow is a big move and `Ctrl`+`Shift`+arrow is a big resize.
 
@@ -255,8 +255,8 @@ By default a splitter draws plain `│`/`─` dividers. Call `.joined()` on the
 - to each other inside nested splitters: interior `├` / `┤` / `┬` / `┴` / `┼`
   crossings.
 
-Joining cascades — you only need `.joined()` on the outermost splitter; all
-nested pane-splitters inherit it automatically. Override the grow mode (a
+Joining cascades: `.joined()` is needed only on the outermost splitter, and all
+nested pane-splitters inherit it. Override the grow mode (a
 splitter fills its owner by default) with `.with_grow_mode(GrowMode::default())`
 for a fixed-size splitter.
 
@@ -274,7 +274,7 @@ A live example showing `.joined()` on a nested three-pane layout is in the
 
 ## Limiting move and resize
 
-Every view carries a [`DragMode`](../api/tvision_rs/view/struct.DragMode.html) — a
+Every view carries a [`DragMode`](../api/tvision_rs/view/struct.DragMode.html), a
 struct of bools controlling whether a window can be moved or resized, and which
 edges constrain the drag. `Window` sets `drag_move` and `drag_grow` by default
 (the user can drag the title bar to move and the bottom corners to resize).
@@ -296,20 +296,20 @@ win.state_mut().drag_mode = DragMode {
 # }
 ```
 
-The `limit_*` bits clamp the drag to the owner's extent — without them the
-user could drag the window partially off-screen. `DragMode::limit_all()` is a
+The `limit_*` bits clamp the drag to the owner's extent. Without them the
+user can drag the window partially off-screen. `DragMode::limit_all()` is a
 convenience that sets all four limit bits at once; it is the standard setting
 for a window that must remain fully on the desktop.
 
 The `drag_grow_left` bit adds the left edge as a resize target. By default only
-the **bottom-right corner** is draggable — `drag_grow_left: true` extends resize
+the **bottom-right corner** is draggable; `drag_grow_left: true` extends resize
 to the left edge as well (useful for left-aligned panels).
 
 Source: `src/view/view.rs` (`DragMode`), `src/window/window.rs` (window default drag setup).
 
 > **Turbo Vision heritage:** `dmDragMove`/`dmDragGrow`/`dmLimitXxx` were bit-field
 > constants combined with `|`. tvision-rs replaces them with a struct of bools (deviation
-> D5) — the individual fields replace the bit-shift arithmetic.
+> D5); the individual fields replace the bit-shift arithmetic.
 
 ## Grow modes: anchoring edges
 
@@ -320,16 +320,16 @@ anchored edge moves with it.
 
 | Field | Meaning when `true` |
 | --- | --- |
-| `lo_x` (left edge) | tracks the owner's **right** edge — child slides right |
-| `lo_y` (top edge) | tracks the owner's **bottom** edge — child slides down |
-| `hi_x` (right edge) | tracks the owner's **right** edge — child widens |
-| `hi_y` (bottom edge) | tracks the owner's **bottom** edge — child grows taller |
-| `fixed` | override — child size is fixed; none of the above apply |
+| `lo_x` (left edge) | tracks the owner's **right** edge: child slides right |
+| `lo_y` (top edge) | tracks the owner's **bottom** edge: child slides down |
+| `hi_x` (right edge) | tracks the owner's **right** edge: child widens |
+| `hi_y` (bottom edge) | tracks the owner's **bottom** edge: child grows taller |
+| `fixed` | override: child size is fixed; none of the above apply |
 | `rel` | proportional scale instead of absolute anchoring |
 
-A child whose *right* and *bottom* edges track the owner's — `hi_x: true, hi_y:
-true` — fills the owner and grows with it. A child whose *left* and *right* edges
-both track the owner's right — `lo_x: true, hi_x: true` — keeps a fixed width
+A child whose *right* and *bottom* edges track the owner's (`hi_x: true, hi_y:
+true`) fills the owner and grows with it. A child whose *left* and *right* edges
+both track the owner's right (`lo_x: true, hi_x: true`) keeps a fixed width
 but slides to maintain its right-edge distance.
 
 ```rust
@@ -345,7 +345,7 @@ child.state_mut().grow_mode = GrowMode {
 # }
 ```
 
-`GrowMode::grow_all()` sets `lo_x | lo_y | hi_x | hi_y` — every edge tracks
+`GrowMode::grow_all()` sets `lo_x | lo_y | hi_x | hi_y`: every edge tracks
 the owner, so the child maintains its margins on all four sides.
 
 Grow mode is applied by [`View::change_bounds`](../api/tvision_rs/view/trait.View.html#method.change_bounds)
@@ -377,14 +377,14 @@ paint order).
 There is no general "reorder to arbitrary Z position" primitive. Only two
 operations exist:
 
-- **`make_first(id, ctx)`** — raises one view to the very top.
-- **`put_in_front_of(id, target, ctx)`** — places `id` immediately in front of
+- **`make_first(id, ctx)`**: raises one view to the very top.
+- **`put_in_front_of(id, target, ctx)`**: places `id` immediately in front of
   `target` (one slot above it in paint order).
 
 `make_first` is the primitive; `put_in_front_of(id, None, ctx)` is its
 definition. Both are no-ops when the child is already in the target position.
 
-The resulting effect is familiar: clicking any window brings it to the top of the
+Clicking any window brings it to the top of the
 stack and makes it active. The previous front window becomes passive (its frame
 changes color) and receives the `StateFlag::Active` clear cascade.
 
@@ -406,7 +406,7 @@ Source: `src/view/group.rs` (`Group::focus_child`, `Group::make_first`,
 
 ## See also
 
-- [Dialogs & data](dialogs.md) — modal windows with gather/scatter
-- [Controls](controls.md) — what goes *inside* a window
-- [The view tree](../internals/view-tree.md) — how desktop, window and group nest
-- [The event loop in depth](../internals/event-loop.md) — focus, capture and z-order at runtime
+- [Dialogs & data](dialogs.md): modal windows with gather/scatter
+- [Controls](controls.md): what goes *inside* a window
+- [The view tree](../internals/view-tree.md): how desktop, window and group nest
+- [The event loop in depth](../internals/event-loop.md): focus, capture and z-order at runtime

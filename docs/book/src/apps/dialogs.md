@@ -1,17 +1,17 @@
 # Dialogs & data
 
 A **dialog** is a modal window: it appears on top of everything, captures input
-until the user dismisses it, and returns a single answer — which button closed
+until the user dismisses it, and returns a single answer: which button closed
 it. [`Dialog`](../api/tvision_rs/dialog/struct.Dialog.html) embeds a
 [`Window`](../api/tvision_rs/window/struct.Window.html) and delegates to it, with
 dialog-specific behaviour layered on: `Esc` cancels, `Enter` accepts the default
-button, and the frame carries only the move and close affordances — no grow, no
+button, and the frame carries only the move and close affordances, without grow or
 zoom *(the tvision-rs equivalent of C++ `TDialog`)*.
 
 ## Building a dialog
 
 Construct the dialog with a rectangle and an optional title, then populate it
-with child views — buttons, input lines, checkboxes, labels — via
+with child views (buttons, input lines, checkboxes, labels) via
 [`insert_child`](../api/tvision_rs/dialog/struct.Dialog.html#method.insert_child):
 
 ```rust
@@ -43,8 +43,8 @@ A button carries the [`Command`](commands.md) it broadcasts when pressed. The
 conventional end commands are `Command::OK` and `Command::CANCEL`; a message box
 also uses `Command::YES` / `Command::NO`.
 
-A dialog assembled this way — a labelled input, check boxes, and the two
-buttons — looks like this:
+A dialog assembled this way, with a labelled input, check boxes, and the two
+buttons, looks like this:
 
 {{#include ../screens/dialog.html}}
 
@@ -55,7 +55,7 @@ The runnable source is the `dialog` entry in the [widget gallery](../gallery.md)
 You do not insert a dialog into the view tree yourself. You hand it to
 [`Program::exec_view`](../api/tvision_rs/app/struct.Program.html#method.exec_view).
 It inserts the dialog at the top of the tree, marks it modal, gives it focus,
-and spins the **same** event loop until the dialog ends itself — then removes it
+and spins the **same** event loop until the dialog ends itself, then removes it
 and hands back the closing command:
 
 ```rust
@@ -76,18 +76,18 @@ loop drives it until the dialog closes itself (see
 [Modal execView → one loop + capture](../port/modal.md) and
 [the event loop in depth](../internals/event-loop.md)). `exec_view` is
 **top-level only**: a view holds only a `&mut Context`, never the `Program`, so
-it *cannot* re-enter the loop from inside `handle_event` — which is exactly what
-keeps the single loop sound.
+it *cannot* re-enter the loop from inside `handle_event`. This keeps the single
+loop sound.
 
 > **Turbo Vision heritage:** in C++ each `TGroup::execView` spun a fresh nested
 > `getEvent` loop. tvision-rs collapses all modal nesting into one loop + capture
-> stack, eliminating the reentrancy entirely.
+> stack, which removes the reentrancy.
 
 > A modal must have a path to closing itself, or it hangs. `Dialog` provides one
-> out of the box: `Esc` becomes a `Cancel`, the default button becomes an `OK`.
+> by default: `Esc` becomes a `Cancel`, the default button becomes an `OK`.
 > If you build a bare modal with neither, nothing will end it.
 
-The framework ships ready-made modals built on this path —
+The framework ships ready-made modals built on this path:
 [`message_box`](../api/tvision_rs/app/struct.Program.html#method.message_box) for a
 titled alert with Yes/No/OK/Cancel buttons, and
 [`input_box`](../api/tvision_rs/app/struct.Program.html#method.input_box) for a
@@ -96,8 +96,8 @@ and return the user's answer.
 
 ## Moving data in and out
 
-Dialog data flows through a **typed value currency** —
-[`FieldValue`](../api/tvision_rs/data/enum.FieldValue.html) — passed through the
+Dialog data flows through a **typed value currency**,
+[`FieldValue`](../api/tvision_rs/data/enum.FieldValue.html), passed through the
 `value` / `set_value` pair on the
 [`View`](../api/tvision_rs/view/trait.View.html) trait. A text field reads and
 writes `FieldValue::Text`; an integer control uses `FieldValue::Int`. The enum
@@ -108,11 +108,11 @@ Two operations bracket a dialog:
 
 | Turbo Vision | tvision-rs | Direction |
 | ------------ | ------- | --------- |
-| `setData` | scatter — `set_value` on each field | seed the dialog before showing it |
-| `getData` | gather — `value()` on each field | read results after `OK` |
+| `setData` | scatter: `set_value` on each field | seed the dialog before showing it |
+| `getData` | gather: `value()` on each field | read results after `OK` |
 
 For a single-field dialog you call `set_value`/`value` on that one field
-directly — which is exactly what `input_box` does internally to seed and read
+directly; `input_box` does this internally to seed and read
 its lone input line. For a multi-field dialog, the
 [`Group`](../api/tvision_rs/view/struct.Group.html) behind the dialog walks its
 children in order: `gather_data` collects a `Vec<Option<FieldValue>>` (one slot
@@ -139,7 +139,7 @@ The well-known shapes are:
 
 ### Ordered-record gather and scatter
 
-When you want the whole dialog's data as **one value** rather than one field at a
+When you want the whole dialog's data as **one value** instead of one field at a
 time, use the ordered-record pair on
 [`Group`](../api/tvision_rs/view/struct.Group.html):
 
@@ -158,7 +158,7 @@ let record = dialog.gather_list();
 ```
 
 `gather_list` walks the group's children in insertion order and collects each
-child's `value()` into a `FieldValue::List` — the positional equivalent of C++
+child's `value()` into a `FieldValue::List`, the positional equivalent of C++
 `getData`'s `memcpy` record. `scatter_list` distributes the list back in the same
 order via `set_value`. Children with no transferable value (labels, decorative
 views) are skipped in both directions; the list contains only the slots that
@@ -170,26 +170,26 @@ over its whole record through the ordinary `value()` call.
 
 ### The `Custom` seam and third-party controls
 
-For richer payloads — a date range, a colour swatch, a structured selection — a
+For richer payloads, such as a date range, a colour swatch or a structured selection, a
 control can return `FieldValue::Custom(...)`. See
-[Third-party components & data interchange](extensibility.md) for the full open
-story: the three exchange paths, `value_as::<T>()` / `as_custom::<T>()`, the
+[Third-party components & data interchange](extensibility.md) for the
+details: the three exchange paths, `value_as::<T>()` / `as_custom::<T>()`, the
 TypeId caveat, and when to skip `FieldValue` entirely.
 
 ## Delivering a modal's result back to its launcher
 
 How a modal's result reaches the view that opened it depends on *who* opened it.
 
-**`Program`-launched modals** — opened from outside the view tree (for example
-the color picker or theme editor) — return their result directly: the pump runs
+**`Program`-launched modals**, opened from outside the view tree (for example
+the color picker or theme editor), return their result directly: the pump runs
 `exec_view_with<R>`, the closure reads the modal's state while it is still in
-the tree, and the result comes back as a plain Rust value. This is the right path
+the tree, and the result comes back as a plain Rust value. Use this path
 when the result type is rich and does not map naturally to `FieldValue` (such as
 `Color` or `Theme`).
 
-**View-launched modals** — opened from inside `handle_event` via the
-[Deferred channel](../internals/deferred.md) — cannot return inline (a view holds
-only `&mut Context`, not the `Program`). Instead, after the modal closes, the pump
+**View-launched modals**, opened from inside `handle_event` via the
+[Deferred channel](../internals/deferred.md), cannot return inline (a view holds
+only `&mut Context`, never the `Program`). Instead, after the modal closes, the pump
 reads each dialog field by id via `View::value()` and delivers the assembled
 result to the launcher by id via `View::set_modal_data(FieldValue)` (virtual
 dispatch, no downcast). The launcher overrides `set_modal_data` to interpret the
@@ -210,7 +210,7 @@ carries a *modal's result* collected by the pump on the launcher's behalf.
 ## Tab order and data transfer
 
 Both **Tab navigation** and **gather/scatter data order** follow the single
-`children` `Vec` in the group — specifically, the **insertion order** (oldest
+`children` `Vec` in the group, specifically the **insertion order** (oldest
 first, as stored in `children[0]`, `children[1]`, …). The children are stored
 back-to-front for painting, and forward for data transfer: `gather_data` walks
 them oldest-first and returns one `Option<FieldValue>` per child.
@@ -224,11 +224,11 @@ inserted last → children[n] (Tab: last stop; gather: slot n)
 
 `Tab` calls `Group::focus_next(forwards: true, ctx)`, which iterates
 `children` in forward order and wraps around. `Shift-Tab` iterates in
-reverse. **Disabled or invisible children are skipped** — they remain in the
+reverse. **Disabled or invisible children are skipped**: they remain in the
 `children` slice but `focus_next` steps over them.
 
 When you assemble a dialog, insert controls in the order you want the Tab key to
-visit them — typically top-to-bottom, then left-to-right. Buttons are usually
+visit them, typically top-to-bottom, then left-to-right. Buttons are usually
 inserted last so they receive focus after all the data fields.
 
 Gather (the dialog walking its children to collect values) follows the same
@@ -290,7 +290,7 @@ The `opts` parameter is a bitmask:
 | `CD_HELP_BUTTON` | Add a Help button at the right |
 
 The second argument is the `history_id` (`u8`) for the path input's recall
-dropdown — use a non-zero id to enable history recall, or `0` to skip it (the
+dropdown. Use a non-zero id to enable history recall, or `0` to skip it (the
 gallery example uses `0`).
 
 When the user navigates the tree and double-clicks a directory (or types a path
@@ -318,10 +318,10 @@ Source: `src/dialog/filedlg.rs` (`ChDirDialog::new`, `DirListBox`, `DirCollectio
 
 ## See also
 
-- [Windows & the desktop](windows.md) — the non-modal sibling of a dialog.
-- [Controls](controls.md) — the buttons, input lines, and clusters you place
+- [Windows & the desktop](windows.md): the non-modal sibling of a dialog.
+- [Controls](controls.md): the buttons, input lines, and clusters you place
   inside a dialog.
-- [Commands & events](commands.md) — how a button's command travels and how
+- [Commands & events](commands.md): how a button's command travels and how
   `OK`/`Cancel` end the modal.
-- [Third-party components](extensibility.md) — the `Custom` seam and the three
+- [Third-party components](extensibility.md): the `Custom` seam and the three
   open exchange paths for your own controls.
