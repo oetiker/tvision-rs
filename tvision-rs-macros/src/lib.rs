@@ -155,7 +155,7 @@ fn expand(args: DelegateArgs, mut item_impl: ItemImpl) -> syn::Result<TokenStrea
         )
     })?;
     let trait_ident = trait_path
-        .1
+        .0
         .segments
         .last()
         .expect("an impl trait path has at least one segment")
