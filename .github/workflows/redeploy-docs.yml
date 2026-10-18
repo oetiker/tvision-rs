@@ -210,7 +210,7 @@ jobs:
           ls -la site/tvision-rs/
           echo "versions.json:"; cat site/tvision-rs/versions.json
 
-      - uses: actions/configure-pages@v4
+      - uses: actions/configure-pages@v6
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site/tvision-rs
