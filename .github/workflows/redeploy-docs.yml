@@ -211,7 +211,7 @@ jobs:
           echo "versions.json:"; cat site/tvision-rs/versions.json
 
       - uses: actions/configure-pages@v6
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: site/tvision-rs
       - id: deployment
