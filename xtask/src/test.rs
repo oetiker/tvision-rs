@@ -17,8 +17,8 @@
 
 use crate::paths;
 use anyhow::{Context, Result};
-use mdbook::MDBook;
-use mdbook::book::BookItem;
+use mdbook_driver::MDBook;
+use mdbook_driver::book::BookItem;
 use std::process::Command;
 
 /// `cargo xtask test`: build the `tvision-rs` lib, then run the guide's doctests.

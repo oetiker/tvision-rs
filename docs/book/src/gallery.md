@@ -3,8 +3,8 @@
 Every widget tvision-rs draws, shown running with the code that builds it. Each
 screenshot is the **real terminal output** of the
 [`gallery` example](https://github.com/oetiker/tvision-rs/blob/main/examples/gallery.rs),
-captured live; each code block is the *same* builder fn the screenshot was made
-from, included verbatim — so every line you see here compiles.
+captured live. Each code block is the builder fn the screenshot was made from,
+included verbatim from the compiled example.
 
 > Run any of these yourself:
 > ```console
@@ -20,7 +20,7 @@ from, included verbatim — so every line you see here compiles.
 
 ### Button
 
-A clickable command button — the `~` marks the hot-letter; `default: true` makes
+A clickable command button. The `~` marks the hot-letter; `default: true` makes
 `Enter` fire it.
 
 {{#include screens/button.html}}
@@ -55,7 +55,7 @@ index.
 
 ### Input line
 
-A single-line text field with a linked [`Label`](apps/controls.md) — the label's
+A single-line text field with a linked [`Label`](apps/controls.md). The label's
 hot-letter focuses the field.
 
 {{#include screens/inputline.html}}
@@ -104,11 +104,11 @@ Read-only text with word-wrap; a leading `\x03` centers a line.
 ### List box
 
 A scrollable single-column list wired to a vertical scroll bar. Its items are
-filled on the first event tick, because `new_list` needs a `Context` — the thin
-wrapper view is the idiomatic deferred-init pattern. Opt-in incremental find
+filled on the first event tick, because `new_list` needs a `Context`; the thin
+wrapper view is the deferred-init pattern. Opt-in incremental find
 (`with_find(FindMode::Filter)` or `FindMode::Highlight`) lets the list own its
-query and highlight or self-filter while focused — see
-[Controls](apps/controls.md).
+query and highlight or self-filter while focused (see
+[Controls](apps/controls.md)).
 
 {{#include screens/listbox.html}}
 
@@ -203,7 +203,7 @@ content.
 
 A scrolling output view you *write into*. `Terminal` embeds a `Scroller` and
 stores incoming bytes in a fixed-size ring buffer; the most recent lines that fit
-the view height are drawn. Write to it via the `TextDevice::write_bytes` method —
+the view height are drawn. Write to it via the `TextDevice::write_bytes` method;
 there is no stream wrapper. Call `Terminal::init` once after insertion (needs a
 `Context`) to set the scroll limit, cursor position, and visibility. The gallery
 wrapper view seeds both calls on the first event tick because a `Context` is not
@@ -219,7 +219,7 @@ available at construction time.
 
 ### Window
 
-A plain titled, movable, resizable window that hosts child views.
+A titled, movable, resizable window that hosts child views.
 
 {{#include screens/window.html}}
 
@@ -243,7 +243,7 @@ sidebar; the right column is split into two rows.
 ### Dialog
 
 A modal form combining a labelled input, check boxes, and `OK` / `Cancel`
-buttons — the canonical Turbo Vision dialog.
+buttons, the canonical Turbo Vision dialog.
 
 {{#include screens/dialog.html}}
 
@@ -264,7 +264,7 @@ helper builds one for you; this shows the equivalent assembled by hand.)
 
 ### Color picker
 
-The truecolor picker dialog — a four-tab RGB / HSV / palette surface.
+The truecolor picker dialog, a four-tab RGB / HSV / palette surface.
 
 {{#include screens/colorpicker.html}}
 
@@ -295,7 +295,7 @@ A directory chooser with a navigable tree.
 
 ### Editor window
 
-A ready-made editor window — a file-backed editor wired to scroll bars and a
+A ready-made editor window: a file-backed editor wired to scroll bars and a
 line:column indicator.
 
 {{#include screens/editor.html}}

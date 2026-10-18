@@ -1,7 +1,7 @@
 # The screenshot tooling
 
 Every colored screen in this guide is the *actual* terminal output of a running
-example, captured live and rendered as selectable HTML — not a picture. The
+example, captured live and rendered as selectable HTML. The
 [`hello` screen](../getting-started/first-app.md) you saw earlier is one of
 these. This page explains the pipeline and how to add or regenerate a screen.
 
@@ -18,9 +18,9 @@ run example in a fixed-size tmux pane
   → embedded into a guide page with {{#include}}
 ```
 
-Capturing real ANSI beats embedding PNGs: the result is selectable,
-copy-pasteable, scalable, tiny, diffable in git, and it supports **interactive**
-shots — send keystrokes to open a menu or dialog, then capture the result.
+Compared with embedded PNGs, the captured ANSI is selectable, copy-pasteable,
+scalable, small and diffable in git. It also supports **interactive** shots:
+send keystrokes to open a menu or dialog, then capture the result.
 
 The ANSI→HTML converter is repo-owned (no external `aha` dependency). It resolves
 the base SGR colors through [`Color::BIOS_RGB`](../api/tvision_rs/color/enum.Color.html),
@@ -56,7 +56,7 @@ moves down, and selects an item before the capture is taken. The capture waits
 A capture can come back empty if the app had not finished painting yet (or died
 on launch). Writing that blank pane would clobber the committed screenshot, so the
 capture step runs a `looks_blank` check: a pane that contains only whitespace and
-escape sequences — no glyphs — is rejected as an error. The committed file is left
+escape sequences (no glyphs) is rejected as an error. The committed file is left
 untouched, and the message suggests a longer `settle_ms`. The detached tmux
 session is always killed afterward, even on error, so no sessions leak.
 
@@ -74,7 +74,7 @@ session is always killed afterward, even on error, so no sessions leak.
    This pre-builds every referenced example, then captures each into
    `docs/book/src/screens/<name>.html`. (`cargo xtask docs` runs the same step as
    the first stage of the full site build, and skips it with a warning if tmux is
-   unavailable — the committed screens stay usable.)
+   unavailable; the committed screens stay usable.)
 4. Embed it in a guide page:
 
    ```text

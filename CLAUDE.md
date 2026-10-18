@@ -154,10 +154,11 @@ restate the phase-by-phase snapshot (it goes stale) — read those three. The
 - English for all code/comments/identifiers (user-facing strings may be localized).
 - **`git pull` before starting work** (ff-only; stash local edits if needed) —
   `main` advances from other sessions/machines.
-- **Roll `CHANGELOG.md` for every user-visible or infra change.** Add a bullet
-  under `## Unreleased` → `### New` / `### Changed` / `### Fixed` (Keep a
-  Changelog format); the release workflow moves it into the dated version
-  section when a release is cut.
+- **Roll `CHANGES.md` for every user-visible or infra change.** Add a bullet
+  under `## [Unreleased]` → `### New` / `### Changed` / `### Fixed` (Keep a
+  Changelog format); the release moves it into the dated version section. A
+  pull request without an entry fails the required `changelog-updated` check
+  unless it carries the `no-changelog` label.
 - Commit messages end with the project's Co-Authored-By trailer
 - **Delegation (D2 embed-and-delegate):** a type that embeds an inner view forwards
   the un-overridden `View` methods via `#[delegate(to = <field>)]` (proc-macro in

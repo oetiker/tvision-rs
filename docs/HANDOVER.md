@@ -597,6 +597,16 @@ C2/C9 dialogs should follow the same shape rather than inventing new seams.
 - Verification is **snapshot tests** (D11, `insta`) for anything that draws.
   `cargo-insta` is **not installed** — generate via `INSTA_UPDATE=always`,
   hand-verify, commit.
+- **Releasing** follows the oposs repo-infra standard (`.github/repo-infra.json`
+  lists the version files). Dispatch **Create release PR** (`release-pr.yml`)
+  with bugfix/feature/major; it rolls `CHANGES.md`, bumps both crates, the
+  `tvision-rs-macros` pin and the README/installation snippet, runs CI on the
+  release branch and opens the release pull request. Merge it, and
+  `release-publish.yml` tags, publishes both crates to crates.io (macros
+  first) and publishes the GitHub release; `redeploy-docs.yml` then deploys
+  the versioned docs. A failed publish is finished with "Re-run failed jobs";
+  a failed docs deploy by dispatching `redeploy-docs.yml` with the tag.
+  crates.io Trusted Publishers must name the workflow `release-publish.yml`.
 
 ## Standing deferrals (still open — grep the TODOs)
 

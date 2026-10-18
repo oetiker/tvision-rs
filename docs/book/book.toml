@@ -20,6 +20,10 @@ preferred-dark-theme = "navy"
 git-repository-url = "https://github.com/oetiker/tvision-rs"
 edit-url-template = "https://github.com/oetiker/tvision-rs/edit/main/docs/book/{path}"
 site-url = "/tvision-rs/"
+# mdBook 0.5 turned smart punctuation on by default; the guide was written and
+# reviewed with straight quotes, and code identifiers quoted in prose ('s after
+# an inline `Type`) came out as curly apostrophes.
+smart-punctuation = false
 
 [output.html.fold]
 enable = true

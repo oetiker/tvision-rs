@@ -1,11 +1,20 @@
-name: Redeploy docs (recover a failed release docs deploy)
+name: Release docs deploy (and manual recovery)
 
-# Finishes a release whose crates/tag/GitHub-release landed but whose
-# `deploy-docs` job failed (a Pages re-run reuses the old workflow definition,
-# so a fixed workflow never reaches it). Point it at the existing tag; it
-# rebuilds that tag's versioned docs and re-deploys the whole multi-version
-# site. Safe to re-run: the version directory is replaced wholesale.
+# Builds a release's versioned docs and deploys the whole multi-version site.
+#
+# It runs when "Publish release (automatic)" completes. That workflow runs on
+# every push of CHANGES.md to main, and most of those publish nothing, so the
+# resolve job deploys only when the GitHub release named by the newest dated
+# section of CHANGES.md was published during that run.
+#
+# Dispatched by hand with an existing tag, it rebuilds and redeploys that tag's
+# docs: the recovery for a release whose docs deploy failed (re-running a failed
+# Pages job reuses the old workflow definition, so a fixed workflow never
+# reaches it). Safe to re-run: the version directory is replaced wholesale.
 on:
+  workflow_run:
+    workflows: ["Publish release (automatic)"]
+    types: [completed]
   workflow_dispatch:
     inputs:
       tag:
@@ -13,26 +22,90 @@ on:
         required: true
         type: string
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
   PAGES_URL: "https://oetiker.github.io/tvision-rs"
 
 jobs:
+  resolve:
+    name: Resolve release tag
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - name: Find the release to deploy
+        id: tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_CREATED: ${{ github.event.workflow_run.created_at }}
+        run: |
+          if [ "$EVENT" = workflow_dispatch ]; then
+            if ! printf '%s' "$INPUT_TAG" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+              echo "::error::tag must look like v1.2.3, got '$INPUT_TAG'"
+              exit 1
+            fi
+            echo "tag=$INPUT_TAG" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          VERSION=$(gh api "repos/$REPO/contents/CHANGES.md?ref=$HEAD_SHA" --jq .content \
+                    | base64 -d \
+                    | sed -nE 's/^## ([0-9]+\.[0-9]+\.[0-9]+) - [0-9]{4}-[0-9]{2}-[0-9]{2}.*/\1/p' \
+                    | head -1)
+          if [ -z "$VERSION" ]; then
+            echo "::notice::CHANGES.md at $HEAD_SHA has no dated release section; nothing to deploy"
+            exit 0
+          fi
+          TAG="v$VERSION"
+          # The endpoint answers 404 for a missing tag and for a draft. Any
+          # other error (a rate limit, an outage) must fail the run, not pass
+          # for "nothing to deploy".
+          if ! RELEASE=$(gh api "repos/$REPO/releases/tags/$TAG" \
+                         --jq '[.draft, (.published_at // "")] | @tsv' 2>api-error.txt); then
+            if grep -q 'HTTP 404' api-error.txt; then
+              echo "::notice::no published GitHub release $TAG; nothing to deploy"
+              exit 0
+            fi
+            echo "::error::reading release $TAG failed: $(cat api-error.txt)"
+            exit 1
+          fi
+          DRAFT=$(printf '%s' "$RELEASE" | cut -f1)
+          PUBLISHED=$(printf '%s' "$RELEASE" | cut -f2)
+          # Both timestamps are UTC ISO 8601 ("2026-10-17T09:12:34Z"), so they
+          # compare as strings.
+          if [ "$DRAFT" != false ] || [ -z "$PUBLISHED" ] || [[ "$PUBLISHED" < "$RUN_CREATED" ]]; then
+            echo "::notice::release $TAG (draft=$DRAFT, published $PUBLISHED) was not published by the run created $RUN_CREATED; nothing to deploy"
+            exit 0
+          fi
+          echo "Deploying docs for $TAG (published $PUBLISHED)"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
   build-docs:
     name: Build versioned docs
+    needs: resolve
+    if: needs.resolve.outputs.tag != ''
     runs-on: ubuntu-latest
+    env:
+      TAG: ${{ needs.resolve.outputs.tag }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.tag }}
+          ref: ${{ needs.resolve.outputs.tag }}
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Install tmux (for screenshots)
         run: sudo apt-get update && sudo apt-get install -y tmux
 
-      - name: Rebase doc URLs to /tvision-rs/${{ inputs.tag }}/
+      - name: Rebase doc URLs to /tvision-rs/${{ needs.resolve.outputs.tag }}/
         run: |
-          TAG="${{ inputs.tag }}"
           sed -i "s|^site-url = \"/tvision-rs/\"|site-url = \"/tvision-rs/${TAG}/\"|" docs/book/book.toml
           sed -i "s|href=\"/tvision-rs/|href=\"/tvision-rs/${TAG}/|g" docs/book/theme/rustdoc-header.html
           grep -n 'site-url' docs/book/book.toml
@@ -41,16 +114,18 @@ jobs:
       - name: Build integrated site (guide + api)
         run: cargo xtask docs
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
-          name: docs-${{ inputs.tag }}
+          name: docs-${{ needs.resolve.outputs.tag }}
           path: docs/book/book
           retention-days: 1
 
   deploy-docs:
     name: Deploy versioned docs
-    needs: build-docs
+    needs: [resolve, build-docs]
     runs-on: ubuntu-latest
+    env:
+      TAG: ${{ needs.resolve.outputs.tag }}
     permissions:
       contents: read
       pages: write
@@ -62,18 +137,21 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           sparse-checkout: .github/scripts
 
       - name: Download versioned docs
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
-          name: docs-${{ inputs.tag }}
+          name: docs-${{ needs.resolve.outputs.tag }}
           path: new-docs
 
-      # Same mirror + normalize + insert + deploy sequence as release.yml's
-      # deploy-docs job — keep the two in sync.
+      # This reconstructs the whole multi-version site from the *live* Pages
+      # URL each run. The `pages` concurrency group (shared with docs.yml)
+      # serializes the deploys; the residual risk is the CDN propagation window
+      # after a just-finished deploy. The upgrade path is a persistent gh-pages
+      # branch as the canonical tree.
       #
       # The root index.html is a JS/meta-refresh redirect with no crawlable
       # links to the other version trees, so a single recursive wget from the
@@ -116,7 +194,6 @@ jobs:
 
       - name: Add new version to site
         run: |
-          TAG="${{ inputs.tag }}"
           rm -rf "site/tvision-rs/$TAG"
           mkdir -p "site/tvision-rs/$TAG"
           cp -r new-docs/* "site/tvision-rs/$TAG/"
@@ -133,9 +210,9 @@ jobs:
           ls -la site/tvision-rs/
           echo "versions.json:"; cat site/tvision-rs/versions.json
 
-      - uses: actions/configure-pages@v4
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/configure-pages@v6
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: site/tvision-rs
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5

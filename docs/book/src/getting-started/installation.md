@@ -9,19 +9,19 @@ alias the package to `tv`, so import it under that name with Cargo's
 
 ```toml
 [dependencies]
-tv = { package = "tvision-rs", git = "https://github.com/oetiker/tvision-rs" }
+tv = { package = "tvision-rs", version = "0.17.0" }
 ```
 
-Once a release is published to crates.io you will be able to pin a version
+To track the development version on `main`, depend on the git repository
 instead:
 
 ```toml
 [dependencies]
-tv = { package = "tvision-rs", version = "0.1" }
+tv = { package = "tvision-rs", git = "https://github.com/oetiker/tvision-rs" }
 ```
 
-Now everything is reachable through the `tv::` namespace — the path is the
-namespace the old `T` prefix was faking:
+Everything is then reachable through the `tv::` namespace, which replaces the
+old `T` prefix:
 
 ```rust
 # #![allow(unused_imports)]
@@ -29,8 +29,7 @@ namespace the old `T` prefix was faking:
 use tv::{Program, Desktop, MenuBar, StatusLine, CrosstermBackend};
 ```
 
-If you prefer the crate's own name, you can of course `use tvision_rs::…` directly;
-the `tv` alias is a convention, not a requirement.
+The `tv` alias is a convention; `use tvision_rs::…` works as well.
 
 ## Feature flags
 
@@ -50,8 +49,7 @@ tv = { package = "tvision-rs", git = "https://github.com/oetiker/tvision-rs", de
 
 ## Verify the build
 
-A plain build is enough to confirm the crate resolves and compiles for your
-toolchain:
+A build confirms that the crate resolves and compiles for your toolchain:
 
 ```console
 $ cargo build
@@ -59,5 +57,4 @@ $ cargo build
     Finished `dev` profile [unoptimized + debuginfo]
 ```
 
-With the crate in place, you are ready to write [your first
-app](first-app.md).
+Next: [your first app](first-app.md).

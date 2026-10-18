@@ -1,0 +1,51 @@
+{
+  "moving_major_tag": false,
+  "rust": {
+    "lint": ["tvision-rs", "tvision-rs-macros", "xtask"],
+    "test": ["tvision-rs", "tvision-rs-macros", "xtask"]
+  },
+  "version_files": [
+    {
+      "path": "Cargo.toml",
+      "pattern": "^version\\s*=\\s*\"[^\"]*\"",
+      "replacement": "version = \"$VERSION\"",
+      "verify": "^version\\s*=\\s*\"$VERSION\""
+    },
+    {
+      "path": "Cargo.toml",
+      "pattern": "^tvision-rs-macros = \\{ path = \"tvision-rs-macros\", version = \"[^\"]*\" \\}",
+      "replacement": "tvision-rs-macros = { path = \"tvision-rs-macros\", version = \"$VERSION\" }",
+      "verify": "^tvision-rs-macros = \\{ path = \"tvision-rs-macros\", version = \"$VERSION\" \\}"
+    },
+    {
+      "path": "tvision-rs-macros/Cargo.toml",
+      "pattern": "^version\\s*=\\s*\"[^\"]*\"",
+      "replacement": "version = \"$VERSION\"",
+      "verify": "^version\\s*=\\s*\"$VERSION\""
+    },
+    {
+      "path": "Cargo.lock",
+      "pattern": "^name = \"tvision-rs\"\nversion = \"[^\"]*\"",
+      "replacement": "name = \"tvision-rs\"\nversion = \"$VERSION\"",
+      "verify": "^name = \"tvision-rs\"\nversion = \"$VERSION\""
+    },
+    {
+      "path": "Cargo.lock",
+      "pattern": "^name = \"tvision-rs-macros\"\nversion = \"[^\"]*\"",
+      "replacement": "name = \"tvision-rs-macros\"\nversion = \"$VERSION\"",
+      "verify": "^name = \"tvision-rs-macros\"\nversion = \"$VERSION\""
+    },
+    {
+      "path": "README.md",
+      "pattern": "^tv = \\{ package = \"tvision-rs\", version = \"[^\"]*\" \\}",
+      "replacement": "tv = { package = \"tvision-rs\", version = \"$VERSION\" }",
+      "verify": "^tv = \\{ package = \"tvision-rs\", version = \"$VERSION\" \\}"
+    },
+    {
+      "path": "docs/book/src/getting-started/installation.md",
+      "pattern": "^tv = \\{ package = \"tvision-rs\", version = \"[^\"]*\" \\}",
+      "replacement": "tv = { package = \"tvision-rs\", version = \"$VERSION\" }",
+      "verify": "^tv = \\{ package = \"tvision-rs\", version = \"$VERSION\" \\}"
+    }
+  ]
+}

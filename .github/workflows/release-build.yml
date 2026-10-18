@@ -1,0 +1,31 @@
+name: Release build
+
+# Called by Create release PR on the release branch before the pull request
+# exists (D28). tvision-rs is a library: crates.io gets the source from
+# release-publish.yml and the release attaches no files, so the build names the
+# version and nothing else.
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: The version being released.
+        type: string
+        required: true
+      ref:
+        description: The release branch head to build.
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  release-version:
+    name: Release version
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - run: echo "Building v${VERSION} from ${REF}"
+        env:
+          VERSION: ${{ inputs.version }}
+          REF: ${{ inputs.ref }}
