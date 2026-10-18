@@ -6,8 +6,8 @@ publish = false
 
 [dependencies]
 tvision-rs = { path = ".." }
-mdbook = "0.4"
-mdbook-mermaid = "0.14"
+mdbook-driver = { version = "0.5", features = ["search"] }
+mdbook-mermaid = "0.17"
 notify = "6"
 tiny_http = "0.12"
 anyhow = "1"
