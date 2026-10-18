@@ -142,7 +142,7 @@ jobs:
         with:
           path: site/tvision-rs
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
 
       # Self-heal: the latest release's versioned docs are deployed by
       # redeploy-docs.yml after "Publish release (automatic)" completes. When
