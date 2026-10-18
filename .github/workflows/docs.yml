@@ -60,6 +60,12 @@ jobs:
     name: Deploy to GitHub Pages
     runs-on: ubuntu-latest
     needs: build
+    # actions: write lets the last step dispatch redeploy-docs.yml.
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+      actions: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -137,3 +143,36 @@ jobs:
           path: site/tvision-rs
       - id: deployment
         uses: actions/deploy-pages@v4
+
+      # Self-heal: the latest release's versioned docs are deployed by
+      # redeploy-docs.yml after "Publish release (automatic)" completes. When
+      # that deploy failed or was cancelled (a newer pending run in the
+      # `pages` group cancels a waiting one), the site lacks the release's
+      # tree. This step runs after the dev deploy, so an error here fails the
+      # job without holding back the dev docs.
+      - name: Check the latest release docs are deployed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if ! TAG=$(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name 2>api-error.txt); then
+            if grep -q 'HTTP 404' api-error.txt; then
+              echo "No published release yet; nothing to check"
+              exit 0
+            fi
+            echo "::error::reading the latest release failed: $(cat api-error.txt)"
+            exit 1
+          fi
+          if grep -q "\"path\": *\"/tvision-rs/$TAG/\"" site/tvision-rs/versions.json \
+             && [ -f "site/tvision-rs/$TAG/index.html" ]; then
+            echo "Docs for $TAG are deployed"
+            exit 0
+          fi
+          ACTIVE=$(gh run list --workflow redeploy-docs.yml --limit 20 \
+                   --json status --jq '[.[] | select(.status != "completed")] | length')
+          if [ "$ACTIVE" != 0 ]; then
+            echo "::warning::docs for $TAG are missing; a redeploy-docs.yml run is already active, not dispatching another"
+            exit 0
+          fi
+          gh workflow run redeploy-docs.yml -f "tag=$TAG"
+          echo "::warning::docs for $TAG were missing from the site; dispatched redeploy-docs.yml for $TAG"
