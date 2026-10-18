@@ -11,7 +11,7 @@ Every widget in tvision-rs is defined by two things working together:
 
 - **[`View`](../api/tvision_rs/view/trait.View.html)**: the *behaviour*. It is a
   trait whose required methods cover everything the framework calls:
-  [`draw`](../api/tvision_rs/view/trait.View.html#method.draw)
+  [`draw`](../api/tvision_rs/view/trait.View.html#tymethod.draw)
   paints the view, [`handle_event`](../api/tvision_rs/view/trait.View.html#method.handle_event)
   reacts to input, and a handful of others (`set_state`, `valid`, `value` /
   `set_value`) cover focus, validation and data transfer.
@@ -22,8 +22,8 @@ Every widget in tvision-rs is defined by two things working together:
 
 Every widget **embeds** a `ViewState` and **implements** `View`. Only three
 methods are required:
-[`state`](../api/tvision_rs/view/trait.View.html#method.state),
-[`state_mut`](../api/tvision_rs/view/trait.View.html#method.state_mut), and `draw`;
+[`state`](../api/tvision_rs/view/trait.View.html#tymethod.state),
+[`state_mut`](../api/tvision_rs/view/trait.View.html#tymethod.state_mut), and `draw`;
 the rest have defaults. That is the composition recipe, and the
 [Writing your own View](custom-view.md) chapter walks it end to end.
 

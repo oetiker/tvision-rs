@@ -73,7 +73,7 @@ Two settings control how text is stored and stepped over:
 is the other text view: a scrolling, ring-buffered output pane that you *write into*. It implements the
 [`TextDevice`](../api/tvision_rs/widgets/terminal/trait.TextDevice.html) trait, so
 you append output by calling
-[`write_bytes`](../api/tvision_rs/widgets/terminal/trait.TextDevice.html#method.write_bytes);
+[`write_bytes`](../api/tvision_rs/widgets/terminal/trait.TextDevice.html#tymethod.write_bytes);
 the most recent lines that fit are drawn, and the embedded scroller keeps its
 scrollbars in sync. There is no stream wrapper, only the byte sink *(the C++
 `streambuf`/`otstream` layer is not ported)*.
