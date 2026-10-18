@@ -24,6 +24,10 @@ into a dated, versioned section.
 
 ### Fixed
 
+- In the guide, the links to `draw`, `state` and `state_mut` on "The view
+  tree" and to `write_bytes` on "Text editing" opened the top of the API page
+  instead of the method's entry. They now go to the method.
+
 ## 0.17.0 - 2026-10-16
 
 ### New
