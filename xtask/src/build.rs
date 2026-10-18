@@ -6,7 +6,7 @@
 
 use crate::{linkcheck, paths, screens};
 use anyhow::{Context, Result};
-use mdbook::MDBook;
+use mdbook_driver::MDBook;
 use std::path::Path;
 use std::process::Command;
 
