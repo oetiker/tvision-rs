@@ -21,6 +21,9 @@ into a dated, versioned section.
 - Releases now go through a release pull request. Once it is merged, the
   version tag, the crates.io upload of `tvision-rs-macros` and `tvision-rs`,
   the GitHub release and the versioned documentation follow automatically.
+- `tvision-rs-macros` now builds with `syn` 3. A project whose other
+  dependencies already use `syn` 3 no longer compiles a second copy of `syn` 2
+  for it.
 
 ### Fixed
 
