@@ -10,11 +10,12 @@ container type `Group`, keeping the Turbo Vision tree model in idiomatic Rust.
 Every widget in tvision-rs is defined by two things working together:
 
 - **[`View`](../api/tvision_rs/view/trait.View.html)**: the *behaviour*. It is a
-  trait whose required methods cover everything the framework calls:
+  trait whose methods cover everything the framework calls:
   [`draw`](../api/tvision_rs/view/trait.View.html#tymethod.draw)
   paints the view, [`handle_event`](../api/tvision_rs/view/trait.View.html#method.handle_event)
   reacts to input, and a handful of others (`set_state`, `valid`, `value` /
-  `set_value`) cover focus, validation and data transfer.
+  `set_value`) cover focus, validation and data transfer. Of these only `draw`
+  is required; the others have default bodies.
 - **[`ViewState`](../api/tvision_rs/view/struct.ViewState.html)**: the *data*. A
   struct that every widget embeds (conventionally a field named `state`),
   holding `origin`, `size`, `cursor`, the state / option / grow / drag flags,
