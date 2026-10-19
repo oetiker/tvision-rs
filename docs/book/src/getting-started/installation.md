@@ -60,7 +60,7 @@ $ cargo build
     Finished `dev` profile [unoptimized + debuginfo] target(s) in 12.34s
 ```
 
-`vX.Y.Z` is the `tvision-rs` version Cargo resolved; for a git dependency it
-also prints the repository URL and commit.
+`vX.Y.Z` is the `tvision-rs` version Cargo resolved; for a git dependency
+Cargo also prints the repository URL and commit.
 
 Next: [your first app](first-app.md).
