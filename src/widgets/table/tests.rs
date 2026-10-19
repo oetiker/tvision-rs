@@ -1220,6 +1220,146 @@ fn snapshot_wide_glyph_at_the_scroll_edge() {
     insta::assert_snapshot!(fx.render(16, 4));
 }
 
+// -- narrower than the columns' floors ---------------------------------------
+
+#[test]
+fn snapshot_narrow_multi_keeps_the_check_column() {
+    // 5 wide → 4 text cells for five layout columns and four separators:
+    // every column sits at its floor ([3, 1, 1, 1, 1]) and the check column
+    // fills the whole text width.
+    let mut fx = Fixture::new(
+        Table::new(Rect::new(0, 0, 5, H), columns(), None)
+            .with_model(model(&ROWS))
+            .with_selection_mode(SelectionMode::Multi),
+    );
+    fx.focus(true);
+    fx.key(Key::Char(' '));
+    let d = fx.t().data.clone();
+    let l = body::row_layout(&d.borrow(), 5);
+    assert_eq!(l.widths, vec![3, 1, 1, 1, 1]);
+    assert_eq!((l.content, l.view), (7, 0));
+    insta::assert_snapshot!(fx.render(5, H as u16));
+}
+
+#[test]
+fn snapshot_narrow_single_clips_the_cells() {
+    // 4 wide → 3 text cells for four columns and three separators.
+    let mut fx =
+        Fixture::new(Table::new(Rect::new(0, 0, 4, H), columns(), None).with_model(model(&ROWS)));
+    fx.focus(true);
+    let d = fx.t().data.clone();
+    let l = body::row_layout(&d.borrow(), 4);
+    assert_eq!(l.widths, vec![1, 1, 1, 1]);
+    assert_eq!((l.content, l.view, l.max_offset()), (7, 3, 4));
+    insta::assert_snapshot!(fx.render(4, H as u16));
+}
+
+#[test]
+fn a_narrow_table_publishes_a_real_h_range_and_scrolls() {
+    // Single mode, 4 wide → 3 text cells over the fixed 30 content cells.
+    let bar = mint_bar();
+    let mut owner = Group::new(Rect::new(0, 0, 60, 20));
+    owner.insert(Box::new(
+        Table::new(Rect::new(0, 0, 4, H), fixed_columns(), None)
+            .with_model(model(&ROWS))
+            .with_h_bar(bar),
+    ));
+    let deferred = deferred_of(|ctx| owner.set_state(StateFlag::Active, true, ctx));
+    assert_eq!(bar_params(&deferred, bar), (Some(27), Some(3)));
+
+    let mut fx = Fixture::new(
+        Table::new(Rect::new(0, 0, 4, H), fixed_columns(), None)
+            .with_model(model(&ROWS))
+            .with_h_bar(bar),
+    );
+    fx.focus(true);
+    fx.key(Key::Right);
+    assert_eq!(fx.t().h_offset(), 1, "Right scrolls the overflow");
+    // STATE starts at content cell 4 + 1 + 10 + 1 = 16.
+    fx.with(|t, ctx| t.body_mut().apply_scroll_sync(Some(16), None, ctx));
+    assert_eq!(fx.t().h_offset(), 16);
+    insta::assert_snapshot!(fx.render(4, H as u16));
+}
+
+/// Drive a table `w` wide through draws, keys, clicks, header presses and
+/// drags, cell-cursor moves and an edit; none of it may panic.
+fn probe_narrow(w: i32, mode: SelectionMode, sep: Separators, cols: Vec<ColumnSpec>) {
+    let bar = mint_bar();
+    let mut fx = Fixture::new(
+        Table::new(Rect::new(0, 0, w, H), cols, None)
+            .with_model(model(&ROWS))
+            .with_selection_mode(mode)
+            .with_separators(sep)
+            .with_h_bar(bar),
+    );
+    fx.focus(true);
+    let _ = fx.render(w as u16, H as u16);
+    for k in [
+        Key::Right,
+        Key::Right,
+        Key::End,
+        Key::Left,
+        Key::Down,
+        Key::Char(' '),
+        Key::Tab,
+        Key::F(2),
+        Key::Esc,
+    ] {
+        fx.key(k);
+        let _ = fx.render(w as u16, H as u16);
+    }
+    for x in -1..=w {
+        fx.click(x, 0);
+        fx.click(x, 1);
+        fx.drag(x, &[x + 1, x + 3, x - 2]);
+        fx.send(mouse_down(x, 2, true));
+        fx.key(Key::Esc);
+        let _ = fx.render(w as u16, H as u16);
+    }
+    for off in [0, 3, 100] {
+        fx.with(|t, ctx| t.set_h_offset(off, ctx));
+        let _ = fx.render(w as u16, H as u16);
+    }
+    let d = fx.t().data.clone();
+    let l = body::row_layout(&d.borrow(), w);
+    assert!(l.widths.iter().all(|&c| c >= 0), "w={w}: {:?}", l.widths);
+    assert!(l.view >= 0 && l.content >= 0 && l.max_offset() >= 0);
+    assert!(fx.t().h_offset() <= l.max_offset());
+}
+
+#[test]
+fn narrow_widths_never_panic() {
+    for w in 1..=10 {
+        for mode in [SelectionMode::Single, SelectionMode::Multi] {
+            for sep in [Separators::Off, Separators::Header, Separators::All] {
+                probe_narrow(w, mode, sep, columns());
+                probe_narrow(w, mode, sep, edit_columns());
+            }
+        }
+    }
+}
+
+#[test]
+fn narrow_widths_keep_every_column_at_its_floor() {
+    // Single mode: four columns need 4 + 3 separators; Multi adds 3 + 1.
+    for (mode, needed) in [(SelectionMode::Single, 7), (SelectionMode::Multi, 11)] {
+        for w in 1..=10 {
+            let t = Table::new(Rect::new(0, 0, w, H), columns(), None)
+                .with_model(model(&ROWS))
+                .with_selection_mode(mode);
+            let l = body::row_layout(&t.data.borrow(), w);
+            let avail = w - 1;
+            if avail <= 0 {
+                assert!(l.widths.iter().all(|&c| c == 0), "w={w}");
+                continue;
+            }
+            let total = l.widths.iter().sum::<i32>() + l.widths.len() as i32 - 1;
+            assert!(total >= needed, "w={w} {mode:?}: {:?}", l.widths);
+            assert!(l.widths.iter().all(|&c| c >= 1), "w={w}: {:?}", l.widths);
+        }
+    }
+}
+
 // -- header interaction: resize, move, show/hide, layout ----------------------
 
 // The fixture header (W = 31): ID at view x 1..5, separator 5; NAME 6..16,
