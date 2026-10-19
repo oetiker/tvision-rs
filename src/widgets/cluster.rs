@@ -1,66 +1,4 @@
-//! Clusters of related toggles: [`CheckBoxes`], [`RadioButtons`], and
-//! [`MultiCheckBoxes`].
-//!
-//! # The seam
-//!
-//! The three cluster kinds differ **only** in their box icon, marker characters,
-//! and how `value` is interpreted, so the polymorphism is modeled as **data**
-//! rather than separate behavior:
-//!
-//! * [`Cluster`] is the full engine — state + layout + nav + draw + events — and
-//!   **branches on its [`ClusterKind`]** for the per-kind behavior. It is the only
-//!   type that `impl`s [`View`] with real bodies.
-//! * [`CheckBoxes`] / [`RadioButtons`] / [`MultiCheckBoxes`] are thin
-//!   embed-and-delegate wrappers (`{ cluster: Cluster }`) whose `impl View`
-//!   forwards every method to `self.cluster`. Their constructors build a
-//!   `Cluster` with the right `ClusterKind`. This keeps named, familiar types
-//!   while the logic lives once.
-//!
-//! # Layout
-//!
-//! `size.y` (the bounds height) is the **column-break period**: items fill
-//! top-to-bottom within a column, then wrap to the next column. A column is
-//! `6 + max-label-width` cells wide (the ` [ ] ` icon is 5 cells plus a 1-cell
-//! gap). Label widths strip the `~`-toggle hotkey marker, which is not a printed
-//! column.
-//!
-//! # Marker / icon data
-//!
-//! The box icons (` [ ] `, ` ( ) `) and marker chars (`X`, the bullet `•`) live
-//! inline as per-kind data, with no theme edit needed.
-//!
-//! # Mouse hold-tracking
-//!
-//! Mouse-down begins a modal hold:
-//! * **MouseDown:** select the item under the cursor (if enabled), set
-//!   `tracking = true`, and call [`Context::start_mouse_track`]. Do NOT press yet.
-//! * **MouseMove arm** (loop body): a no-op — the original only toggled cursor
-//!   visibility while dragging, which has no TUI equivalent. Guarded by
-//!   `tracking`.
-//! * **MouseUp arm** (post-loop): press only if the item under the release
-//!   position is still the selected one — the same-item release-confirm. Clear
-//!   `tracking`. Guarded by `tracking`.
-//!
-//! The `abs_origin` field caches the view-local `(0, 0)` in absolute screen
-//! coords from the last `draw`, used by the capture to localize events.
-//!
-//! # Value and help context
-//!
-//! The typed value protocol (`value`/`set_value`) is not implemented for clusters:
-//! their `value`/`sel` fields are read and written directly by their owning dialog
-//! rather than through the gather/scatter protocol. The original per-item
-//! help-context offset (help id plus selected index) does not map onto tvision-rs's
-//! string-identity [`HelpCtx`](crate::help::HelpCtx) and is not modeled.
-//!
-//! # Turbo Vision heritage
-//!
-//! Ports `TCluster` and its subclasses `TCheckBoxes` / `TRadioButtons` /
-//! `TMultiCheckBoxes` (`tcluster.cpp`, `tcheckbo.cpp`, `tradiobu.cpp`,
-//! `tmulchkb.cpp`). The abstract base with its per-kind virtual overrides becomes
-//! one engine branching on a closed [`ClusterKind`] enum, with the named
-//! subclasses as embed-and-delegate wrappers (deviations D1, D2). The palette
-//! AttrPairs become `(lo, hi)` [`Role`] pairs, and coordinates arrive view-local
-//! from the group so no manual localization is needed.
+//! `Cluster` and its `CheckBoxes` / `RadioButtons` / `MultiCheckBoxes` wrappers (documented on `Cluster`).
 
 use crate::capture::TrackMask;
 use crate::event::{Event, Key, ctrl_to_arrow, hot_key, is_alt_hotkey, is_plain_hotkey};
@@ -148,6 +86,60 @@ impl ClusterKind {
 
 /// The cluster engine (state + layout + nav + draw + events).
 ///
+/// Clusters of related toggles: [`CheckBoxes`], [`RadioButtons`], and
+/// [`MultiCheckBoxes`].
+///
+/// # The seam
+///
+/// The three cluster kinds differ **only** in their box icon, marker characters,
+/// and how `value` is interpreted, so the polymorphism is modeled as **data**
+/// rather than separate behavior:
+///
+/// * [`Cluster`] is the full engine — state + layout + nav + draw + events — and
+///   **branches on its [`ClusterKind`]** for the per-kind behavior. It is the only
+///   type that `impl`s [`View`] with real bodies.
+/// * [`CheckBoxes`] / [`RadioButtons`] / [`MultiCheckBoxes`] are thin
+///   embed-and-delegate wrappers (`{ cluster: Cluster }`) whose `impl View`
+///   forwards every method to `self.cluster`. Their constructors build a
+///   `Cluster` with the right `ClusterKind`. This keeps named, familiar types
+///   while the logic lives once.
+///
+/// # Layout
+///
+/// `size.y` (the bounds height) is the **column-break period**: items fill
+/// top-to-bottom within a column, then wrap to the next column. A column is
+/// `6 + max-label-width` cells wide (the ` [ ] ` icon is 5 cells plus a 1-cell
+/// gap). Label widths strip the `~`-toggle hotkey marker, which is not a printed
+/// column.
+///
+/// # Marker / icon data
+///
+/// The box icons (` [ ] `, ` ( ) `) and marker chars (`X`, the bullet `•`) live
+/// inline as per-kind data, with no theme edit needed.
+///
+/// # Mouse hold-tracking
+///
+/// Mouse-down begins a modal hold:
+/// * **MouseDown:** select the item under the cursor (if enabled), set
+///   `tracking = true`, and call [`Context::start_mouse_track`]. Do NOT press yet.
+/// * **MouseMove arm** (loop body): a no-op — the original only toggled cursor
+///   visibility while dragging, which has no TUI equivalent. Guarded by
+///   `tracking`.
+/// * **MouseUp arm** (post-loop): press only if the item under the release
+///   position is still the selected one — the same-item release-confirm. Clear
+///   `tracking`. Guarded by `tracking`.
+///
+/// The `abs_origin` field caches the view-local `(0, 0)` in absolute screen
+/// coords from the last `draw`, used by the capture to localize events.
+///
+/// # Value and help context
+///
+/// The typed value protocol (`value`/`set_value`) is not implemented for clusters:
+/// their `value`/`sel` fields are read and written directly by their owning dialog
+/// rather than through the gather/scatter protocol. The original per-item
+/// help-context offset (help id plus selected index) does not map onto tvision-rs's
+/// string-identity [`HelpCtx`](crate::help::HelpCtx) and is not modeled.
+///
 /// Embeds [`ViewState`], `impl`s [`View`] fully, and branches on
 /// [`kind`](Cluster::kind) for per-kind behavior. The concrete
 /// [`CheckBoxes`] / [`RadioButtons`] / [`MultiCheckBoxes`] wrappers delegate to
@@ -162,7 +154,13 @@ impl ClusterKind {
 ///
 /// # Turbo Vision heritage
 ///
-/// Ports `TCluster` (`tcluster.cpp`).
+/// Ports `TCluster` and its subclasses `TCheckBoxes` / `TRadioButtons` /
+/// `TMultiCheckBoxes` (`tcluster.cpp`, `tcheckbo.cpp`, `tradiobu.cpp`,
+/// `tmulchkb.cpp`). The abstract base with its per-kind virtual overrides becomes
+/// one engine branching on a closed [`ClusterKind`] enum, with the named
+/// subclasses as embed-and-delegate wrappers (deviations D1, D2). The palette
+/// AttrPairs become `(lo, hi)` [`Role`] pairs, and coordinates arrive view-local
+/// from the group so no manual localization is needed.
 pub struct Cluster {
     /// View state (geometry, flags, cursor) — the composition target.
     pub state: ViewState,

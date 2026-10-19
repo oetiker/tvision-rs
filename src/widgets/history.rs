@@ -1,31 +1,4 @@
-//! Process-global, byte-budget-bounded history store for input fields, plus the
-//! [`HistoryViewer`] widget that shows the store in a modal recall list.
-//!
-//! Each "channel" is a small `u8` id that groups one input field's recall
-//! list.  Entries are stored oldest-first globally; [`history_str(id, 0)`](history_str)
-//! returns the oldest surviving entry for that id.
-//!
-//! # The clean read contract — every non-evicted entry is readable
-//!
-//! The store keeps a flat list of entries and a byte budget; once adding an
-//! entry would exceed the budget, the globally-oldest entries are evicted until
-//! it fits. **Every entry that has not been evicted is readable** — there is no
-//! hidden front record and no skipped-oldest entry.
-//!
-//! This is a deliberate simplification of the original store, which carried a
-//! hidden front sentinel record and skipped it (and, after the first eviction,
-//! the real oldest entry) when reading. Pre-overflow behavior is identical; the
-//! only difference is that we keep that one globally-oldest entry visible, and
-//! our first-eviction byte boundary is 3 bytes looser because we do not spend
-//! budget on a sentinel. The deviation is intentional and noted here so it is
-//! not mistaken for a missing behavior.
-//!
-//! # Turbo Vision heritage
-//!
-//! Ports the history store (`histlist.cpp`) plus `THistoryViewer`
-//! (`thstview.cpp`), `THistoryWindow` (`thistwin.cpp`), and the `THistory`
-//! dropdown icon (`thistory.cpp`). The store drops the original front-sentinel
-//! byte-block bookkeeping in favor of the clean read contract above.
+//! The history store and the `THistory` / `HistoryViewer` / `HistoryWindow` widgets (documented on `HistoryViewer`).
 
 use crate::command::Command;
 use crate::event::{Event, Key};
@@ -201,6 +174,28 @@ pub fn clear_history() {
 /// A read-only single-column list over the global history store, shown in a
 /// modal recall popup when a user drops down an input field.
 ///
+/// Process-global, byte-budget-bounded history store for input fields, plus the
+/// [`HistoryViewer`] widget that shows the store in a modal recall list.
+///
+/// Each "channel" is a small `u8` id that groups one input field's recall
+/// list.  Entries are stored oldest-first globally; [`history_str(id, 0)`](history_str)
+/// returns the oldest surviving entry for that id.
+///
+/// # The clean read contract — every non-evicted entry is readable
+///
+/// The store keeps a flat list of entries and a byte budget; once adding an
+/// entry would exceed the budget, the globally-oldest entries are evicted until
+/// it fits. **Every entry that has not been evicted is readable** — there is no
+/// hidden front record and no skipped-oldest entry.
+///
+/// This is a deliberate simplification of the original store, which carried a
+/// hidden front sentinel record and skipped it (and, after the first eviction,
+/// the real oldest entry) when reading. Pre-overflow behavior is identical; the
+/// only difference is that we keep that one globally-oldest entry visible, and
+/// our first-eviction byte boundary is 3 bytes looser because we do not spend
+/// budget on a sentinel. The deviation is intentional and noted here so it is
+/// not mistaken for a missing behavior.
+///
 /// Enter / double-click confirms; Esc or a cancel command dismisses. All other
 /// events fall through to the base [`ListViewer`] navigation.
 ///
@@ -227,8 +222,10 @@ pub fn clear_history() {
 ///
 /// # Turbo Vision heritage
 ///
-/// Ports `THistoryViewer` (`thstview.cpp`); its palette recolor surfaces as a
-/// [`ListRoles`](crate::widgets::ListRoles) override.
+/// Ports the history store (`histlist.cpp`) plus `THistoryViewer`
+/// (`thstview.cpp`), `THistoryWindow` (`thistwin.cpp`), and the `THistory`
+/// dropdown icon (`thistory.cpp`). The store drops the original front-sentinel
+/// byte-block bookkeeping in favor of the clean read contract above.
 pub struct HistoryViewer {
     lv: ListViewerState,
     history_id: u8,

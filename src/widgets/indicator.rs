@@ -1,35 +1,4 @@
-//! A 1-row strip that displays an editor's current cursor position (row:col).
-//! It is owned by the editor and updated through [`Indicator::set_value`].
-//!
-//! # Color
-//!
-//! [`Role::IndicatorNormal`] when not dragging, [`Role::IndicatorDragging`]
-//! while the editor window is being dragged.
-//!
-//! # Glyphs
-//!
-//! Glyphs come from `ctx.glyphs()`:
-//! - `indicator_frame_normal` (`═`) — fill char when **not** dragging.
-//! - `indicator_frame_dragging` (`─`) — fill char **while** dragging.
-//! - `indicator_modified` (`☼`) — the "buffer modified" marker.
-//!
-//! # Colon alignment
-//!
-//! The position string is placed so the `:` lands at column 8. The string is
-//! `" {row}:{col} "`, so the colon sits at byte index `1 + digits(row)` and
-//! drawing starts at `7 - digits(row)`. That only goes negative once the row
-//! number has 8 or more digits (row ≥ 10,000,000) — unreachable in a real
-//! editor, but handled gracefully: [`DrawCtx::put_str`] skips the off-screen
-//! prefix without panicking.
-//!
-//! There is no event handling; the indicator is display-only. The dragging
-//! state is read live from the view state each frame.
-//!
-//! # Turbo Vision heritage
-//!
-//! Ports `TIndicator` (`tindictr.cpp`). The hardcoded frame characters become
-//! [`Glyphs`](crate::theme::Glyphs) fields and the palette becomes [`Role`]s
-//! (deviation D7).
+//! `Indicator`, the editor row:col display (documented on the type).
 
 use crate::theme::Role;
 use crate::view::{DrawCtx, GrowMode, Point, Rect, View, ViewState};
@@ -38,14 +7,41 @@ use crate::view::{DrawCtx, GrowMode, Point, Rect, View, ViewState};
 // Indicator
 // ---------------------------------------------------------------------------
 
-/// A row/column position display for an editor.
+/// A 1-row strip that displays an editor's current cursor position (row:col).
+/// It is owned by the editor and updated through [`Indicator::set_value`].
+///
+/// # Color
+///
+/// [`Role::IndicatorNormal`] when not dragging, [`Role::IndicatorDragging`]
+/// while the editor window is being dragged.
+///
+/// # Glyphs
+///
+/// Glyphs come from `ctx.glyphs()`:
+/// - `indicator_frame_normal` (`═`) — fill char when **not** dragging.
+/// - `indicator_frame_dragging` (`─`) — fill char **while** dragging.
+/// - `indicator_modified` (`☼`) — the "buffer modified" marker.
+///
+/// # Colon alignment
+///
+/// The position string is placed so the `:` lands at column 8. The string is
+/// `" {row}:{col} "`, so the colon sits at byte index `1 + digits(row)` and
+/// drawing starts at `7 - digits(row)`. That only goes negative once the row
+/// number has 8 or more digits (row ≥ 10,000,000) — unreachable in a real
+/// editor, but handled gracefully: [`DrawCtx::put_str`] skips the off-screen
+/// prefix without panicking.
+///
+/// There is no event handling; the indicator is display-only. The dragging
+/// state is read live from the view state each frame.
 ///
 /// The owner pushes updates via [`set_value`](Self::set_value); the next
 /// whole-tree redraw reads the updated fields.
 ///
 /// # Turbo Vision heritage
 ///
-/// Ports `TIndicator` (`tindictr.cpp`).
+/// Ports `TIndicator` (`tindictr.cpp`). The hardcoded frame characters become
+/// [`Glyphs`](crate::theme::Glyphs) fields and the palette becomes [`Role`]s
+/// (deviation D7).
 pub struct Indicator {
     /// View state (geometry, flags, etc.) — the composition target.
     pub state: ViewState,

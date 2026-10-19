@@ -1,19 +1,4 @@
-//! Downward draw and event/update contexts.
-//!
-//! There are no up-pointers from a view to its parent: instead a parent passes a
-//! context *down* carrying everything a child would otherwise reach upward for.
-//! There are two:
-//!
-//! * [`DrawCtx`] — the clipped, themed writer a view paints through during
-//!   `draw()`. It works in *view-local* coordinates; the ctx translates them to
-//!   absolute screen coordinates and clips. Its write ops are built on top of the
-//!   [`Buffer`] and the [`text`](crate::text) primitives — never re-deriving
-//!   wide-char logic.
-//! * [`Context`] — the event/update context handlers and `handle_event` reach
-//!   for. It exposes the `ctx.*` call surface (post / broadcast / timer
-//!   scheduling / deferred capture push). It is built over loop-owned state as
-//!   **distinct `&mut` fields** so the event loop can take disjoint-field
-//!   borrows; the fields are deliberately not hidden behind one getter.
+//! `Context` and `DrawCtx`, the downward event and draw contexts (documented on `Context`).
 
 use crate::capture::CaptureHandler;
 use crate::color::{Color, Style};
@@ -989,6 +974,23 @@ impl<'a> DrawCtx<'a> {
 
 /// The event/update context `handle_event` and capture handlers reach for.
 ///
+/// Downward draw and event/update contexts.
+///
+/// There are no up-pointers from a view to its parent: instead a parent passes a
+/// context *down* carrying everything a child would otherwise reach upward for.
+/// There are two:
+///
+/// * [`DrawCtx`] — the clipped, themed writer a view paints through during
+///   `draw()`. It works in *view-local* coordinates; the ctx translates them to
+///   absolute screen coordinates and clips. Its write ops are built on top of the
+///   [`Buffer`] and the [`text`](crate::text) primitives — never re-deriving
+///   wide-char logic.
+/// * [`Context`] — the event/update context handlers and `handle_event` reach
+///   for. It exposes the `ctx.*` call surface (post / broadcast / timer
+///   scheduling / deferred capture push). It is built over loop-owned state as
+///   **distinct `&mut` fields** so the event loop can take disjoint-field
+///   borrows; the fields are deliberately not hidden behind one getter.
+///
 /// Built over loop-owned state as **distinct `&mut` fields** (not hidden behind
 /// a single getter) so the event loop can borrow them disjointly. The live event
 /// loop owns the backing `VecDeque` / [`TimerQueue`] / pending-capture `Vec` and
@@ -1001,6 +1003,7 @@ impl<'a> DrawCtx<'a> {
 /// realized differently), so these are intentionally absent here.
 ///
 /// # Turbo Vision heritage
+///
 /// The downward-passed successor to the data a view reads through its owner
 /// pointer — the owner's size and dispatch phase, event put-back, command
 /// enable/disable, and broadcasts — gathered into one context handed down the tree

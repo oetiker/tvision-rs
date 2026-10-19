@@ -1,17 +1,4 @@
-//! Geometry primitives: [`Point`] and [`Rect`].
-//!
-//! Coordinates are `i32`. Signed is required: view origins go negative when
-//! scrolled offscreen, and the translate/inflate operations take negative deltas.
-//! Conversion to the unsigned buffer index space happens at the screen boundary.
-//!
-//! ### Keyword-collision renames
-//! Two [`Rect`] methods would collide with Rust keywords, so they use raw
-//! identifiers: [`Rect::r#move`] (translate) and [`Rect::r#union`] (bounding box).
-//! Call sites read `rect.r#move(1, 2)` / `rect.r#union(&other)`.
-//!
-//! # Turbo Vision heritage
-//! Ports `TPoint`/`TRect` (`objects.h`). The mutating methods return `&mut Self`
-//! to mirror the original `TRect&` chaining idiom.
+//! `Point` and `Rect` (documented on `Rect`).
 
 use std::ops::{Add, AddAssign, Sub, SubAssign};
 
@@ -119,6 +106,17 @@ impl SubAssign for Point {
 /// A rectangle defined by its top-left corner `a` (inclusive) and bottom-right
 /// corner `b` (exclusive).
 ///
+/// Geometry primitives: [`Point`] and [`Rect`].
+///
+/// Coordinates are `i32`. Signed is required: view origins go negative when
+/// scrolled offscreen, and the translate/inflate operations take negative deltas.
+/// Conversion to the unsigned buffer index space happens at the screen boundary.
+///
+/// ### Keyword-collision renames
+/// Two [`Rect`] methods would collide with Rust keywords, so they use raw
+/// identifiers: `Rect::r#move` (translate) and `Rect::r#union` (bounding box).
+/// Call sites read `rect.r#move(1, 2)` / `rect.r#union(&other)`.
+///
 /// The half-open convention (`[a, b)`) means `b` is one cell past the last
 /// occupied column/row — the same model used by Rust ranges and ratatui.
 /// The width is `b.x - a.x`; the height is `b.y - a.y`.
@@ -134,6 +132,10 @@ impl SubAssign for Point {
 /// ```
 ///
 /// # Turbo Vision heritage
+///
+/// Ports `TPoint`/`TRect` (`objects.h`). The mutating methods return `&mut Self`
+/// to mirror the original `TRect&` chaining idiom.
+///
 /// Ports `TRect` from `objects.h`. The two raw-identifier methods
 /// `r#move` and `r#union` use raw identifiers
 /// to avoid collisions with the Rust keywords `move` and `union`.

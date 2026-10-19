@@ -1,6 +1,5 @@
-//! Named layout metrics for dialogs — the recovered classic Turbo Vision
-//! conventions (confirmed against `msgbox.cpp`/`tfildlg.cpp`), so dialogs stop
-//! inventing their own coordinates. See `docs/design/dialog-layout.md`.
+//! Named layout metrics for dialogs (documented in the `dialog` module docs).
+//! See `docs/design/dialog-layout.md`.
 
 use crate::view::Point;
 

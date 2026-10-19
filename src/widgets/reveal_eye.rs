@@ -1,11 +1,4 @@
-//! A one-cell focusable "reveal" eye for masked [`InputLine`](super::InputLine)
-//! fields.
-//!
-//! Drives a paired field's reveal: press-and-hold the mouse for a momentary
-//! peek, or (while focused) press Space for a 1 s timed peek — or, when
-//! configured `sticky`, toggle a latched reveal. It carries no secret text; it
-//! only tracks its own intent and broadcasts [`Command::REVEAL_CHANGED`] so the
-//! owning `MaskedInput` (added in a later task) can apply it.
+//! `RevealEye`, the reveal toggle for masked input lines (documented on the type).
 
 use std::time::Duration;
 
@@ -36,7 +29,14 @@ impl Default for RevealEyeConfig {
     }
 }
 
-/// A focusable one-cell reveal toggle. See the module docs.
+/// A one-cell focusable "reveal" eye for masked [`InputLine`](super::InputLine)
+/// fields.
+///
+/// Drives a paired field's reveal: press-and-hold the mouse for a momentary
+/// peek, or (while focused) press Space for a 1 s timed peek, or, when
+/// configured `sticky`, toggle a latched reveal. It carries no secret text; it
+/// only tracks its own intent and broadcasts [`Command::REVEAL_CHANGED`] so the
+/// owning [`MaskedInput`](super::MaskedInput) can apply it.
 ///
 /// # Turbo Vision heritage
 /// **tvision-rs extension**: no Turbo Vision counterpart.

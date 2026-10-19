@@ -1,31 +1,4 @@
-//! The file-selection dialog and its building blocks: [`FileDialog`],
-//! [`ChDirDialog`], the directory/file panes ([`FileList`], [`DirListBox`],
-//! [`FileInfoPane`], [`FileInputLine`]), and the data types they hold
-//! ([`DirEntry`], [`SearchRec`], [`DirCollection`], [`FileCollection`]).
-//!
-//! [`DirEntry`]/[`SearchRec`]/[`DirCollection`]/[`FileCollection`] are pure data;
-//! [`DirListBox`] is the directory-tree pane, a concrete
-//! [`ListViewer`](crate::widgets::list_viewer::ListViewer) over a
-//! [`Vec<DirEntry>`] that renders a tree-indented listing.
-//!
-//! Following tvision-rs's "collections become `Vec`" convention, `DirCollection` is a
-//! plain `Vec<DirEntry>` alias and `FileCollection` is a `Vec<SearchRec>` carrying
-//! only the one piece of real logic — the sorted insert and its comparator. The
-//! general-purpose collection API (index-of, remove, replace-at, find-first, …) is
-//! omitted; nothing here needs it.
-//!
-//! ## Native paths
-//! Paths are native and `/`-separated, enumerated with `std::fs::read_dir`. There
-//! is no DOS drive-letter machinery (drive scanning, `\`-separators); it has no
-//! Linux counterpart and is omitted.
-//!
-//! # Turbo Vision heritage
-//! Ports the `TFileDialog` family — `TFileDialog`, `TChDirDialog`, `TFileList`,
-//! `TDirListBox`, `TFileInfoPane`, `TFileInputLine`, plus `TDirEntry`,
-//! `TSearchRec`, `TDirCollection`, `TFileCollection` (`filedial.cpp`,
-//! `fileopen.cpp`, `tfildlg.cpp` and headers). The DOS file model is re-imagined
-//! for native Linux `/`-paths (deviation D14); `TCollection`s become `Vec`s and
-//! `TStreamable` persistence is dropped (deviation D12).
+//! The file-selection dialog family (documented on `FileDialog`).
 
 use core::cmp::Ordering;
 
@@ -1914,6 +1887,27 @@ fn button_specs(options: u16) -> Vec<(&'static str, crate::command::Command, boo
 /// history icon, a scroll bar, and the action buttons — into a working file
 /// dialog.
 ///
+/// The file-selection dialog and its building blocks: [`FileDialog`],
+/// [`ChDirDialog`], the directory/file panes ([`FileList`], [`DirListBox`],
+/// [`FileInfoPane`], [`FileInputLine`]), and the data types they hold
+/// ([`DirEntry`], [`SearchRec`], [`DirCollection`], [`FileCollection`]).
+///
+/// [`DirEntry`]/[`SearchRec`]/[`DirCollection`]/[`FileCollection`] are pure data;
+/// [`DirListBox`] is the directory-tree pane, a concrete
+/// [`ListViewer`](crate::widgets::list_viewer::ListViewer) over a
+/// [`Vec<DirEntry>`] that renders a tree-indented listing.
+///
+/// Following tvision-rs's "collections become `Vec`" convention, `DirCollection` is a
+/// plain `Vec<DirEntry>` alias and `FileCollection` is a `Vec<SearchRec>` carrying
+/// only the one piece of real logic — the sorted insert and its comparator. The
+/// general-purpose collection API (index-of, remove, replace-at, find-first, …) is
+/// omitted; nothing here needs it.
+///
+/// ## Native paths
+/// Paths are native and `/`-separated, enumerated with `std::fs::read_dir`. There
+/// is no DOS drive-letter machinery (drive scanning, `\`-separators); it has no
+/// Linux counterpart and is omitted.
+///
 /// ## Structural shape
 ///
 /// This **embeds** a [`Dialog`] and forwards the un-overridden
@@ -1936,6 +1930,14 @@ fn button_specs(options: u16) -> Vec<(&'static str, crate::command::Command, boo
 /// there is no `Context` in the constructor; this happens before the first draw.
 ///
 /// # Turbo Vision heritage
+///
+/// Ports the `TFileDialog` family — `TFileDialog`, `TChDirDialog`, `TFileList`,
+/// `TDirListBox`, `TFileInfoPane`, `TFileInputLine`, plus `TDirEntry`,
+/// `TSearchRec`, `TDirCollection`, `TFileCollection` (`filedial.cpp`,
+/// `fileopen.cpp`, `tfildlg.cpp` and headers). The DOS file model is re-imagined
+/// for native Linux `/`-paths (deviation D14); `TCollection`s become `Vec`s and
+/// `TStreamable` persistence is dropped (deviation D12).
+///
 /// Ports `TFileDialog` (`tfildlg.cpp`/`stddlg.h`), a dialog subclass; here it
 /// becomes embed-and-delegate composition (deviation D2), the DOS path model
 /// becomes native `/`-paths (deviation D14), and persistence is dropped

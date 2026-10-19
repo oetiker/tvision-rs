@@ -1,54 +1,49 @@
-//! The base for scrollable content views (the editor, the text terminal, the
-//! outline viewer). A scroller references **two sibling scroll bars** that live
-//! on the window frame, mirrors their `value` into its own
-//! [`delta`](Scroller::delta) (the scroll offset its subclasses draw with), and
-//! pushes range/value changes back to them.
-//!
-//! # The cross-view scrollbar broker — read **and** write
-//!
-//! A scroller both *reads* its two scroll bars (their `value`, arrow step) and
-//! *mutates* them (set value/params, show/hide). But a leaf view holds only
-//! `&mut Context` during dispatch — no tree access — and the bars are
-//! window-frame siblings it cannot own, so it can neither read nor mutate them
-//! directly.
-//!
-//! **The event loop is the broker, in both directions.** The scroller stores its
-//! bars as [`Option<ViewId>`](crate::view::ViewId) handles and issues
-//! [`Deferred`](crate::view::Deferred) ops naming them; the loop performs every
-//! cross-view read/write at apply time. A
-//! [`SCROLL_BAR_CHANGED`](crate::command::Command::SCROLL_BAR_CHANGED)
-//! broadcast's `source` is the **filter** only (the scroller reacts iff
-//! `source ∈ {h, v}`); the value is not stuffed into the message — the loop
-//! resolves the subject bar and reads its `value`.
-//!
-//! # Selected color
-//!
-//! The base scroller only ever draws a fill in [`Role::ScrollerNormal`]. The
-//! "selected" scroller color exists in the palette but is never used by the base;
-//! the editor, which selects text, applies its own selection color, so no
-//! `ScrollerSelected` role is wired here.
-//!
-//! # Resizing
-//!
-//! [`View::change_bounds`](crate::view::View::change_bounds) takes no
-//! [`Context`], but re-publishing scroll-bar parameters after a resize needs one.
-//! So `change_bounds` stays geometry-only, and [`Scroller::set_limit`] /
-//! [`Scroller::scroll_to`] are the public `Context`-taking entries that
-//! (re)publish the parameters; a window or editor that resizes a scroller calls
-//! `set_limit` afterwards. There is no automatic re-emit on a bare bounds change,
-//! because nothing currently drives that path.
-//!
-//! # Turbo Vision heritage
-//!
-//! Ports `TScroller` (`tscrolle.cpp`). Owner back-pointers to the sibling scroll
-//! bars become [`ViewId`] handles brokered by the event loop, and the
-//! palette becomes [`Role`]s. The original draw-re-entrancy guard is unneeded
-//! under whole-tree redraw and is dropped.
+//! `Scroller`, the base for scrollable content views (documented on the type).
 
 use crate::theme::Role;
 use crate::view::{Context, DrawCtx, Options, Point, Rect, StateFlag, View, ViewId, ViewState};
 
 /// The base scrollable-content view.
+///
+/// The base for scrollable content views (the editor, the text terminal, the
+/// outline viewer). A scroller references **two sibling scroll bars** that live
+/// on the window frame, mirrors their `value` into its own
+/// [`delta`](Scroller::delta) (the scroll offset its subclasses draw with), and
+/// pushes range/value changes back to them.
+///
+/// # The cross-view scrollbar broker — read **and** write
+///
+/// A scroller both *reads* its two scroll bars (their `value`, arrow step) and
+/// *mutates* them (set value/params, show/hide). But a leaf view holds only
+/// `&mut Context` during dispatch — no tree access — and the bars are
+/// window-frame siblings it cannot own, so it can neither read nor mutate them
+/// directly.
+///
+/// **The event loop is the broker, in both directions.** The scroller stores its
+/// bars as [`Option<ViewId>`](crate::view::ViewId) handles and issues
+/// [`Deferred`](crate::view::Deferred) ops naming them; the loop performs every
+/// cross-view read/write at apply time. A
+/// [`SCROLL_BAR_CHANGED`](crate::command::Command::SCROLL_BAR_CHANGED)
+/// broadcast's `source` is the **filter** only (the scroller reacts iff
+/// `source ∈ {h, v}`); the value is not stuffed into the message — the loop
+/// resolves the subject bar and reads its `value`.
+///
+/// # Selected color
+///
+/// The base scroller only ever draws a fill in [`Role::ScrollerNormal`]. The
+/// "selected" scroller color exists in the palette but is never used by the base;
+/// the editor, which selects text, applies its own selection color, so no
+/// `ScrollerSelected` role is wired here.
+///
+/// # Resizing
+///
+/// [`View::change_bounds`](crate::view::View::change_bounds) takes no
+/// [`Context`], but re-publishing scroll-bar parameters after a resize needs one.
+/// So `change_bounds` stays geometry-only, and [`Scroller::set_limit`] /
+/// [`Scroller::scroll_to`] are the public `Context`-taking entries that
+/// (re)publish the parameters; a window or editor that resizes a scroller calls
+/// `set_limit` afterwards. There is no automatic re-emit on a bare bounds change,
+/// because nothing currently drives that path.
 ///
 /// Manages scroll state and keeps two sibling scroll bars in sync with its
 /// content offset. The base draws only a uniform fill; subclasses (e.g. the
@@ -58,12 +53,15 @@ use crate::view::{Context, DrawCtx, Options, Point, Rect, StateFlag, View, ViewI
 /// whenever the content size changes, and [`scroll_to`](Self::scroll_to) to
 /// jump to a position programmatically.
 ///
-/// Cross-view scroll-bar reads and writes are brokered by the event loop — see
-/// the module-level docs for the broker pattern.
+/// Cross-view scroll-bar reads and writes are brokered by the event loop, as
+/// described above.
 ///
 /// # Turbo Vision heritage
 ///
-/// Ports `TScroller` (`tscrolle.cpp`).
+/// Ports `TScroller` (`tscrolle.cpp`). Owner back-pointers to the sibling scroll
+/// bars become [`ViewId`] handles brokered by the event loop, and the
+/// palette becomes [`Role`]s. The original draw-re-entrancy guard is unneeded
+/// under whole-tree redraw and is dropped.
 pub struct Scroller {
     /// View state (geometry, flags, etc.) — the composition target.
     state: ViewState,
@@ -276,7 +274,7 @@ impl View for Scroller {
 
     /// React to a [`SCROLL_BAR_CHANGED`](crate::command::Command::SCROLL_BAR_CHANGED)
     /// broadcast whose `source` is one of this scroller's two bars by requesting a
-    /// deferred delta-sync (the read broker; see the module docs).
+    /// deferred delta-sync (the read broker; see the [`Scroller`] docs).
     ///
     /// The `source ∈ {h_id, v_id}` test is the filter that decides whether this
     /// scroller owns the firing bar.

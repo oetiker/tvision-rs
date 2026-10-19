@@ -1,19 +1,4 @@
-//! Render back-buffer and cell diff.
-//!
-//! [`Buffer`] is the in-memory screen grid: the whole view tree is painted into
-//! it each frame, then [`Buffer::diff`] compares it against the previous frame so
-//! only changed cells are flushed to the terminal.
-//!
-//! The diff algorithm is adapted from ratatui's `Buffer::diff` (MIT). Our `Cell`
-//! (see `cell.rs`) already encodes double-width glyphs with explicit
-//! `wide`/`trail` flags, so the wide-char skipping is driven off those rather
-//! than off `unicode-width`. ratatui's `skip` field is dropped — tvision-rs repaints
-//! the whole tree, so there is nothing to opt out of.
-//!
-//! # Turbo Vision heritage
-//! Replaces Turbo Vision's per-view incremental screen writes with a
-//! double-buffered whole-tree repaint plus cell diff (deviation D8). The grid
-//! and diff are adapted from ratatui rather than ported from the original.
+//! `Buffer`, the render back-buffer and cell diff (documented on the type).
 //
 // Portions adapted from ratatui (https://github.com/ratatui-org/ratatui),
 // licensed under the MIT License. Copyright (c) 2023-2024 The Ratatui Developers.
@@ -21,6 +6,18 @@
 use crate::screen::Cell;
 
 /// In-memory screen grid; the render target for one complete frame.
+///
+/// Render back-buffer and cell diff.
+///
+/// [`Buffer`] is the in-memory screen grid: the whole view tree is painted into
+/// it each frame, then [`Buffer::diff`] compares it against the previous frame so
+/// only changed cells are flushed to the terminal.
+///
+/// The diff algorithm is adapted from ratatui's `Buffer::diff` (MIT). Our `Cell`
+/// (see `cell.rs`) already encodes double-width glyphs with explicit
+/// `wide`/`trail` flags, so the wide-char skipping is driven off those rather
+/// than off `unicode-width`. ratatui's `skip` field is dropped — tvision-rs repaints
+/// the whole tree, so there is nothing to opt out of.
 ///
 /// Call [`Buffer::new`] to create a blank grid sized to the terminal, paint the
 /// full view tree into it via the renderer, then call [`Buffer::diff`] against
@@ -33,6 +30,10 @@ use crate::screen::Cell;
 /// `(width-1, height-1)`). There is no offset to carry.
 ///
 /// # Turbo Vision heritage
+///
+/// Replaces Turbo Vision's per-view incremental screen writes with a
+/// double-buffered whole-tree repaint plus cell diff (deviation D8). The grid
+/// and diff are adapted from ratatui rather than ported from the original.
 ///
 /// Replaces `TVideoBuf` (a fixed 80×25 word array of `char+attr` cells) and
 /// the per-view incremental `writeView` calls. The dynamic-size grid and

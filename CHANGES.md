@@ -28,7 +28,9 @@ into a dated, versioned section.
   widgets, options and subsystems tvision-rs adds to Turbo Vision, such as
   `Table`, `Splitter`, the color picker and the keymap. Where the guide and the
   API reference describe one of them, a "tvision-rs extension" note now says so
-  and links to that page.
+  and links to that page. The API reference also shows the full documentation of
+  types such as `Button`, `InputLine`, `Editor` and `Program`, which was
+  written but never appeared on their pages.
 - Releases now go through a release pull request. Once it is merged, the
   version tag, the crates.io upload of `tvision-rs-macros` and `tvision-rs`,
   the GitHub release and the versioned documentation follow automatically.

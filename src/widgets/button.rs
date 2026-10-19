@@ -1,82 +1,4 @@
-//! A clickable command button: a 2+-row box with a centered (or
-//! left-justified) title, a drop shadow, and an `~`-marked hotkey. Pressing it
-//! (mouse, Alt+hotkey, focused-Space, or — for the default button — the
-//! [`Command::DEFAULT`] broadcast) fires its [`command`](Button::command), either
-//! posted as an `Event::Command` or broadcast.
-//!
-//! # Model
-//!
-//! [`Button`] embeds [`ViewState`] and branches on its per-instance data; the
-//! decoration/behavior flags are the [`ButtonFlags`] struct-of-bools. Drawing
-//! goes through [`DrawCtx`], events through [`Context`]. Coordinates are
-//! view-local (the group already translated the mouse position into this view's
-//! frame).
-//!
-//! # The press animation
-//!
-//! A keyboard / [`Command::DEFAULT`] press does not fire immediately: it flips the button
-//! to its pressed look (`down = true`), arms a one-shot 100 ms timer
-//! ([`Context::set_timer`]), and stores the [`TimerId`]. When that timer's
-//! [`Event::Timer`] arrives (it reaches every view), the button compares the id
-//! to its stored [`animation_timer`](Button::animation_timer); on a match it
-//! clears the flash and finally [`press`](Button::press)es. Matching the id
-//! against the stored handle means a button only fires on *its own* timer, never
-//! on an unrelated one.
-//!
-//! Broadcast and timer events reach every child regardless of its event mask
-//! (the mask only gates `mouse_move`/`mouse_auto`), so opting into the broadcast
-//! class is automatic — no per-button state is needed.
-//!
-//! # Mouse hold-tracking
-//!
-//! A mouse-down inside the click rectangle begins a modal hold: the button sets
-//! `down = true` and calls [`Context::start_mouse_track`], caching the absolute
-//! screen origin of button-local `(0, 0)` (recorded by the last `draw`) so the
-//! capture can convert absolute mouse coordinates back to button-local.
-//!
-//! From the next pump on, the
-//! [`MouseTrackCapture`](crate::capture::MouseTrackCapture) routes every
-//! `MouseMove` (localized to button-local) back into this `handle_event`: each
-//! move flips `down` on tracking-rectangle containment. On `MouseUp` the button
-//! presses iff the last move was still inside the tracking rectangle (`self.down`)
-//! — never the release position — then clears `down`. Both arms are guarded by a
-//! `tracking` flag so a stray, untracked release falls through. Every other event
-//! during the hold is swallowed by the capture (the hold is modal). A button
-//! without an id (an uninserted, test-only button) keeps a single-shot fallback.
-//!
-//! # Command-enabled graying
-//!
-//! When a [`Command::COMMAND_SET_CHANGED`] broadcast arrives, the button grays
-//! itself out if its command is currently disabled
-//! (`state.disabled = !ctx.command_enabled(command)`). Initial disabled state is
-//! established the same way, by the first command-set-changed broadcast on the
-//! opening idle pass — no separate constructor step is needed. A disabled default
-//! button does not flash on the default-command broadcast.
-//!
-//! # Plain-letter accelerator
-//!
-//! When the button has its post-process option set, an unmodified letter that
-//! matches its hotkey fires it during the post-processing phase. A focused input
-//! line that consumes the letter first still starves this path, so plain letters
-//! are only stolen when the focused view leaves them live (matching Turbo Vision).
-//!
-//! Marker decoration (`showMarkers`/`specialChars`) is not modeled — the button
-//! always draws the no-markers form.
-//!
-//! # Turbo Vision heritage
-//!
-//! Ports `TButton` (`tbutton.cpp`/`dialogs.h`). Inheritance becomes the `View`
-//! trait plus `ViewState` composition (deviation D2); the C++ button flag word
-//! becomes [`ButtonFlags`] (deviation D5); the view-local grab/release-default
-//! commands become namespaced [`Command::custom`] consts
-//! ([`Button::GRAB_DEFAULT`] / [`Button::RELEASE_DEFAULT`]). The owner up-pointer
-//! is replaced by [`Context`], and a broadcast carries the firing button's
-//! resolvable [`ViewId`] as its `source` (deviations D3, D4). The palette
-//! AttrPairs become explicit (lo, hi) [`Role`] pairs chosen per state (see
-//! [`Button::state_roles`]); the typed [`Event::Timer(id)`] payload replaces the
-//! C++ timer-expired broadcast.
-//!
-//! [`ViewId`]: crate::view::ViewId
+//! `Button`, the clickable command button (documented on the type).
 
 use crate::capture::TrackMask;
 use crate::command::Command;
@@ -124,7 +46,85 @@ impl ButtonFlags {
 // Button
 // ---------------------------------------------------------------------------
 
-/// A clickable command button.
+/// A clickable command button: a 2+-row box with a centered (or
+/// left-justified) title, a drop shadow, and an `~`-marked hotkey. Pressing it
+/// (mouse, Alt+hotkey, focused-Space, or — for the default button — the
+/// [`Command::DEFAULT`] broadcast) fires its [`command`](Button::command), either
+/// posted as an `Event::Command` or broadcast.
+///
+/// # Model
+///
+/// [`Button`] embeds [`ViewState`] and branches on its per-instance data; the
+/// decoration/behavior flags are the [`ButtonFlags`] struct-of-bools. Drawing
+/// goes through [`DrawCtx`], events through [`Context`]. Coordinates are
+/// view-local (the group already translated the mouse position into this view's
+/// frame).
+///
+/// # The press animation
+///
+/// A keyboard / [`Command::DEFAULT`] press does not fire immediately: it flips the button
+/// to its pressed look (`down = true`), arms a one-shot 100 ms timer
+/// ([`Context::set_timer`]), and stores the [`TimerId`]. When that timer's
+/// [`Event::Timer`] arrives (it reaches every view), the button compares the id
+/// to its stored [`animation_timer`](Button::animation_timer); on a match it
+/// clears the flash and finally `press`es. Matching the id
+/// against the stored handle means a button only fires on *its own* timer, never
+/// on an unrelated one.
+///
+/// Broadcast and timer events reach every child regardless of its event mask
+/// (the mask only gates `mouse_move`/`mouse_auto`), so opting into the broadcast
+/// class is automatic — no per-button state is needed.
+///
+/// # Mouse hold-tracking
+///
+/// A mouse-down inside the click rectangle begins a modal hold: the button sets
+/// `down = true` and calls [`Context::start_mouse_track`], caching the absolute
+/// screen origin of button-local `(0, 0)` (recorded by the last `draw`) so the
+/// capture can convert absolute mouse coordinates back to button-local.
+///
+/// From the next pump on, the
+/// [`MouseTrackCapture`](crate::capture::MouseTrackCapture) routes every
+/// `MouseMove` (localized to button-local) back into this `handle_event`: each
+/// move flips `down` on tracking-rectangle containment. On `MouseUp` the button
+/// presses iff the last move was still inside the tracking rectangle (`self.down`)
+/// — never the release position — then clears `down`. Both arms are guarded by a
+/// `tracking` flag so a stray, untracked release falls through. Every other event
+/// during the hold is swallowed by the capture (the hold is modal). A button
+/// without an id (an uninserted, test-only button) keeps a single-shot fallback.
+///
+/// # Command-enabled graying
+///
+/// When a [`Command::COMMAND_SET_CHANGED`] broadcast arrives, the button grays
+/// itself out if its command is currently disabled
+/// (`state.disabled = !ctx.command_enabled(command)`). Initial disabled state is
+/// established the same way, by the first command-set-changed broadcast on the
+/// opening idle pass — no separate constructor step is needed. A disabled default
+/// button does not flash on the default-command broadcast.
+///
+/// # Plain-letter accelerator
+///
+/// When the button has its post-process option set, an unmodified letter that
+/// matches its hotkey fires it during the post-processing phase. A focused input
+/// line that consumes the letter first still starves this path, so plain letters
+/// are only stolen when the focused view leaves them live (matching Turbo Vision).
+///
+/// Marker decoration (`showMarkers`/`specialChars`) is not modeled — the button
+/// always draws the no-markers form.
+///
+/// # Turbo Vision heritage
+///
+/// Ports `TButton` (`tbutton.cpp`/`dialogs.h`). Inheritance becomes the `View`
+/// trait plus `ViewState` composition (deviation D2); the C++ button flag word
+/// becomes [`ButtonFlags`] (deviation D5); the view-local grab/release-default
+/// commands become namespaced [`Command::custom`] consts
+/// ([`Button::GRAB_DEFAULT`] / [`Button::RELEASE_DEFAULT`]). The owner up-pointer
+/// is replaced by [`Context`], and a broadcast carries the firing button's
+/// resolvable [`ViewId`] as its `source` (deviations D3, D4). The palette
+/// AttrPairs become explicit (lo, hi) [`Role`] pairs chosen per state (see
+/// `Button::state_roles`); the typed [`Event::Timer(id)`](Event::Timer) payload replaces the
+/// C++ timer-expired broadcast.
+///
+/// [`ViewId`]: crate::view::ViewId
 pub struct Button {
     /// View state (geometry, flags, cursor) — the composition target.
     pub state: ViewState,
@@ -184,8 +184,8 @@ impl Button {
     /// Opting into the broadcast class is automatic (broadcasts reach every
     /// child regardless of its event mask), so no per-button state is needed.
     /// Initial command-enabled graying is established lazily by the first
-    /// command-set-changed broadcast rather than in the constructor — see the
-    /// module docs.
+    /// command-set-changed broadcast rather than in the constructor; see the
+    /// [`Button`] docs.
     pub fn new(bounds: Rect, title: &str, command: Command, flags: ButtonFlags) -> Self {
         let mut state = ViewState::new(bounds);
         state.options = Options {
@@ -398,8 +398,8 @@ impl View for Button {
     }
 
     /// Handle the button's events — mouse hold-tracking, keyboard/hotkey presses,
-    /// default-look grab/release, and command-set graying. See the module docs for
-    /// the per-branch behavior.
+    /// default-look grab/release, and command-set graying. See the [`Button`] docs
+    /// for the per-branch behavior.
     fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
         // C++ clickRect = getExtent() shrunk by (a.x+1, b.x-1, b.y-1).
         let ext = self.state.get_extent();

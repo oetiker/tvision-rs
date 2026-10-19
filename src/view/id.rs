@@ -1,39 +1,4 @@
-//! Global view-identity minter.
-//!
-//! ## Why this exists
-//!
-//! A view tree needs links in every direction: each view to its parent, each
-//! view to its siblings, and each group to its focused/selected child. Rust
-//! forbids aliased mutable references, so those links cannot all be live
-//! pointers. tvision-rs splits them into two clean pieces:
-//!
-//! * **Downward ownership is a tree** — a `Group` owns
-//!   `children: Vec<Box<dyn View>>`.
-//! * **Up/sideways links become [`ViewId`] handles** — a lightweight identity
-//!   that can be stored cheaply anywhere without borrowing the tree.
-//!
-//! A [`ViewId`] is *not* an index into any store. It is a globally-unique
-//! identity, minted once at [`Group::insert`](crate::view::Group::insert) and
-//! stamped into the view's own [`ViewState`](crate::view::ViewState). Resolving a
-//! `ViewId` back to a `&mut dyn View` is a tree-walk
-//! ([`View::find_mut`](crate::view::View::find_mut)) performed by the downward
-//! context — not here.
-//!
-//! ## Design
-//!
-//! Ids are **process-global and monotonic**: a single `static AtomicU64`
-//! counter, never reset, never reused. A stale handle (its view removed) simply
-//! matches nothing in the tree-walk; there is no slot to alias, so no
-//! generational validation is needed (the earlier per-`Group` generational arena
-//! guarded an ABA hazard that the by-identity child scan cannot have). The
-//! `NonZeroU64` gives `Option<ViewId>` a niche, so it costs no extra size; use
-//! `Option<ViewId>` (not a sentinel value) to represent "no link / null". The
-//! `u64` space never realistically exhausts (mirrors `TimerId`).
-//!
-//! # Turbo Vision heritage
-//! Replaces the raw `TView*` pointer web (`owner`, the `next`/`prev` sibling
-//! ring, `current`/`selected`) with owned tree edges plus by-value identity
-//! handles (deviation D3).
+//! `ViewId`, the global view identity (documented on the type).
 
 use std::num::NonZeroU64;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -41,6 +6,38 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// A lightweight, globally-unique view identity. `Copy`, carries no
 /// reference into the tree, so it can be stored freely (sibling links, focus
 /// stacks, capture handlers). Identity is `ViewId` equality.
+///
+/// Global view-identity minter.
+///
+/// ## Why this exists
+///
+/// A view tree needs links in every direction: each view to its parent, each
+/// view to its siblings, and each group to its focused/selected child. Rust
+/// forbids aliased mutable references, so those links cannot all be live
+/// pointers. tvision-rs splits them into two clean pieces:
+///
+/// * **Downward ownership is a tree** — a `Group` owns
+///   `children: Vec<Box<dyn View>>`.
+/// * **Up/sideways links become [`ViewId`] handles** — a lightweight identity
+///   that can be stored cheaply anywhere without borrowing the tree.
+///
+/// A [`ViewId`] is *not* an index into any store. It is a globally-unique
+/// identity, minted once at [`Group::insert`](crate::view::Group::insert) and
+/// stamped into the view's own [`ViewState`](crate::view::ViewState). Resolving a
+/// `ViewId` back to a `&mut dyn View` is a tree-walk
+/// ([`View::find_mut`](crate::view::View::find_mut)) performed by the downward
+/// context — not here.
+///
+/// ## Design
+///
+/// Ids are **process-global and monotonic**: a single `static AtomicU64`
+/// counter, never reset, never reused. A stale handle (its view removed) simply
+/// matches nothing in the tree-walk; there is no slot to alias, so no
+/// generational validation is needed (the earlier per-`Group` generational arena
+/// guarded an ABA hazard that the by-identity child scan cannot have). The
+/// `NonZeroU64` gives `Option<ViewId>` a niche, so it costs no extra size; use
+/// `Option<ViewId>` (not a sentinel value) to represent "no link / null". The
+/// `u64` space never realistically exhausts (mirrors `TimerId`).
 ///
 /// Ids are **process-global and monotonic** — minted once at `Group::insert`,
 /// never reused. A stale handle (its view removed) therefore matches nothing and
@@ -50,6 +47,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// space never realistically exhausts (mirrors `TimerId`).
 ///
 /// # Turbo Vision heritage
+///
+/// Replaces the raw `TView*` pointer web (`owner`, the `next`/`prev` sibling
+/// ring, `current`/`selected`) with owned tree edges plus by-value identity
+/// handles (deviation D3).
+///
 /// The by-value successor to a raw `TView*` used for `owner` / sibling /
 /// `current` links (deviation D3).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]

@@ -1,59 +1,4 @@
-//! A gap-buffer text editor: a leaf [`View`] holding a single `Vec<u8>` split by
-//! a movable gap, with a cursor, a selection, single-level undo, and a viewport
-//! (`delta`) onto a content extent (`limit`). It references two sibling scroll
-//! bars and an indicator on the window frame, runs Find / Replace dialogs, and
-//! cuts/copies/pastes through a shared internal clipboard editor.
-//!
-//! # The context-threading split (the central seam)
-//!
-//! Redraw work needs a [`Context`], but a [`View`] has none at construction, so
-//! requesting a redraw is **split from performing it**:
-//!
-//! * The **core editing methods take no `Context`** — they mutate logical state
-//!   and only OR bits into [`update_flags`](Editor::update_flags). [`update`]
-//!   only records what changed; it never repaints inline.
-//! * `&mut Context` is threaded **only** into [`do_update`], [`unlock`],
-//!   `handle_event`, `set_state`, and the public ctx-taking entries
-//!   (`apply_scroll_delta`, `insert_text`). `unlock` flushes when the lock count
-//!   hits 0; `handle_event` flushes at the end for the arms that ran unlocked.
-//! * `change_bounds` is geometry-only plus a `delta` clamp plus a view-update
-//!   request — scroll-bar params republish on the next flush.
-//!
-//! This makes the entire gap-buffer + edit core context-free and unit-testable in
-//! isolation, where the real oracle (logical buffer state) lives.
-//!
-//! # Siblings by `ViewId`
-//!
-//! The editor holds [`h_scroll_bar`](Editor::h_scroll_bar)/`v_scroll_bar`/
-//! `indicator` as [`Option<ViewId>`], never pointers. Every cross-view read/write
-//! is routed through the event loop: read the bar values into `delta`, publish
-//! range/value, set the indicator value, show/hide. The editor is its own
-//! concrete downcast target (it is *not* a `Scroller`).
-//!
-//! # Grapheme text
-//!
-//! The character-stepping helpers read logical bytes across the gap into a small
-//! buffer, `str`-decode the contiguous slice, and step whole grapheme clusters
-//! via [`text::next`]/[`text::prev`]. There is no fixed-size character stack
-//! buffer.
-//!
-//! # Mouse hold-tracking
-//!
-//! The two mouse-down hold loops (drag-select and pan) become tracked event arms:
-//! the `MouseDown` arm runs the first loop iteration and arms the capture; the
-//! move/auto/wheel arms are the loop bodies; `MouseUp` clears. Which loop is in
-//! flight lives in [`EditorTrack`] (`Select` carries the live select mode; `Pan`
-//! carries the last mouse position). A wheel during a drag-select forwards to both scroll
-//! bars and self-posts a delta-sync, so the new offset lands on the next pump.
-//! Outside a hold, a wheel falls through unconsumed (the editor's event mask
-//! excludes the wheel).
-//!
-//! # Turbo Vision heritage
-//!
-//! Ports `TEditor` (`teditor1.cpp`, `teditor2.cpp`, `edits.cpp`). Up-pointers to
-//! the scroll bars and indicator become [`ViewId`] handles brokered by the event
-//! loop (deviation D3); raw byte indices become grapheme-aware stepping (deviation
-//! D13); color lookups become [`Role`]s; serialization is dropped.
+//! `Editor`, the gap-buffer text editor, and its `Memo` / `FileEditor` / `EditWindow` relatives.
 
 use crate::keymap::{self, KeyStroke, Resolve};
 use crate::theme::Role;
@@ -352,7 +297,55 @@ fn prev_grapheme_byte_len(chunk: &[u8]) -> usize {
 // Editor
 // ---------------------------------------------------------------------------
 
-/// The gap-buffer text editor.
+/// A gap-buffer text editor: a leaf [`View`] holding a single `Vec<u8>` split by
+/// a movable gap, with a cursor, a selection, single-level undo, and a viewport
+/// (`delta`) onto a content extent (`limit`). It references two sibling scroll
+/// bars and an indicator on the window frame, runs Find / Replace dialogs, and
+/// cuts/copies/pastes through a shared internal clipboard editor.
+///
+/// # The context-threading split (the central seam)
+///
+/// Redraw work needs a [`Context`], but a [`View`] has none at construction, so
+/// requesting a redraw is **split from performing it**:
+///
+/// * The **core editing methods take no `Context`** — they mutate logical state
+///   and only OR bits into `update_flags`. `update`
+///   only records what changed; it never repaints inline.
+/// * `&mut Context` is threaded **only** into `do_update`, `unlock`,
+///   `handle_event`, `set_state`, and the public ctx-taking entries
+///   (`apply_scroll_delta`, `insert_text`). `unlock` flushes when the lock count
+///   hits 0; `handle_event` flushes at the end for the arms that ran unlocked.
+/// * `change_bounds` is geometry-only plus a `delta` clamp plus a view-update
+///   request — scroll-bar params republish on the next flush.
+///
+/// This makes the entire gap-buffer + edit core context-free and unit-testable in
+/// isolation, where the real oracle (logical buffer state) lives.
+///
+/// # Siblings by `ViewId`
+///
+/// The editor holds `h_scroll_bar`/`v_scroll_bar`/
+/// `indicator` as [`Option<ViewId>`], never pointers. Every cross-view read/write
+/// is routed through the event loop: read the bar values into `delta`, publish
+/// range/value, set the indicator value, show/hide. The editor is its own
+/// concrete downcast target (it is *not* a `Scroller`).
+///
+/// # Grapheme text
+///
+/// The character-stepping helpers read logical bytes across the gap into a small
+/// buffer, `str`-decode the contiguous slice, and step whole grapheme clusters
+/// via [`text::next`](crate::text::next)/[`text::prev`](crate::text::prev). There is no fixed-size character stack
+/// buffer.
+///
+/// # Mouse hold-tracking
+///
+/// The two mouse-down hold loops (drag-select and pan) become tracked event arms:
+/// the `MouseDown` arm runs the first loop iteration and arms the capture; the
+/// move/auto/wheel arms are the loop bodies; `MouseUp` clears. Which loop is in
+/// flight lives in `EditorTrack` (`Select` carries the live select mode; `Pan`
+/// carries the last mouse position). A wheel during a drag-select forwards to both scroll
+/// bars and self-posts a delta-sync, so the new offset lands on the next pump.
+/// Outside a hold, a wheel falls through unconsumed (the editor's event mask
+/// excludes the wheel).
 ///
 /// Search/replace state — the find string, the replacement string, and the
 /// `EF_*` option flags — is **per-editor**: each editor independently
@@ -362,7 +355,10 @@ fn prev_grapheme_byte_len(chunk: &[u8]) -> usize {
 ///
 /// # Turbo Vision heritage
 ///
-/// Ports `TEditor` (`teditor1.cpp`, `teditor2.cpp`, `edits.cpp`).
+/// Ports `TEditor` (`teditor1.cpp`, `teditor2.cpp`, `edits.cpp`). Up-pointers to
+/// the scroll bars and indicator become [`ViewId`] handles brokered by the event
+/// loop (deviation D3); raw byte indices become grapheme-aware stepping (deviation
+/// D13); color lookups become [`Role`]s; serialization is dropped.
 pub struct Editor {
     /// View state (geometry, flags, etc.) — the composition target.
     state: ViewState,

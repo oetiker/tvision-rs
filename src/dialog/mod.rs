@@ -29,6 +29,11 @@
 //! focus-release and close, and the group's gather/scatter walk collects them — see
 //! [`FileDialog`] for a worked example.
 //!
+//! The layout constants ([`STD_BUTTON`], [`BUTTON_GAP`], the margins and
+//! [`BUTTON_ROW_FROM_BOTTOM`]) name the classic Turbo Vision metrics, recovered
+//! from `msgbox.cpp` and `tfildlg.cpp`, so dialogs need not invent their own
+//! coordinates. [`Dialog::button_row`] lays out a row of buttons with them.
+//!
 //! **Guide:** [Dialogs & data](../../../apps/dialogs.html).
 //!
 //! # Turbo Vision heritage

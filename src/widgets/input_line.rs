@@ -1,52 +1,4 @@
-//! A single-line text-entry field with selection, horizontal scrolling, an
-//! optional [`Validator`], and the typed [`value`](View::value)/
-//! [`set_value`](View::set_value) data protocol.
-//!
-//! # Coordinate model — byte offsets vs. display columns
-//!
-//! `data` is a Rust [`String`]. The cursor/selection offsets
-//! [`cur_pos`](InputLine::cur_pos) / [`sel_start`](InputLine::sel_start) /
-//! [`sel_end`](InputLine::sel_end) / [`anchor`](InputLine::anchor) are **byte
-//! offsets** into it. Slicing a `String` at a non-`char` boundary panics, so
-//! every step over `data` goes through [`text::next`] / [`text::prev`] (whole
-//! grapheme clusters) — never `+1`/`-1`. `prev_word`/`next_word` scan ASCII
-//! spaces, whose byte offsets are always `char` boundaries.
-//!
-//! [`first_pos`](InputLine::first_pos), by contrast, is a **display column**
-//! (the horizontal scroll offset). The displayed position of an offset is the
-//! display width of `data[..pos]`. For ASCII, byte == column, but for multi-byte
-//! / wide content they diverge, so the two units are kept strictly distinct here.
-//!
-//! # Clipboard and command enabling
-//!
-//! Cut/copy write to the clipboard via [`Context`]; paste is requested through
-//! the context and the pump reads the backend clipboard and inserts into the
-//! field, clamped to `max_len` and replacing any selection. The field keeps
-//! `cmCut`/`cmCopy` enabled while there is a selection and `cmPaste` enabled
-//! while it is active and selected, pushing those enable/disable updates as
-//! selection and focus change.
-//!
-//! # Validation
-//!
-//! A [`Validator`] gates the contents. Validators may also carry typed,
-//! non-text values: [`value`](View::value)/[`set_value`](View::set_value)
-//! consult the validator's [`transfer_get`](Validator::transfer_get) /
-//! [`transfer_set`](Validator::transfer_set) hook before falling back to the
-//! text itself, so a range validator round-trips an integer rather than a string.
-//!
-//! Validation runs on focus loss and returns a plain boolean. Deciding validity
-//! is a read-only query (`valid(&self)`); a field that fails validation is *not*
-//! automatically re-focused, since moving focus would require mutable access to
-//! the event loop.
-//!
-//! # Turbo Vision heritage
-//!
-//! Ports `TInputLine` (`tinputli.cpp`/`dialogs.h`). Inheritance becomes the
-//! `View` trait plus `ViewState` composition (D2); the byte/width/char limit
-//! constants become the [`LimitMode`] enum (D1); the get/set/size data hooks
-//! become the typed [`value`](View::value)/[`set_value`](View::set_value)
-//! protocol over [`FieldValue`] (D10); and the explicit byte-offset vs.
-//! display-column split is the two-unit coordinate model (D13).
+//! `InputLine`, the single-line text-entry field (documented on the type).
 
 use crate::capture::TrackMask;
 use crate::command::Command;
@@ -80,7 +32,6 @@ pub enum LimitMode {
 // InputLine
 // ---------------------------------------------------------------------------
 
-/// A single-line text-entry field.
 /// Where [`View::set_value`] leaves a field: which end of the text is on screen.
 ///
 /// A value wider than the field can only show one end of itself. Which end is
@@ -99,6 +50,55 @@ pub enum ValuePosition {
     Start,
 }
 
+/// A single-line text-entry field with selection, horizontal scrolling, an
+/// optional [`Validator`], and the typed [`value`](View::value)/
+/// [`set_value`](View::set_value) data protocol.
+///
+/// # Coordinate model — byte offsets vs. display columns
+///
+/// `data` is a Rust [`String`]. The cursor/selection offsets
+/// [`cur_pos`](InputLine::cur_pos) / [`sel_start`](InputLine::sel_start) /
+/// [`sel_end`](InputLine::sel_end) / `anchor` are **byte
+/// offsets** into it. Slicing a `String` at a non-`char` boundary panics, so
+/// every step over `data` goes through [`text::next`] / [`text::prev`] (whole
+/// grapheme clusters) — never `+1`/`-1`. `prev_word`/`next_word` scan ASCII
+/// spaces, whose byte offsets are always `char` boundaries.
+///
+/// [`first_pos`](InputLine::first_pos), by contrast, is a **display column**
+/// (the horizontal scroll offset). The displayed position of an offset is the
+/// display width of `data[..pos]`. For ASCII, byte == column, but for multi-byte
+/// / wide content they diverge, so the two units are kept strictly distinct here.
+///
+/// # Clipboard and command enabling
+///
+/// Cut/copy write to the clipboard via [`Context`]; paste is requested through
+/// the context and the pump reads the backend clipboard and inserts into the
+/// field, clamped to `max_len` and replacing any selection. The field keeps
+/// `cmCut`/`cmCopy` enabled while there is a selection and `cmPaste` enabled
+/// while it is active and selected, pushing those enable/disable updates as
+/// selection and focus change.
+///
+/// # Validation
+///
+/// A [`Validator`] gates the contents. Validators may also carry typed,
+/// non-text values: [`value`](View::value)/[`set_value`](View::set_value)
+/// consult the validator's [`transfer_get`](Validator::transfer_get) /
+/// [`transfer_set`](Validator::transfer_set) hook before falling back to the
+/// text itself, so a range validator round-trips an integer rather than a string.
+///
+/// Validation runs on focus loss and returns a plain boolean. Deciding validity
+/// is a read-only query (`valid(&self)`); a field that fails validation is *not*
+/// automatically re-focused, since moving focus would require mutable access to
+/// the event loop.
+///
+/// # Turbo Vision heritage
+///
+/// Ports `TInputLine` (`tinputli.cpp`/`dialogs.h`). Inheritance becomes the
+/// `View` trait plus `ViewState` composition (D2); the byte/width/char limit
+/// constants become the [`LimitMode`] enum (D1); the get/set/size data hooks
+/// become the typed [`value`](View::value)/[`set_value`](View::set_value)
+/// protocol over [`FieldValue`] (D10); and the explicit byte-offset vs.
+/// display-column split is the two-unit coordinate model (D13).
 pub struct InputLine {
     /// View state (geometry, flags, cursor) — the composition target.
     pub state: ViewState,
@@ -141,8 +141,8 @@ pub struct InputLine {
     /// the caret into view, though — use [`set_cursor_pos`](Self::set_cursor_pos)
     /// for that.
     pub cur_pos: i32,
-    /// Horizontal scroll offset, a **display column** (see module docs: NOT a
-    /// byte offset).
+    /// Horizontal scroll offset, a **display column** (see the [`InputLine`]
+    /// docs: NOT a byte offset).
     ///
     /// Direct writes are supported — see [`cursor_request`](View::cursor_request)
     /// for how this feeds the screen cursor. Direct writes do **not** scroll
