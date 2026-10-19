@@ -302,22 +302,72 @@ pub fn layout_widths(cols: &[ColumnSpec], avail: i32) -> Vec<i32> {
     // At or below 0 when the separators take every cell: the loop below
     // then shrinks each column to its floor and the layout overflows.
     let budget = avail - (visible - 1);
-    let mut over = sum_widths(&widths).saturating_sub(budget);
-    while over > 0 {
-        let widest = widths
-            .iter()
-            .enumerate()
-            .filter(|(i, w)| !cols[*i].hidden && **w > shrink_floor(&cols[*i]))
-            .max_by_key(|(_, w)| **w)
-            .map(|(i, _)| i);
-        let Some(i) = widest else { break };
-        widths[i] -= 1;
-        over -= 1;
-    }
-    if over < 0 {
+    let over = sum_widths(&widths).saturating_sub(budget);
+    if over > 0 {
+        shrink(cols, &mut widths, over);
+    } else if over < 0 {
         stretch(cols, &mut widths, -over);
     }
     widths
+}
+
+/// Take `over` cells off the shrinkable columns, widest first, one cell at a
+/// time, the rightmost of equally wide columns first, never below a column's
+/// [`shrink_floor`]; stop early when every column sits at its floor.
+///
+/// Computed by level instead of cell by cell: every column wider than the
+/// lowest level `level` whose cut fits in `over` drops to that level (or its
+/// floor), and the cells left over come off the rightmost columns standing at
+/// `level`. That is the state the one-cell-per-pass loop reaches, in
+/// O(n log width) instead of O(n · over).
+fn shrink(cols: &[ColumnSpec], widths: &mut [i32], over: i32) {
+    let floors: Vec<i32> = cols.iter().map(shrink_floor).collect();
+    let shrinkable = |i: usize| !cols[i].hidden;
+    // The cells taken by cutting every shrinkable column down to `level`
+    // (but not below its floor).
+    let cut = |widths: &[i32], level: i32| -> i64 {
+        (0..widths.len())
+            .filter(|&i| shrinkable(i))
+            .map(|i| i64::from((widths[i] - floors[i].max(level)).max(0)))
+            .sum()
+    };
+    let over = i64::from(over);
+    // Floors are at least 1, so cutting to level 1 already means every
+    // column at its floor. A budget at or below the floors' sum (the
+    // overflow case) needs no search.
+    if over >= cut(widths, 1) {
+        for i in (0..widths.len()).filter(|&i| shrinkable(i)) {
+            widths[i] = widths[i].min(floors[i]);
+        }
+        return;
+    }
+    // The lowest level whose cut fits in `over`: cut is non-increasing in
+    // the level, cut(1) > over, and cut(widest) = 0 ≤ over.
+    let (mut lo, mut hi) = (2, widths.iter().copied().max().unwrap_or(1).max(2));
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if cut(widths, mid) <= over {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    let level = lo;
+    let mut rest = over - cut(widths, level);
+    for i in (0..widths.len()).filter(|&i| shrinkable(i)) {
+        widths[i] = widths[i].min(floors[i].max(level));
+    }
+    // `rest` is below the number of columns at `level` that may still shrink
+    // (cut(level - 1) > over), so each loses at most one cell.
+    for i in (0..widths.len()).rev() {
+        if rest == 0 {
+            break;
+        }
+        if shrinkable(i) && widths[i] == level && floors[i] < level {
+            widths[i] -= 1;
+            rest -= 1;
+        }
+    }
 }
 
 /// The width a column starts the layout from: 0 when hidden; a flex column
@@ -418,7 +468,12 @@ impl RowLayout {
     }
 
     /// The largest horizontal offset: how far the scrolling part overflows.
+    /// 0 when the scrolling part has no cell on screen (the frozen check
+    /// column fills the view): no offset would bring a cell into view.
     pub fn max_offset(&self) -> i32 {
+        if self.view <= 0 {
+            return 0;
+        }
         (self.content - self.view).max(0)
     }
 
@@ -1124,5 +1179,90 @@ mod tests {
     fn nan_sort_keys_tie_and_stay_stable() {
         let m = Percent(vec![f64::NAN, f64::NAN]);
         assert_eq!(sort_order(&m, 0, SortDir::Asc), [0, 1]);
+    }
+
+    /// The layout as it was before the level shrink: one cell off the widest
+    /// shrinkable column (the rightmost of a tie) per pass. Kept verbatim as
+    /// the reference [`shrink`] must reproduce.
+    fn layout_widths_reference(cols: &[ColumnSpec], avail: i32) -> Vec<i32> {
+        let mut widths: Vec<i32> = cols.iter().map(preferred_width).collect();
+        let visible = widths.iter().filter(|&&w| w > 0).count() as i32;
+        if visible == 0 || avail <= 0 {
+            return vec![0; cols.len()];
+        }
+        let budget = avail - (visible - 1);
+        let mut over = sum_widths(&widths).saturating_sub(budget);
+        while over > 0 {
+            let widest = widths
+                .iter()
+                .enumerate()
+                .filter(|(i, w)| !cols[*i].hidden && **w > shrink_floor(&cols[*i]))
+                .max_by_key(|(_, w)| **w)
+                .map(|(i, _)| i);
+            let Some(i) = widest else { break };
+            widths[i] -= 1;
+            over -= 1;
+        }
+        if over < 0 {
+            stretch(cols, &mut widths, -over);
+        }
+        widths
+    }
+
+    #[test]
+    fn level_shrink_matches_the_one_cell_loop() {
+        let templates = [
+            check_column(),
+            col("a", 5),
+            col("b", 9).min_width(3),
+            col("c", 4).fixed(true),
+            col("d", 0).flex(1),
+            col("e", 6).flex(2).min_width(2),
+            col("h", 7).hidden(true),
+            col("z", 0),
+            col("w", 2).min_width(5),
+            col("t", 9),
+        ];
+        let n = templates.len();
+        let mut checked = 0u32;
+        // Every ordered pick of 0..=4 templates (repeats allowed).
+        for len in 0..=4u32 {
+            for code in 0..n.pow(len) {
+                let mut c = code;
+                let cols: Vec<ColumnSpec> = (0..len)
+                    .map(|_| {
+                        let t = templates[c % n].clone();
+                        c /= n;
+                        t
+                    })
+                    .collect();
+                for avail in -3..=60 {
+                    assert_eq!(
+                        layout_widths(&cols, avail),
+                        layout_widths_reference(&cols, avail),
+                        "avail {avail}, columns {:?}",
+                        cols.iter().map(|c| &c.label).collect::<Vec<_>>()
+                    );
+                    checked += 1;
+                }
+            }
+        }
+        assert_eq!(checked, 11_111 * 64);
+        // Wide columns: several levels, ties and partial rounds.
+        let wide = [
+            col("p", 40),
+            col("q", 40).min_width(30),
+            col("r", 25),
+            col("s", 40),
+            col("u", 13).fixed(true),
+            check_column(),
+        ];
+        for avail in -3..=200 {
+            assert_eq!(
+                layout_widths(&wide, avail),
+                layout_widths_reference(&wide, avail),
+                "avail {avail}"
+            );
+        }
     }
 }
