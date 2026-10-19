@@ -16,6 +16,12 @@ into a dated, versioned section.
 
 ### New
 
+### Changed
+
+### Fixed
+
+## 0.18.0 - 2026-10-19
+### New
 - **`Table` column separators can be made visible.** `Table::with_separators`
   chooses whether the one-cell gap after each column holds a `│` rule:
   `Separators::Off` (the default) keeps the blank gap, `Separators::Header`
@@ -23,7 +29,6 @@ into a dated, versioned section.
   and `Separators::All` rules the header and between every row's cells.
 
 ### Changed
-
 - The guide has a new page, "Extensions beyond Turbo Vision", that lists the
   widgets, options and subsystems tvision-rs adds to Turbo Vision, such as
   `Table`, `Splitter`, the color picker and the keymap. Where the guide and the
@@ -39,7 +44,6 @@ into a dated, versioned section.
   for it.
 
 ### Fixed
-
 - A `Table` narrower than its columns showed nothing, not even the `[ ]`
   check boxes of a multi-select table, and its horizontal scroll bar could
   not bring the columns back. It now keeps each column at its minimum width,

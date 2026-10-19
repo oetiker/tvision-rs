@@ -9,7 +9,7 @@ alias the package to `tv`, so import it under that name with Cargo's
 
 ```toml
 [dependencies]
-tv = { package = "tvision-rs", version = "0.17.0" }
+tv = { package = "tvision-rs", version = "0.18.0" }
 ```
 
 To track the development version on `main`, depend on the git repository
