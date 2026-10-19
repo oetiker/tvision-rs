@@ -43,6 +43,23 @@ Views never call `lock`/`unlock` or reason about what is occluded; they draw.
 The mechanics are in [Drawing & backends](../internals/drawing.md); the
 rationale is [The draw model](draw.md).
 
+## `TColorDialog`: replaced by `ColorPicker`
+
+Turbo Vision's `TColorDialog`, with its `TColorSelector`, `TMonoSelector`,
+`TColorDisplay`, `TColorGroupList` and `TColorItemList` helpers, edited the
+16-entry BIOS palette in place. tvision-rs has no such palette: colors live in
+a role-based [`Theme`](../api/tvision_rs/theme/struct.Theme.html) and can be
+truecolor, so the cluster is not ported.
+
+Its place is taken by
+[`ColorPicker`](../api/tvision_rs/dialog/struct.ColorPicker.html), a truecolor
+picker view, and
+[`Program::color_dialog`](../api/tvision_rs/app/struct.Program.html#method.color_dialog),
+which runs it as a modal and returns the chosen color. Editing a whole theme
+goes through
+[`Program::theme_editor`](../api/tvision_rs/app/struct.Program.html#method.theme_editor).
+Both are listed on [Extensions beyond Turbo Vision](extensions.md).
+
 ## Coordinates stay `i32` (*unchanged*)
 
 magiblot's coordinates are plain C++ `int`. The port keeps them as **`i32`**

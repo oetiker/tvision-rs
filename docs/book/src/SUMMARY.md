@@ -22,6 +22,7 @@
 - [Event capture](port/capture.md)
 - [The Deferred channel](port/deferred.md)
 - [Dropped & changed](port/dropped.md)
+- [Extensions beyond Turbo Vision](port/extensions.md)
 
 # Building Apps
 
