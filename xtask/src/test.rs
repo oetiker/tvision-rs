@@ -12,7 +12,7 @@
 //! target dir holds more than one `libtvision_rs-*.rlib`. Passing the exact rlib
 //! via `--extern` sidesteps both. `rustdoc --test` on the raw chapter markdown
 //! still extracts the blocks, honours `ignore`, and processes hidden `#` lines —
-//! mdBook preprocessor directives (`{{#rustdoc_include}}`, ```mermaid```) live in
+//! mdBook preprocessor directives (`{{#rustdoc_include}}`) live in
 //! non-`rust` or `rust,ignore` blocks, so rustdoc skips them.
 
 use crate::paths;
