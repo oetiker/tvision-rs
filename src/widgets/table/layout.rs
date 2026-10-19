@@ -52,21 +52,25 @@ impl SortDir {
 }
 
 /// Which column separators a [`Table`](super::Table) draws between its
-/// columns. A separator is always one cell wide — this only chooses whether
+/// columns. A separator is always one cell wide; this only chooses whether
 /// that cell holds a visible rule, so the layout never shifts. The rule glyph
 /// itself belongs to the theme (its [`frame_v`](crate::theme::Glyphs::frame_v));
 /// the draw that renders it passes it in, like the `ListViewer` divider does.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Separators {
-    /// One blank cell between columns — no visible rule (the default). Named
+    /// One blank cell between columns, with no visible rule (the default). Named
     /// `Off` rather than `None` so a `use Separators::*` does not shadow
     /// [`Option::None`].
     #[default]
     Off,
     /// The rule in the header row only, so the resize handle is visible;
-    /// the rows keep blank separators.
+    /// the rows keep blank separators. When the columns leave spare width,
+    /// the header also rules the cell after the last column, which is that
+    /// column's resize handle.
     Header,
-    /// The rule in the header and between every row's cells.
+    /// The rule in the header and between every row's cells. The header
+    /// rules the cell after the last column as in [`Separators::Header`];
+    /// the rows rule only the cells between columns and leave that one blank.
     All,
 }
 
