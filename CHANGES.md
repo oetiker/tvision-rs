@@ -36,7 +36,9 @@ into a dated, versioned section.
 - A `Table` narrower than its columns showed nothing, not even the `[ ]`
   check boxes of a multi-select table, and its horizontal scroll bar could
   not bring the columns back. It now keeps each column at its minimum width,
-  clips the cells to the view and scrolls sideways.
+  clips the cells to the view and scrolls sideways. When the check boxes
+  alone fill a multi-select table, the scroll bar has no range and the arrow
+  keys no longer scroll columns that cannot come into view.
 - In the guide, the links to `draw`, `state` and `state_mut` on "The view
   tree" and to `write_bytes` on "Text editing" opened the top of the API page
   instead of the method's entry. They now go to the method.

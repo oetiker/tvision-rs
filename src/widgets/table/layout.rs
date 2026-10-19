@@ -418,7 +418,12 @@ impl RowLayout {
     }
 
     /// The largest horizontal offset: how far the scrolling part overflows.
+    /// 0 when the scrolling part has no cell on screen (the frozen check
+    /// column fills the view): no offset would bring a cell into view.
     pub fn max_offset(&self) -> i32 {
+        if self.view <= 0 {
+            return 0;
+        }
         (self.content - self.view).max(0)
     }
 

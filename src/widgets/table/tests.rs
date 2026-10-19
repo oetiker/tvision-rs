@@ -1281,6 +1281,39 @@ fn a_narrow_table_publishes_a_real_h_range_and_scrolls() {
     insta::assert_snapshot!(fx.render(4, H as u16));
 }
 
+#[test]
+fn a_check_column_filling_the_view_leaves_the_h_bar_no_range() {
+    // Multi mode, 5 wide → 4 text cells, all taken by the frozen check
+    // column: no scrolling cell is on screen, so nothing can scroll into
+    // view and the bar gets no range.
+    let h = mint_bar();
+    let mut fx = Fixture::new(
+        Table::new(Rect::new(0, 0, 5, H), fixed_columns(), None)
+            .with_model(model(&ROWS))
+            .with_selection_mode(SelectionMode::Multi)
+            .with_h_bar(h),
+    );
+    fx.focus(true);
+    let d = fx.t().data.clone();
+    let l = body::row_layout(&d.borrow(), 5);
+    assert_eq!((l.content, l.view, l.max_offset()), (30, 0, 0));
+    let deferred = fx.with_deferred(|t, ctx| t.set_h_offset(3, ctx));
+    assert_eq!(bar_params(&deferred, h), (Some(0), Some(1)));
+    assert_eq!(bar_value(&deferred, h), Some(0), "the offset clamps to 0");
+    assert_eq!(d.borrow().h_offset, 0);
+    for k in [Key::Right, Key::End, Key::Tab, Key::Right] {
+        fx.key(k);
+        assert_eq!(d.borrow().h_offset, 0, "{k:?} scrolls nothing");
+    }
+    // Wider again, the overflow is the range: 30 content cells over
+    // 21 − 1 − 4 = 16 on screen.
+    fx.t().change_bounds(Rect::new(0, 0, 21, H));
+    let deferred = fx.with_deferred(|t, ctx| t.on_bounds_changed(ctx));
+    assert_eq!(bar_params(&deferred, h), (Some(14), Some(16)));
+    fx.key(Key::Right);
+    assert_eq!(fx.t().h_offset(), 1, "Right scrolls again");
+}
+
 /// Drive a table `w` wide through draws, keys, clicks, header presses and
 /// drags, cell-cursor moves and an edit; none of it may panic.
 fn probe_narrow(w: i32, mode: SelectionMode, sep: Separators, cols: Vec<ColumnSpec>) {
