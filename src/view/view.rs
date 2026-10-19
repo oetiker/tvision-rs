@@ -780,9 +780,9 @@ fn grow(gm: GrowMode, s: i32, d: i32, i: &mut i32) {
 /// [`State`]/[`Options`]/[`GrowMode`]/[`DragMode`] **structs-of-bools**, and the
 /// state-mutating verbs become plain field flips or small helpers.
 ///
-/// # What lives here vs. elsewhere
+/// # What lives on `View` vs. elsewhere
 ///
-/// This module is the *abstract base*. Several operations have no home on a bare
+/// `View` and [`ViewState`] are the *abstract base*. Several operations have no home on a bare
 /// view because the data they need lives in the tree or the event loop:
 ///
 /// * **Up-tree / owner operations live on [`Group`](crate::view::Group)** —
@@ -826,7 +826,8 @@ fn grow(gm: GrowMode, s: i32, d: i32, i: &mut i32) {
 /// Inheritance becomes a trait plus a composed `ViewState` (deviation D2); the
 /// packed `sf*`/`of*`/`gf*`/`dm*` flag words become structs-of-bools (deviation
 /// D5); owner/sibling pointers become tree edges plus `ViewId` handles
-/// (deviation D3).
+/// (deviation D3), and methods that reached up an owner pointer instead take
+/// the downward [`Context`](crate::view::Context) (deviation D3).
 // MAINTENANCE: when adding a defaulted method to this trait, also add a
 // forwarder entry to `tvision-rs-macros/src/specs.rs` (`view()`) AND the
 // `expected` list in `tests/delegate_view.rs`. Required methods (no default)

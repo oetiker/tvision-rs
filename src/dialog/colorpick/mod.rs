@@ -97,7 +97,8 @@ impl Tab {
 ///
 /// **tvision-rs extension**: no Turbo Vision counterpart. It takes the place of the
 /// `TColorDialog` cluster (`colorsel.h`), which edited the application's
-/// `TPalette`, each entry one of the 16 BIOS colors. tvision-rs replaces that
+/// `TPalette`, each entry a foreground/background attribute built from the BIOS
+/// colors. tvision-rs replaces that
 /// palette with a role-based [`Theme`](crate::theme::Theme).
 pub struct ColorPicker {
     group: Group,
@@ -132,8 +133,8 @@ impl ColorPicker {
     ///
     /// # Turbo Vision heritage
     /// No Turbo Vision counterpart. Supersedes `TColorDialog::Init` (guide
-    /// p. 407–408), which built a fixed 62×19 dialog editing a 16-entry BIOS
-    /// palette. This constructor builds only the picker body; the caller owns
+    /// p. 407–408), which built a fixed 62×19 dialog editing the application's
+    /// `TPalette` attributes. This constructor builds only the picker body; the caller owns
     /// the dialog chrome.
     pub fn new(bounds: Rect, initial: Color) -> Self {
         let w = bounds.b.x - bounds.a.x;

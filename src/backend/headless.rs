@@ -143,7 +143,7 @@ impl HeadlessHandle {
 // HeadlessBackend
 // ---------------------------------------------------------------------------
 
-/// In-memory backend for tests: the deterministic test backend.
+/// In-memory backend for deterministic tests.
 ///
 /// `HeadlessBackend` stores an in-memory cell buffer and a programmable event
 /// queue. It never performs I/O and never blocks. Create it with

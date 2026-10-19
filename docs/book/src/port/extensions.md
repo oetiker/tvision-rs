@@ -43,8 +43,8 @@ These have no Turbo Vision counterpart.
   [Controls](../apps/controls.md#validators).
 
 `TColorDialog` and its helper classes are not ported: they edited the
-application's `TPalette`, each entry one of the 16 BIOS colors, which tvision-rs
-replaces with a role-based theme.
+application's `TPalette`, each entry a foreground/background attribute built
+from the BIOS colors, which tvision-rs replaces with a role-based theme.
 [`ColorPicker`](../api/tvision_rs/dialog/struct.ColorPicker.html) takes their
 place; see [Dropped & changed](dropped.md#tcolordialog-replaced-by-colorpicker).
 

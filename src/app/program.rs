@@ -392,7 +392,10 @@ struct FullscreenSlot {
 /// Ports `TProgram` (`tprogram.cpp`/`tprogram.h`), the application root and its
 /// blocking event loop. The single non-recursive loop plus a capture stack
 /// replaces the original's nested modal loops (deviation D9); broadcasts carry a
-/// [`ViewId`] subject instead of a raw pointer (deviation D4).
+/// [`ViewId`] subject instead of a raw pointer (deviation D4). The original
+/// derived an application class from this root by inheritance; here
+/// [`Application`](crate::app::Application) embeds a `Program` and forwards to
+/// it (deviation D2).
 pub struct Program {
     /// The root container (holds desktop/status-line/menu-bar children).
     group: Group,
@@ -1524,7 +1527,8 @@ impl Program {
     /// # Turbo Vision heritage
     /// **tvision-rs extension**: no Turbo Vision counterpart. Supersedes `TColorDialog`
     /// (guide pp. 406–409), which edited the application's `TPalette`, each
-    /// entry one of the 16 BIOS colors. tvision-rs replaces it with a
+    /// entry a foreground/background attribute built from the BIOS colors.
+    /// tvision-rs replaces it with a
     /// truecolor picker that returns an `Option<Color>` directly instead of
     /// mutating an in-memory `TPalette` blob.
     pub fn color_dialog(&mut self, initial: crate::color::Color) -> Option<crate::color::Color> {

@@ -1539,7 +1539,8 @@ impl Editor {
 
     // -- update / lock / flush ----------------------------------------------
 
-    /// Record pending redraw flags; no inline flush (see the module seam).
+    /// Record pending redraw flags; no inline flush (see the context-threading
+    /// split in the [`Editor`] docs).
     fn update(&mut self, flags: u8) {
         self.update_flags |= flags;
     }

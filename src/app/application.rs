@@ -16,7 +16,7 @@ use crate::view::{Rect, View, ViewId};
 /// [`Backend`](crate::backend::Backend) +
 /// [`Renderer`](crate::backend::Renderer) construction path. History needs no
 /// explicit setup: the store is a `thread_local!` `Vec` that auto-initializes and
-/// auto-drops (see `history.rs`). The module is thin: one [`get_tile_rect`] helper
+/// auto-drops (see `history.rs`). The type is thin: one [`get_tile_rect`] helper
 /// plus forwarding delegations to the embedded program.
 ///
 /// `Application` provides [`Application::get_tile_rect`] (the rectangle tile and
@@ -28,13 +28,10 @@ use crate::view::{Rect, View, ViewId};
 ///
 /// # Turbo Vision heritage
 ///
-/// Ports `TApplication` (`tapplica.cpp`); the `TApplication : TProgram`
-/// inheritance becomes embed-and-delegate composition (deviation D2): the type
-/// holds a [`Program`] and forwards to it.
-///
 /// Ports `TApplication` (`tapplica.cpp`); its constructor is the factory mixin
-/// that wires up the status line, menu bar, and desktop. The inheritance from
-/// `TProgram` becomes embed-and-delegate composition (deviation D2). History
+/// that wires up the status line, menu bar, and desktop. The `TApplication :
+/// TProgram` inheritance becomes embed-and-delegate composition (deviation D2):
+/// the type holds a [`Program`] and forwards to it. History
 /// needs no explicit setup — the store is a `thread_local!` `Vec` that
 /// auto-initializes and auto-drops (see `history.rs`).
 ///

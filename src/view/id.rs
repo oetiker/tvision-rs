@@ -26,7 +26,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// stamped into the view's own [`ViewState`](crate::view::ViewState). Resolving a
 /// `ViewId` back to a `&mut dyn View` is a tree-walk
 /// ([`View::find_mut`](crate::view::View::find_mut)) performed by the downward
-/// context — not here.
+/// context, not by the id itself.
 ///
 /// ## Design
 ///

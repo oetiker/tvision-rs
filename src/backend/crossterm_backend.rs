@@ -383,7 +383,7 @@ impl Backend for CrosstermBackend {
         }
     }
 
-    /// Run the copy chain (module `## Clipboard` docs): native → OSC 52 →
+    /// Run the copy chain (see *Clipboard* in the [`CrosstermBackend`] docs): native → OSC 52 →
     /// internal. The OSC sequence is queued on the normal output handle and
     /// delivered by the next `flush` (every pump iteration flushes).
     fn set_clipboard(&mut self, text: &str) -> bool {

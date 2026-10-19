@@ -54,8 +54,8 @@ use crate::widgets::{InputLine, Label, LimitMode};
 /// (`msgbox.cpp`; titles and button labels from `tvtext2.cpp`). The original
 /// packed `aOptions` flag word becomes the typed [`MessageBoxKind`] +
 /// [`MessageBoxButtons`] (deviation D5); running the dialog modally and destroying
-/// it afterward live in [`Program`](crate::app::Program), so this module is a pure
-/// builder (deviation D9).
+/// it afterward live in [`Program`](crate::app::Program), so the builders are pure
+/// (deviation D9).
 ///
 /// Replaces the C++ `mfWarning`/`mfError`/`mfInformation`/`mfConfirmation`
 /// nibble packed into the `aOptions Word` (`msgbox.cpp`); the type is now a
