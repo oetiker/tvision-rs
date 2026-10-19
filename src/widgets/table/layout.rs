@@ -284,20 +284,24 @@ pub fn with_check_cell(w0: i32, check: &str, rest: String, sep: char) -> String 
 /// keep their preferred width while everything (plus one separator between
 /// neighbouring visible columns) fits, else the currently widest shrinkable
 /// column loses one cell per pass until it fits or every column sits at its
-/// `min_width` (a [`fixed`](ColumnSpec::fixed) one at its `width`). A layout that still does not fit is wider than `avail`; the
-/// table scrolls it horizontally. Spare cells go to the
-/// [`flex`](ColumnSpec::flex) columns by weight (see [`stretch`]); without one
-/// they stay empty. With no room at all (`avail` at or below the separators)
-/// every width is 0.
+/// `min_width` (a [`fixed`](ColumnSpec::fixed) one at its `width`). Shrinking
+/// comes first, scrolling second: a layout that still does not fit, even one
+/// whose separators alone fill `avail`, keeps every column at that floor and
+/// is wider than `avail`; the table scrolls it horizontally. Spare cells go
+/// to the [`flex`](ColumnSpec::flex) columns by weight (see [`stretch`]);
+/// without one they stay empty. With no visible column, or no cell at all
+/// (`avail` ≤ 0), every width is 0.
 pub fn layout_widths(cols: &[ColumnSpec], avail: i32) -> Vec<i32> {
     let mut widths: Vec<i32> = cols.iter().map(preferred_width).collect();
     // A visible column of width 0 renders nothing and gets no separator
     // (as in `join_cells` / `column_at`), so it does not count here either.
     let visible = widths.iter().filter(|&&w| w > 0).count() as i32;
-    let budget = avail - (visible - 1).max(0);
-    if visible == 0 || budget <= 0 {
+    if visible == 0 || avail <= 0 {
         return vec![0; cols.len()];
     }
+    // At or below 0 when the separators take every cell: the loop below
+    // then shrinks each column to its floor and the layout overflows.
+    let budget = avail - (visible - 1);
     let mut over = sum_widths(&widths).saturating_sub(budget);
     while over > 0 {
         let widest = widths
@@ -716,7 +720,41 @@ mod tests {
     #[test]
     fn layout_widths_nonpositive_avail_yields_zeros() {
         assert_eq!(layout_widths(&[col("A", 40)], 0), vec![0]);
-        assert_eq!(layout_widths(&[col("A", 4), col("B", 4)], 1), vec![0, 0]);
+        assert_eq!(layout_widths(&[col("A", 4), col("B", 4)], -3), vec![0, 0]);
+    }
+
+    #[test]
+    fn layout_widths_without_room_for_the_separators_keeps_the_floors() {
+        // avail 1, two visible columns: the separator alone eats the budget.
+        // The columns stay at their floors and overflow (the table scrolls).
+        assert_eq!(layout_widths(&[col("A", 4), col("B", 4)], 1), vec![1, 1]);
+        // Multi mode, four columns, view 5 wide → avail 4, five layout
+        // columns, budget 4 − 4 = 0: the check column keeps its 3.
+        let cols = [
+            check_column(),
+            col("ID", 4),
+            col("NAME", 10),
+            col("STATE", 8),
+            col("CPU", 5),
+        ];
+        assert_eq!(layout_widths(&cols, 4), vec![3, 1, 1, 1, 1]);
+        assert_eq!(layout_widths(&cols, 1), vec![3, 1, 1, 1, 1]);
+        // min_width and fixed floors hold too; hidden columns stay 0.
+        let cols = [
+            col("A", 6).min_width(2),
+            col("H", 5).hidden(true),
+            col("F", 4).fixed(true),
+        ];
+        assert_eq!(layout_widths(&cols, 1), vec![2, 0, 4]);
+        let l = RowLayout::new(&cols, 0, 1);
+        assert_eq!((l.content, l.view, l.max_offset()), (7, 1, 6));
+    }
+
+    #[test]
+    fn layout_widths_with_no_visible_column_yields_zeros() {
+        let cols = [col("A", 4).hidden(true), col("B", 0)];
+        assert_eq!(layout_widths(&cols, 1), vec![0, 0]);
+        assert_eq!(layout_widths(&cols, 10), vec![0, 0]);
     }
 
     #[test]
