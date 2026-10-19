@@ -89,6 +89,11 @@ or flip foreground and background with
 swaps concrete colors but toggles the `reverse` flag when one side is
 `Default`, matching Turbo Vision's `reverseAttribute`.
 
+## The theme editor
+
+> **tvision-rs extension**: not in Turbo Vision. See
+> [Extensions beyond Turbo Vision](../port/extensions.md).
+
 For an interactive way to tweak roles at runtime, the program ships a built-in
 theme-editor dialog
 ([`Program::theme_editor`](../api/tvision_rs/app/struct.Program.html#method.theme_editor)):

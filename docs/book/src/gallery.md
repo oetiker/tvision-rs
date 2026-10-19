@@ -66,6 +66,9 @@ hot-letter focuses the field.
 
 ### Masked input
 
+> **tvision-rs extension**: not in Turbo Vision. See
+> [Extensions beyond Turbo Vision](port/extensions.md).
+
 A password field ([`MaskedInput`](apps/controls.md)) that shows its value as
 bullets while keeping the real text intact, with a reveal eye in the last column
 (its own Tab stop). Press-and-hold the eye, or focus it and press Space, to peek;
@@ -105,7 +108,12 @@ Read-only text with word-wrap; a leading `\x03` centers a line.
 
 A scrollable single-column list wired to a vertical scroll bar. Its items are
 filled on the first event tick, because `new_list` needs a `Context`; the thin
-wrapper view is the deferred-init pattern. Opt-in incremental find
+wrapper view is the deferred-init pattern.
+
+> **tvision-rs extension** to `TListViewer`: incremental find is not in Turbo
+> Vision. See [Extensions beyond Turbo Vision](port/extensions.md).
+
+Opt-in incremental find
 (`with_find(FindMode::Filter)` or `FindMode::Highlight`) lets the list own its
 query and highlight or self-filter while focused (see
 [Controls](apps/controls.md)).
@@ -118,8 +126,10 @@ query and highlight or self-filter while focused (see
 
 ### Table
 
-A tvision-rs extension (Turbo Vision has no table): a column header over a
-scrolling row list. Rows come from a `TableModel` (`VecModel` for plain
+> **tvision-rs extension**: not in Turbo Vision. See
+> [Extensions beyond Turbo Vision](port/extensions.md).
+
+A column header over a scrolling row list. Rows come from a `TableModel` (`VecModel` for plain
 strings) and carry a stable `RowKey`, so focus and the marked rows follow the
 record through a re-sort or a `set_model` reload. Click a column label to sort
 by it, click again to flip; numbers sort numerically. Columns shrink widest
@@ -236,6 +246,9 @@ A titled, movable, resizable window that hosts child views.
 
 ### Splitter
 
+> **tvision-rs extension**: not in Turbo Vision. See
+> [Extensions beyond Turbo Vision](port/extensions.md).
+
 Resizable multi-pane layout. `Splitter::cols()`/`rows()` arrange panes along one
 axis with draggable divider seams; `.joined()` connects the divider lines to the
 window frame (`┬ ┴ ┤`) and to each other (`├`). The left column here is a fixed
@@ -271,7 +284,11 @@ helper builds one for you; this shows the equivalent assembled by hand.)
 
 ### Color picker
 
-The truecolor picker dialog, a four-tab RGB / HSV / palette surface.
+> **tvision-rs extension**: not in Turbo Vision. See
+> [Extensions beyond Turbo Vision](port/extensions.md).
+
+The truecolor picker dialog, a four-tab RGB / HSV / palette surface. It takes
+the place of Turbo Vision's `TColorDialog`.
 
 {{#include screens/colorpicker.html}}
 

@@ -87,6 +87,9 @@ dedicated `dragView` nested-mouse-loop for this)*.
 
 ## Fullscreen windows
 
+> **tvision-rs extension** to `TWindow`: not in Turbo Vision. See
+> [Extensions beyond Turbo Vision](../port/extensions.md).
+
 A window can fill the screen without its frame border via three modes of
 [`Fullscreen`](../api/tvision_rs/window/enum.Fullscreen.html):
 
@@ -160,6 +163,9 @@ The `hello` example wires `Command::TILE` / `Command::CASCADE` menu items that
 route to these calls, so its three demo windows rearrange on command.
 
 ## Splitter: resizable panes
+
+> **tvision-rs extension**: not in Turbo Vision. See
+> [Extensions beyond Turbo Vision](../port/extensions.md).
 
 A [`Splitter`](../api/tvision_rs/widgets/splitter/struct.Splitter.html) divides a
 rectangle into N panes along one axis, separated by 1-cell divider seams that the
