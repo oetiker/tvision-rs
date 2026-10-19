@@ -445,9 +445,12 @@ impl Table {
 
     /// Builder: which column separators to draw (see [`Separators`]).
     /// The default, [`Separators::Off`], leaves the one-cell separators
-    /// blank; [`Separators::Header`] draws a `│` rule in the header row only,
-    /// making the resize handle visible; [`Separators::All`] draws the header
-    /// rule and a `│` between every row's cells as well.
+    /// blank; [`Separators::Header`] draws the theme's vertical frame glyph
+    /// (`│` by default) in the header row only, making the resize handle
+    /// visible; [`Separators::All`] draws the header rule and the same rule
+    /// between every row's cells as well. When the columns leave spare width,
+    /// the header also rules the cell after the last column (its resize
+    /// handle); the rows leave that cell blank.
     pub fn with_separators(self, separators: Separators) -> Self {
         self.data.borrow_mut().separators = separators;
         self
