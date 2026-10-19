@@ -134,6 +134,18 @@ filesystem: no drive letters, the root is `/`, and subdirectories are listed via
 UTC, packed into the same DOS `ftime` word so the file-info-pane unpack ports
 verbatim. → [Dropped & changed](../port/dropped.md)
 
+### D16 · Virtual `sizeLimits` floor → settable `min_size` {#d16}
+
+*minor.* A C++ window subclass raises its minimum size by overriding the
+virtual `sizeLimits`, which the drag, keyboard-resize and zoom paths call. With
+embed-and-delegate ([D2](#d2)) the inner window cannot see a wrapper's override,
+so the floor is a field on the window instead:
+[`Window::set_min_size`](../api/tvision_rs/window/struct.Window.html#method.set_min_size)
+(also on [`Dialog`](../api/tvision_rs/dialog/struct.Dialog.html#method.set_min_size))
+raises it from the 16×6 default, and every clamp path reads it. The wrapper sets
+it once at construction, as `FileDialog` (49×19), `ChDirDialog` (48×18) and
+`EditWindow` (24×6) do. → [Inheritance](../port/inheritance.md)
+
 ## Underlying mechanisms
 
 The [`Deferred` channel](../port/deferred.md) and the [cross-view sibling
