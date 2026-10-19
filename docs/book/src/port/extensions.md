@@ -1,8 +1,9 @@
 # Extensions beyond Turbo Vision
 
 This page lists the widgets, options and subsystems tvision-rs adds to what
-magiblot/tvision offers; everything else in the crate ports a Turbo Vision
-class. Where the guide describes one of these features, a
+magiblot/tvision offers. Convenience methods that wrap what a Turbo Vision
+program does by hand, such as `Program::open_file_dialog`, are not listed.
+Where the guide describes one of these features, a
 **tvision-rs extension** callout at the start of the section points back here.
 
 ## New widgets
@@ -21,7 +22,7 @@ These have no Turbo Vision counterpart.
   [gallery](../gallery.md#splitter).
 - [`ColorPicker`](../api/tvision_rs/dialog/struct.ColorPicker.html) and
   [`Program::color_dialog`](../api/tvision_rs/app/struct.Program.html#method.color_dialog):
-  a truecolor picker with presets, RGB, color-plane and xterm-256 tabs, either
+  a truecolor picker with Presets, RGB, Hue/Sat and Xterm tabs, either
   embedded in a dialog or run as a ready-made modal that returns the chosen
   color. See the [gallery](../gallery.md#color-picker).
 - [`MaskedInput`](../api/tvision_rs/widgets/struct.MaskedInput.html) and
@@ -41,8 +42,9 @@ These have no Turbo Vision counterpart.
   type-as-you-go checking as the picture-mask validator. See
   [Controls](../apps/controls.md#validators).
 
-`TColorDialog` and its helper classes are not ported: they edited the 16-entry
-BIOS palette that tvision-rs replaces with a role-based theme.
+`TColorDialog` and its helper classes are not ported: they edited the
+application's `TPalette`, each entry one of the 16 BIOS colors, which tvision-rs
+replaces with a role-based theme.
 [`ColorPicker`](../api/tvision_rs/dialog/struct.ColorPicker.html) takes their
 place; see [Dropped & changed](dropped.md#tcolordialog-replaced-by-colorpicker).
 
@@ -93,9 +95,11 @@ These extend a ported Turbo Vision class.
   middle-click pastes the X11 or Wayland PRIMARY selection into an input line
   or the editor, and a mouse selection in an input line becomes the PRIMARY
   selection for other programs.
-- [`HeadlessBackend`](../api/tvision_rs/backend/struct.HeadlessBackend.html):
-  an in-memory terminal with injected input and an inspectable screen, for
-  testing an application without a terminal.
+- [`HeadlessBackend`](../api/tvision_rs/backend/struct.HeadlessBackend.html)
+  and [`screen::snapshot`](../api/tvision_rs/screen/snapshot/index.html): an
+  in-memory terminal with injected input and an inspectable screen, and a
+  stable text format of that screen for snapshot tests, for testing an
+  application without a terminal.
 - [`CrosstermBackend`](../api/tvision_rs/backend/struct.CrosstermBackend.html)
   wraps every frame in synchronized output (DEC mode 2026), so terminals that
   support it show each frame whole.

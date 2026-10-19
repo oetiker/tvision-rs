@@ -525,8 +525,10 @@ impl InputLine {
     /// boundary-snap idiom `check_valid` and [`View::set_value`] already use
     /// when clamping to `max_len`).
     ///
-    /// This is a tvision-rs extension: C++ `TInputLine` has no public setter
-    /// for an arbitrary caret position.
+    /// # Turbo Vision heritage
+    /// C++ code assigns the public `TInputLine::curPos` field directly; this
+    /// setter does the same and also collapses the selection and scrolls the
+    /// caret into view.
     pub fn set_cursor_pos(&mut self, pos: i32) {
         let mut cut = pos.clamp(0, self.data.len() as i32) as usize;
         while cut > 0 && !self.data.is_char_boundary(cut) {

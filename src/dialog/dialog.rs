@@ -150,8 +150,10 @@ impl Dialog {
     /// editing"), which would otherwise render hard against the drop shadow.
     ///
     /// # Turbo Vision heritage
-    /// **tvision-rs extension** to `TDialog`. The metrics are the classic Turbo Vision
-    /// ones; C++ dialogs place each button by hand.
+    /// **tvision-rs extension** to `TDialog`. The metrics are the classic Turbo
+    /// Vision ones. C++ has no public button-row call: an application places
+    /// each button itself, and only `messageBox` (`msgbox.cpp`) lays out its own
+    /// row internally.
     pub fn button_row(
         &mut self,
         buttons: &[(&str, Command, crate::widgets::ButtonFlags)],

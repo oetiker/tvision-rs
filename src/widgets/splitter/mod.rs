@@ -646,7 +646,7 @@ impl Splitter {
 
     // -- interior crossings (Site 2) --------------------------------------------
 
-    /// Site 2 (tvision-rs-original): overlay `├`/`┤`/`┴`/`┬` on this splitter's own
+    /// Site 2 (tvision-rs extension): overlay `├`/`┤`/`┴`/`┬` on this splitter's own
     /// divider cells where a perpendicular pane sub-splitter's divider meets them.
     /// `&mut self` because reaching a pane child to read its divider positions
     /// needs `Group::child_mut` (the `&self draw_dividers` cannot do this). Reads

@@ -11,6 +11,11 @@
 //! [`Splitter`](crate::widgets::Splitter) calls [`divider_junction`] for its
 //! interior crossings. See the design spec
 //! `docs/superpowers/specs/2026-06-13-splitter-frame-joining-design.md`.
+//!
+//! # Turbo Vision heritage
+//! **tvision-rs extension**: no Turbo Vision counterpart. It joins
+//! [`Splitter`](crate::widgets::Splitter) dividers to the window frame; the
+//! glyph lookup follows the idea of `frameChars[mask]` in `framelin.cpp`.
 
 use crate::theme::Glyphs;
 

@@ -1320,9 +1320,9 @@ impl Program {
     /// default currency stands).
     ///
     /// # Turbo Vision heritage
-    /// A tvision-rs-original convenience (C++ `execView` takes no focus argument).
-    /// It bundles `execView` with the pre-`execView` focus seed a C++ caller would
-    /// apply by hand — e.g. `msgbox.cpp`'s `selectNext(False)` to land the first
+    /// A convenience over `execView`, which takes no focus argument. It bundles
+    /// `execView` with the focus seed a C++ caller applies by hand before it, for
+    /// example `msgbox.cpp`'s `selectNext(False)` to land the first
     /// button — here generalized to focus any descendant by [`ViewId`](crate::view::ViewId)
     /// via [`View::focus_descendant`], closer to `setCurrent(p, …)` than to
     /// `selectNext`.
@@ -1525,8 +1525,8 @@ impl Program {
     ///
     /// # Turbo Vision heritage
     /// **tvision-rs extension**: no Turbo Vision counterpart. Supersedes `TColorDialog`
-    /// (guide pp. 406–409), which was an interactive
-    /// editor for the 16-entry BIOS palette. tvision-rs replaces it with a
+    /// (guide pp. 406–409), which edited the application's `TPalette`, each
+    /// entry one of the 16 BIOS colors. tvision-rs replaces it with a
     /// truecolor picker that returns an `Option<Color>` directly instead of
     /// mutating an in-memory `TPalette` blob.
     pub fn color_dialog(&mut self, initial: crate::color::Color) -> Option<crate::color::Color> {

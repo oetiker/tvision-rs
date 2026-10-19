@@ -326,8 +326,7 @@ impl GrowMode {
 ///
 /// # Turbo Vision heritage
 /// Ports the `dm*` flag family (`views.h`) as a struct-of-bools (deviation D5);
-/// each field names its `dm*` source. `dmDragGrowLeft` is a tvision-rs extension
-/// (no C++ equivalent).
+/// each field names its `dm*` source.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct DragMode {
     /// `dmDragMove` — the view can be moved by dragging.

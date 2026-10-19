@@ -639,7 +639,7 @@ pub struct DrawCtx<'a> {
     theme: &'a Theme,
     /// The owning pane is the focused one. Set by `Group::draw` from the owning
     /// group's own `focused`; content widgets pick their surface from it. Unlike
-    /// `active` (window-wide) this is per-pane. tvision-rs deviation — C++ focus is
+    /// `active` (window-wide) this is per-pane. tvision-rs deviation: C++ focus is
     /// per-window, with no nested panes.
     owner_active: bool,
 }

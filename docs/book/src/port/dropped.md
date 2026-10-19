@@ -47,7 +47,8 @@ rationale is [The draw model](draw.md).
 
 Turbo Vision's `TColorDialog`, with its `TColorSelector`, `TMonoSelector`,
 `TColorDisplay`, `TColorGroupList` and `TColorItemList` helpers, edited the
-16-entry BIOS palette in place. tvision-rs has no such palette: colors live in
+application's `TPalette` in place, each entry one of the 16 BIOS colors.
+tvision-rs has no such palette: colors live in
 a role-based [`Theme`](../api/tvision_rs/theme/struct.Theme.html) and can be
 truecolor, so the cluster is not ported.
 

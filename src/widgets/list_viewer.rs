@@ -108,8 +108,10 @@ pub(crate) struct LvTrack {
 ///
 /// # Turbo Vision heritage
 ///
-/// **tvision-rs extension** to `TListViewer`. It builds on the faithful `TListViewer`
-/// type-to-search lookup; see the design note `docs/superpowers/specs/2026-06-30-listviewer-incremental-find-design.md`.
+/// **tvision-rs extension** to `TListViewer`. `TListViewer` itself has no
+/// type-to-search; the classic prefix lookup that [`FindMode::Off`] keeps ports
+/// `TSortedListBox::handleEvent` (`stddlg.cpp`). See the design note
+/// `docs/superpowers/specs/2026-06-30-listviewer-incremental-find-design.md`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FindMode {
     /// Off — the classic prefix lookup (today's behaviour).

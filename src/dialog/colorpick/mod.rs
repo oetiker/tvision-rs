@@ -93,8 +93,9 @@ impl Tab {
 ///
 /// # Turbo Vision heritage
 /// **tvision-rs extension**: no Turbo Vision counterpart. It takes the place of the
-/// `TColorDialog` cluster (`colorsel.h`), which edited the 16-entry BIOS palette
-/// that tvision-rs replaces with a role-based [`Theme`](crate::theme::Theme).
+/// `TColorDialog` cluster (`colorsel.h`), which edited the application's
+/// `TPalette`, each entry one of the 16 BIOS colors. tvision-rs replaces that
+/// palette with a role-based [`Theme`](crate::theme::Theme).
 pub struct ColorPicker {
     group: Group,
     tab_bar_id: ViewId,

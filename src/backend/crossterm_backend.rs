@@ -8,7 +8,7 @@
 //! ## Terminal lifecycle (RAII)
 //! `CrosstermBackend::new()` performs the full terminal setup — raw mode,
 //! alternate screen, mouse capture — at construction; `Drop` restores the
-//! terminal (best-effort, errors ignored), so an tvision-rs program never hand-rolls
+//! terminal (best-effort, errors ignored), so a tvision-rs program never hand-rolls
 //! terminal setup.
 //!
 //! Two process-global hooks (installed once, on the first construction) keep
@@ -123,6 +123,11 @@ pub enum ColorDepth {
 /// # Turbo Vision heritage
 /// The production realization of the [`Backend`] seam — see the module-level
 /// heritage note for the `TScreen` / terminal-driver lineage.
+///
+/// **tvision-rs extension**: each frame is wrapped in synchronized output (DEC
+/// private mode 2026), so a terminal that supports it shows the frame whole
+/// instead of repainting it part-way. magiblot's terminal driver does not use
+/// the mode.
 pub struct CrosstermBackend {
     out: Stdout,
     color_depth: ColorDepth,

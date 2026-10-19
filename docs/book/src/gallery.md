@@ -287,7 +287,7 @@ helper builds one for you; this shows the equivalent assembled by hand.)
 > **tvision-rs extension**: not in Turbo Vision. See
 > [Extensions beyond Turbo Vision](port/extensions.md).
 
-The truecolor picker dialog, a four-tab RGB / HSV / palette surface. It takes
+The truecolor picker dialog, with Presets, RGB, Hue/Sat and Xterm tabs. It takes
 the place of Turbo Vision's `TColorDialog`.
 
 {{#include screens/colorpicker.html}}
