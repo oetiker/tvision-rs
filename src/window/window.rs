@@ -104,6 +104,9 @@ pub enum WindowPalette {
 /// desktop area; `Screen` additionally covers the menu row (the menu bar
 /// collapses to a `[⋮]` kebab at the top-right). Per-window property, driven by
 /// `set_fullscreen`.
+///
+/// # Turbo Vision heritage
+/// **tvision-rs extension** to `TWindow`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum Fullscreen {
     /// Normal framed window.
@@ -688,6 +691,9 @@ impl Window {
     /// [`Deferred::SetFullscreen`](crate::view::Deferred::SetFullscreen) tells the
     /// pump to do the cross-tree work (menu bar / desktop) and to track the window
     /// for resize re-fit and removal-restore.
+    ///
+    /// # Turbo Vision heritage
+    /// **tvision-rs extension** to `TWindow`.
     pub fn set_fullscreen(&mut self, mode: Fullscreen, ctx: &mut Context) {
         self.fullscreen = mode;
         match mode {

@@ -37,6 +37,9 @@ impl Default for RevealEyeConfig {
 }
 
 /// A focusable one-cell reveal toggle. See the module docs.
+///
+/// # Turbo Vision heritage
+/// **tvision-rs extension**: no Turbo Vision counterpart.
 pub struct RevealEye {
     pub state: ViewState,
     cfg: RevealEyeConfig,

@@ -44,6 +44,9 @@ pub(crate) fn button_face_width(title: &str) -> i32 {
 /// in a row. In every case the width is floored at the dialog's configured
 /// minimum (see [`set_button_min_width`](crate::dialog::Dialog::set_button_min_width),
 /// default [`STD_BUTTON`]).
+///
+/// # Turbo Vision heritage
+/// **tvision-rs extension** to `TDialog`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ButtonLayout {

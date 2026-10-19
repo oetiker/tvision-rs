@@ -1,16 +1,12 @@
 //! A single-row tab selector: corner-cap active tab (`┌Label┐`), ←/→/hotkey/click
-//! selection. An tvision-rs-original widget — no Turbo Vision ancestor for the tab idiom
-//! — but **cluster-shaped**: it follows the `TCluster`/`TRadioButtons` contract
+//! selection. A tvision-rs extension with no Turbo Vision ancestor for the tab
+//! idiom, but **cluster-shaped**: it follows the `TCluster`/`TRadioButtons` contract
 //! (single selection, `~X~` hotkeys, `find_sel` hit-test, press-on-release,
 //! `value`/`set_value` transfer), the way the C++ color dialog's
 //! `TMonoSelector : public TCluster` was a custom selector built on the cluster.
 //! On a change it broadcasts [`Command::TAB_BAR_CHANGED`] carrying its own
 //! [`ViewId`](crate::view::ViewId) as `source`, so a sibling
 //! [`PageStack`](crate::widgets::PageStack) can react (mirrors `ScrollBar`).
-//!
-//! # Turbo Vision heritage
-//! None — the tabbed idiom is an tvision-rs extension; the selection mechanics mirror
-//! `TCluster`.
 
 use crate::capture::TrackMask;
 use crate::command::Command;
@@ -20,6 +16,10 @@ use crate::theme::Role;
 use crate::view::{Context, DrawCtx, Point, Rect, View, ViewState};
 
 /// A horizontal single-row tab selector. See the module docs.
+///
+/// # Turbo Vision heritage
+/// **tvision-rs extension**: no Turbo Vision counterpart. The selection mechanics mirror
+/// `TCluster`.
 pub struct TabBar {
     /// View state (geometry, flags) — the composition target.
     pub state: ViewState,

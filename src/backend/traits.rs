@@ -138,6 +138,10 @@ pub trait Backend {
     /// middle-click paste is simply inert. Serving the in-app buffer instead
     /// would paste stale text the user never selected.
     ///
+    /// # Turbo Vision heritage
+    /// **tvision-rs extension**: no Turbo Vision counterpart. magiblot's `TClipboard` reads only
+    /// the CLIPBOARD selection.
+    ///
     /// Defaulted to `None` so an existing implementor keeps compiling and
     /// silently gets the inert behaviour.
     fn get_primary(&mut self) -> Option<String> {
@@ -152,6 +156,9 @@ pub trait Backend {
     /// [`get_primary`](Self::get_primary): the internal buffer is never
     /// written, because it backs CLIPBOARD and must not be shadowed by a
     /// selection the user merely swept with the mouse.
+    ///
+    /// # Turbo Vision heritage
+    /// **tvision-rs extension**: no Turbo Vision counterpart.
     fn set_primary(&mut self, _text: &str) -> bool {
         false
     }

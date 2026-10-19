@@ -357,6 +357,10 @@ impl InputLine {
     /// the field keeps its caret and any existing selection on focus gain and
     /// typing inserts at the caret — the field still clears its selection on focus
     /// loss. See [`select_all_on_focus`](InputLine::select_all_on_focus).
+    ///
+    /// # Turbo Vision heritage
+    /// **tvision-rs extension** to `TInputLine`. `TInputLine` always selects all on
+    /// focus gain.
     pub fn set_select_all_on_focus(&mut self, enable: bool) {
         self.select_all_on_focus = enable;
     }
@@ -384,6 +388,9 @@ impl InputLine {
     /// Setting this does not change the text, the caret, or the appearance: a
     /// read-only field is drawn exactly like an editable one, because the owner
     /// — which knows *why* the field is read-only — is better placed to signal it.
+    ///
+    /// # Turbo Vision heritage
+    /// **tvision-rs extension** to `TInputLine`.
     pub fn set_read_only(&mut self, read_only: bool) {
         self.read_only = read_only;
     }
@@ -407,6 +414,10 @@ impl InputLine {
     ///
     /// This governs `set_value` only. Focus is separate: see
     /// [`set_select_all_on_focus`](Self::set_select_all_on_focus).
+    ///
+    /// # Turbo Vision heritage
+    /// **tvision-rs extension** to `TInputLine`. `ValuePosition::End` is the
+    /// `TInputLine::setData` behaviour.
     pub fn set_value_position(&mut self, position: ValuePosition) {
         self.value_position = position;
     }
@@ -442,12 +453,18 @@ impl InputLine {
 
     /// Set (or clear) the echo character. `Some(ch)` masks the display with `ch`;
     /// `None` restores the plain field. The stored value is unaffected.
+    ///
+    /// # Turbo Vision heritage
+    /// **tvision-rs extension** to `TInputLine`.
     pub fn set_mask(&mut self, mask: Option<char>) {
         self.mask = mask;
     }
 
     /// Momentarily show the real text despite `mask` (password reveal). Ignored
     /// when the field is not masked.
+    ///
+    /// # Turbo Vision heritage
+    /// **tvision-rs extension** to `TInputLine`.
     pub fn set_reveal(&mut self, reveal: bool) {
         self.reveal = reveal;
     }

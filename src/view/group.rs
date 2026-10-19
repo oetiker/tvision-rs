@@ -209,10 +209,9 @@ impl Group {
     /// ```
     ///
     /// # Turbo Vision heritage
-    /// An tvision-rs convenience addition with no `TGroup` counterpart: in
-    /// Turbo Vision a group never paints its own area (backgrounds are
-    /// `TBackground` / frame territory). The faithful default is preserved —
-    /// the surface is strictly opt-in.
+    /// **tvision-rs extension** to `TGroup`. In Turbo Vision a group never
+    /// paints its own area (backgrounds are `TBackground` / frame territory).
+    /// The faithful default is preserved: the surface is strictly opt-in.
     pub fn set_surface(&mut self, normal: Role, inactive: Role) {
         self.surface = Some((normal, inactive));
     }

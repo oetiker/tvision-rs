@@ -108,8 +108,8 @@ pub(crate) struct LvTrack {
 ///
 /// # Turbo Vision heritage
 ///
-/// An rstv extension on top of the faithful `TListViewer` lookup — see the
-/// design note `docs/superpowers/specs/2026-06-30-listviewer-incremental-find-design.md`.
+/// **tvision-rs extension** to `TListViewer`. It builds on the faithful `TListViewer`
+/// type-to-search lookup; see the design note `docs/superpowers/specs/2026-06-30-listviewer-incremental-find-design.md`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FindMode {
     /// Off — the classic prefix lookup (today's behaviour).

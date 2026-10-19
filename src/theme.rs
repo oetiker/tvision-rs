@@ -367,7 +367,7 @@ pub enum Role {
     /// field in the pane recedes together, regardless of which field itself
     /// holds focus. Heritage: this is the C++ `cpInputLine[1]` slot
     /// (`TInputLine::draw` selects it via `getColor(sfFocused ? 2 : 1)`, the
-    /// unfocused entry); rstv repurposes it onto the owning-pane axis. In
+    /// unfocused entry); tvision-rs repurposes it onto the owning-pane axis. In
     /// `classic_blue` it equals [`InputNormal`](Role::InputNormal); a theme may
     /// dim it to signal an inactive pane.
     InputInactive,

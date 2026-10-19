@@ -3,16 +3,17 @@
 //! broadcasts [`Command::TAB_BAR_CHANGED`], this stack (bound to the bar's id)
 //! switches the visible page through the pump broker — mirroring how a
 //! [`Scroller`](crate::widgets::Scroller) reacts to its `ScrollBar`.
-//!
-//! # Turbo Vision heritage
-//! None — classic Turbo Vision has no notebook/tab-page container, only `TGroup`
-//! + `sfVisible`/`show()`/`hide()`. `PageStack` packages exactly that.
 
 use crate::command::Command;
 use crate::event::Event;
 use crate::view::{Context, Group, Rect, View, ViewId};
 
 /// A stack of page Views showing one at a time. See the module docs.
+///
+/// # Turbo Vision heritage
+/// **tvision-rs extension**: no Turbo Vision counterpart. Classic Turbo Vision has no
+/// notebook or tab-page container, only `TGroup` plus `sfVisible` /
+/// `show()` / `hide()`; `PageStack` packages exactly that.
 pub struct PageStack {
     group: Group,
     pages: Vec<ViewId>,

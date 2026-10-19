@@ -1517,7 +1517,6 @@ impl Program {
     /// }
     /// ```
     ///
-    /// An tvision-rs-original extension (no direct Borland/magiblot counterpart).
     /// The chosen color is read out of the modal's own
     /// [`ColorPicker`](crate::dialog::ColorPicker) and returned **by value** via
     /// [`exec_view_with`](Self::exec_view_with)-style capture. `Color` is
@@ -1525,7 +1524,8 @@ impl Program {
     /// spec non-goal).
     ///
     /// # Turbo Vision heritage
-    /// Supersedes `TColorDialog` (guide pp. 406–409), which was an interactive
+    /// **tvision-rs extension**: no Turbo Vision counterpart. Supersedes `TColorDialog`
+    /// (guide pp. 406–409), which was an interactive
     /// editor for the 16-entry BIOS palette. tvision-rs replaces it with a
     /// truecolor picker that returns an `Option<Color>` directly instead of
     /// mutating an in-memory `TPalette` blob.
@@ -1591,6 +1591,9 @@ impl Program {
     /// [`set_theme`](Self::set_theme). On cancel, does nothing.
     ///
     /// Entry point for an app's "edit colors" menu command.
+    ///
+    /// # Turbo Vision heritage
+    /// **tvision-rs extension**: no Turbo Vision counterpart.
     pub fn theme_editor(&mut self) {
         use crate::dialog::{Dialog, ThemeEditorBody};
         use crate::widgets::{Button, ButtonFlags};

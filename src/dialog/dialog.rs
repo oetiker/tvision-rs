@@ -88,6 +88,9 @@ impl Dialog {
     /// [`Ragged`](crate::dialog::ButtonLayout::Ragged) when a row carries labels
     /// longer than the minimum ("Discard", "Keep editing"), which would otherwise
     /// render hard against the drop shadow. Call before `button_row`.
+    ///
+    /// # Turbo Vision heritage
+    /// **tvision-rs extension** to `TDialog`.
     pub fn set_button_layout(&mut self, layout: crate::dialog::ButtonLayout) {
         self.button_layout = layout;
     }
@@ -145,6 +148,10 @@ impl Dialog {
     /// `Classic` at [`STD_BUTTON`](crate::dialog::STD_BUTTON), i.e. every face a fixed 10 columns. Switch to
     /// `Uniform` or `Ragged` for labels longer than the minimum ("Discard", "Keep
     /// editing"), which would otherwise render hard against the drop shadow.
+    ///
+    /// # Turbo Vision heritage
+    /// **tvision-rs extension** to `TDialog`. The metrics are the classic Turbo Vision
+    /// ones; C++ dialogs place each button by hand.
     pub fn button_row(
         &mut self,
         buttons: &[(&str, Command, crate::widgets::ButtonFlags)],

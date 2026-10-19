@@ -9,7 +9,7 @@
 //! needing to reach through the `Box<dyn Backend>` that the `Renderer` owns.
 //!
 //! # Turbo Vision heritage
-//! An tvision-rs addition with no Turbo Vision counterpart: it stands in for the
+//! **tvision-rs extension**: no Turbo Vision counterpart. It stands in for the
 //! platform terminal driver so the snapshot test suite can drive the framework
 //! synchronously, with injected input and an inspectable screen (deviation D11).
 
@@ -161,6 +161,10 @@ impl HeadlessHandle {
 /// Create with [`HeadlessBackend::new`]; move the backend into a
 /// [`Renderer`](crate::backend::Renderer) and keep the returned
 /// [`HeadlessHandle`] to observe and drive it.
+///
+/// # Turbo Vision heritage
+/// **tvision-rs extension**: no Turbo Vision counterpart. It stands in for the platform
+/// terminal driver so tests can drive an application without a terminal.
 pub struct HeadlessBackend {
     shared: HeadlessHandle,
 }

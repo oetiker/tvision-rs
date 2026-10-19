@@ -8,6 +8,9 @@ use crate::view::{Context, DrawCtx, Group, Rect, View, ViewId};
 use crate::widgets::{InputLine, RevealEye, RevealEyeConfig};
 
 /// See the module docs.
+///
+/// # Turbo Vision heritage
+/// **tvision-rs extension**: no Turbo Vision counterpart.
 pub struct MaskedInput {
     group: Group,
     input_id: ViewId,
