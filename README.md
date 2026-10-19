@@ -53,7 +53,7 @@ becomes the `tv::` namespace: `TButton` → `tv::Button`, `TDialog` → `tv::Dia
 
 ```toml
 [dependencies]
-tv = { package = "tvision-rs", version = "0.17.0" }
+tv = { package = "tvision-rs", version = "0.18.0" }
 ```
 
 ```rust
