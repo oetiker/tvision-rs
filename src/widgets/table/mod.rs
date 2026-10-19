@@ -181,7 +181,7 @@ use crate::widgets::list_viewer;
 
 use body::{TableBody, TableHeader};
 pub use columns::ColumnState;
-pub use layout::{Align, ColumnSpec, SortDir, ValidatorFactory};
+pub use layout::{Align, ColumnSpec, Separators, SortDir, ValidatorFactory};
 pub use model::{RowKey, SortKey, TableModel, VecModel};
 
 /// How a [`Table`] selects rows.
@@ -228,6 +228,8 @@ struct TableData {
     /// The model column the cell cursor was last put on; see
     /// [`cursor_col`](TableData::cursor_col) for the one in effect.
     cursor: Option<usize>,
+    /// Which column separators the table draws (see [`Separators`]).
+    separators: Separators,
 }
 
 type Shared = Rc<RefCell<TableData>>;
@@ -367,6 +369,7 @@ impl Table {
             drop_x: None,
             h_offset: 0,
             cursor: None,
+            separators: Separators::default(),
         }));
         group.insert(Box::new(TableHeader::new(size.x, data.clone())));
         let body_bounds = Rect::new(0, 1, size.x, size.y.max(1));
@@ -438,6 +441,21 @@ impl Table {
     /// The selection mode.
     pub fn selection_mode(&self) -> SelectionMode {
         self.data.borrow().mode
+    }
+
+    /// Builder: which column separators to draw (see [`Separators`]).
+    /// The default, [`Separators::Off`], leaves the one-cell separators
+    /// blank; [`Separators::Header`] draws a `│` rule in the header row only,
+    /// making the resize handle visible; [`Separators::All`] draws the header
+    /// rule and a `│` between every row's cells as well.
+    pub fn with_separators(self, separators: Separators) -> Self {
+        self.data.borrow_mut().separators = separators;
+        self
+    }
+
+    /// The column separators drawn between the table's columns.
+    pub fn separators(&self) -> Separators {
+        self.data.borrow().separators
     }
 
     /// The current model.

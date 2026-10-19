@@ -3,7 +3,7 @@
 use super::*;
 use crate::backend::{HeadlessBackend, Renderer};
 use crate::event::{Key, KeyEvent, KeyModifiers, MouseButtons, MouseEvent, MouseEventFlags};
-use crate::screen::Buffer;
+use crate::screen::{Buffer, Cell};
 use crate::theme::{Role, Theme};
 use crate::timer::TimerQueue;
 use crate::view::{Deferred, DrawCtx, Point, StateFlag};
@@ -219,6 +219,22 @@ fn render(t: &mut Table, w: u16, h: u16) -> String {
         t.draw(&mut dc);
     });
     screen.snapshot()
+}
+
+/// The cell at table-local `(x, y)` after drawing `t` into a fresh `w × h`
+/// buffer — cell-level assertions without parsing a snapshot.
+fn cell_at(t: &mut Table, w: u16, h: u16, x: u16, y: u16) -> Cell {
+    let theme = Theme::classic_blue();
+    let (backend, _screen) = HeadlessBackend::new(w, h);
+    let mut r = Renderer::new(Box::new(backend));
+    let mut out = Cell::default();
+    r.render(|buf: &mut Buffer| {
+        let bounds = t.state().get_bounds();
+        let mut dc = DrawCtx::new(buf, &theme, bounds, bounds.a);
+        t.draw(&mut dc);
+        out = buf.get(x, y).clone();
+    });
+    out
 }
 
 // -- structure ------------------------------------------------------------------
@@ -729,6 +745,78 @@ fn snapshot_hidden_column() {
 }
 
 #[test]
+fn snapshot_separators_header() {
+    let mut fx = Fixture::new(
+        Table::new(Rect::new(0, 0, W, H), columns(), None)
+            .with_separators(Separators::Header)
+            .with_model(model(&ROWS)),
+    );
+    fx.focus(true);
+    fx.key(Key::Down);
+    insta::assert_snapshot!(fx.render(W as u16, H as u16));
+}
+
+#[test]
+fn snapshot_separators_all() {
+    let mut fx = Fixture::new(
+        Table::new(Rect::new(0, 0, W, H), columns(), None)
+            .with_separators(Separators::All)
+            .with_model(model(&ROWS)),
+    );
+    fx.focus(true);
+    fx.key(Key::Down);
+    insta::assert_snapshot!(fx.render(W as u16, H as u16));
+}
+
+#[test]
+fn snapshot_separators_spare_width() {
+    // The table wider than its columns: the trailing rule marks the last
+    // column's resize handle in the spare width (review item 1).
+    let mut fx = Fixture::new(
+        Table::new(Rect::new(0, 0, 40, H), columns(), None)
+            .with_separators(Separators::Header)
+            .with_model(model(&ROWS)),
+    );
+    fx.focus(true);
+    fx.key(Key::Down);
+    insta::assert_snapshot!(fx.render(40, H as u16));
+}
+
+#[test]
+fn snapshot_separators_multi() {
+    // The frozen check column beside the rules: its separator stays put while
+    // the rules run between the scrolling cells, and a marked row keeps the
+    // divider-styled rules under its highlight.
+    let mut fx = Fixture::new(
+        Table::new(Rect::new(0, 0, W, H), columns(), None)
+            .with_separators(Separators::All)
+            .with_model(model(&ROWS))
+            .with_selection_mode(SelectionMode::Multi),
+    );
+    fx.focus(true);
+    fx.key(Key::Char(' ')); // mark a1
+    fx.key(Key::Down); // focus b2, a1 stays marked
+    insta::assert_snapshot!(fx.render(W as u16, H as u16));
+}
+
+#[test]
+fn snapshot_separators_h_scrolled() {
+    // Header and rows scroll together with their rules; the frozen check
+    // column and its separator do not move, and no rule is drawn where the
+    // columns overflow the view.
+    let mut fx = Fixture::new(
+        Table::new(Rect::new(0, 0, 21, H), fixed_columns(), None)
+            .with_separators(Separators::All)
+            .with_model(model(&ROWS))
+            .with_selection_mode(SelectionMode::Multi),
+    );
+    fx.focus(true);
+    fx.key(Key::Char(' '));
+    fx.with(|t, ctx| t.set_h_offset(7, ctx));
+    insta::assert_snapshot!(fx.render(21, H as u16));
+}
+
+#[test]
 fn snapshot_row_role() {
     let rows: Vec<Vec<String>> = ROWS
         .iter()
@@ -748,6 +836,124 @@ fn snapshot_row_role() {
     fx.key(Key::Down);
     fx.key(Key::Down);
     insta::assert_snapshot!(fx.render(W as u16, H as u16));
+}
+
+// -- separators (review round 2) -----------------------------------------------
+
+#[test]
+fn header_draws_the_trailing_rule_in_the_spare_width() {
+    // Columns 4 + 10 + 8 + 5 plus three separators = 30 cells; a 40-wide
+    // table leaves the cell after CPU (x 31) inside the view — it is the
+    // last column's resize handle, so the header must rule it.
+    let mut fx = Fixture::new(
+        Table::new(Rect::new(0, 0, 40, H), columns(), None)
+            .with_separators(Separators::Header)
+            .with_model(model(&ROWS)),
+    );
+    fx.focus(true);
+    let rule = cell_at(fx.t(), 40, H as u16, 31, 0);
+    assert_eq!(rule.symbol(), "│", "the handle right of the last column");
+    assert_eq!(
+        rule.style(),
+        Theme::classic_blue().style(Role::TableHeader),
+        "the rule keeps the header style"
+    );
+    // Off draws no rule in that cell …
+    let mut off =
+        Fixture::new(Table::new(Rect::new(0, 0, 40, H), columns(), None).with_model(model(&ROWS)));
+    assert_eq!(cell_at(off.t(), 40, H as u16, 31, 0).symbol(), " ");
+    // … and without spare width there is no trailing cell: the view's last
+    // cell stays the last column's own label cell, rule or no rule.
+    let mut fit = Fixture::new(
+        Table::new(Rect::new(0, 0, W, H), columns(), None)
+            .with_separators(Separators::Header)
+            .with_model(model(&ROWS)),
+    );
+    fit.focus(true);
+    assert_eq!(cell_at(fit.t(), W as u16, H as u16, 30, 0).symbol(), "U");
+}
+
+#[test]
+fn all_mode_rules_keep_the_divider_style_on_every_row() {
+    // The shared draw paints row text in the row's own colour (focused /
+    // marked / row-role), which would punch a gap of highlight into the
+    // vertical line. The ListViewer's own divider keeps `roles.divider` on
+    // every row; the table rules must do the same.
+    let theme = Theme::classic_blue();
+    let divider = theme.style(Role::ListDivider);
+    let mut fx = Fixture::new(
+        Table::new(Rect::new(0, 0, W, H), columns(), None)
+            .with_separators(Separators::All)
+            .with_model(model(&ROWS)),
+    );
+    fx.focus(true);
+    fx.key(Key::Down); // focus b2 (y 2): its highlight must not reach the rules
+    for y in 1..5 {
+        for x in [5, 16, 25] {
+            let cell = cell_at(fx.t(), W as u16, H as u16, x, y);
+            assert_eq!(cell.symbol(), "│", "rule at ({x}, {y})");
+            assert_eq!(
+                cell.style(),
+                divider,
+                "the rule at ({x}, {y}) keeps roles.divider, not the row colour"
+            );
+        }
+    }
+}
+
+#[test]
+fn all_mode_rows_keep_the_trailing_cell_blank() {
+    // Header-only decision: the trailing rule marks the header's resize
+    // handle. A row's text stops at its last column (`join_cells` rules only
+    // *between* cells), so a row's trailing cell stays background even where
+    // the columns leave spare width — while its last real rule stays put.
+    let mut fx = Fixture::new(
+        Table::new(Rect::new(0, 0, 40, H), columns(), None)
+            .with_separators(Separators::All)
+            .with_model(model(&ROWS)),
+    );
+    fx.focus(true);
+    assert_eq!(
+        cell_at(fx.t(), 40, H as u16, 31, 0).symbol(),
+        "│",
+        "the header rules its trailing handle cell"
+    );
+    assert_eq!(
+        cell_at(fx.t(), 40, H as u16, 31, 1).symbol(),
+        " ",
+        "a row's trailing cell is not a separator cell"
+    );
+    let last_rule = cell_at(fx.t(), 40, H as u16, 25, 1);
+    assert_eq!(last_rule.symbol(), "│", "the real rule before CPU stays");
+    assert_eq!(
+        last_rule.style(),
+        Theme::classic_blue().style(Role::ListDivider),
+        "and keeps the divider style"
+    );
+}
+
+#[test]
+fn the_left_edge_separator_keeps_the_divider_style_too() {
+    // A horizontal offset can land a separator on the view's very first
+    // scrolling cell (content offset == separator cell): the overlay's
+    // range includes `rel == 0`, so that rule keeps `roles.divider` as well.
+    // Columns cannot shrink (`fixed_columns`), so offset 4 overflows 30 > 20.
+    let mut fx = Fixture::new(
+        Table::new(Rect::new(0, 0, 21, H), fixed_columns(), None)
+            .with_separators(Separators::All)
+            .with_model(model(&ROWS)),
+    );
+    fx.focus(true);
+    fx.with(|t, ctx| t.set_h_offset(4, ctx));
+    // The separator between ID and NAME sits at content cell 4 → view x 0
+    // (text starts at TEXT_X = 1) on the focused row (y 1).
+    let edge = cell_at(fx.t(), 21, H as u16, 1, 1);
+    assert_eq!(edge.symbol(), "│", "separator at the left edge of the view");
+    assert_eq!(
+        edge.style(),
+        Theme::classic_blue().style(Role::ListDivider),
+        "the left-edge rule keeps roles.divider, not the row colour"
+    );
 }
 
 // -- layout: stretch and horizontal scroll -----------------------------------
@@ -1471,6 +1677,20 @@ fn a_tilde_in_a_label_does_not_become_a_popup_hotkey() {
 fn the_fixed_builder_sets_the_flag() {
     assert!(ColumnSpec::new("A", 4).fixed(true).fixed);
     assert!(!ColumnSpec::new("A", 4).fixed);
+}
+
+#[test]
+fn with_separators_sets_the_mode() {
+    let t = Table::new(Rect::new(0, 0, W, H), columns(), None);
+    assert_eq!(
+        t.separators(),
+        Separators::Off,
+        "blank separators by default"
+    );
+    let t = t.with_separators(Separators::Header);
+    assert_eq!(t.separators(), Separators::Header);
+    let t = t.with_separators(Separators::All);
+    assert_eq!(t.separators(), Separators::All);
 }
 
 // -- cell editing ----------------------------------------------------------------

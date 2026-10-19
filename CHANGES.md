@@ -16,6 +16,12 @@ into a dated, versioned section.
 
 ### New
 
+- **`Table` column separators can be made visible.** `Table::with_separators`
+  chooses whether the one-cell gap after each column holds a `│` rule:
+  `Separators::Off` (the default) keeps the blank gap, `Separators::Header`
+  rules the label row only so the header's resize handle has a visible target,
+  and `Separators::All` rules the header and between every row's cells.
+
 ### Changed
 
 - Releases now go through a release pull request. Once it is merged, the
