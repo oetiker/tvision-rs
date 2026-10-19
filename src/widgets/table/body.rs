@@ -3,7 +3,7 @@
 
 use crate::command::Command;
 use crate::event::{Event, Key};
-use crate::theme::Role;
+use crate::theme::{Glyphs, Role};
 use crate::view::{Context, DrawCtx, GrowMode, Point, Rect, StateFlag, View, ViewId, ViewState};
 use crate::widgets::list_viewer::{self, ListViewer, ListViewerState};
 
@@ -73,20 +73,23 @@ impl View for TableHeader {
             .sort
             .and_then(|(c, dir)| d.col_order.iter().position(|&m| m == c).map(|p| (p, dir)));
         let sep = d.separators;
-        let labels = header_line(
-            &d.display_columns(),
-            &l.widths[l.frozen..],
-            sort,
-            sep.header_char(),
-        );
+        // The rule glyph is the theme's vertical bar, read the way the
+        // multi-column ListViewer reads its divider's (`ctx.glyphs().frame_v`).
+        let rule = sep.header_char(ctx.glyphs().frame_v);
+        let labels = header_line(&d.display_columns(), &l.widths[l.frozen..], sort, rule);
         // The labels scroll with the rows; the check column's header cell is
         // blank.
-        ctx.put_str(
-            TEXT_X,
-            0,
-            &l.compose("", &labels, d.h_offset, sep.header_char()),
-            style,
-        );
+        ctx.put_str(TEXT_X, 0, &l.compose("", &labels, d.h_offset, rule), style);
+        // The cell after the last column is a resize handle too when the
+        // columns leave spare width (see the module doc's Columns section);
+        // `join_cells` only rules the gaps *between* cells, so rule that one
+        // as well — while it lies inside the view. `Off` leaves it blank.
+        if rule != ' ' {
+            let rel = l.content - l.clamp(d.h_offset);
+            if l.content > 0 && (0..l.view).contains(&rel) {
+                ctx.put_char(TEXT_X + l.frozen_width + rel, 0, rule, style);
+            }
+        }
         if let Some(x) = d.drop_x {
             ctx.put_char(x, 0, DROP_MARK, ctx.style(Role::ListFocused));
         }
@@ -136,6 +139,11 @@ pub(super) struct TableBody {
     layout: RowLayout,
     /// The column specs in display order, refreshed with `layout`.
     display: Vec<ColumnSpec>,
+    /// The theme's vertical-rule glyph, refreshed with the other two: the
+    /// separator rules `get_text` draws are `│` only under the default
+    /// theme. Initialized to the default so a `get_text` outside a draw
+    /// (tests) still sees the theme's own default.
+    glyph: char,
 }
 
 impl TableBody {
@@ -155,6 +163,7 @@ impl TableBody {
             data,
             layout: RowLayout::new(&[], 0, 0),
             display: Vec::new(),
+            glyph: Glyphs::default().frame_v,
         }
     }
 
@@ -228,6 +237,55 @@ impl TableBody {
             .filter(|&c| d.columns[c].editable);
         if col.is_some() {
             d.cursor = col;
+        }
+    }
+
+    /// Repaint the `All`-mode separator rules with the list's divider style.
+    /// The shared draw paints the row text — rules included — in the row's
+    /// own colour (focused / marked / row-role), which would punch a gap of
+    /// highlight into the vertical line. The multi-column ListViewer draws
+    /// its divider the same way, after the text, with `roles.divider`.
+    fn draw_rules(&self, ctx: &mut DrawCtx) {
+        let d = self.data.borrow();
+        let rule = d.separators.row_char(self.glyph);
+        if rule == ' ' {
+            return;
+        }
+        let l = &self.layout;
+        if l.view <= 0 {
+            return;
+        }
+        let off = l.clamp(d.h_offset);
+        let style = ctx.style(self.list_roles().divider);
+        // The separators *between* cells: after the frozen check cell, and
+        // after every visible scrolling column but the last — the row text
+        // stops at `content`, so the last column has no trailing separator
+        // cell in it (that cell is the header's resize handle alone; see the
+        // trailing rule in `TableHeader::draw`). A `spans()` `end` past the
+        // view edge is scrolled away and skipped.
+        let mut xs = Vec::new();
+        if l.frozen > 0 && l.content > 0 && l.widths[0] > 0 {
+            xs.push(TEXT_X + l.widths[0]);
+        }
+        xs.extend(
+            l.spans()
+                .iter()
+                .filter(|&&(_, _, end)| end < l.content)
+                .map(|&(_, _, end)| end - off)
+                .filter(|&rel| (0..l.view).contains(&rel))
+                .map(|rel| TEXT_X + l.frozen_width + rel),
+        );
+        // Unlike the ListViewer's column border, these rules live inside the
+        // row text: a screen row with no text (`item >= range`) has no
+        // separator cells, so nothing there is repainted.
+        for y in 0..self.lv.state.size.y {
+            let item = self.lv.top_item + y;
+            if item >= self.lv.range {
+                continue; // no row text there: nothing to rule
+            }
+            for &x in &xs {
+                ctx.put_char(x, y, rule, style);
+            }
         }
     }
 
@@ -313,7 +371,13 @@ impl ListViewer for TableBody {
             cols: &d.col_order,
         };
         let sep = d.separators;
-        let line = format_line(&model, row, rest_widths, &self.display, sep.row_char());
+        let line = format_line(
+            &model,
+            row,
+            rest_widths,
+            &self.display,
+            sep.row_char(self.glyph),
+        );
         let check = if l.frozen > 0 {
             let marked = d
                 .key_at(item as usize)
@@ -322,7 +386,7 @@ impl ListViewer for TableBody {
         } else {
             String::new()
         };
-        l.compose(&check, &line, d.h_offset, sep.row_char())
+        l.compose(&check, &line, d.h_offset, sep.row_char(self.glyph))
     }
 
     fn is_selected(&self, item: i32) -> bool {
@@ -379,6 +443,9 @@ impl View for TableBody {
     }
 
     fn draw(&mut self, ctx: &mut DrawCtx) {
+        // The theme's rule glyph, refreshed with the geometry the shared
+        // draw calls back into `get_text` with.
+        self.glyph = ctx.glyphs().frame_v;
         {
             let mut d = self.data.borrow_mut();
             self.layout = row_layout(&d, self.lv.state.size.x);
@@ -390,6 +457,7 @@ impl View for TableBody {
         // viewer's own indent stays 0.
         self.lv.indent = 0;
         list_viewer::draw(self, ctx);
+        self.draw_rules(ctx);
         self.draw_cursor(ctx);
     }
 

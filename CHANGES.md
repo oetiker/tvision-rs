@@ -18,11 +18,9 @@ into a dated, versioned section.
 
 - **`Table` column separators can be made visible.** `Table::with_separators`
   chooses whether the one-cell gap after each column holds a `│` rule:
-  `Separators::None` (the default) keeps the blank gap, `Separators::Header`
+  `Separators::Off` (the default) keeps the blank gap, `Separators::Header`
   rules the label row only so the header's resize handle has a visible target,
-  and `Separators::All` rules the header and between every row's cells. The rule
-  is one display cell wide, so the layout, the column hit test and the cell
-  cursor stay on the same cells.
+  and `Separators::All` rules the header and between every row's cells.
 
 ### Changed
 

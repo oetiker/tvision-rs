@@ -13,13 +13,14 @@ text:
 |                               |
 attr:
 |aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
-|bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb|
-|ccccccccccccccccccccccccccccccc|
-|bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb|
-|bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb|
+|bbbbbcbbbbbbbbbbcbbbbbbbbcbbbbb|
+|dddddcddddddddddcddddddddcddddd|
+|bbbbbcbbbbbbbbbbcbbbbbbbbcbbbbb|
+|bbbbbcbbbbbbbbbbcbbbbbbbbcbbbbb|
 |bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb|
 legend:
   . default
   a fg=RGB(255,255,85) bg=RGB(0,0,170)
   b fg=RGB(0,0,0) bg=RGB(0,170,170)
-  c fg=RGB(255,255,255) bg=RGB(0,170,0)
+  c fg=RGB(0,0,170) bg=RGB(0,170,170)
+  d fg=RGB(255,255,255) bg=RGB(0,170,0)

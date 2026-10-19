@@ -134,6 +134,11 @@ right-click the header to show or hide columns from a popup; `TABLE_COLUMNS`
 opens the same popup from a key or menu. Each of these broadcasts
 `TABLE_COLUMNS_CHANGED`; `column_layout()` / `set_column_layout()` save and
 restore the arrangement. `resizable(false)` / `movable(false)` lock a column.
+`with_separators` decides whether the one-cell gaps between the columns stay
+blank (the default, `Separators::Off`) or carry the theme's `│` rule:
+`Separators::Header` rules the label row only, so the separator you drag to
+resize a column has a visible target, and `Separators::All` rules between every
+row's cells as well.
 In `SelectionMode::Multi` the rows get a leading check column drawn like
 check boxes: click a row's `[ ]` box, or press Space, to mark it. The table
 broadcasts `TABLE_SORT_CHANGED`, `TABLE_SELECTION_CHANGED` and, in single

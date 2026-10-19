@@ -51,39 +51,41 @@ impl SortDir {
     }
 }
 
-/// The glyph of a visible column separator: the light box-drawing vertical,
-/// one display cell wide (the character the frame and the status line use).
-const SEPARATOR_RULE: char = '│';
-
 /// Which column separators a [`Table`](super::Table) draws between its
 /// columns. A separator is always one cell wide — this only chooses whether
-/// that cell holds a visible rule, so the layout never shifts.
+/// that cell holds a visible rule, so the layout never shifts. The rule glyph
+/// itself belongs to the theme (its [`frame_v`](crate::theme::Glyphs::frame_v));
+/// the draw that renders it passes it in, like the `ListViewer` divider does.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Separators {
-    /// One blank cell between columns — no visible rule (the default).
+    /// One blank cell between columns — no visible rule (the default). Named
+    /// `Off` rather than `None` so a `use Separators::*` does not shadow
+    /// [`Option::None`].
     #[default]
-    None,
-    /// A `│` rule in the header row only, so the resize handle is visible;
+    Off,
+    /// The rule in the header row only, so the resize handle is visible;
     /// the rows keep blank separators.
     Header,
-    /// A `│` rule in the header and between every row's cells.
+    /// The rule in the header and between every row's cells.
     All,
 }
 
 impl Separators {
-    /// The character a header separator cell draws.
-    pub(crate) fn header_char(self) -> char {
+    /// The character a header separator cell draws: `rule` where the mode
+    /// rules, blank where it does not.
+    pub(crate) fn header_char(self, rule: char) -> char {
         match self {
-            Separators::None => ' ',
-            Separators::Header | Separators::All => SEPARATOR_RULE,
+            Separators::Off => ' ',
+            Separators::Header | Separators::All => rule,
         }
     }
 
-    /// The character a row separator cell draws.
-    pub(crate) fn row_char(self) -> char {
+    /// The character a row separator cell draws: `rule` only in
+    /// [`Separators::All`], blank otherwise.
+    pub(crate) fn row_char(self, rule: char) -> char {
         match self {
-            Separators::All => SEPARATOR_RULE,
-            Separators::None | Separators::Header => ' ',
+            Separators::All => rule,
+            Separators::Off | Separators::Header => ' ',
         }
     }
 }
@@ -670,6 +672,11 @@ mod tests {
     use crate::widgets::table::model::{RowKey, SortKey, VecModel};
     use std::borrow::Cow;
 
+    /// The default theme's `frame_v` — the glyph the draws pass to the
+    /// [`Separators`] helpers (these tests are view-free, so the literal
+    /// stands in for `ctx.glyphs().frame_v`).
+    const RULE: char = '│';
+
     fn col(label: &str, width: i32) -> ColumnSpec {
         ColumnSpec::new(label, width)
     }
@@ -975,42 +982,55 @@ mod tests {
 
         // The default draws one blank cell between columns.
         assert_eq!(
-            header_line(&cols, &widths, None, Separators::None.header_char()),
+            header_line(&cols, &widths, None, Separators::Off.header_char(RULE)),
             "ID   NAME     STATE "
         );
         assert_eq!(
-            format_line(&m, 0, &widths, &cols, Separators::None.row_char()),
+            format_line(&m, 0, &widths, &cols, Separators::Off.row_char(RULE)),
             "a1   web      runni…"
         );
 
         // Header: a `│` rule in the label row only; the rows keep spaces.
         assert_eq!(
-            header_line(&cols, &widths, None, Separators::Header.header_char()),
+            header_line(&cols, &widths, None, Separators::Header.header_char(RULE)),
             "ID  │NAME    │STATE "
         );
         assert_eq!(
-            format_line(&m, 0, &widths, &cols, Separators::Header.row_char()),
+            format_line(&m, 0, &widths, &cols, Separators::Header.row_char(RULE)),
             "a1   web      runni…",
             "rows keep the blank separator"
         );
 
         // All: the rule in the header and between every row's cells.
         assert_eq!(
-            header_line(&cols, &widths, None, Separators::All.header_char()),
+            header_line(&cols, &widths, None, Separators::All.header_char(RULE)),
             "ID  │NAME    │STATE "
         );
         assert_eq!(
-            format_line(&m, 0, &widths, &cols, Separators::All.row_char()),
+            format_line(&m, 0, &widths, &cols, Separators::All.row_char(RULE)),
             "a1  │web     │runni…"
         );
 
         // A rule is one cell wide, so it never changes the line's width.
-        for sep in [Separators::None, Separators::Header, Separators::All] {
-            let head = header_line(&cols, &widths, None, sep.header_char());
-            let row = format_line(&m, 0, &widths, &cols, sep.row_char());
+        for sep in [Separators::Off, Separators::Header, Separators::All] {
+            let head = header_line(&cols, &widths, None, sep.header_char(RULE));
+            let row = format_line(&m, 0, &widths, &cols, sep.row_char(RULE));
             assert_eq!(text::width(&head) as i32, line_width(&widths));
             assert_eq!(text::width(&row) as i32, line_width(&widths));
         }
+    }
+
+    #[test]
+    fn separator_rules_take_the_glyph_from_the_theme() {
+        // The rule is not a literal of this module: it is whatever
+        // `ctx.glyphs().frame_v` holds, so another theme can rule with
+        // another glyph (the ListViewer divider reads it the same way).
+        const DOUBLE: char = '║';
+        assert_eq!(Separators::Header.header_char(DOUBLE), DOUBLE);
+        assert_eq!(Separators::All.header_char(DOUBLE), DOUBLE);
+        assert_eq!(Separators::All.row_char(DOUBLE), DOUBLE);
+        assert_eq!(Separators::Off.header_char(DOUBLE), ' ');
+        assert_eq!(Separators::Header.row_char(DOUBLE), ' ', "rows stay blank");
     }
 
     #[test]
@@ -1020,17 +1040,17 @@ mod tests {
         let cols = [col("A", 4), col("B", 4)];
         let l = RowLayout::new(&cols, 0, 9);
         assert_eq!(l.widths, vec![4, 4]);
-        let head = header_line(&cols, &l.widths, None, Separators::Header.header_char());
-        assert_eq!(head.chars().nth(4), Some(SEPARATOR_RULE));
+        let head = header_line(&cols, &l.widths, None, Separators::Header.header_char(RULE));
+        assert_eq!(head.chars().nth(4), Some(RULE));
         assert_eq!(l.separator_at(4, 0), Some(0));
         let row = format_line(
             &model(&[&["a", "b"]]),
             0,
             &l.widths,
             &cols,
-            Separators::All.row_char(),
+            Separators::All.row_char(RULE),
         );
-        assert_eq!(row.chars().nth(4), Some(SEPARATOR_RULE));
+        assert_eq!(row.chars().nth(4), Some(RULE));
     }
 
     /// A model whose display text is not its sort key (the tvdocker

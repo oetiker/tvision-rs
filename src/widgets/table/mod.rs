@@ -444,9 +444,10 @@ impl Table {
     }
 
     /// Builder: which column separators to draw (see [`Separators`]).
-    /// The default, [`Separators::None`], leaves the one-cell separators
+    /// The default, [`Separators::Off`], leaves the one-cell separators
     /// blank; [`Separators::Header`] draws a `│` rule in the header row only,
-    /// making the resize handle visible.
+    /// making the resize handle visible; [`Separators::All`] draws the header
+    /// rule and a `│` between every row's cells as well.
     pub fn with_separators(self, separators: Separators) -> Self {
         self.data.borrow_mut().separators = separators;
         self

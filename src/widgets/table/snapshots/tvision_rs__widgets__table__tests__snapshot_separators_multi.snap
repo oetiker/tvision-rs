@@ -1,0 +1,27 @@
+---
+source: src/widgets/table/tests.rs
+expression: "fx.render(W as u16, H as u16)"
+---
+size: 31x6
+cursor: hidden
+text:
+|    │ID  │NAME   │STATE  │  CPU|
+| [X]│a1  │web    │running│ 12.5|
+| [ ]│b2  │db     │exited │    0|
+| [ ]│c3  │cache  │running│ 3.25|
+| [ ]│d4  │worker…│paused │  100|
+|                               |
+attr:
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|bbbbcbbbbcbbbbbbbcbbbbbbbcbbbbb|
+|ddddcddddcdddddddcdddddddcddddd|
+|eeeeceeeeceeeeeeeceeeeeeeceeeee|
+|eeeeceeeeceeeeeeeceeeeeeeceeeee|
+|eeeeeeeeeeeeeeeeeeeeeeeeeeeeeee|
+legend:
+  . default
+  a fg=RGB(255,255,85) bg=RGB(0,0,170)
+  b fg=RGB(255,255,85) bg=RGB(0,170,170)
+  c fg=RGB(0,0,170) bg=RGB(0,170,170)
+  d fg=RGB(255,255,255) bg=RGB(0,170,0)
+  e fg=RGB(0,0,0) bg=RGB(0,170,170)
