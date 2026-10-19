@@ -1,17 +1,4 @@
-//! Headless backend — the deterministic test backend.
-//!
-//! `HeadlessBackend` stores an in-memory cell buffer and a programmable event
-//! queue.  It never performs I/O and never blocks.  Tests keep a `HeadlessHandle`
-//! to inject events and inspect the screen after each `Renderer::render` call.
-//!
-//! The shared-state pattern avoids downcasting: the handle and the backend share
-//! the same `Rc<RefCell<…>>` cells, so tests can observe the screen without
-//! needing to reach through the `Box<dyn Backend>` that the `Renderer` owns.
-//!
-//! # Turbo Vision heritage
-//! An tvision-rs addition with no Turbo Vision counterpart: it stands in for the
-//! platform terminal driver so the snapshot test suite can drive the framework
-//! synchronously, with injected input and an inspectable screen (deviation D11).
+//! `HeadlessBackend`, the deterministic test backend (documented on the type).
 
 use std::cell::{Cell as StdCell, RefCell};
 use std::collections::VecDeque;
@@ -156,11 +143,24 @@ impl HeadlessHandle {
 // HeadlessBackend
 // ---------------------------------------------------------------------------
 
-/// In-memory backend for tests.
+/// In-memory backend for deterministic tests.
 ///
-/// Create with [`HeadlessBackend::new`]; move the backend into a
+/// `HeadlessBackend` stores an in-memory cell buffer and a programmable event
+/// queue. It never performs I/O and never blocks. Create it with
+/// [`HeadlessBackend::new`]; move the backend into a
 /// [`Renderer`](crate::backend::Renderer) and keep the returned
-/// [`HeadlessHandle`] to observe and drive it.
+/// [`HeadlessHandle`] to inject events and inspect the screen after each
+/// `Renderer::render` call.
+///
+/// The shared-state pattern avoids downcasting: the handle and the backend share
+/// the same `Rc<RefCell<…>>` cells, so tests can observe the screen without
+/// needing to reach through the `Box<dyn Backend>` that the `Renderer` owns.
+///
+/// # Turbo Vision heritage
+/// **tvision-rs extension**: no Turbo Vision counterpart. It stands in for the
+/// platform terminal driver so the snapshot test suite, or an application's
+/// own tests, can drive the framework synchronously, with injected input and an
+/// inspectable screen (deviation D11).
 pub struct HeadlessBackend {
     shared: HeadlessHandle,
 }

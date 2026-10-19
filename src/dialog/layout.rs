@@ -1,6 +1,5 @@
-//! Named layout metrics for dialogs — the recovered classic Turbo Vision
-//! conventions (confirmed against `msgbox.cpp`/`tfildlg.cpp`), so dialogs stop
-//! inventing their own coordinates. See `docs/design/dialog-layout.md`.
+//! Named layout metrics for dialogs (documented in the `dialog` module docs).
+//! See `docs/design/dialog-layout.md`.
 
 use crate::view::Point;
 
@@ -44,6 +43,9 @@ pub(crate) fn button_face_width(title: &str) -> i32 {
 /// in a row. In every case the width is floored at the dialog's configured
 /// minimum (see [`set_button_min_width`](crate::dialog::Dialog::set_button_min_width),
 /// default [`STD_BUTTON`]).
+///
+/// # Turbo Vision heritage
+/// **tvision-rs extension** to `TDialog`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ButtonLayout {

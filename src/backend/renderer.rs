@@ -1,31 +1,34 @@
-//! Renderer — the per-frame draw cycle.
-//!
-//! The `Renderer` owns the back/front `Buffer` pair plus a boxed `Backend`.  Each
-//! frame it:
-//! 1. Resets the back buffer.
-//! 2. Runs the paint closure into the back buffer.
-//! 3. Diffs the back buffer against the front buffer.
-//! 4. Pushes changed cells to the backend.
-//! 5. Sets the cursor and, while it is shown, the caret size.
-//! 6. Flushes.
-//! 7. Swaps back/front so the new frame becomes the reference for the next diff.
-//!
-//! This mirrors the role of ratatui's `Terminal::draw` but is simpler: there is
-//! no partial-repaint or damage-tracking — the whole view tree is painted every
-//! frame and the cell diff keeps the terminal I/O bounded.
-//!
-//! # Turbo Vision heritage
-//! Replaces Turbo Vision's incremental, per-view screen writes (each view wrote
-//! its buffer straight through the screen driver) with a double-buffered
-//! whole-tree repaint plus diff. The per-view damage tracking is dropped in favour
-//! of repaint-and-diff (deviation D8).
+//! `Renderer`, the per-frame draw cycle (documented on the type).
 
 use crate::backend::Backend;
 use crate::screen::Buffer;
 
 /// Owns the back/front buffer pair and a boxed [`Backend`].
 ///
+/// Renderer — the per-frame draw cycle.
+///
+/// The `Renderer` owns the back/front `Buffer` pair plus a boxed `Backend`.  Each
+/// frame it:
+/// 1. Resets the back buffer.
+/// 2. Runs the paint closure into the back buffer.
+/// 3. Diffs the back buffer against the front buffer.
+/// 4. Pushes changed cells to the backend.
+/// 5. Sets the cursor and, while it is shown, the caret size.
+/// 6. Flushes.
+/// 7. Swaps back/front so the new frame becomes the reference for the next diff.
+///
+/// This mirrors the role of ratatui's `Terminal::draw` but is simpler: there is
+/// no partial-repaint or damage-tracking — the whole view tree is painted every
+/// frame and the cell diff keeps the terminal I/O bounded.
+///
 /// Constructed with [`Renderer::new`]; the frame cycle is [`Renderer::render`].
+///
+/// # Turbo Vision heritage
+///
+/// Replaces Turbo Vision's incremental, per-view screen writes (each view wrote
+/// its buffer straight through the screen driver) with a double-buffered
+/// whole-tree repaint plus diff. The per-view damage tracking is dropped in favour
+/// of repaint-and-diff (deviation D8).
 pub struct Renderer {
     backend: Box<dyn Backend>,
     /// `buffers[0]` and `buffers[1]` alternate roles each frame.

@@ -5,7 +5,15 @@
 //!
 //! Pure color-mapping math: `RGB → xterm-256 → xterm-16 → BIOS`. All functions
 //! are const-capable and I/O-free, so a backend can downsample any color to the
-//! depth its terminal supports.
+//! depth its terminal supports. They operate on raw `u8` channel values and
+//! palette indices and are decoupled from the [`Color`](crate::color::Color)
+//! enum: the [`Backend`] assembles the capability-aware policy that decides
+//! which rung of the ladder to use.
+//!
+//! Turbo Vision heritage: the functions port `RGBtoXTerm16`, `RGBtoXTerm256`,
+//! `BIOStoXTerm16` and the related helpers from `colors.cpp` / `colors.h`. The
+//! math is reproduced verbatim; only the storage is typed (`u8` channels rather
+//! than packed bytes).
 //!
 //! ## Backend trait + implementations
 //!

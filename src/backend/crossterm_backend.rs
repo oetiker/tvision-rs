@@ -1,66 +1,4 @@
-//! Crossterm backend — the production terminal implementation.
-//!
-//! Wraps `crossterm` for terminal I/O behind the [`Backend`] trait.
-//!
-//! This backend is the production path.  It does not run in CI (no TTY), but it
-//! must compile and be correct/reasonable.
-//!
-//! ## Terminal lifecycle (RAII)
-//! `CrosstermBackend::new()` performs the full terminal setup — raw mode,
-//! alternate screen, mouse capture — at construction; `Drop` restores the
-//! terminal (best-effort, errors ignored), so an tvision-rs program never hand-rolls
-//! terminal setup.
-//!
-//! Two process-global hooks (installed once, on the first construction) keep
-//! the user's terminal usable when the program does not exit normally:
-//!
-//! * a **panic hook** that restores the terminal before delegating to the
-//!   previous hook — so the panic message prints on the normal screen, and a
-//!   crashed TUI app leaves the shell sane;
-//! * (unix) a **signal thread** that restores the terminal on `SIGINT`,
-//!   `SIGTERM`, or `SIGHUP` and exits with status `128 + signal_number` (the
-//!   shell convention: 130 for SIGINT, 143 for SIGTERM, 129 for SIGHUP).
-//!   Signals are handled on a dedicated thread — not in an async-signal
-//!   context — so calling into crossterm is sound. (`SIGKILL` is uncatchable;
-//!   a `kill -9` still leaves the terminal dirty — run `reset` to recover.)
-//!
-//! The restore sequence is idempotent, so Drop, the panic hook, and the signal
-//! thread may each run it without harm. Both hooks persist for the process
-//! lifetime (a later restore on an already-restored terminal is a no-op).
-//!
-//! ## Clipboard
-//! The clipboard is the [`ClipboardChain`] (see `backend::clipboard`):
-//!
-//! - **Copy** (`set_clipboard`): OS-native via arboard (`os-clipboard`
-//!   feature, on by default) → OSC 52 escape sequence queued on the normal
-//!   output handle (delivered by the next `flush`) → internal string buffer.
-//!   Returns `true` only on the native rung (trait contract: `false` = fell
-//!   back to internal).
-//! - **Paste** (`get_clipboard`): OS-native → internal buffer → `None`.
-//!   There is no OSC 52 *read* rung — the capability probes it needs require
-//!   owning the input parser, which crossterm (not tvision-rs) owns.
-//!
-//! **SSH story:** with no display, arboard init fails and the chain runs
-//! without its native rung — but the OSC 52 emit still reaches the *local*
-//! terminal's clipboard on copy, which is exactly what a remote TUI wants.
-//! Paste over SSH falls back to the internal buffer (copies made inside the
-//! app) or the terminal's own bracketed paste, which arrives as
-//! [`Event::Paste`](crate::event::Event::Paste).
-//!
-//! ## Color depth
-//! `ColorDepth` selects which rung of the quantization ladder to use when
-//! mapping our `Color` enum to crossterm colors.
-//!
-//! ## Key/event translation
-//! `crossterm::event::Event` is translated to our `Event` enum.  Only
-//! `KeyEventKind::Press` and `Repeat` are translated; `Release` is ignored.
-//!
-//! # Turbo Vision heritage
-//! Replaces the platform driver behind `TScreen` / `THardwareInfo` and the Unix
-//! terminal I/O of `unixcon.cpp` / `termio.cpp` with a crossterm-backed
-//! [`Backend`]. Terminal setup that the original did in the application
-//! constructor chain is RAII here: construction sets the terminal up, `Drop` tears
-//! it down.
+//! `CrosstermBackend`, the production terminal backend (documented on the type).
 
 use std::io::{self, Stdout, Write as _};
 use std::time::Duration;
@@ -115,14 +53,81 @@ pub enum ColorDepth {
 
 /// Production backend backed by crossterm.
 ///
+/// Crossterm backend — the production terminal implementation.
+///
+/// Wraps `crossterm` for terminal I/O behind the [`Backend`] trait.
+///
+/// This backend is the production path.  It does not run in CI (no TTY), but it
+/// must compile and be correct/reasonable.
+///
+/// ## Terminal lifecycle (RAII)
+/// `CrosstermBackend::new()` performs the full terminal setup — raw mode,
+/// alternate screen, mouse capture — at construction; `Drop` restores the
+/// terminal (best-effort, errors ignored), so a tvision-rs program never hand-rolls
+/// terminal setup.
+///
+/// Two process-global hooks (installed once, on the first construction) keep
+/// the user's terminal usable when the program does not exit normally:
+///
+/// * a **panic hook** that restores the terminal before delegating to the
+///   previous hook — so the panic message prints on the normal screen, and a
+///   crashed TUI app leaves the shell sane;
+/// * (unix) a **signal thread** that restores the terminal on `SIGINT`,
+///   `SIGTERM`, or `SIGHUP` and exits with status `128 + signal_number` (the
+///   shell convention: 130 for SIGINT, 143 for SIGTERM, 129 for SIGHUP).
+///   Signals are handled on a dedicated thread — not in an async-signal
+///   context — so calling into crossterm is sound. (`SIGKILL` is uncatchable;
+///   a `kill -9` still leaves the terminal dirty — run `reset` to recover.)
+///
+/// The restore sequence is idempotent, so Drop, the panic hook, and the signal
+/// thread may each run it without harm. Both hooks persist for the process
+/// lifetime (a later restore on an already-restored terminal is a no-op).
+///
+/// ## Clipboard
+/// The clipboard is the `ClipboardChain` (see `backend::clipboard`):
+///
+/// - **Copy** (`set_clipboard`): OS-native via arboard (`os-clipboard`
+///   feature, on by default) → OSC 52 escape sequence queued on the normal
+///   output handle (delivered by the next `flush`) → internal string buffer.
+///   Returns `true` only on the native rung (trait contract: `false` = fell
+///   back to internal).
+/// - **Paste** (`get_clipboard`): OS-native → internal buffer → `None`.
+///   There is no OSC 52 *read* rung — the capability probes it needs require
+///   owning the input parser, which crossterm (not tvision-rs) owns.
+///
+/// **SSH story:** with no display, arboard init fails and the chain runs
+/// without its native rung — but the OSC 52 emit still reaches the *local*
+/// terminal's clipboard on copy, which is exactly what a remote TUI wants.
+/// Paste over SSH falls back to the internal buffer (copies made inside the
+/// app) or the terminal's own bracketed paste, which arrives as
+/// [`Event::Paste`](crate::event::Event::Paste).
+///
+/// ## Color depth
+/// `ColorDepth` selects which rung of the quantization ladder to use when
+/// mapping our `Color` enum to crossterm colors.
+///
+/// ## Key/event translation
+/// `crossterm::event::Event` is translated to our `Event` enum.  Only
+/// `KeyEventKind::Press` and `Repeat` are translated; `Release` is ignored.
+///
 /// Construct with [`CrosstermBackend::new`].  Construction performs the full
 /// terminal setup (raw mode, alternate screen, mouse capture) and `Drop`
-/// restores the terminal — see the module-level `## Terminal lifecycle (RAII)`
-/// note.
+/// restores the terminal; see *Terminal lifecycle (RAII)* above.
 ///
 /// # Turbo Vision heritage
-/// The production realization of the [`Backend`] seam — see the module-level
-/// heritage note for the `TScreen` / terminal-driver lineage.
+///
+/// Replaces the platform driver behind `TScreen` / `THardwareInfo` and the Unix
+/// terminal I/O of `unixcon.cpp` / `termio.cpp` with a crossterm-backed
+/// [`Backend`]. Terminal setup that the original did in the application
+/// constructor chain is RAII here: construction sets the terminal up, `Drop` tears
+/// it down.
+///
+/// The production realization of the [`Backend`] seam.
+///
+/// **tvision-rs extension**: each frame is wrapped in synchronized output (DEC
+/// private mode 2026), so a terminal that supports it shows the frame whole
+/// instead of repainting it part-way. magiblot's terminal driver does not use
+/// the mode.
 pub struct CrosstermBackend {
     out: Stdout,
     color_depth: ColorDepth,
@@ -378,7 +383,7 @@ impl Backend for CrosstermBackend {
         }
     }
 
-    /// Run the copy chain (module `## Clipboard` docs): native → OSC 52 →
+    /// Run the copy chain (see *Clipboard* in the [`CrosstermBackend`] docs): native → OSC 52 →
     /// internal. The OSC sequence is queued on the normal output handle and
     /// delivered by the next `flush` (every pump iteration flushes).
     fn set_clipboard(&mut self, text: &str) -> bool {

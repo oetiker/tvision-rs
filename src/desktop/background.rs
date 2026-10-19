@@ -1,15 +1,14 @@
-//! The desktop [`Background`] — the backdrop the desktop and its windows sit
-//! on.
-//!
-//! The simplest concrete view: it fills its entire extent with a repeated
-//! pattern character styled with [`Role::Background`], and handles no events.
-//! Its grow mode stretches it with its owner on the right and bottom edges, so
-//! it always covers the desktop.
+//! `Background`, the desktop backdrop (documented on the type).
 
 use crate::theme::Role;
 use crate::view::{DrawCtx, Rect, View, ViewState};
 
 /// Desktop background fill.
+///
+/// The simplest concrete view: it fills its entire extent with a repeated
+/// pattern character styled with [`Role::Background`], and handles no events.
+/// Its grow mode stretches it with its owner on the right and bottom edges, so
+/// it always covers the desktop.
 ///
 /// Fills its extent with a single repeated `pattern` character, styled through
 /// [`Role::Background`] from the active [`Theme`](crate::theme::Theme).

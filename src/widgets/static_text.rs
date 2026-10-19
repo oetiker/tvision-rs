@@ -1,24 +1,4 @@
-//! Read-only text widgets: [`StaticText`] (a word-wrapped text block), [`Label`]
-//! (a hotkey-bearing caption that focuses its linked control), and [`ParamText`]
-//! (a static text whose content is set at runtime).
-//!
-//! # Word-wrap algorithm
-//!
-//! For each output row: fill with the static-text color; if text remains, handle
-//! a leading `\x03` (ETX) byte as a *center-this-line* flag (it persists across
-//! wrapped continuations until `\n` resets it); compute the byte offset reached
-//! by scrolling `size.x` display columns; pack whole words within that limit;
-//! handle the back-off (step back to the last word boundary, or hard-break if the
-//! first word alone overflows); draw the line, centered or left-aligned; consume
-//! trailing spaces; on `\n` reset centering and advance past the newline.
-//!
-//! Word-scanning over byte offsets is safe because space, newline, and ETX are
-//! single-byte ASCII; non-ASCII runs are advanced through whole grapheme clusters.
-//!
-//! # Turbo Vision heritage
-//!
-//! Ports `TStaticText` (`tstatict.cpp`), `TLabel` (`tlabel.cpp`), and
-//! `TParamText` (`tstatict.cpp`). The palette becomes [`Role`]s.
+//! `StaticText`, `Label` and `ParamText` (documented on `StaticText`).
 
 use crate::command::Command;
 use crate::event::{Event, hot_key, is_alt_hotkey, is_plain_hotkey};
@@ -32,9 +12,27 @@ use crate::view::{Context, DrawCtx, GrowMode, Options, Phase, Rect, View, ViewId
 
 /// A read-only, word-wrapped text block. No events; not selectable.
 ///
+/// Read-only text widgets: [`StaticText`] (a word-wrapped text block), [`Label`]
+/// (a hotkey-bearing caption that focuses its linked control), and [`ParamText`]
+/// (a static text whose content is set at runtime).
+///
+/// # Word-wrap algorithm
+///
+/// For each output row: fill with the static-text color; if text remains, handle
+/// a leading `\x03` (ETX) byte as a *center-this-line* flag (it persists across
+/// wrapped continuations until `\n` resets it); compute the byte offset reached
+/// by scrolling `size.x` display columns; pack whole words within that limit;
+/// handle the back-off (step back to the last word boundary, or hard-break if the
+/// first word alone overflows); draw the line, centered or left-aligned; consume
+/// trailing spaces; on `\n` reset centering and advance past the newline.
+///
+/// Word-scanning over byte offsets is safe because space, newline, and ETX are
+/// single-byte ASCII; non-ASCII runs are advanced through whole grapheme clusters.
+///
 /// # Turbo Vision heritage
 ///
-/// Ports `TStaticText` (`tstatict.cpp`).
+/// Ports `TStaticText` (`tstatict.cpp`), `TLabel` (`tlabel.cpp`), and
+/// `TParamText` (`tstatict.cpp`). The palette becomes [`Role`]s.
 pub struct StaticText {
     /// View state (geometry, flags, etc.) — the composition target.
     pub state: ViewState,

@@ -1,13 +1,16 @@
-//! A masked text field with a reveal eye: an [`InputLine`] (masked) plus a
-//! [`RevealEye`](super::RevealEye) in its last column, bundled as one group so
-//! the eye is its own Tab stop and reveal is wired internally.
+//! `MaskedInput`, a masked text field with a reveal eye (documented on the type).
 
 use crate::data::FieldValue;
 use crate::event::Event;
 use crate::view::{Context, DrawCtx, Group, Rect, View, ViewId};
 use crate::widgets::{InputLine, RevealEye, RevealEyeConfig};
 
-/// See the module docs.
+/// A masked text field with a reveal eye: an [`InputLine`] (masked) plus a
+/// [`RevealEye`](super::RevealEye) in its last column, bundled as one group so
+/// the eye is its own Tab stop and reveal is wired internally.
+///
+/// # Turbo Vision heritage
+/// **tvision-rs extension**: no Turbo Vision counterpart.
 pub struct MaskedInput {
     group: Group,
     input_id: ViewId,

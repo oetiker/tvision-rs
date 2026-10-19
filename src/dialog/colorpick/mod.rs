@@ -1,11 +1,4 @@
-//! Truecolor color-picker — an tvision-rs-original extension (NOT a faithful port).
-//!
-//! [`ColorPicker`] is a [`Group`](crate::view::Group) container assembled from a
-//! [`TabBar`](crate::widgets::TabBar) (tab strip), a
-//! [`PageStack`](crate::widgets::PageStack) of four surface pages, and an
-//! always-visible `InfoColumn`. The four surfaces and the info column share one
-//! `ColorModel` through a [`SharedModel`]. Produces any
-//! [`Color`](crate::color::Color) variant.
+//! The truecolor `ColorPicker` (documented on the type).
 
 pub(crate) mod drag;
 mod info;
@@ -90,6 +83,23 @@ impl Tab {
 /// The reusable, embeddable truecolor color-picker view. A `Group` wrapping a
 /// `TabBar` + `PageStack` (four surface pages) + an `InfoColumn`, all sharing one
 /// `ColorModel`. Does NOT own OK/Cancel (dialog chrome).
+///
+/// Truecolor color picker, a tvision-rs extension that replaces `TColorDialog`.
+///
+/// [`ColorPicker`] is a [`Group`](crate::view::Group) container assembled from a
+/// [`TabBar`](crate::widgets::TabBar) (tab strip), a
+/// [`PageStack`](crate::widgets::PageStack) of four surface pages, and an
+/// always-visible `InfoColumn`. The four surfaces and the info column share one
+/// `ColorModel` through a `SharedModel`. Produces any
+/// [`Color`](crate::color::Color) variant.
+///
+/// # Turbo Vision heritage
+///
+/// **tvision-rs extension**: no Turbo Vision counterpart. It takes the place of the
+/// `TColorDialog` cluster (`colorsel.h`), which edited the application's
+/// `TPalette`, each entry a foreground/background attribute built from the BIOS
+/// colors. tvision-rs replaces that
+/// palette with a role-based [`Theme`](crate::theme::Theme).
 pub struct ColorPicker {
     group: Group,
     tab_bar_id: ViewId,
@@ -122,9 +132,9 @@ impl ColorPicker {
     /// [`Program::color_dialog`](crate::Program::color_dialog).
     ///
     /// # Turbo Vision heritage
-    /// tvision-rs-original extension. Supersedes `TColorDialog::Init` (guide
-    /// p. 407–408), which built a fixed 62×19 dialog editing a 16-entry BIOS
-    /// palette. This constructor builds only the picker body; the caller owns
+    /// No Turbo Vision counterpart. Supersedes `TColorDialog::Init` (guide
+    /// p. 407–408), which built a fixed 62×19 dialog editing the application's
+    /// `TPalette` attributes. This constructor builds only the picker body; the caller owns
     /// the dialog chrome.
     pub fn new(bounds: Rect, initial: Color) -> Self {
         let w = bounds.b.x - bounds.a.x;

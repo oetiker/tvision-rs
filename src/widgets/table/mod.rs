@@ -156,9 +156,10 @@
 //!
 //! # Turbo Vision heritage
 //!
-//! None — Turbo Vision has no table; this is a tvision-rs extension like
+//! **tvision-rs extension**: no Turbo Vision counterpart. Like
 //! [`Splitter`](crate::widgets::Splitter) and
-//! [`TabBar`](crate::widgets::TabBar). Its feature set and the pure helpers in
+//! [`TabBar`](crate::widgets::TabBar), it is listed on the guide's
+//! "Extensions beyond Turbo Vision" page. Its feature set and the pure helpers in
 //! [`layout`] are adapted from the `Table` of tvdocker
 //! (<https://github.com/supertorpe/tvdocker>, MIT, by supertorpe), rebuilt on
 //! the list viewer.

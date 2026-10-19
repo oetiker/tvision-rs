@@ -1,48 +1,4 @@
-//! The live event loop and application root.
-//!
-//! [`Program`] is the application root: it owns the single event loop, the
-//! desktop / status-line / menu-bar subviews, the [`TimerQueue`], and the
-//! [`CaptureStack`]. [`Program::run`] is the *only* loop ([`Program::pump_once`]
-//! is one iteration), and modality is a [`ModalFrame`] on the [`CaptureStack`]:
-//! a handler that consumes every otherwise-unhandled event *is* the modal loop.
-//!
-//! ## How it works
-//!
-//! * **One loop, no nested modal loops.** [`Program::run`] is the single event
-//!   loop and `pump_once` is one iteration; modal dialogs are realized as a
-//!   [`ModalFrame`] capture handler rather than a nested blocking loop.
-//!
-//! * **Broadcasts carry a subject.** `Event::Broadcast` carries a
-//!   `source: ViewId` identifying the subject view; `Event::Command` carries only
-//!   the [`Command`]. Integer payloads are not served by `source` (they are not
-//!   `ViewId`s): a fired timer's id is carried by [`Event::Timer`], and a window
-//!   number is resolved by a direct desktop walk.
-//!
-//! * **Whole-tree redraw + diff every pass.** No damage tracking; a terminal
-//!   resize is picked up by the size check at the top of `pump_once` (the backend
-//!   reports terminal size live).
-//!
-//! * **Injected [`Clock`] + [`Backend`].** Headless never blocks, so tests drive
-//!   `pump_once` synchronously with a
-//!   [`ManualClock`](crate::timer::ManualClock).
-//!
-//! * **String commands, enabled-by-default.** The command set is stored as its
-//!   complement — the **disabled** set, seeded with the five startup-disabled
-//!   window commands (see [`initial_disabled_commands`]). Every command not in it,
-//!   including any app-minted [`Command::custom`], is enabled. See
-//!   `docs/design/command-enablement.md`.
-//!
-//! Modal dialogs ([`exec_view`](Program::exec_view) / `messageBox` / `inputBox`)
-//! run on top of the [`ModalFrame`] mechanism; Alt-1..9 window selection walks the
-//! desktop directly for the child whose [`number`](View::number) matches; the
-//! status line and menu bar are real subviews that the pump pre-routes keyDown and
-//! over-the-line mouseDown events to before normal dispatch.
-//!
-//! # Turbo Vision heritage
-//! Ports `TProgram` (`tprogram.cpp`/`tprogram.h`), the application root and its
-//! blocking event loop. The single non-recursive loop plus a capture stack
-//! replaces the original's nested modal loops (deviation D9); broadcasts carry a
-//! [`ViewId`] subject instead of a raw pointer (deviation D4).
+//! `Program`, the live event loop and application root (documented on the type).
 
 use std::collections::VecDeque;
 use std::time::Duration;
@@ -391,10 +347,55 @@ struct FullscreenSlot {
     mode: crate::window::Fullscreen,
 }
 
-/// Ports `TProgram` (`tprogram.cpp`). The original derived an application class
-/// from this root by inheritance; here [`Application`](crate::app::Application) embeds a `Program` and
-/// forwards to it (deviation D2), and the single event loop replaces the nested
-/// modal loops (deviation D9).
+/// The live event loop and application root.
+///
+/// [`Program`] is the application root: it owns the single event loop, the
+/// desktop / status-line / menu-bar subviews, the [`TimerQueue`], and the
+/// [`CaptureStack`]. [`Program::run`] is the *only* loop ([`Program::pump_once`]
+/// is one iteration), and modality is a [`ModalFrame`] on the [`CaptureStack`]:
+/// a handler that consumes every otherwise-unhandled event *is* the modal loop.
+///
+/// ## How it works
+///
+/// * **One loop, no nested modal loops.** [`Program::run`] is the single event
+///   loop and `pump_once` is one iteration; modal dialogs are realized as a
+///   [`ModalFrame`] capture handler rather than a nested blocking loop.
+///
+/// * **Broadcasts carry a subject.** `Event::Broadcast` carries a
+///   `source: ViewId` identifying the subject view; `Event::Command` carries only
+///   the [`Command`]. Integer payloads are not served by `source` (they are not
+///   `ViewId`s): a fired timer's id is carried by [`Event::Timer`], and a window
+///   number is resolved by a direct desktop walk.
+///
+/// * **Whole-tree redraw + diff every pass.** No damage tracking; a terminal
+///   resize is picked up by the size check at the top of `pump_once` (the backend
+///   reports terminal size live).
+///
+/// * **Injected [`Clock`] + [`Backend`].** Headless never blocks, so tests drive
+///   `pump_once` synchronously with a
+///   [`ManualClock`](crate::timer::ManualClock).
+///
+/// * **String commands, enabled-by-default.** The command set is stored as its
+///   complement — the **disabled** set, seeded with the five startup-disabled
+///   window commands (see `initial_disabled_commands`). Every command not in it,
+///   including any app-minted [`Command::custom`], is enabled. See
+///   `docs/design/command-enablement.md`.
+///
+/// Modal dialogs ([`exec_view`](Program::exec_view) / `messageBox` / `inputBox`)
+/// run on top of the [`ModalFrame`] mechanism; Alt-1..9 window selection walks the
+/// desktop directly for the child whose [`number`](View::number) matches; the
+/// status line and menu bar are real subviews that the pump pre-routes keyDown and
+/// over-the-line mouseDown events to before normal dispatch.
+///
+/// # Turbo Vision heritage
+///
+/// Ports `TProgram` (`tprogram.cpp`/`tprogram.h`), the application root and its
+/// blocking event loop. The single non-recursive loop plus a capture stack
+/// replaces the original's nested modal loops (deviation D9); broadcasts carry a
+/// [`ViewId`] subject instead of a raw pointer (deviation D4). The original
+/// derived an application class from this root by inheritance; here
+/// [`Application`](crate::app::Application) embeds a `Program` and forwards to
+/// it (deviation D2).
 pub struct Program {
     /// The root container (holds desktop/status-line/menu-bar children).
     group: Group,
@@ -1320,9 +1321,9 @@ impl Program {
     /// default currency stands).
     ///
     /// # Turbo Vision heritage
-    /// A tvision-rs-original convenience (C++ `execView` takes no focus argument).
-    /// It bundles `execView` with the pre-`execView` focus seed a C++ caller would
-    /// apply by hand — e.g. `msgbox.cpp`'s `selectNext(False)` to land the first
+    /// A convenience over `execView`, which takes no focus argument. It bundles
+    /// `execView` with the focus seed a C++ caller applies by hand before it, for
+    /// example `msgbox.cpp`'s `selectNext(False)` to land the first
     /// button — here generalized to focus any descendant by [`ViewId`](crate::view::ViewId)
     /// via [`View::focus_descendant`], closer to `setCurrent(p, …)` than to
     /// `selectNext`.
@@ -1517,7 +1518,6 @@ impl Program {
     /// }
     /// ```
     ///
-    /// An tvision-rs-original extension (no direct Borland/magiblot counterpart).
     /// The chosen color is read out of the modal's own
     /// [`ColorPicker`](crate::dialog::ColorPicker) and returned **by value** via
     /// [`exec_view_with`](Self::exec_view_with)-style capture. `Color` is
@@ -1525,8 +1525,10 @@ impl Program {
     /// spec non-goal).
     ///
     /// # Turbo Vision heritage
-    /// Supersedes `TColorDialog` (guide pp. 406–409), which was an interactive
-    /// editor for the 16-entry BIOS palette. tvision-rs replaces it with a
+    /// **tvision-rs extension**: no Turbo Vision counterpart. Supersedes `TColorDialog`
+    /// (guide pp. 406–409), which edited the application's `TPalette`, each
+    /// entry a foreground/background attribute built from the BIOS colors.
+    /// tvision-rs replaces it with a
     /// truecolor picker that returns an `Option<Color>` directly instead of
     /// mutating an in-memory `TPalette` blob.
     pub fn color_dialog(&mut self, initial: crate::color::Color) -> Option<crate::color::Color> {
@@ -1591,6 +1593,9 @@ impl Program {
     /// [`set_theme`](Self::set_theme). On cancel, does nothing.
     ///
     /// Entry point for an app's "edit colors" menu command.
+    ///
+    /// # Turbo Vision heritage
+    /// **tvision-rs extension**: no Turbo Vision counterpart.
     pub fn theme_editor(&mut self) {
         use crate::dialog::{Dialog, ThemeEditorBody};
         use crate::widgets::{Button, ButtonFlags};

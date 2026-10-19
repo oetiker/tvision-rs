@@ -1,16 +1,4 @@
-//! RGB colour-quantization ladder: `RGB → xterm-256 → xterm-16 → BIOS`.
-//!
-//! These are pure math functions operating on raw `u8` channel values and
-//! palette indices. They are deliberately decoupled from the [`Color`] enum —
-//! the [`Backend`](crate::backend::Backend) assembles the capability-aware
-//! policy that decides which rung of the ladder to use.
-//!
-//! [`Color`]: crate::color::Color
-//!
-//! # Turbo Vision heritage
-//! Ports `RGBtoXTerm16`, `RGBtoXTerm256`, `BIOStoXTerm16` and the related helpers
-//! from `colors.cpp` / `colors.h`. The math is reproduced verbatim; only the
-//! storage is typed (`u8` channels rather than packed bytes).
+//! RGB colour-quantization ladder (documented in the `backend` module docs).
 
 // ---------------------------------------------------------------------------
 // Hue-Chroma-Lightness helper

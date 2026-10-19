@@ -1,25 +1,18 @@
-//! Keyboard keys and key-down events.
-//!
-//! A keystroke is modeled the idiomatic, crossterm-shaped way: a closed [`Key`]
-//! enum of *physical* keys plus a *separate* [`KeyModifiers`] channel. There are
-//! deliberately **no** modifier-combined variants: `Ctrl+C` is `Key::Char('c')`
-//! plus `ctrl`, `Shift+Tab` is `Key::Tab` plus `shift`, and `Alt+F3` is
-//! `Key::F(3)` plus `alt`. A [`KeyEvent`] pairs a key with the modifiers active
-//! when it was pressed.
-//!
-//! There is no "no key" value: the absence of a keystroke is the absence of a
-//! key event.
-//!
-//! # Turbo Vision heritage
-//!
-//! Ports the `kb*` key-code family, the `TKey` class (`tkeys.h` / `tkey.cpp`),
-//! and `KeyDownEvent` (`system.h`). `TKey`'s canonical form already decomposes
-//! each keystroke into a base code plus a modifier mask (Ctrl+A is `'A'` with the
-//! ctrl-shift mask; Shift+Tab is the Tab code with the shift mask); tvision-rs keeps
-//! that decomposition as the [`Key`] enum and a separate [`KeyModifiers`]
-//! (deviations D4 and D5).
+//! `Key` and `KeyEvent` (documented on `Key`).
 
 /// A logical, modifier-free key — the base of a [`KeyEvent`].
+///
+/// Keyboard keys and key-down events.
+///
+/// A keystroke is modeled the idiomatic, crossterm-shaped way: a closed [`Key`]
+/// enum of *physical* keys plus a *separate* [`KeyModifiers`] channel. There are
+/// deliberately **no** modifier-combined variants: `Ctrl+C` is `Key::Char('c')`
+/// plus `ctrl`, `Shift+Tab` is `Key::Tab` plus `shift`, and `Alt+F3` is
+/// `Key::F(3)` plus `alt`. A [`KeyEvent`] pairs a key with the modifiers active
+/// when it was pressed.
+///
+/// There is no "no key" value: the absence of a keystroke is the absence of a
+/// key event.
 ///
 /// Only the 16 base keys appear here; modifier combinations are expressed by
 /// pairing a `Key` with a [`KeyModifiers`] in a [`KeyEvent`]:
@@ -38,6 +31,13 @@
 /// with no cross-platform meaning).
 ///
 /// # Turbo Vision heritage
+///
+/// Ports the `kb*` key-code family, the `TKey` class (`tkeys.h` / `tkey.cpp`),
+/// and `KeyDownEvent` (`system.h`). `TKey`'s canonical form already decomposes
+/// each keystroke into a base code plus a modifier mask (Ctrl+A is `'A'` with the
+/// ctrl-shift mask; Shift+Tab is the Tab code with the shift mask); tvision-rs keeps
+/// that decomposition as the [`Key`] enum and a separate [`KeyModifiers`]
+/// (deviations D4 and D5).
 ///
 /// Ports the `kb*` key-code family (`tkeys.h`) and the `TKey` canonical form
 /// (`tkeys.h` / `tkey.cpp`); the 1992 guide's `charCode: Char` (low byte) maps

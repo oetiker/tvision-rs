@@ -1,30 +1,4 @@
-//! The [`Desktop`] — the group every window lives in.
-//!
-//! A `Desktop` owns a [`Background`](crate::desktop::Background) fill and tiles
-//! or cascades the windows inserted into it. It gives
-//! [`Program`](crate::app::Program) a **named real desktop**, and it is the
-//! first exemplar of the **"a [`View`] that embeds a [`Group`] and delegates the
-//! whole trait"** pattern that [`Window`](crate::window::Window) also uses.
-//!
-//! ## Window cycling and tiling
-//!
-//! The [`Command::NEXT`]/[`Command::PREV`] commands cycle focus through the open
-//! windows (see [`Desktop::handle_event`]), and Alt-N selects a window by number
-//! via [`Desktop::select_window_num`]. [`tile`](Desktop::tile) and
-//! [`cascade`](Desktop::cascade) lay the windows out — a most-equal grid or an
-//! offset stack — driven by the program's tile/cascade handler. When a layout
-//! cannot fit (a cell would be zero-sized, or a window's minimum exceeds the
-//! cascade rect) the affected bounds are simply left unchanged.
-//! `tile_columns_first` selects the grid orientation (default: rows first).
-//!
-//! # Turbo Vision heritage
-//!
-//! Ports `TDeskTop` (`tdesktop.cpp`), which derived from the group class. That
-//! inheritance becomes an embedded [`Group`] the [`Desktop`] forwards every
-//! [`View`] method to (deviation D2); the background is recorded as a local
-//! [`ViewId`] rather than through an owner back-pointer (deviation D3); and the
-//! streaming machinery is dropped (deviation D12). There is no separate shutdown
-//! phase — the tree is simply dropped.
+//! `Desktop`, the group every window lives in (documented on the type).
 
 use crate::command::Command;
 use crate::event::Event;
@@ -103,14 +77,35 @@ const DEFAULT_BKGRND: char = '\u{2591}';
 
 /// The desktop group: an embedded [`Group`] that owns a [`Background`].
 ///
+/// A `Desktop` owns a [`Background`](crate::desktop::Background) fill and tiles
+/// or cascades the windows inserted into it. It gives
+/// [`Program`](crate::app::Program) a **named real desktop**, and it is the
+/// first exemplar of the **"a [`View`] that embeds a [`Group`] and delegates the
+/// whole trait"** pattern that [`Window`](crate::window::Window) also uses.
+///
+/// ## Window cycling and tiling
+///
+/// The [`Command::NEXT`]/[`Command::PREV`] commands cycle focus through the open
+/// windows (see [`Desktop::handle_event`]), and Alt-N selects a window by number
+/// via [`Desktop::select_window_num`]. [`tile`](Desktop::tile) and
+/// [`cascade`](Desktop::cascade) lay the windows out — a most-equal grid or an
+/// offset stack — driven by the program's tile/cascade handler. When a layout
+/// cannot fit (a cell would be zero-sized, or a window's minimum exceeds the
+/// cascade rect) the affected bounds are simply left unchanged.
+/// `tile_columns_first` selects the grid orientation (default: rows first).
+///
 /// Build with [`Desktop::new`] supplying a background factory (use
 /// [`Desktop::init_background`] for the faithful default), then drive it as any
 /// other [`View`].
 ///
 /// # Turbo Vision heritage
 ///
-/// Ports `TDeskTop` (`tdesktop.cpp`); inheritance from the group class becomes an
-/// embedded [`Group`] (deviation D2).
+/// Ports `TDeskTop` (`tdesktop.cpp`), which derived from the group class. That
+/// inheritance becomes an embedded [`Group`] the [`Desktop`] forwards every
+/// [`View`] method to (deviation D2); the background is recorded as a local
+/// [`ViewId`] rather than through an owner back-pointer (deviation D3); and the
+/// streaming machinery is dropped (deviation D12). There is no separate shutdown
+/// phase — the tree is simply dropped.
 pub struct Desktop {
     /// The embedded container. The desktop *is-a* group: its state, draw, and
     /// event routing are the group's.

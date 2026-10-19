@@ -116,6 +116,9 @@ Source: `src/widgets/editor.rs` (`Editor::update_commands`, `Editor::set_state`)
 
 ## Key bindings
 
+> **tvision-rs extension**: the configurable keymap is not in Turbo Vision.
+> See [Extensions beyond Turbo Vision](../port/extensions.md).
+
 The editor resolves keystrokes through the process-global
 [`Keymap`](../api/tvision_rs/keymap/struct.Keymap.html) (`src/keymap.rs`). The
 keymap maps one- or two-stroke **chords** to `Command` values. Three preset

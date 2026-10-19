@@ -1,55 +1,4 @@
-//! A scroll bar: a draggable thumb, paging troughs, and step arrows, drawn into
-//! its own 1×N (vertical) or N×1 (horizontal) bounds. Orientation is inferred
-//! from the bounds at construction: `width == 1` means vertical, `height == 1`
-//! means horizontal.
-//!
-//! # Glyphs
-//!
-//! The arrow/page/thumb characters live in [`crate::theme::Glyphs`]
-//! (`sb_v_arrow_back`, `sb_v_arrow_fwd`, `sb_h_arrow_back`, `sb_h_arrow_fwd`,
-//! `sb_page`, `sb_thumb`, `sb_page_no_range`) and are read via `ctx.glyphs()`.
-//!
-//! # Broadcasts
-//!
-//! When the value changes, the bar broadcasts [`Command::SCROLL_BAR_CHANGED`],
-//! carrying its own [`ViewId`](crate::view::ViewId) as the broadcast `source`, so
-//! an owner with two bars can tell which bar fired. On mouse-down / keyboard
-//! action it likewise broadcasts [`Command::SCROLL_BAR_CLICKED`]. The bar only
-//! emits these; a scroller, list viewer, or editor consumes them (see the
-//! [scroller's read-sync](crate::widgets::Scroller)).
-//!
-//! # Press-and-hold auto-repeat
-//!
-//! The bar supports two modal holds, each driven through the mouse-track capture:
-//!
-//! * **Arrow press-and-hold:** `MouseDown` on an arrow does the first step, then
-//!   calls [`Context::start_mouse_track`]. Each auto tick re-derives the part code
-//!   under the cursor; if it still matches the clicked part, it steps the value.
-//!   `MouseUp` clears tracking.
-//!
-//! * **Thumb drag:** `MouseDown` on the indicator (or outside the extent) does
-//!   the first recompute, then arms the capture. Each tracked move recomputes the
-//!   value from the thumb position. `MouseUp` clears tracking.
-//!
-//! # Colors
-//!
-//! Two [`Theme`](crate::theme::Theme) roles control the scrollbar appearance:
-//!
-//! * [`Role::ScrollBarPage`] — the trough (page) cells.
-//! * [`Role::ScrollBarControls`] — arrow glyphs and the thumb.
-//!
-//! The classic blue theme resolves both to blue-on-cyan via the palette chain
-//! `CScrollBar → cpBlueWindow → cpAppColor` (slots 11–12 in the app palette).
-//! The C++ `CScrollBar` has three entries — page slot and two control slots
-//! (arrows + indicator); those two control slots share one RGB value, so Rust
-//! collapses them into the single `ScrollBarControls` role.
-//!
-//! # Turbo Vision heritage
-//!
-//! Ports `TScrollBar` (`tscrlbar.cpp`/`scrlbar.h`). The hardcoded glyph tables
-//! become [`Glyphs`](crate::theme::Glyphs) fields (D7); the owner back-pointer
-//! plus its event payload become [`Context`] broadcasts that carry a resolvable
-//! [`ViewId`](crate::view::ViewId) `source` (D3, D4).
+//! `ScrollBar` (documented on the type).
 
 use crate::capture::TrackMask;
 use crate::command::Command;
@@ -113,17 +62,66 @@ impl Part {
 /// A single-axis scroll-bar widget: a draggable thumb between two step-arrows,
 /// with paging troughs on either side.
 ///
+/// A scroll bar: a draggable thumb, paging troughs, and step arrows, drawn into
+/// its own 1×N (vertical) or N×1 (horizontal) bounds. Orientation is inferred
+/// from the bounds at construction: `width == 1` means vertical, `height == 1`
+/// means horizontal.
+///
+/// # Glyphs
+///
+/// The arrow/page/thumb characters live in [`crate::theme::Glyphs`]
+/// (`sb_v_arrow_back`, `sb_v_arrow_fwd`, `sb_h_arrow_back`, `sb_h_arrow_fwd`,
+/// `sb_page`, `sb_thumb`, `sb_page_no_range`) and are read via `ctx.glyphs()`.
+///
+/// # Broadcasts
+///
+/// When the value changes, the bar broadcasts [`Command::SCROLL_BAR_CHANGED`],
+/// carrying its own [`ViewId`](crate::view::ViewId) as the broadcast `source`, so
+/// an owner with two bars can tell which bar fired. On mouse-down / keyboard
+/// action it likewise broadcasts [`Command::SCROLL_BAR_CLICKED`]. The bar only
+/// emits these; a scroller, list viewer, or editor consumes them (see the
+/// [scroller's read-sync](crate::widgets::Scroller)).
+///
+/// # Press-and-hold auto-repeat
+///
+/// The bar supports two modal holds, each driven through the mouse-track capture:
+///
+/// * **Arrow press-and-hold:** `MouseDown` on an arrow does the first step, then
+///   calls [`Context::start_mouse_track`]. Each auto tick re-derives the part code
+///   under the cursor; if it still matches the clicked part, it steps the value.
+///   `MouseUp` clears tracking.
+///
+/// * **Thumb drag:** `MouseDown` on the indicator (or outside the extent) does
+///   the first recompute, then arms the capture. Each tracked move recomputes the
+///   value from the thumb position. `MouseUp` clears tracking.
+///
+/// # Colors
+///
+/// Two [`Theme`](crate::theme::Theme) roles control the scrollbar appearance:
+///
+/// * [`Role::ScrollBarPage`] — the trough (page) cells.
+/// * [`Role::ScrollBarControls`] — arrow glyphs and the thumb.
+///
+/// The classic blue theme resolves both to blue-on-cyan via the palette chain
+/// `CScrollBar → cpBlueWindow → cpAppColor` (slots 11–12 in the app palette).
+/// The C++ `CScrollBar` has three entries — page slot and two control slots
+/// (arrows + indicator); those two control slots share one RGB value, so Rust
+/// collapses them into the single `ScrollBarControls` role.
+///
 /// Orientation is derived from bounds at construction (`size.x == 1` →
 /// vertical, `size.y == 1` → horizontal). Construct with [`ScrollBar::new`],
 /// then call [`set_params`](Self::set_params) (or the convenience wrappers) to
 /// configure the range. When the user interacts with the bar it broadcasts
 /// [`Command::SCROLL_BAR_CHANGED`]; a paired scroller or list viewer listens
-/// for this broadcast and syncs its own position. See the module-level
-/// documentation for the full broadcast and press-and-hold protocol.
+/// for this broadcast and syncs its own position. The broadcast and press-and-hold protocol is
+/// described above.
 ///
 /// # Turbo Vision heritage
 ///
-/// Ports `TScrollBar` (`tscrlbar.cpp`).
+/// Ports `TScrollBar` (`tscrlbar.cpp`/`scrlbar.h`). The hardcoded glyph tables
+/// become [`Glyphs`](crate::theme::Glyphs) fields (D7); the owner back-pointer
+/// plus its event payload become [`Context`] broadcasts that carry a resolvable
+/// [`ViewId`](crate::view::ViewId) `source` (D3, D4).
 pub struct ScrollBar {
     /// View state (geometry, flags, etc.) — the composition target.
     pub state: ViewState,
@@ -266,7 +264,7 @@ impl ScrollBar {
     /// `a_max` is floored to `a_min`; `a_value` is clamped to `[a_min, a_max]`.
     /// If `value` changed, broadcasts [`Command::SCROLL_BAR_CHANGED`] so that
     /// a linked scroller or list viewer can sync its own position (see the
-    /// module-level broadcast docs). Steps are set unconditionally at
+    /// [`ScrollBar`] broadcast docs). Steps are set unconditionally at
     /// the end, regardless of whether the value or range changed.
     ///
     /// The display is repainted automatically on the next whole-tree redraw pass

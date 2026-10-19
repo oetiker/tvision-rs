@@ -31,6 +31,9 @@ Two helpers bridge the old DOS conventions into this model:
 
 ## The keymap
 
+> **tvision-rs extension**: not in Turbo Vision. See
+> [Extensions beyond Turbo Vision](../port/extensions.md).
+
 Text input does not hard-wire keys to editing actions. Instead a
 [`Keymap`](../api/tvision_rs/keymap/struct.Keymap.html) maps a **chord** to a
 [`Command`](../api/tvision_rs/command/struct.Command.html) by name, in the same

@@ -1,8 +1,4 @@
-//! The `Backend` trait — the object-safe terminal seam.
-//!
-//! The app holds a `Box<dyn Backend>`; the view tree never carries a `<B>`
-//! type parameter. This trait must therefore be **object-safe** — no generic
-//! methods.
+//! The `Backend` trait (documented on the type).
 
 use std::time::Duration;
 
@@ -27,6 +23,12 @@ pub const CARET_INSERT: u8 = 100;
 
 /// Platform seam between the framework and the terminal.
 ///
+/// The `Backend` trait — the object-safe terminal seam.
+///
+/// The app holds a `Box<dyn Backend>`; the view tree never carries a `<B>`
+/// type parameter. This trait must therefore be **object-safe** — no generic
+/// methods.
+///
 /// Two implementations exist:
 /// - [`CrosstermBackend`](crate::backend::CrosstermBackend) — production, wraps crossterm.
 /// - [`HeadlessBackend`](crate::backend::HeadlessBackend) — tests, in-memory buffer.
@@ -34,6 +36,7 @@ pub const CARET_INSERT: u8 = 100;
 /// The trait is object-safe; the app holds `Box<dyn Backend>`.
 ///
 /// # Turbo Vision heritage
+///
 /// Stands in for the platform layer of `TScreen` / `THardwareInfo`
 /// (`hardware.cpp`, `tscreen.cpp`) plus the event source pump. The original
 /// selected a platform driver at link time; here the seam is a runtime trait
@@ -138,6 +141,10 @@ pub trait Backend {
     /// middle-click paste is simply inert. Serving the in-app buffer instead
     /// would paste stale text the user never selected.
     ///
+    /// # Turbo Vision heritage
+    /// **tvision-rs extension**: no Turbo Vision counterpart. magiblot's `TClipboard` reads only
+    /// the CLIPBOARD selection.
+    ///
     /// Defaulted to `None` so an existing implementor keeps compiling and
     /// silently gets the inert behaviour.
     fn get_primary(&mut self) -> Option<String> {
@@ -152,6 +159,9 @@ pub trait Backend {
     /// [`get_primary`](Self::get_primary): the internal buffer is never
     /// written, because it backs CLIPBOARD and must not be shadowed by a
     /// selection the user merely swept with the mouse.
+    ///
+    /// # Turbo Vision heritage
+    /// **tvision-rs extension**: no Turbo Vision counterpart.
     fn set_primary(&mut self, _text: &str) -> bool {
         false
     }

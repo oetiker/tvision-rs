@@ -47,21 +47,11 @@ extension (see row 81). The Phase C feature backlog (`C1`–`C9` — find/replac
 context menu, internal clipboard, dialog gather/scatter, cmQuit veto, dosShell,
 help-ctx refresh, theme editor, bracketed paste) also landed; the
 forward-looking state lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/tvision-rs/docs/HANDOVER.md).
-**Beyond the ladder:** `RegexValidator` (in `validate`) is an
-**tvision-rs-original extension** — a regex-driven validator alongside the faithful
-`TPXPictureValidator` (62) — not a Turbo Vision class, so it has no row here.
-`Splitter` (in `widgets::splitter`) is likewise an **tvision-rs-original extension**: a
-generic, N-ary, resizable multi-pane view (a `Group` specialization with a pure
-integer flexbox solver, draggable dividers, and an F6 keyboard reconfig mode) —
-no Turbo Vision ancestor, so no row. See spec
-[`docs/superpowers/specs/2026-06-13-splitter-design.md`](docs/superpowers/specs/2026-06-13-splitter-design.md)
-and plan [`docs/superpowers/plans/2026-06-13-splitter.md`](docs/superpowers/plans/2026-06-13-splitter.md).
-Frame-joining (divider↔frame tee glyphs `┬`/`┴`/`┤` and divider↔divider
-crossings `├`/`┼`) is implemented on `feat/splitter` via `Splitter::joined()`
-(opt-in, off by default; cascades to sub-splitters; the window auto-brokers a
-joined splitter body to its frame, so plain windows are unchanged). See spec
-[`docs/superpowers/specs/2026-06-13-splitter-frame-joining-design.md`](docs/superpowers/specs/2026-06-13-splitter-frame-joining-design.md)
-and plan [`docs/superpowers/plans/2026-06-13-splitter.md`](docs/superpowers/plans/2026-06-13-splitter.md).
+**Beyond the ladder:** classes with no Turbo Vision ancestor, for example
+`RegexValidator`, `Splitter`, `Table` and `TabBar`, have no row here. The
+guide lists them, together with the options added to ported classes, on
+[Extensions beyond Turbo Vision](book/src/port/extensions.md); their design
+specs are under `docs/superpowers/specs/`.
 
 **Out of scope** (present in `tv.h` but in no guide module): the **help system**
 (`helpbase.cpp`/`help.cpp` → `THelpViewer`/`THelpWindow`/`THelpFile`) and

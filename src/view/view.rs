@@ -1,57 +1,4 @@
-//! The [`View`] trait + [`ViewState`] — the base every widget builds on.
-//!
-//! A widget *embeds* a [`ViewState`] (its bounds, state flags, options, owner id,
-//! …) and *implements* [`View`] (draw, handle an event, report its value, …).
-//! The packed framework flag words become the
-//! [`State`]/[`Options`]/[`GrowMode`]/[`DragMode`] **structs-of-bools**, and the
-//! state-mutating verbs become plain field flips or small helpers.
-//!
-//! # What lives here vs. elsewhere
-//!
-//! This module is the *abstract base*. Several operations have no home on a bare
-//! view because the data they need lives in the tree or the event loop:
-//!
-//! * **Up-tree / owner operations live on [`Group`](crate::view::Group)** —
-//!   focusing, selecting, sibling navigation, and the coordinate transforms.
-//!   Because a view has no up-pointer, the group drives these *top-down*. The
-//!   auto-select on a selecting mouse-down likewise lives in the group's routing;
-//!   the base [`View::handle_event`] is a no-op.
-//!
-//! * **Already provided elsewhere:** timers →
-//!   [`Context::set_timer`](crate::view::Context::set_timer) /
-//!   [`kill_timer`](crate::view::Context::kill_timer); colors → views call
-//!   `ctx.style(Role::…)` directly, so the trait has **no** color methods; the
-//!   clip rect → [`DrawCtx::clip`](crate::view::DrawCtx::clip).
-//!
-//! * **Modality and data transfer:** a modal loop runs through
-//!   [`Program::exec_view`](crate::app::Program::exec_view) and
-//!   [`Context::end_modal`](crate::view::Context::end_modal); window drag/resize
-//!   is a capture handler; getting/setting a view's contents is the typed
-//!   [`View::value`] / [`View::set_value`] protocol.
-//!
-//! * **Subsumed by the single event loop:** the blocking event-pump and
-//!   put-back helpers, cursor placement, and teardown collapse into the one loop
-//!   plus `Drop` and the group's child removal.
-//!
-//! * **Command-enable policy.** The program-global command set lives on
-//!   [`Program`](crate::app::Program) as its complement — a **disabled set**
-//!   (denylist): every command, including app-minted ones, is enabled unless
-//!   explicitly disabled. Views write through
-//!   `Context::enable_command`/`disable_command` and read through the
-//!   `Context::command_enabled` per-pump snapshot
-//!   (`docs/design/command-enablement.md`).
-//!
-//! * **Dropped entirely:** the occlusion/damage family (per-view back buffers and
-//!   the exposed-region cache) is replaced by [`DrawCtx`] writes + whole-tree
-//!   redraw + diff; serialization is gone; the error attribute becomes
-//!   [`Role::Error`](crate::theme::Role).
-//!
-//! # Turbo Vision heritage
-//! Ports `TView` (`tview.cpp`/`views.h`), the root of the view hierarchy.
-//! Inheritance becomes a trait plus a composed `ViewState` (deviation D2); the
-//! packed `sf*`/`of*`/`gf*`/`dm*` flag words become structs-of-bools (deviation
-//! D5); owner/sibling pointers become tree edges plus `ViewId` handles
-//! (deviation D3).
+//! The `View` trait and `ViewState` (documented on `View`).
 
 use crate::command::{Command, CommandSet};
 use crate::data::FieldValue;
@@ -326,8 +273,7 @@ impl GrowMode {
 ///
 /// # Turbo Vision heritage
 /// Ports the `dm*` flag family (`views.h`) as a struct-of-bools (deviation D5);
-/// each field names its `dm*` source. `dmDragGrowLeft` is a tvision-rs extension
-/// (no C++ equivalent).
+/// each field names its `dm*` source.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct DragMode {
     /// `dmDragMove` — the view can be moved by dragging.
@@ -828,11 +774,60 @@ fn grow(gm: GrowMode, s: i32, d: i32, i: &mut i32) {
 /// The behavior every view implements. Widgets supply [`state`](View::state) /
 /// [`state_mut`](View::state_mut) / [`draw`](View::draw); the rest default.
 ///
+/// A widget *embeds* a [`ViewState`] (its bounds, state flags, options, owner id,
+/// …) and *implements* [`View`] (draw, handle an event, report its value, …).
+/// The packed framework flag words become the
+/// [`State`]/[`Options`]/[`GrowMode`]/[`DragMode`] **structs-of-bools**, and the
+/// state-mutating verbs become plain field flips or small helpers.
+///
+/// # What lives on `View` vs. elsewhere
+///
+/// `View` and [`ViewState`] are the *abstract base*. Several operations have no home on a bare
+/// view because the data they need lives in the tree or the event loop:
+///
+/// * **Up-tree / owner operations live on [`Group`](crate::view::Group)** —
+///   focusing, selecting, sibling navigation, and the coordinate transforms.
+///   Because a view has no up-pointer, the group drives these *top-down*. The
+///   auto-select on a selecting mouse-down likewise lives in the group's routing;
+///   the base [`View::handle_event`] is a no-op.
+///
+/// * **Already provided elsewhere:** timers →
+///   [`Context::set_timer`](crate::view::Context::set_timer) /
+///   [`kill_timer`](crate::view::Context::kill_timer); colors → views call
+///   `ctx.style(Role::…)` directly, so the trait has **no** color methods; the
+///   clip rect → [`DrawCtx::clip`](crate::view::DrawCtx::clip).
+///
+/// * **Modality and data transfer:** a modal loop runs through
+///   [`Program::exec_view`](crate::app::Program::exec_view) and
+///   [`Context::end_modal`](crate::view::Context::end_modal); window drag/resize
+///   is a capture handler; getting/setting a view's contents is the typed
+///   [`View::value`] / [`View::set_value`] protocol.
+///
+/// * **Subsumed by the single event loop:** the blocking event-pump and
+///   put-back helpers, cursor placement, and teardown collapse into the one loop
+///   plus `Drop` and the group's child removal.
+///
+/// * **Command-enable policy.** The program-global command set lives on
+///   [`Program`](crate::app::Program) as its complement — a **disabled set**
+///   (denylist): every command, including app-minted ones, is enabled unless
+///   explicitly disabled. Views write through
+///   `Context::enable_command`/`disable_command` and read through the
+///   `Context::command_enabled` per-pump snapshot
+///   (`docs/design/command-enablement.md`).
+///
+/// * **Dropped entirely:** the occlusion/damage family (per-view back buffers and
+///   the exposed-region cache) is replaced by [`DrawCtx`] writes + whole-tree
+///   redraw + diff; serialization is gone; the error attribute becomes
+///   [`Role::Error`](crate::theme::Role).
+///
 /// # Turbo Vision heritage
-/// Ports `TView`'s virtual methods (`tview.cpp`/`views.h`). Inheritance becomes
-/// this trait plus a composed [`ViewState`] (deviation D2); methods that reached
-/// up an owner pointer instead take the downward
-/// [`Context`](crate::view::Context) (deviation D3).
+///
+/// Ports `TView` (`tview.cpp`/`views.h`), the root of the view hierarchy.
+/// Inheritance becomes a trait plus a composed `ViewState` (deviation D2); the
+/// packed `sf*`/`of*`/`gf*`/`dm*` flag words become structs-of-bools (deviation
+/// D5); owner/sibling pointers become tree edges plus `ViewId` handles
+/// (deviation D3), and methods that reached up an owner pointer instead take
+/// the downward [`Context`](crate::view::Context) (deviation D3).
 // MAINTENANCE: when adding a defaulted method to this trait, also add a
 // forwarder entry to `tvision-rs-macros/src/specs.rs` (`view()`) AND the
 // `expected` list in `tests/delegate_view.rs`. Required methods (no default)

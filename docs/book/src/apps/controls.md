@@ -4,8 +4,10 @@ Controls are the leaf views you put inside a dialog or window: buttons, check
 boxes, radio buttons, input fields, captions, list boxes, and scroll bars.
 You build them, insert them into a group (a [Dialog](dialogs.md) or
 [Window](windows.md)), and let the [event loop](../internals/event-loop.md)
-drive them. The names follow the `tv::` house style with no `T` prefix
-*(each maps to the corresponding Turbo Vision `T*` class)*.
+drive them. The names follow the `tv::` house style with no `T` prefix. Most
+map to the Turbo Vision `T*` class of the same name; the ones Turbo Vision
+lacks are marked **tvision-rs extension** and listed on
+[Extensions beyond Turbo Vision](../port/extensions.md).
 
 ## Buttons
 
@@ -61,7 +63,10 @@ an optional [`Validator`](../api/tvision_rs/validate/trait.Validator.html). Its
 cursor and selection track byte offsets into a real Rust `String`, so multi-byte
 and wide text behave correctly.
 
-### Read-only fields (rstv extension)
+### Read-only fields
+
+> **tvision-rs extension** to `TInputLine`: not in Turbo Vision. See
+> [Extensions beyond Turbo Vision](../port/extensions.md).
 
 `set_read_only(true)` makes a field refuse every change to its text while
 leaving it fully navigable. Disabling a field is different: a disabled
@@ -90,7 +95,10 @@ A read-only field is drawn exactly like an editable one. Signalling the
 distinction visually is left to the owner, which knows whether "read-only" means
 server-maintained, computed, or merely not-yet-unlocked.
 
-### Which end of a long value shows (rstv extension)
+### Which end of a long value shows
+
+> **tvision-rs extension** to `TInputLine`: not in Turbo Vision. See
+> [Extensions beyond Turbo Vision](../port/extensions.md).
 
 A value wider than its field can only show one end of itself. `set_value`
 select-alls, so by default the view sits at the **tail**. This is Turbo Vision's
@@ -130,6 +138,9 @@ validator-transfer path. Focus behaviour is separate: see
   navigation for you. [`SortedListBox`](../api/tvision_rs/widgets/struct.SortedListBox.html)
   keeps the items ordered.
 
+  > **tvision-rs extension** to `TListViewer`: incremental find is not in
+  > Turbo Vision. See [Extensions beyond Turbo Vision](../port/extensions.md).
+
   Both support an opt-in incremental find via
   [`with_find(FindMode)`](../api/tvision_rs/widgets/list_viewer/enum.FindMode.html):
   `FindMode::Highlight` owns the query and highlights the matched substring in
@@ -153,9 +164,13 @@ validator-transfer path. Focus behaviour is separate: see
   mirrors their value into its own scroll offset, and pushes range changes back
   to them. The wiring between a scroller and its bars is brokered by the event
   loop; see [Cross-view brokering](../internals/brokering.md).
-- [`Table`](../api/tvision_rs/widgets/table/struct.Table.html) (a tvision-rs extension;
-  Turbo Vision has no table): a multi-column list under a click-to-sort
-  header. Rows come from a `TableModel` and keep a stable `RowKey`, so focus and
+- [`Table`](../api/tvision_rs/widgets/table/struct.Table.html): a multi-column
+  list under a click-to-sort header.
+
+  > **tvision-rs extension**: not in Turbo Vision. See
+  > [Extensions beyond Turbo Vision](../port/extensions.md).
+
+  Rows come from a `TableModel` and keep a stable `RowKey`, so focus and
   the marked rows follow the record through a re-sort or reload. Columns can be
   resized, moved and hidden with the mouse (`column_layout` /
   `set_column_layout` save the arrangement), and cells of `editable` columns
@@ -173,8 +188,7 @@ runs as each character is typed (and may auto-fill or modify the buffer), while
 `is_valid` runs the final-form check when the field must be fully valid: on
 focus-release or when a modal dialog's OK button is pressed.
 
-The concrete validators port the Turbo Vision set, plus one Rust-native
-addition:
+The concrete validators port the Turbo Vision set, plus `RegexValidator`:
 
 | Validator | Accepts |
 | --- | --- |
@@ -182,7 +196,7 @@ addition:
 | [`RangeValidator`](../api/tvision_rs/validate/struct.RangeValidator.html) | an integer within `[min, max]` |
 | [`PXPictureValidator`](../api/tvision_rs/validate/struct.PXPictureValidator.html) | text matching a Paradox picture mask |
 | [`LookupValidator`](../api/tvision_rs/validate/struct.LookupValidator.html) / [`StringLookupValidator`](../api/tvision_rs/validate/struct.StringLookupValidator.html) | a value from a fixed list |
-| [`RegexValidator`](../api/tvision_rs/validate/struct.RegexValidator.html) | text matching a regular expression (a modern extension) |
+| [`RegexValidator`](../api/tvision_rs/validate/struct.RegexValidator.html) | text matching a regular expression (**tvision-rs extension**, see [Extensions beyond Turbo Vision](../port/extensions.md)) |
 
 When a final-form check fails, the validator can pop an informational error
 message box explaining what is wrong, then return focus to the field.

@@ -1,55 +1,4 @@
-//! [`Group`] — the view container and event router.
-//!
-//! A `Group` is the node type of the view tree: it owns a set of child views,
-//! draws them, routes events to them, and tracks which one is current/focused.
-//! The tree shape drives a few design choices:
-//!
-//! * **Ownership is a `Vec`, links are by id.** A [`Group`] owns
-//!   `children: Vec<Child>`; children hold no up-pointer. Each child's [`ViewId`]
-//!   is a process-global identity minted at [`Group::insert`] and stamped into the
-//!   child's own `ViewState.id`. Cross-links (`current`) are a [`ViewId`],
-//!   resolved by an internal index lookup ([`Group::index_of`]).
-//!
-//!   The `children` `Vec` is ordered **back-to-front for painting**:
-//!   `children[0]` is the bottom (drawn first); `children.last()` is the
-//!   top/frontmost (drawn last). [`Group::insert`] pushes, so a new child lands
-//!   on top. Visits that go top-to-bottom (paint occlusion, hit-testing,
-//!   broadcast delivery) iterate `children.iter().rev()`; tab order steps to the
-//!   next-frontmost child by walking decreasing index with wrap.
-//!
-//! * **Mouse position is view-local at each level.** Because a child holds no
-//!   pointer back to its owner, the group itself does the coordinate translation:
-//!   on each positional delivery it subtracts the child's `origin`, handing the
-//!   child a position already in the child's own coordinate frame.
-//!
-//! * **No event bubbling.** "Consumed" means the event was set to
-//!   [`Event::Nothing`]; an unhandled event is simply left **not cleared**, and
-//!   as the recursive [`handle_event`](View::handle_event) stack unwinds the
-//!   parent/loop sees it still live. There is no owner pointer to bubble back to.
-//!
-//! * **Painter's-algorithm draw.** [`draw`](View::draw) paints back-to-front, so
-//!   higher siblings overpaint lower ones. There is no per-cell occlusion
-//!   bookkeeping: the whole tree is redrawn each frame and a diff sends only the
-//!   changed cells to the terminal.
-//!
-//! * **Z-reorder lives in the owner.** A child cannot move itself in the
-//!   Z-order; the group does it ([`Group::put_in_front_of`]/[`Group::make_first`]).
-//!   Selecting a child that opts into raise-on-select
-//!   ([`top_select`](crate::view::Options::top_select)) raises it to the top via
-//!   [`Group::focus_child`] rather than merely making it current.
-//!
-//! Running a modal loop is not a group operation: the event loop owns the capture
-//! stack, so modality runs through [`Program::exec_view`](crate::app::Program::exec_view)
-//! and a [`ModalFrame`](crate::app::ModalFrame). Bulk data transfer uses the
-//! typed [`View::value`]/[`View::set_value`] protocol, and the hardware cursor is
-//! placed by the event loop.
-//!
-//! # Turbo Vision heritage
-//! Ports `TGroup` (`tgroup.cpp`). The circular sibling ring plus owner
-//! back-pointers become an owned `Vec` of children addressed by [`ViewId`]
-//! (deviation D3); broadcasts carry a [`ViewId`] subject rather than a pointer
-//! (deviation D4); the occlusion/buffering draw machinery is replaced by
-//! whole-tree redraw + diff.
+//! `Group`, the view container and event router (documented on the type).
 
 use crate::command::Command;
 use crate::data::FieldValue;
@@ -101,14 +50,61 @@ struct Child {
 
 /// A view that owns and routes to a tree of child views.
 ///
-/// See the module docs for the sibling-ring↔`Vec` Z-order mapping. Build
+/// A `Group` is the node type of the view tree: it owns a set of child views,
+/// draws them, routes events to them, and tracks which one is current/focused.
+/// The tree shape drives a few design choices:
+///
+/// * **Ownership is a `Vec`, links are by id.** A [`Group`] owns
+///   `children: Vec<Child>`; children hold no up-pointer. Each child's [`ViewId`]
+///   is a process-global identity minted at [`Group::insert`] and stamped into the
+///   child's own `ViewState.id`. Cross-links (`current`) are a [`ViewId`],
+///   resolved by an internal index lookup (`Group::index_of`).
+///
+///   The `children` `Vec` is ordered **back-to-front for painting**:
+///   `children[0]` is the bottom (drawn first); `children.last()` is the
+///   top/frontmost (drawn last). [`Group::insert`] pushes, so a new child lands
+///   on top. Visits that go top-to-bottom (paint occlusion, hit-testing,
+///   broadcast delivery) iterate `children.iter().rev()`; tab order steps to the
+///   next-frontmost child by walking decreasing index with wrap.
+///
+/// * **Mouse position is view-local at each level.** Because a child holds no
+///   pointer back to its owner, the group itself does the coordinate translation:
+///   on each positional delivery it subtracts the child's `origin`, handing the
+///   child a position already in the child's own coordinate frame.
+///
+/// * **No event bubbling.** "Consumed" means the event was set to
+///   [`Event::Nothing`]; an unhandled event is simply left **not cleared**, and
+///   as the recursive [`handle_event`](View::handle_event) stack unwinds the
+///   parent/loop sees it still live. There is no owner pointer to bubble back to.
+///
+/// * **Painter's-algorithm draw.** [`draw`](View::draw) paints back-to-front, so
+///   higher siblings overpaint lower ones. There is no per-cell occlusion
+///   bookkeeping: the whole tree is redrawn each frame and a diff sends only the
+///   changed cells to the terminal.
+///
+/// * **Z-reorder lives in the owner.** A child cannot move itself in the
+///   Z-order; the group does it ([`Group::put_in_front_of`]/[`Group::make_first`]).
+///   Selecting a child that opts into raise-on-select
+///   ([`top_select`](crate::view::Options::top_select)) raises it to the top via
+///   [`Group::focus_child`] rather than merely making it current.
+///
+/// Running a modal loop is not a group operation: the event loop owns the capture
+/// stack, so modality runs through [`Program::exec_view`](crate::app::Program::exec_view)
+/// and a [`ModalFrame`](crate::app::ModalFrame). Bulk data transfer uses the
+/// typed [`View::value`]/[`View::set_value`] protocol, and the hardware cursor is
+/// placed by the event loop.
+///
+/// The sibling-ring↔`Vec` Z-order mapping is described above. Build
 /// with [`Group::new`], add children with [`Group::insert`], and drive it as any
 /// other [`View`] (`draw` / `handle_event` / …).
 ///
 /// # Turbo Vision heritage
-/// Ports `TGroup` (`tgroup.cpp`). Owns its children in a `Vec` addressed by
-/// [`ViewId`] rather than a `next`/`prev`/`owner` pointer ring (deviation D3);
-/// broadcasts carry a [`ViewId`] subject rather than a pointer (deviation D4).
+///
+/// Ports `TGroup` (`tgroup.cpp`). The circular sibling ring plus owner
+/// back-pointers become an owned `Vec` of children addressed by [`ViewId`]
+/// (deviation D3); broadcasts carry a [`ViewId`] subject rather than a pointer
+/// (deviation D4); the occlusion/buffering draw machinery is replaced by
+/// whole-tree redraw + diff.
 pub struct Group {
     st: ViewState,
     /// Children in back-to-front paint order (`children[0]` is the bottom,
@@ -209,10 +205,9 @@ impl Group {
     /// ```
     ///
     /// # Turbo Vision heritage
-    /// An tvision-rs convenience addition with no `TGroup` counterpart: in
-    /// Turbo Vision a group never paints its own area (backgrounds are
-    /// `TBackground` / frame territory). The faithful default is preserved —
-    /// the surface is strictly opt-in.
+    /// **tvision-rs extension** to `TGroup`. In Turbo Vision a group never
+    /// paints its own area (backgrounds are `TBackground` / frame territory).
+    /// The faithful default is preserved: the surface is strictly opt-in.
     pub fn set_surface(&mut self, normal: Role, inactive: Role) {
         self.surface = Some((normal, inactive));
     }
@@ -267,7 +262,7 @@ impl Group {
     }
 
     /// Ids of tileable + visible direct children in **top-to-bottom** order
-    /// (`children` reversed; see the module doc). Backs
+    /// (`children` reversed; see the [`Group`] docs). Backs
     /// [`Desktop::tile`/`cascade`](crate::desktop::Desktop): the tile/cascade
     /// counter decrements across this visit, so the *first-visited* (topmost)
     /// child gets the highest position/offset.

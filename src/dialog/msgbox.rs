@@ -1,36 +1,4 @@
-//! Modal alert, confirmation, and input dialogs.
-//!
-//! Builders for the standard pop-up dialogs: a body of text with a title
-//! ([`build_message_box`]) and a single-field prompt ([`build_input_box`]). Each
-//! returns a ready-to-run [`Dialog`]; the program runs it modally and returns the
-//! command that closed it.
-//!
-//! The option types are typed instead of a packed flag word: [`MessageBoxKind`]
-//! picks the title and [`MessageBoxButtons`] selects which of [Yes, No, OK, Cancel]
-//! to show, in that fixed order.
-//!
-//! ## Initial focus
-//!
-//! After inserting the buttons, focus goes to the first selectable child (the
-//! first button in [Yes, No, OK, Cancel] order). `build_message_box` returns that
-//! button's [`ViewId`], which
-//! [`Program::message_box_rect`](crate::app::Program::message_box_rect) passes as
-//! the initial-focus target.
-//!
-//! ## Button behavior
-//!
-//! All message-box buttons are normal (not default). A button fires when focused
-//! (Space / Alt+hotkey) or on a direct mouse click — see [`Button`]
-//! (focused-Space and Alt+hotkey arm the animation timer, which fires the command
-//! on expiry).
-//!
-//! # Turbo Vision heritage
-//! Ports the `messageBox` / `inputBox` free functions and their `…Rect` variants
-//! (`msgbox.cpp`; titles and button labels from `tvtext2.cpp`). The original
-//! packed `aOptions` flag word becomes the typed [`MessageBoxKind`] +
-//! [`MessageBoxButtons`] (deviation D5); running the dialog modally and destroying
-//! it afterward live in [`Program`](crate::app::Program), so this module is a pure
-//! builder (deviation D9).
+//! Message-box and input-box builders (documented on `MessageBoxKind`).
 
 use super::Dialog;
 use crate::command::Command;
@@ -45,6 +13,32 @@ use crate::widgets::{InputLine, Label, LimitMode};
 
 /// The dialog title — which kind of alert this is.
 ///
+/// Modal alert, confirmation, and input dialogs.
+///
+/// Builders for the standard pop-up dialogs: a body of text with a title
+/// (`build_message_box`) and a single-field prompt (`build_input_box`). Each
+/// returns a ready-to-run [`Dialog`]; the program runs it modally and returns the
+/// command that closed it.
+///
+/// The option types are typed instead of a packed flag word: [`MessageBoxKind`]
+/// picks the title and [`MessageBoxButtons`] selects which of [Yes, No, OK, Cancel]
+/// to show, in that fixed order.
+///
+/// ## Initial focus
+///
+/// After inserting the buttons, focus goes to the first selectable child (the
+/// first button in [Yes, No, OK, Cancel] order). `build_message_box` returns that
+/// button's [`ViewId`], which
+/// [`Program::message_box_rect`](crate::app::Program::message_box_rect) passes as
+/// the initial-focus target.
+///
+/// ## Button behavior
+///
+/// All message-box buttons are normal (not default). A button fires when focused
+/// (Space / Alt+hotkey) or on a direct mouse click — see [`Button`]
+/// (focused-Space and Alt+hotkey arm the animation timer, which fires the command
+/// on expiry).
+///
 /// Pass to [`Program::message_box`](crate::app::Program::message_box) or [`Program::message_box_rect`](crate::app::Program::message_box_rect) as the
 /// `kind` argument. Each variant maps to a fixed title string shown in the
 /// dialog frame:
@@ -55,6 +49,13 @@ use crate::widgets::{InputLine, Label, LimitMode};
 /// - [`Confirmation`](Self::Confirmation) — "Confirm": asking the user to approve an action.
 ///
 /// # Turbo Vision heritage
+///
+/// Ports the `messageBox` / `inputBox` free functions and their `…Rect` variants
+/// (`msgbox.cpp`; titles and button labels from `tvtext2.cpp`). The original
+/// packed `aOptions` flag word becomes the typed [`MessageBoxKind`] +
+/// [`MessageBoxButtons`] (deviation D5); running the dialog modally and destroying
+/// it afterward live in [`Program`](crate::app::Program), so the builders are pure
+/// (deviation D9).
 ///
 /// Replaces the C++ `mfWarning`/`mfError`/`mfInformation`/`mfConfirmation`
 /// nibble packed into the `aOptions Word` (`msgbox.cpp`); the type is now a

@@ -125,6 +125,7 @@ the data protocol in [Dialogs & data](../apps/dialogs.md).
 | ---------------- | -------------- |
 | `drawHide` / `drawShow` / `drawUnder*` / buffered group | dropped (whole-tree redraw + diff) |
 | `TStreamable` / `TResourceFile` | dropped (serde if revived) |
+| `TColorDialog` and its selector classes | replaced by [`ColorPicker`](../api/tvision_rs/dialog/struct.ColorPicker.html) / [`Program::color_dialog`](../api/tvision_rs/app/struct.Program.html#method.color_dialog) |
 | `forEach` / `firstThat` / `TSortedCollection` | iterators / `Vec<T: Ord>` |
 
 Rationale for each removal is in
@@ -135,3 +136,6 @@ Rationale for each removal is in
 > Anything not in this table ports verbatim: same name (minus the `T`), same
 > method, same behaviour. For the differences that *do* change a symbol, see
 > [Differences from C++ Turbo Vision](deviations.md).
+> Types and methods with no C++ counterpart, such as `Table`, `Splitter` or
+> `Keymap`, are not in this table; they are listed on
+> [Extensions beyond Turbo Vision](../port/extensions.md).

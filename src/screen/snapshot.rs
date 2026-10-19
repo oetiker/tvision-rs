@@ -46,7 +46,7 @@
 //! columns wide and stay aligned.
 //!
 //! # Turbo Vision heritage
-//! An tvision-rs addition with no Turbo Vision counterpart: it serializes the screen
+//! **tvision-rs extension**: no Turbo Vision counterpart. It serializes the screen
 //! grid to a stable golden string so the framework can be verified with snapshot
 //! tests rather than a live terminal (deviation D11).
 

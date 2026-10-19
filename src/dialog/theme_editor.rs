@@ -8,7 +8,8 @@
 //! leaf view cannot run a modal dialog inline, so it routes the request to the
 //! event-loop owner.
 //!
-//! This is an tvision-rs-original widget with no Turbo Vision counterpart.
+//! # Turbo Vision heritage
+//! **tvision-rs extension**: no Turbo Vision counterpart.
 
 use crate::{
     color::{Color, Style},

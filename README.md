@@ -103,15 +103,11 @@ I ported tvision-rs from C++ using [Claude Code](https://claude.com/claude-code)
 working class-by-class through magiblot/tvision in dependency order, with every
 widget pinned by a snapshot test against the original's behaviour.
 
-On top of the port I intend to add modern, native-Rust widgets to the classic
-set. These have landed so far: a **truecolor color picker** (a 24-bit successor
-to the original 16-color selector), a **multi-pane splitter**, a **regex validator** alongside the
-ported picture-mask one, **incremental find/filter on list boxes** (type a
-query while a list is focused: highlights matched substrings and optionally
-self-filters to matching rows, with no separate input field), a **masked
-password input** with a reveal eye, and a
-**table** with a click-to-sort header, columns the user can resize, move and
-hide, and in-place cell editing (adapted from tvdocker). More are planned.
+On top of the port I am adding modern, native-Rust widgets and options to the
+classic set, such as a sortable table, a multi-pane splitter and a truecolor
+color picker. The guide's
+[Extensions beyond Turbo Vision](https://oetiker.github.io/tvision-rs/dev/port/extensions.html)
+page lists them all; more are planned.
 
 [Tobi Oetiker](https://github.com/oetiker)
 

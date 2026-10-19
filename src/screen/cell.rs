@@ -1,26 +1,29 @@
-//! A single screen cell: its text (a grapheme cluster), its colour [`Style`],
-//! and flags tracking double-width glyphs.
-//!
-//! One cell can hold a whole grapheme cluster (a base character plus combining
-//! marks / ZWJ sequence), stored as an owned `String`. Double-width handling: a
-//! width-2 grapheme occupies a [`wide`](Cell::is_wide) lead cell immediately
-//! followed by a [`trail`](Cell::is_wide_trail) continuation cell whose symbol
-//! is empty.
-//!
-//! # Turbo Vision heritage
-//! Ports `TScreenCell` + `TCellChar` (`scrncell.h`). The original packs the text
-//! inline as up to 15 UTF-8 bytes; here it is an owned `String`. The colour is a
-//! typed [`Style`] rather than a packed attribute byte (deviation D6), and the
-//! inline grapheme model carries combining marks and ZWJ sequences (deviation
-//! D13).
+//! `Cell`, a single screen cell (documented on the type).
 
 use crate::color::Style;
 
 /// One character cell of the screen: its text (a grapheme cluster), its colour
 /// [`Style`], and the wide/trail flags that track double-width glyphs.
 ///
+/// A single screen cell: its text (a grapheme cluster), its colour [`Style`],
+/// and flags tracking double-width glyphs.
+///
+/// One cell can hold a whole grapheme cluster (a base character plus combining
+/// marks / ZWJ sequence), stored as an owned `String`. Double-width handling: a
+/// width-2 grapheme occupies a [`wide`](Cell::is_wide) lead cell immediately
+/// followed by a [`trail`](Cell::is_wide_trail) continuation cell whose symbol
+/// is empty.
+///
 /// `PartialEq` is derived because the render diff compares the back buffer
 /// against the front buffer cell-by-cell to emit only changed cells.
+///
+/// # Turbo Vision heritage
+///
+/// Ports `TScreenCell` + `TCellChar` (`scrncell.h`). The original packs the text
+/// inline as up to 15 UTF-8 bytes; here it is an owned `String`. The colour is a
+/// typed [`Style`] rather than a packed attribute byte (deviation D6), and the
+/// inline grapheme model carries combining marks and ZWJ sequences (deviation
+/// D13).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Cell {
     /// The grapheme cluster shown in this cell. Empty for a wide-char trail.

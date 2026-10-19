@@ -1022,8 +1022,7 @@ impl std::fmt::Display for RegexError {
 
 impl std::error::Error for RegexError {}
 
-/// tvision-rs-original **extension** (NOT a Turbo Vision port): a [`Validator`]
-/// driven by a regular expression, giving the same two-phase behavior as
+/// A [`Validator`] driven by a regular expression, giving the same two-phase behavior as
 /// [`PXPictureValidator`] — `is_valid` = the input fully matches the pattern;
 /// `is_valid_input` = the input is still a *prefix of some complete match*
 /// ("could it still become valid?") — but expressed as a regex so callers can
@@ -1060,6 +1059,10 @@ impl std::error::Error for RegexError {}
 /// The DFA is compiled once in [`new`](Self::new) and is thereafter immutable.
 /// `RegexValidator` is `Send + Sync`. `\d`/`\w`/`\s` and other Perl-compatible
 /// character classes are available (`unicode-perl` feature is enabled).
+///
+/// # Turbo Vision heritage
+/// **tvision-rs extension**: no Turbo Vision counterpart. It sits alongside the faithful
+/// [`PXPictureValidator`] port.
 ///
 /// [`PXPictureValidator`]: crate::PXPictureValidator
 pub struct RegexValidator {

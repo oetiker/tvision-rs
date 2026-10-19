@@ -6,6 +6,11 @@
 //! `docs/superpowers/specs/2026-06-12-configurable-keymap-design.md`.
 //!
 //! **Guide:** [Keyboard & key mapping](../../../apps/keyboard.html).
+//!
+//! # Turbo Vision heritage
+//! **tvision-rs extension**: no Turbo Vision counterpart. The C++ editor hard-codes its
+//! keys in the `firstKeys` / `quickKeys` / `blockKeys` tables;
+//! [`Keymap::word_star`] transcribes them.
 
 use crate::command::Command;
 use crate::event::{Key, KeyEvent, KeyModifiers};
@@ -146,6 +151,9 @@ pub enum Resolve {
 }
 
 /// A `Chord → Command` table plus the set of strokes that begin a 2-chord.
+///
+/// # Turbo Vision heritage
+/// **tvision-rs extension**: no Turbo Vision counterpart. See the module docs.
 #[derive(Clone, Default)]
 pub struct Keymap {
     bindings: HashMap<Chord, Command>,

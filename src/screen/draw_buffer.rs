@@ -1,30 +1,33 @@
-//! `DrawBuffer` — a scratch row of [`Cell`]s.
-//!
-//! A view fills a `DrawBuffer` one display line at a time and then blits it. The
-//! buffer is a `Vec<Cell>` of an explicit width; writes past the end are clipped
-//! against that width. Text writing delegates to the [`text`] primitives, so
-//! width-aware truncation and double-width handling are shared with the rest of
-//! the renderer.
-//!
-//! ### No `0 = retain` sentinel
-//! [`move_char`](DrawBuffer::move_char) always writes both the char and the
-//! style. For the rare "change only the attribute / only the char of a cell"
-//! cases, use [`put_attribute`](DrawBuffer::put_attribute) /
-//! [`put_char`](DrawBuffer::put_char).
-//!
-//! # Turbo Vision heritage
-//! Ports `TDrawBuffer` (`drawbuf.h`, `drivers.cpp`), which allocated a fixed
-//! capacity sized to the screen; here it is a `Vec<Cell>` of an explicit width.
-//! The original packed a `0` char/attribute to mean "keep what is already there";
-//! that sentinel is dropped in favour of the typed cell model (deviation D6).
-//! Text drawing routes through the shared Unicode-aware text primitives
-//! (deviation D13).
+//! `DrawBuffer`, a scratch row of cells (documented on the type).
 
 use crate::color::Style;
 use crate::screen::Cell;
 use crate::text;
 
 /// A fixed-width row of screen cells under construction.
+///
+/// `DrawBuffer` — a scratch row of [`Cell`]s.
+///
+/// A view fills a `DrawBuffer` one display line at a time and then blits it. The
+/// buffer is a `Vec<Cell>` of an explicit width; writes past the end are clipped
+/// against that width. Text writing delegates to the [`text`] primitives, so
+/// width-aware truncation and double-width handling are shared with the rest of
+/// the renderer.
+///
+/// ### No `0 = retain` sentinel
+/// [`move_char`](DrawBuffer::move_char) always writes both the char and the
+/// style. For the rare "change only the attribute / only the char of a cell"
+/// cases, use [`put_attribute`](DrawBuffer::put_attribute) /
+/// [`put_char`](DrawBuffer::put_char).
+///
+/// # Turbo Vision heritage
+///
+/// Ports `TDrawBuffer` (`drawbuf.h`, `drivers.cpp`), which allocated a fixed
+/// capacity sized to the screen; here it is a `Vec<Cell>` of an explicit width.
+/// The original packed a `0` char/attribute to mean "keep what is already there";
+/// that sentinel is dropped in favour of the typed cell model (deviation D6).
+/// Text drawing routes through the shared Unicode-aware text primitives
+/// (deviation D13).
 #[derive(Clone, Debug)]
 pub struct DrawBuffer {
     data: Vec<Cell>,
@@ -82,7 +85,7 @@ impl DrawBuffer {
     }
 
     /// Fill `count` cells from `indent` with `ch` and `style`, clipped to
-    /// capacity. (See the module note on the dropped `0 = retain` sentinel.)
+    /// capacity. (See the [`DrawBuffer`] docs on the dropped `0 = retain` sentinel.)
     pub fn move_char(&mut self, indent: usize, ch: char, style: Style, count: usize) {
         let cap = self.data.len();
         if count == 0 || indent >= cap {

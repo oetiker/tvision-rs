@@ -1,36 +1,4 @@
-//! A concrete list box over a `Vec<String>`: the first concrete
-//! [`ListViewer`](crate::widgets::list_viewer::ListViewer). It holds the items
-//! and delegates all draw/event/nav logic to the shared list-viewer functions via
-//! the [`ListViewer`] trait. Only [`get_text`](ListViewer::get_text) is
-//! overridden; `is_selected` and `select_item` inherit the base behavior
-//! (`item == focused`, and the base broadcasts that an item was selected).
-//!
-//! # Population wiring
-//!
-//! The constructor sets fields only (empty items, range 0) — no [`Context`] is
-//! available at construction. After insertion into a group:
-//!
-//! 1. Call [`new_list`](ListBox::new_list) to populate the items and publish the
-//!    vertical-bar range + focus position.
-//! 2. Call [`list_viewer::update_steps`](crate::widgets::list_viewer::update_steps)
-//!    to publish the page/arrow step sizes to the bars.
-//!
-//! Missing step 1 leaves the list empty; missing step 2 leaves the scrollbar
-//! thumb unsized. Both require a `Context`, so they cannot run in the constructor.
-//!
-//! # The focused item as a value
-//!
-//! The list box's [`value`](View::value) is its focused item index. Scattering a
-//! value back (focusing an item) is done through
-//! [`set_value_ctx`](ListBox::set_value_ctx) rather than the plain
-//! [`set_value`](View::set_value), because focusing an item must republish the
-//! scroll-bar position and so needs a [`Context`].
-//!
-//! # Turbo Vision heritage
-//!
-//! Ports `TListBox` (`tlistbox.cpp`). The list-record get/set hooks become the
-//! typed value protocol (D10); mouse press-and-hold, auto-scroll, and resize
-//! handling all live in the shared list-viewer base.
+//! `ListBox` and `SortedListBox` (documented on the types).
 
 use crate::data::FieldValue;
 use crate::event::Event;
@@ -38,6 +6,34 @@ use crate::view::{Context, DrawCtx, Point, StateFlag, View, ViewId, ViewState};
 use crate::widgets::list_viewer::{self, ListViewer, ListViewerState};
 
 /// A concrete list viewer that owns a `Vec<String>` as its item source.
+///
+/// A concrete list box over a `Vec<String>`: the first concrete
+/// [`ListViewer`](crate::widgets::list_viewer::ListViewer). It holds the items
+/// and delegates all draw/event/nav logic to the shared list-viewer functions via
+/// the [`ListViewer`] trait. Only [`get_text`](ListViewer::get_text) is
+/// overridden; `is_selected` and `select_item` inherit the base behavior
+/// (`item == focused`, and the base broadcasts that an item was selected).
+///
+/// # Population wiring
+///
+/// The constructor sets fields only (empty items, range 0) — no [`Context`] is
+/// available at construction. After insertion into a group:
+///
+/// 1. Call [`new_list`](ListBox::new_list) to populate the items and publish the
+///    vertical-bar range + focus position.
+/// 2. Call [`list_viewer::update_steps`](crate::widgets::list_viewer::update_steps)
+///    to publish the page/arrow step sizes to the bars.
+///
+/// Missing step 1 leaves the list empty; missing step 2 leaves the scrollbar
+/// thumb unsized. Both require a `Context`, so they cannot run in the constructor.
+///
+/// # The focused item as a value
+///
+/// The list box's [`value`](View::value) is its focused item index. Scattering a
+/// value back (focusing an item) is done through
+/// [`set_value_ctx`](ListBox::set_value_ctx) rather than the plain
+/// [`set_value`](View::set_value), because focusing an item must republish the
+/// scroll-bar position and so needs a [`Context`].
 ///
 /// `ListBox` is the standard list widget: embed it in a dialog or group,
 /// call [`new_list`](Self::new_list) after insertion to populate and wire
@@ -47,7 +43,11 @@ use crate::widgets::list_viewer::{self, ListViewer, ListViewerState};
 /// overridden — every other hook (selection highlight, keyboard scroll,
 /// mouse drag) is handled by the trait's default implementations.
 ///
-/// See the module doc for the two-step population wiring protocol.
+/// # Turbo Vision heritage
+///
+/// Ports `TListBox` (`tlistbox.cpp`). The list-record get/set hooks become the
+/// typed value protocol (D10); mouse press-and-hold, auto-scroll, and resize
+/// handling all live in the shared list-viewer base.
 pub struct ListBox {
     lv: ListViewerState,
     /// The displayed rows (the source narrowed by the query in `Filter` mode).

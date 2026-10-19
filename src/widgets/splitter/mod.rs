@@ -1,3 +1,17 @@
+//! A resizable multi-pane layout: [`Splitter`] arranges N panes along one axis,
+//! separated by 1-cell dividers that the user drags (or moves from the keyboard
+//! in resize mode) to resize the panes. [`Constraints`] bound each pane's size,
+//! [`DividerStyle`] sets how each divider looks and whether it moves, and
+//! [`Splitter::joined`] connects the divider lines to the window frame and to
+//! each other through the [`junction`](crate::junction) glyph selectors.
+//!
+//! **Guide:** [Windows & the desktop](../../../../apps/windows.html#splitter-resizable-panes).
+//!
+//! # Turbo Vision heritage
+//! **tvision-rs extension**: no Turbo Vision counterpart. A splitter is a `Group`
+//! specialization; Turbo Vision lays out panes only by hand-placed bounds and
+//! grow modes.
+
 pub mod layout;
 
 use crate::capture::TrackMask;
@@ -48,6 +62,9 @@ fn divider_role(moving: bool, active: bool) -> Role {
 /// A generic, N-ary, resizable multi-pane view. One axis, N child panes, N−1
 /// dividers in 1-cell gaps. Embeds a `Group` and delegates the un-overridden
 /// `View` methods to it. See `docs/superpowers/specs/2026-06-13-splitter-design.md`.
+///
+/// # Turbo Vision heritage
+/// **tvision-rs extension**: no Turbo Vision counterpart.
 pub struct Splitter {
     group: Group,
     orientation: Orientation,
@@ -629,7 +646,7 @@ impl Splitter {
 
     // -- interior crossings (Site 2) --------------------------------------------
 
-    /// Site 2 (tvision-rs-original): overlay `├`/`┤`/`┴`/`┬` on this splitter's own
+    /// Site 2 (tvision-rs extension): overlay `├`/`┤`/`┴`/`┬` on this splitter's own
     /// divider cells where a perpendicular pane sub-splitter's divider meets them.
     /// `&mut self` because reaching a pane child to read its divider positions
     /// needs `Group::child_mut` (the `&self draw_dividers` cannot do this). Reads
