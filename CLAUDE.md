@@ -42,7 +42,7 @@ export CARGO_TARGET_DIR=/home/oetiker/scratch/cargo-target  # artifacts land HER
 cargo test  --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all --check
-cargo run --example hello   # first runnable TV app: modal dialog on a desktop
+cargo run --example hello   # minimal app: menu bar, status line, desktop with three windows
 ```
 
 Verification is **snapshot tests** (D11, `insta`): build a view on the

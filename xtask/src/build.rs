@@ -35,11 +35,9 @@ pub fn docs() -> Result<()> {
     Ok(())
 }
 
-/// mdBook via the library API, with the mermaid preprocessor registered in-process.
+/// mdBook via the library API.
 pub fn build_book() -> Result<()> {
-    let mut book =
-        MDBook::load(paths::book_root()).map_err(|e| anyhow::anyhow!("load book: {e}"))?;
-    book.with_preprocessor(mdbook_mermaid::Mermaid);
+    let book = MDBook::load(paths::book_root()).map_err(|e| anyhow::anyhow!("load book: {e}"))?;
     book.build()
         .map_err(|e| anyhow::anyhow!("build book: {e}"))?;
     Ok(())

@@ -321,7 +321,8 @@ guide Parts II–V · `35b3aca` Part I + screenshot guard.
 toggle, owned book↔api link checker, rustdoc into isolated `<target>/tvision-rs-rustdoc`).
 Also `--serve` and `cargo xtask screens`. **Repo-owner action (still pending):**
 Settings → Pages → Source = "GitHub Actions" before `.github/workflows/docs.yml`
-can publish. Mermaid runtime JS is still a placeholder.
+can publish. The book has no mermaid diagrams, so it carries no mermaid
+wiring; a first diagram needs the `mdbook-mermaid` preprocessor and its runtime JS.
 
 ### Porting state (unchanged since `5407109`, configurable keymap)
 
@@ -546,9 +547,9 @@ When editing the guide, follow the Phase-3 doctest convention in "Current state"
   in `src/` → `../../../examples/…`; pages one level deeper → `../../../../`.
 
 **Smaller follow-ups:** complete `src/theme/` rustdoc to parity;
-`#![doc(html_logo_url/favicon)]` crate attrs; vendor the real mermaid runtime;
-optionally **hyperlink** the heritage `(deviation Dn)` citations (currently plain
-text — would need per-item relative rustdoc→guide paths, link-checked).
+`#![doc(html_logo_url/favicon)]` crate attrs; optionally **hyperlink** the
+heritage `(deviation Dn)` citations (currently plain text — would need per-item
+relative rustdoc→guide paths, link-checked).
 
 **Intentionally left:** C++ references inside `#[cfg(test)]` doc comments (test
 provenance, **not** rendered in rustdoc) — a separate large pass only if wanted.

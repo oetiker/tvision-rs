@@ -44,8 +44,10 @@ internal rungs, so copy/paste keeps working on capable terminals:
 
 ```toml
 [dependencies]
-tv = { package = "tvision-rs", git = "https://github.com/oetiker/tvision-rs", default-features = false }
+tv = { package = "tvision-rs", version = "0.18.0", default-features = false }
 ```
+
+The git dependency takes the same `default-features = false` key.
 
 ## Verify the build
 
@@ -53,8 +55,12 @@ A build confirms that the crate resolves and compiles for your toolchain:
 
 ```console
 $ cargo build
-   Compiling tvision-rs v0.1.0
-    Finished `dev` profile [unoptimized + debuginfo]
+   Compiling tvision-rs vX.Y.Z
+   Compiling my-app v0.1.0 (/home/me/my-app)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 12.34s
 ```
+
+`vX.Y.Z` is the `tvision-rs` version Cargo resolved; for a git dependency
+Cargo also prints the repository URL and commit.
 
 Next: [your first app](first-app.md).
