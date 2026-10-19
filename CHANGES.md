@@ -19,6 +19,7 @@ into a dated, versioned section.
 ### Changed
 
 ### Fixed
+- **Developer guide corrections.** The installation page's example for turning off `os-clipboard` now uses the released crate instead of the git `main` branch, and its build output no longer shows `Compiling tvision-rs v0.1.0`. The view-tree chapter no longer lists `handle_event`, `set_state`, `valid`, `value` and `set_value` as required `View` methods, and the deviations page gains the missing D16 entry (settable window minimum size).
 
 ## 0.18.0 - 2026-10-19
 ### New

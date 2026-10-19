@@ -46,6 +46,12 @@
       "pattern": "^tv = \\{ package = \"tvision-rs\", version = \"[^\"]*\" \\}",
       "replacement": "tv = { package = \"tvision-rs\", version = \"$VERSION\" }",
       "verify": "^tv = \\{ package = \"tvision-rs\", version = \"$VERSION\" \\}"
+    },
+    {
+      "path": "docs/book/src/getting-started/installation.md",
+      "pattern": "^tv = \\{ package = \"tvision-rs\", version = \"[^\"]*\", default-features = false \\}",
+      "replacement": "tv = { package = \"tvision-rs\", version = \"$VERSION\", default-features = false }",
+      "verify": "^tv = \\{ package = \"tvision-rs\", version = \"$VERSION\", default-features = false \\}"
     }
   ]
 }
